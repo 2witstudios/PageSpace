@@ -3,9 +3,9 @@
  * (machine/project/branch — see `agent-terminals.ts`), named, pluggable-
  * agent-typed PTY sessions (Terminal — Workspace, Runtime tier).
  *
- * GET    ?terminalId=[&projectName=][&branchName=]                              → list
- * POST   { terminalId, [projectName], [branchName], name, agentType, [command] } → spawn (reserves the session; PTY opens lazily on first realtime connect)
- * DELETE ?terminalId=[&projectName=][&branchName=]&name=                        → kill (tears down the PTY if running, drops the tracking row)
+ * GET    ?machineId=[&projectName=][&branchName=]                              → list
+ * POST   { machineId, [projectName], [branchName], name, agentType, [command] } → spawn (reserves the session; PTY opens lazily on first realtime connect)
+ * DELETE ?machineId=[&projectName=][&branchName=]&name=                        → kill (tears down the PTY if running, drops the tracking row)
  *
  * `projectName`/`branchName` are OPTIONAL on every verb — neither set targets
  * machine scope, `projectName` alone targets project scope, both target
@@ -75,19 +75,19 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = optionalString(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = optionalString(url.searchParams.get('branchName'), 'branchName');
   if (!branchName.ok) return branchName.error;
 
-  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+  if (!(await canViewMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const result = await listAgentTerminals({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
     deps: buildListAgentTerminalsDeps(),
@@ -104,15 +104,15 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  let body: { terminalId?: unknown; projectName?: unknown; branchName?: unknown; name?: unknown; agentType?: unknown; command?: unknown };
+  let body: { machineId?: unknown; projectName?: unknown; branchName?: unknown; name?: unknown; agentType?: unknown; command?: unknown };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const terminalId = requireString(body.terminalId, 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(body.machineId, 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = optionalString(body.projectName, 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = optionalString(body.branchName, 'branchName');
@@ -124,12 +124,12 @@ export async function POST(request: Request) {
   const command = optionalString(body.command, 'command');
   if (!command.ok) return command.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) {
+  if (!(await canAccessMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const result = await spawnAgentTerminal({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
     name: name.value,
@@ -152,8 +152,8 @@ export async function DELETE(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = optionalString(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = optionalString(url.searchParams.get('branchName'), 'branchName');
@@ -161,12 +161,12 @@ export async function DELETE(request: Request) {
   const name = requireString(url.searchParams.get('name'), 'name');
   if (!name.ok) return name.error;
 
-  if (!(await canAccessMachine(auth.userId, terminalId.value))) {
+  if (!(await canAccessMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const result = await killAgentTerminal({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
     name: name.value,

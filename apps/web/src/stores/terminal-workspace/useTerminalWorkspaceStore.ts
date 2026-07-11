@@ -2,14 +2,14 @@
  * Terminal Workspace Store
  *
  * Thin imperative shell over the pure workspace-reducer. Keyed by
- * `terminalId` (the Terminal page's own id) so several Terminal pages can
+ * `machineId` (the Terminal page's own id) so several Terminal pages can
  * hold independent pane layouts at once. Fresh ids are generated here
  * (crypto.randomUUID) — the reducer itself never generates ids, keeping it
  * deterministic and trivially testable.
  *
  * This is the single source of truth shared, by composition, between the
  * Navigator (right sidebar) and TerminalPanes (middle content) — they no
- * longer need a common parent to share `panes`/`activePaneId` local state.
+ * longer need a common parent to share `columns`/`activePaneId` local state.
  *
  * Navigation cleanup (dispose on unmount) is performed by the mounting
  * component via `useEffect`, not from inside the store — same pattern as
@@ -20,80 +20,91 @@ import { create } from 'zustand';
 import {
   initialWorkspace,
   openTerminal as openTerminalTransition,
-  split as splitTransition,
+  splitRight as splitRightTransition,
+  splitDown as splitDownTransition,
   closePane as closePaneTransition,
   selectPane as selectPaneTransition,
   type OpenTerminalScope,
+  type TerminalColumnState,
   type TerminalPaneState,
   type WorkspaceState,
 } from './workspace-reducer';
 
-export type { OpenTerminalScope, TerminalPaneState, WorkspaceState };
+export type { OpenTerminalScope, TerminalColumnState, TerminalPaneState, WorkspaceState };
 
 interface TerminalWorkspaceStoreState {
   workspaces: Record<string, WorkspaceState>;
-  ensureWorkspace: (terminalId: string) => void;
-  disposeWorkspace: (terminalId: string) => void;
-  openTerminal: (terminalId: string, scope: OpenTerminalScope) => void;
-  split: (terminalId: string) => void;
-  closePane: (terminalId: string, paneId: string) => void;
-  selectPane: (terminalId: string, paneId: string) => void;
+  ensureWorkspace: (machineId: string) => void;
+  disposeWorkspace: (machineId: string) => void;
+  openTerminal: (machineId: string, scope: OpenTerminalScope) => void;
+  splitRight: (machineId: string, fromPaneId: string) => void;
+  splitDown: (machineId: string, fromPaneId: string) => void;
+  closePane: (machineId: string, paneId: string) => void;
+  selectPane: (machineId: string, paneId: string) => void;
 }
 
-/** Applies a pure reducer transition to the workspace at `terminalId`, if it
+/** Applies a pure reducer transition to the workspace at `machineId`, if it
  * exists — a missing workspace (not yet ensured, or already disposed) is a
  * no-op rather than an error. */
 function applyTransition(
   state: TerminalWorkspaceStoreState,
-  terminalId: string,
+  machineId: string,
   transition: (workspace: WorkspaceState) => WorkspaceState
 ): Pick<TerminalWorkspaceStoreState, 'workspaces'> {
-  const workspace = state.workspaces[terminalId];
+  const workspace = state.workspaces[machineId];
   if (!workspace) return { workspaces: state.workspaces };
   return {
-    workspaces: { ...state.workspaces, [terminalId]: transition(workspace) },
+    workspaces: { ...state.workspaces, [machineId]: transition(workspace) },
   };
 }
 
 export const useTerminalWorkspaceStore = create<TerminalWorkspaceStoreState>((set, get) => ({
   workspaces: {},
 
-  ensureWorkspace: (terminalId) => {
-    if (get().workspaces[terminalId]) return;
+  ensureWorkspace: (machineId) => {
+    if (get().workspaces[machineId]) return;
     set((state) => ({
       workspaces: {
         ...state.workspaces,
-        [terminalId]: initialWorkspace(crypto.randomUUID()),
+        [machineId]: initialWorkspace(crypto.randomUUID()),
       },
     }));
   },
 
-  disposeWorkspace: (terminalId) => {
+  disposeWorkspace: (machineId) => {
     set((state) => {
-      if (!(terminalId in state.workspaces)) return state;
+      if (!(machineId in state.workspaces)) return state;
       const workspaces = { ...state.workspaces };
-      delete workspaces[terminalId];
+      delete workspaces[machineId];
       return { workspaces };
     });
   },
 
-  openTerminal: (terminalId, scope) => {
-    set((state) => applyTransition(state, terminalId, (workspace) => openTerminalTransition(workspace, scope)));
+  openTerminal: (machineId, scope) => {
+    set((state) => applyTransition(state, machineId, (workspace) => openTerminalTransition(workspace, scope)));
   },
 
-  split: (terminalId) => {
-    const newId = crypto.randomUUID();
-    set((state) => applyTransition(state, terminalId, (workspace) => splitTransition(workspace, newId)));
+  splitRight: (machineId, fromPaneId) => {
+    const newColumnId = crypto.randomUUID();
+    const newPaneId = crypto.randomUUID();
+    set((state) =>
+      applyTransition(state, machineId, (workspace) => splitRightTransition(workspace, fromPaneId, newColumnId, newPaneId))
+    );
   },
 
-  closePane: (terminalId, paneId) => {
-    set((state) => applyTransition(state, terminalId, (workspace) => closePaneTransition(workspace, paneId)));
+  splitDown: (machineId, fromPaneId) => {
+    const newPaneId = crypto.randomUUID();
+    set((state) => applyTransition(state, machineId, (workspace) => splitDownTransition(workspace, fromPaneId, newPaneId)));
   },
 
-  selectPane: (terminalId, paneId) => {
-    set((state) => applyTransition(state, terminalId, (workspace) => selectPaneTransition(workspace, paneId)));
+  closePane: (machineId, paneId) => {
+    set((state) => applyTransition(state, machineId, (workspace) => closePaneTransition(workspace, paneId)));
+  },
+
+  selectPane: (machineId, paneId) => {
+    set((state) => applyTransition(state, machineId, (workspace) => selectPaneTransition(workspace, paneId)));
   },
 }));
 
-export const selectWorkspace = (terminalId: string) => (state: TerminalWorkspaceStoreState) =>
-  state.workspaces[terminalId];
+export const selectWorkspace = (machineId: string) => (state: TerminalWorkspaceStoreState) =>
+  state.workspaces[machineId];

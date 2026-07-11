@@ -131,6 +131,7 @@ describe('createStreamLifecycle', () => {
         displayName: 'Alice',
         browserSessionId: 'session-1',
         status: 'streaming',
+        startedAt: expect.any(Date),
       });
     });
 
@@ -174,13 +175,14 @@ describe('createStreamLifecycle', () => {
       expect(mockBroadcastStart).toHaveBeenCalled();
     });
 
-    it('given a successful start, should broadcast chat:stream_start with the full triggeredBy payload', async () => {
+    it('given a successful start, should broadcast chat:stream_start with the full triggeredBy payload and start time', async () => {
       await createStreamLifecycle(params());
 
       expect(mockBroadcastStart).toHaveBeenCalledWith({
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: expect.any(String),
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       });
     });

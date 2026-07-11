@@ -41,6 +41,21 @@ describe('mergeServerAndPending', () => {
     expect(result[0].id).toBe('pending-1');
   });
 
+  it('stamps the synthesized message with a createdAt derived from pendingStartedAt', () => {
+    const server = [makeMsg('m1', 'hello')];
+    const parts = [{ type: 'text' as const, text: 'streaming...' }];
+    const result = mergeServerAndPending(server, parts, 'pending-1', '2024-01-01T00:00:00.000Z');
+    const synthesized = result[1] as UIMessage & { createdAt?: Date };
+    expect(synthesized.createdAt).toEqual(new Date('2024-01-01T00:00:00.000Z'));
+  });
+
+  it('omits createdAt when pendingStartedAt is absent', () => {
+    const server = [makeMsg('m1', 'hello')];
+    const parts = [{ type: 'text' as const, text: 'streaming...' }];
+    const result = mergeServerAndPending(server, parts, 'pending-1');
+    expect('createdAt' in result[1]).toBe(false);
+  });
+
   it('does not mutate the serverMessages array when appending', () => {
     const server = [makeMsg('m1', 'hello')];
     const parts = [{ type: 'text' as const, text: 'streaming...' }];

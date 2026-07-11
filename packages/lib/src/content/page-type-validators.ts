@@ -118,7 +118,7 @@ export function validatePageCreation(
       // Code pages can start empty
       break;
 
-    case PageType.TERMINAL:
+    case PageType.MACHINE:
       // Terminal pages start with empty session history
       break;
 
@@ -188,7 +188,7 @@ export function validatePageUpdate(
       
       case PageType.CHANNEL:
       case PageType.AI_CHAT:
-      case PageType.TERMINAL:
+      case PageType.MACHINE:
         // These types use structured JSON content
         if (typeof data.content === 'string') {
           try {

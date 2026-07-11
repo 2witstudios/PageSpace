@@ -14,11 +14,15 @@ const {
   mockDbInsertValues,
   mockUserEmailMatch,
   mockPrepareUserWrite,
+  mockIsOnPrem,
+  mockGenerateSetupLink,
 } = vi.hoisted(() => ({
   mockDbFindFirst: vi.fn(),
   mockDbInsertValues: vi.fn().mockResolvedValue(undefined),
   mockUserEmailMatch: vi.fn((email: string) => ({ emailMatch: email })),
   mockPrepareUserWrite: vi.fn(async (values: Record<string, unknown>) => ({ ...values, emailBidx: 'bidx-of-' + values.email })),
+  mockIsOnPrem: vi.fn(() => false),
+  mockGenerateSetupLink: vi.fn(async () => 'http://web.local/api/auth/magic-link/verify?token=abc'),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -38,7 +42,11 @@ vi.mock('@pagespace/lib/auth/user-repository', () => ({
 }));
 
 vi.mock('@pagespace/lib/deployment-mode', () => ({
-  isOnPrem: vi.fn(() => false),
+  isOnPrem: mockIsOnPrem,
+}));
+
+vi.mock('@pagespace/lib/auth/onprem-setup-link', () => ({
+  generateOnPremSetupLink: mockGenerateSetupLink,
 }));
 
 vi.mock('@pagespace/lib/onprem-defaults', () => ({
@@ -74,6 +82,8 @@ describe('POST /api/admin/users/create', () => {
     mockDbInsertValues.mockClear().mockResolvedValue(undefined);
     mockUserEmailMatch.mockClear();
     mockPrepareUserWrite.mockClear();
+    mockIsOnPrem.mockReset().mockReturnValue(false);
+    mockGenerateSetupLink.mockClear().mockResolvedValue('http://web.local/api/auth/magic-link/verify?token=abc');
   });
 
   it('checks for an existing user via the dual-lookup helper, not a raw equality match', async () => {
@@ -104,5 +114,29 @@ describe('POST /api/admin/users/create', () => {
     expect(mockDbInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({ email: 'jane@example.com', emailBidx: 'bidx-of-jane@example.com' })
     );
+  });
+
+  it('on-prem: returns a one-time setup link so the credential-less user can bootstrap a passkey', async () => {
+    mockIsOnPrem.mockReturnValue(true);
+    mockDbFindFirst.mockResolvedValueOnce(undefined);
+
+    const res = await POST(makeRequest({ name: 'Jane Doe', email: 'jane@example.com' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(mockGenerateSetupLink).toHaveBeenCalledOnce();
+    expect(body.setupLink).toBe('http://web.local/api/auth/magic-link/verify?token=abc');
+  });
+
+  it('cloud/tenant: does not mint or return a setup link (email delivery works there)', async () => {
+    mockIsOnPrem.mockReturnValue(false);
+    mockDbFindFirst.mockResolvedValueOnce(undefined);
+
+    const res = await POST(makeRequest({ name: 'Jane Doe', email: 'jane@example.com' }));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(mockGenerateSetupLink).not.toHaveBeenCalled();
+    expect(body.setupLink).toBeUndefined();
   });
 });

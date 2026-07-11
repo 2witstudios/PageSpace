@@ -15,7 +15,7 @@ import { createHmac } from 'crypto';
 
 export interface BranchSessionKeyInput {
   tenantId: string;
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   secret: string;
@@ -25,7 +25,7 @@ const NAMESPACE_VERSION = 'branch-session:v1';
 
 export function deriveBranchSessionKey({
   tenantId,
-  terminalId,
+  machineId,
   projectName,
   branchName,
   secret,
@@ -33,7 +33,7 @@ export function deriveBranchSessionKey({
   if (secret.length === 0) {
     throw new Error('deriveBranchSessionKey requires a non-empty secret');
   }
-  const payload = [NAMESPACE_VERSION, tenantId, terminalId, projectName, branchName].join('\0');
+  const payload = [NAMESPACE_VERSION, tenantId, machineId, projectName, branchName].join('\0');
   // codeql[js/insufficient-password-hash] not a password hash — a keyed HMAC over SANDBOX_SESSION_SECRET (a >=32-char server secret, never user input) deriving a deterministic Sprite-name pseudonym, same as terminal-session-manager.ts's deriveTerminalSessionKey
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-brn-${digest}`;

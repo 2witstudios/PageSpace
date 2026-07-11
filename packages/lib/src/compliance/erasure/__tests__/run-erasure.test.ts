@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runErasure, type RunnableStep, type ErasureRecorder } from '../run-erasure';
+import { buildErasurePlan, classifyErasureError } from '../erasure-plan';
 
 function makeRecorder(): ErasureRecorder & { statuses: string[]; steps: unknown[] } {
   const statuses: string[] = [];
@@ -90,6 +91,43 @@ describe('runErasure', () => {
     expect(recorder.statuses[recorder.statuses.length - 1]).toBe('failed');
     // Steps after a fatal failure do not run.
     expect(never.run).not.toHaveBeenCalled();
+  });
+
+  it('given CH in play and the CH purge fails, the run must NOT complete — subject rows would be retained forever under a completed status (#890 Phase 3 FIX)', async () => {
+    const recorder = makeRecorder();
+    // Wire the REAL plan (clickHouseInPlay: true) so this test breaks if the
+    // fatality decision regresses, not just the runner semantics.
+    const steps: RunnableStep[] = buildErasurePlan({
+      deploymentMode: 'cloud',
+      clickHouseInPlay: true,
+    }).map((step) => ({
+      id: step.id,
+      fatal: step.fatal,
+      run:
+        step.id === 'purge-monitoring'
+          ? vi.fn(async () => {
+              throw new Error('ClickHouse misconfigured: GDPR client unavailable');
+            })
+          : okStep(step.id).run,
+    }));
+
+    const result = await runErasure({
+      requestId: 'dsr_1',
+      attemptsSoFar: 0,
+      steps,
+      recorder,
+      now: fixedNow,
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.failedStep).toBe('purge-monitoring');
+    expect(recorder.statuses).not.toContain('completed');
+    // delete-user comes after purge-monitoring: the user row must survive so
+    // the durable queue can retry the whole run.
+    const ranSteps = (recorder.steps as Array<{ step: string }>).map((s) => s.step);
+    expect(ranSteps).not.toContain('delete-user');
+    // The failure is retryable — the queue will re-attempt when CH is back.
+    expect(classifyErasureError(new Error('ClickHouse misconfigured: GDPR client unavailable')).retryable).toBe(true);
   });
 
   it('given a fatal step throws ERASURE_BLOCKED, should mark blocked with a reason and stop', async () => {

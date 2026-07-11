@@ -7,6 +7,7 @@ import { PushActionHandler } from "@/components/PushActionHandler";
 import QuickCreatePalette from "@/components/create/QuickCreatePalette";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
+import { NonceProvider } from "@/contexts/NonceContext";
 
 // Routes that render full-page content instead of CenterPanel
 const FULL_PAGE_ROUTES = [
@@ -21,7 +22,7 @@ const FULL_PAGE_ROUTES = [
   '/dashboard/trash',
 ];
 
-export default function DashboardLayoutClient({ children }: { children: React.ReactNode }) {
+export default function DashboardLayoutClient({ children, nonce }: { children: React.ReactNode; nonce?: string }) {
   const pathname = usePathname();
 
   useHotkeyPreferences();
@@ -35,11 +36,11 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
 
 
   return (
-    <>
+    <NonceProvider nonce={nonce}>
       <PushNotificationManager />
       <PushActionHandler />
       <QuickCreatePalette />
       {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
-    </>
+    </NonceProvider>
   );
 }

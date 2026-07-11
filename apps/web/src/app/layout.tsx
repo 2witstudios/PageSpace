@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { connection } from "next/server";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
@@ -9,7 +9,7 @@ import { THEME_COOKIE_NAME } from "@/lib/theme-cookie";
 import ClientTrackingProvider from "@/components/providers/ClientTrackingProvider";
 import ConsentProvider from "@/components/providers/ConsentProvider";
 import { Toaster } from "@/components/ui/sonner";
-import { NONCE_HEADER } from "@/middleware/security-headers";
+import { getRequestNonce } from "@/lib/request-nonce";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -78,9 +78,7 @@ export default async function RootLayout({
   // Per Next.js 15 requirements: nonces require fresh generation per request
   await connection();
 
-  // Read nonce from middleware headers (Next.js 15 async API)
-  const requestHeaders = await headers();
-  const nonce = requestHeaders.get(NONCE_HEADER) ?? undefined;
+  const nonce = await getRequestNonce();
 
   // Resolve the initial theme from the cookie server-side so the very first
   // render (and next-themes' pre-hydration script, via defaultTheme) already

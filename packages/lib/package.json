@@ -87,6 +87,56 @@
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
     },
+    "./observability/clickhouse-buffer": {
+      "types": "./dist/observability/clickhouse-buffer.d.ts",
+      "import": "./dist/observability/clickhouse-buffer.js",
+      "require": "./dist/observability/clickhouse-buffer.js"
+    },
+    "./observability/clickhouse-client": {
+      "types": "./dist/observability/clickhouse-client.d.ts",
+      "import": "./dist/observability/clickhouse-client.js",
+      "require": "./dist/observability/clickhouse-client.js"
+    },
+    "./observability/clickhouse-env": {
+      "types": "./dist/observability/clickhouse-env.d.ts",
+      "import": "./dist/observability/clickhouse-env.js",
+      "require": "./dist/observability/clickhouse-env.js"
+    },
+    "./observability/clickhouse-ddl": {
+      "types": "./dist/observability/clickhouse-ddl.d.ts",
+      "import": "./dist/observability/clickhouse-ddl.js",
+      "require": "./dist/observability/clickhouse-ddl.js"
+    },
+    "./observability/analytics-rows": {
+      "types": "./dist/observability/analytics-rows.d.ts",
+      "import": "./dist/observability/analytics-rows.js",
+      "require": "./dist/observability/analytics-rows.js"
+    },
+    "./observability/analytics-inserts": {
+      "types": "./dist/observability/analytics-inserts.d.ts",
+      "import": "./dist/observability/analytics-inserts.js",
+      "require": "./dist/observability/analytics-inserts.js"
+    },
+    "./observability/analytics-read-core": {
+      "types": "./dist/observability/analytics-read-core.d.ts",
+      "import": "./dist/observability/analytics-read-core.js",
+      "require": "./dist/observability/analytics-read-core.js"
+    },
+    "./observability/analytics-reads": {
+      "types": "./dist/observability/analytics-reads.d.ts",
+      "import": "./dist/observability/analytics-reads.js",
+      "require": "./dist/observability/analytics-reads.js"
+    },
+    "./observability/analytics-gdpr": {
+      "types": "./dist/observability/analytics-gdpr.d.ts",
+      "import": "./dist/observability/analytics-gdpr.js",
+      "require": "./dist/observability/analytics-gdpr.js"
+    },
+    "./observability/error-resolutions": {
+      "types": "./dist/observability/error-resolutions.d.ts",
+      "import": "./dist/observability/error-resolutions.js",
+      "require": "./dist/observability/error-resolutions.js"
+    },
     "./billing/credit-pricing": {
       "types": "./dist/billing/credit-pricing.d.ts",
       "import": "./dist/billing/credit-pricing.js",
@@ -232,6 +282,11 @@
       "import": "./dist/auth/user-repository.js",
       "require": "./dist/auth/user-repository.js"
     },
+    "./auth/onprem-setup-link": {
+      "types": "./dist/auth/onprem-setup-link.d.ts",
+      "import": "./dist/auth/onprem-setup-link.js",
+      "require": "./dist/auth/onprem-setup-link.js"
+    },
     "./auth/token-lifecycle-policy": {
       "types": "./dist/auth/token-lifecycle-policy.d.ts",
       "import": "./dist/auth/token-lifecycle-policy.js",
@@ -256,6 +311,41 @@
       "types": "./dist/audit/security-audit.d.ts",
       "import": "./dist/audit/security-audit.js",
       "require": "./dist/audit/security-audit.js"
+    },
+    "./audit/emission-hash": {
+      "types": "./dist/audit/emission-hash.d.ts",
+      "import": "./dist/audit/emission-hash.js",
+      "require": "./dist/audit/emission-hash.js"
+    },
+    "./audit/chain-step": {
+      "types": "./dist/audit/chain-step.d.ts",
+      "import": "./dist/audit/chain-step.js",
+      "require": "./dist/audit/chain-step.js"
+    },
+    "./audit/anchor": {
+      "types": "./dist/audit/anchor.d.ts",
+      "import": "./dist/audit/anchor.js",
+      "require": "./dist/audit/anchor.js"
+    },
+    "./audit/audit-ingest-writer": {
+      "types": "./dist/audit/audit-ingest-writer.d.ts",
+      "import": "./dist/audit/audit-ingest-writer.js",
+      "require": "./dist/audit/audit-ingest-writer.js"
+    },
+    "./audit/co-stream": {
+      "types": "./dist/audit/co-stream.d.ts",
+      "import": "./dist/audit/co-stream.js",
+      "require": "./dist/audit/co-stream.js"
+    },
+    "./audit/co-stream-reconciliation": {
+      "types": "./dist/audit/co-stream-reconciliation.d.ts",
+      "import": "./dist/audit/co-stream-reconciliation.js",
+      "require": "./dist/audit/co-stream-reconciliation.js"
+    },
+    "./audit/full-audit-verification": {
+      "types": "./dist/audit/full-audit-verification.d.ts",
+      "import": "./dist/audit/full-audit-verification.js",
+      "require": "./dist/audit/full-audit-verification.js"
     },
     "./audit/mask-email": {
       "types": "./dist/audit/mask-email.d.ts",
@@ -457,6 +547,26 @@
       "import": "./dist/services/sandbox/machine-host.js",
       "require": "./dist/services/sandbox/machine-host.js"
     },
+    "./services/sandbox/machine-fs": {
+      "types": "./dist/services/sandbox/machine-fs.d.ts",
+      "import": "./dist/services/sandbox/machine-fs.js",
+      "require": "./dist/services/sandbox/machine-fs.js"
+    },
+    "./services/sandbox/machine-git-blob": {
+      "types": "./dist/services/sandbox/machine-git-blob.d.ts",
+      "import": "./dist/services/sandbox/machine-git-blob.js",
+      "require": "./dist/services/sandbox/machine-git-blob.js"
+    },
+    "./services/sandbox/machine-diff-scope": {
+      "types": "./dist/services/sandbox/machine-diff-scope.d.ts",
+      "import": "./dist/services/sandbox/machine-diff-scope.js",
+      "require": "./dist/services/sandbox/machine-diff-scope.js"
+    },
+    "./services/sandbox/machine-diff": {
+      "types": "./dist/services/sandbox/machine-diff.d.ts",
+      "import": "./dist/services/sandbox/machine-diff.js",
+      "require": "./dist/services/sandbox/machine-diff.js"
+    },
     "./services/sandbox/tool-runners": {
       "types": "./dist/services/sandbox/tool-runners.d.ts",
       "import": "./dist/services/sandbox/tool-runners.js",
@@ -502,6 +612,11 @@
       "import": "./dist/services/machines/machine-branches.js",
       "require": "./dist/services/machines/machine-branches.js"
     },
+    "./services/machines/machine-settings": {
+      "types": "./dist/services/machines/machine-settings.d.ts",
+      "import": "./dist/services/machines/machine-settings.js",
+      "require": "./dist/services/machines/machine-settings.js"
+    },
     "./services/machines/agent-terminal-types": {
       "types": "./dist/services/machines/agent-terminal-types.d.ts",
       "import": "./dist/services/machines/agent-terminal-types.js",
@@ -516,6 +631,11 @@
       "types": "./dist/services/machines/agent-terminals.d.ts",
       "import": "./dist/services/machines/agent-terminals.js",
       "require": "./dist/services/machines/agent-terminals.js"
+    },
+    "./services/machines/machine-access": {
+      "types": "./dist/services/machines/machine-access.d.ts",
+      "import": "./dist/services/machines/machine-access.js",
+      "require": "./dist/services/machines/machine-access.js"
     },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
@@ -1367,6 +1487,11 @@
       "import": "./dist/compliance/erasure/pseudonymize.js",
       "require": "./dist/compliance/erasure/pseudonymize.js"
     },
+    "./compliance/erasure/pseudonymize-targets": {
+      "types": "./dist/compliance/erasure/pseudonymize-targets.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-targets.js",
+      "require": "./dist/compliance/erasure/pseudonymize-targets.js"
+    },
     "./compliance/erasure/pseudonymize-repository": {
       "types": "./dist/compliance/erasure/pseudonymize-repository.d.ts",
       "import": "./dist/compliance/erasure/pseudonymize-repository.js",
@@ -1604,6 +1729,9 @@
       "services/machines/machine-branches": [
         "./dist/services/machines/machine-branches.d.ts"
       ],
+      "services/machines/machine-settings": [
+        "./dist/services/machines/machine-settings.d.ts"
+      ],
       "services/machines/agent-terminal-types": [
         "./dist/services/machines/agent-terminal-types.d.ts"
       ],
@@ -1612,6 +1740,9 @@
       ],
       "services/machines/agent-terminals": [
         "./dist/services/machines/agent-terminals.d.ts"
+      ],
+      "services/machines/machine-access": [
+        "./dist/services/machines/machine-access.d.ts"
       ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"
@@ -1627,6 +1758,18 @@
       ],
       "services/sandbox/machine-host": [
         "./dist/services/sandbox/machine-host.d.ts"
+      ],
+      "services/sandbox/machine-fs": [
+        "./dist/services/sandbox/machine-fs.d.ts"
+      ],
+      "services/sandbox/machine-git-blob": [
+        "./dist/services/sandbox/machine-git-blob.d.ts"
+      ],
+      "services/sandbox/machine-diff-scope": [
+        "./dist/services/sandbox/machine-diff-scope.d.ts"
+      ],
+      "services/sandbox/machine-diff": [
+        "./dist/services/sandbox/machine-diff.d.ts"
       ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
@@ -1696,6 +1839,12 @@
       ],
       "auth/verification-utils": [
         "./dist/auth/verification-utils.d.ts"
+      ],
+      "auth/user-repository": [
+        "./dist/auth/user-repository.d.ts"
+      ],
+      "auth/onprem-setup-link": [
+        "./dist/auth/onprem-setup-link.d.ts"
       ],
       "services/email-service": [
         "./dist/services/email-service.d.ts"
@@ -2055,6 +2204,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
+    "@clickhouse/client": "^1.23.1",
     "@fly/sprites": "0.0.1-rc37",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",

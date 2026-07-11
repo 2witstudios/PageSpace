@@ -37,8 +37,8 @@ describe('pages.create — request shape', () => {
     expect(JSON.parse(request.body!)).toEqual({ driveId: 'd1abc', title: 'New Page', type: 'DOCUMENT' });
   });
 
-  it('accepts every route-creatable type, including FILE/CODE/TERMINAL (D9)', () => {
-    for (const type of ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE', 'TERMINAL']) {
+  it('accepts every route-creatable type, including FILE/CODE/MACHINE (D9)', () => {
+    for (const type of ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'FILE', 'SHEET', 'TASK_LIST', 'CODE', 'MACHINE']) {
       const result = createPage.inputSchema.safeParse({ driveId: 'd1abc', title: 'x', type });
       expect(result.success).toBe(true);
     }

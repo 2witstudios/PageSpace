@@ -454,6 +454,119 @@ describe('renderCanvasDocument — <html lang>', () => {
   });
 });
 
+describe('renderCanvasDocument — CSP nonce for inherited outer policy', () => {
+  // The in-app iframe's srcDoc document unconditionally inherits the parent
+  // (embedder) document's CSP, in addition to its own <meta> CSP. When the app
+  // shell's CSP requires a nonce on script-src, author <script> tags need a
+  // matching nonce to keep running under the outer, inherited policy.
+  it('given a nonce, should stamp it onto preserved author <script> tags', () => {
+    const out = renderCanvasDocument({
+      html: '<script>console.log("hi");</script>',
+      nonce: 'abc123==',
+    });
+    expect(out).toContain('<script nonce="abc123==">console.log("hi");</script>');
+  });
+
+  it('given no nonce (e.g. the publish pipeline), should leave author <script> tags byte-for-byte unchanged', () => {
+    const out = renderCanvasDocument({
+      html: '<script>console.log("hi");</script>',
+    });
+    expect(out).toContain('<script>console.log("hi");</script>');
+    expect(out).not.toContain('nonce=');
+  });
+
+  it('given an author script that already declares its own (foreign/stale) nonce attribute, should REPLACE it with the current nonce, not leave it alone', () => {
+    // A foreign nonce (e.g. HTML pasted from a different nonce-protected site)
+    // can never match the inherited outer CSP's nonce-source — leaving it in
+    // place would still get the script blocked, defeating the whole point of
+    // this function. Replace it (not duplicate) so the tag stays valid HTML
+    // with exactly one nonce attribute that actually matches.
+    const out = renderCanvasDocument({
+      html: '<script nonce="author-nonce">console.log("hi");</script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==">console.log("hi");</script>');
+    expect(out).not.toContain('author-nonce');
+    // nonce="app-nonce==" itself contains the substring "nonce=", so count by
+    // the quoted attribute form (`nonce="`) to avoid matching inside the value.
+    expect((out.match(/nonce="/g) ?? []).length).toBe(1);
+  });
+
+  it('given a script with a data-nonce (or aria-nonce) attribute, should NOT mistake it for a real nonce attribute — it stamps a real one alongside', () => {
+    // A bare `\b` word-boundary regex matches right after a hyphen too, so
+    // `data-nonce="foo"` was previously (incorrectly) treated as "already has
+    // a nonce" and skipped — leaving the script with no real nonce attribute
+    // at all, still blocked by the inherited CSP.
+    const out = renderCanvasDocument({
+      html: '<script data-nonce="foo" aria-nonce="bar">console.log("hi");</script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==" data-nonce="foo" aria-nonce="bar">console.log("hi");</script>');
+    // data-nonce/aria-nonce values are untouched — only a real nonce attribute was added.
+    expect(out).toContain('data-nonce="foo"');
+    expect(out).toContain('aria-nonce="bar"');
+    expect((out.match(/ nonce="app-nonce=="/g) ?? []).length).toBe(1);
+  });
+
+  it('given another attribute whose OWN value contains the substring " nonce=", should NOT corrupt that attribute — it stamps a real nonce alongside, untouched', () => {
+    // A raw substring search for `nonce=` (rather than walking real,
+    // whole attributes) would match INSIDE this attribute's quoted value
+    // and truncate/re-quote it mid-string, corrupting the tag.
+    const out = renderCanvasDocument({
+      html: '<script data-log="utm_source=x nonce=stale123">console.log("hi");</script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==" data-log="utm_source=x nonce=stale123">console.log("hi");</script>');
+    expect((out.match(/ nonce="app-nonce=="/g) ?? []).length).toBe(1);
+  });
+
+  // Regression guard for CodeQL js/polynomial-redos (CWE-1333): the
+  // attribute-tokenizer's leading-whitespace group must stay a single `\s`,
+  // not `\s+` — the latter is O(n²) on a long whitespace run with no valid
+  // attribute name following, since the regex engine retries the match at
+  // every position with a shrinking whitespace span before giving up.
+  it('given a script tag padded with a large run of whitespace and no valid attribute name, should stamp the nonce in near-linear time (not quadratic)', () => {
+    const padding = ' '.repeat(50_000);
+    const html = `<script${padding}>console.log("hi");</script>`;
+    const start = performance.now();
+    const out = renderCanvasDocument({ html, nonce: 'n' });
+    const elapsedMs = performance.now() - start;
+    expect(out).toContain('console.log("hi")');
+    // Linear-time regex finishes in low single-digit ms even at 50k chars;
+    // a reintroduced O(n²) `\s+` blows well past 1s at this size.
+    expect(elapsedMs).toBeLessThan(1000);
+  });
+
+  it('given a bare (valueless) nonce attribute, should replace it with a real one, not duplicate it', () => {
+    const out = renderCanvasDocument({
+      html: '<script nonce defer src="x.js"></script>',
+      nonce: 'app-nonce==',
+    });
+    expect(out).toContain('<script nonce="app-nonce==" defer src="x.js"></script>');
+    // "app-nonce==" itself contains "nonce" as a substring, and the bare
+    // attribute is a literal `nonce` token — count the quoted attribute form
+    // only, which is unambiguous.
+    expect((out.match(/nonce="/g) ?? []).length).toBe(1);
+    expect(out).not.toContain('nonce defer'); // the original bare token is gone, not left behind
+  });
+
+  it('given a nonce with HTML-significant characters, should escape it in the stamped attribute', () => {
+    const out = renderCanvasDocument({
+      html: '<script>x()</script>',
+      nonce: '"><script>alert(1)</script>',
+    });
+    expect(out).toContain('nonce="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"');
+  });
+
+  it('given multiple author <script> tags, should stamp the nonce onto each', () => {
+    const out = renderCanvasDocument({
+      html: '<script>a()</script><p>x</p><script>b()</script>',
+      nonce: 'n1',
+    });
+    expect((out.match(/nonce="n1"/g) ?? []).length).toBe(2);
+  });
+});
+
 describe('deriveDescription', () => {
   it('given plain text shorter than the limit, should return it unchanged', () => {
     expect(deriveDescription('Hello world')).toBe('Hello world');

@@ -63,6 +63,19 @@ POSTGRES_DB=pagespace
 POSTGRES_USER=pagespace
 POSTGRES_PASSWORD=$(alnum_secret 32)
 
+# --- Admin Database (trust plane) ---
+ADMIN_POSTGRES_DB=pagespace_admin
+ADMIN_POSTGRES_USER=pagespace
+ADMIN_POSTGRES_PASSWORD=$(alnum_secret 32)
+ADMIN_APP_PASSWORD=$(alnum_secret 32)
+ADMIN_PROCESSOR_PASSWORD=$(alnum_secret 32)
+ADMIN_READER_PASSWORD=$(alnum_secret 32)
+ADMIN_ERASER_PASSWORD=$(alnum_secret 32)
+# Fresh install: the audit chainer may start its chain from genesis. An
+# UPGRADED stack must never carry this flag (see infrastructure/UPGRADE.md,
+# Phase 2 backfill — era-fork guard).
+AUDIT_CHAINER_ALLOW_GENESIS=true
+
 # --- Security Secrets ---
 ENCRYPTION_KEY=$(hex_secret 32)
 CSRF_SECRET=$(hex_secret 32)

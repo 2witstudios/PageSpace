@@ -52,7 +52,7 @@ const PAGE_TYPE_COLORS: Partial<Record<PageType, string>> = {
   [PageType.CANVAS]:    '#f472b6',
   [PageType.CODE]:      '#a78bfa',
   [PageType.FILE]:      '#94a3b8',
-  [PageType.TERMINAL]:  '#6ee7b7',
+  [PageType.MACHINE]:  '#6ee7b7',
 };
 
 const PAGE_TYPE_ICON_COMPONENTS: Record<string, LucideIcon> = {
@@ -270,7 +270,7 @@ export default function QuickCreatePalette() {
 
   const creatableTypes = useMemo(() => {
     const types = getCreatablePageTypes();
-    return user?.role === 'admin' ? [...types, PageType.TERMINAL] : types;
+    return user?.role === 'admin' ? [...types, PageType.MACHINE] : types;
   }, [user?.role]);
 
   if (!quickCreateOpen) return null;

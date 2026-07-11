@@ -27,7 +27,7 @@ import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/l
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
-import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -97,43 +97,43 @@ export async function resolveMachineActorContext(userId: string): Promise<Machin
   };
 }
 
-async function findTerminalPage(terminalId: string) {
+async function findMachinePage(machineId: string) {
   const page = await db.query.pages.findFirst({
-    where: eq(pages.id, terminalId),
+    where: eq(pages.id, machineId),
     columns: { type: true, driveId: true },
   });
-  if (!page || !isTerminalPage(page.type as PageType)) return null;
+  if (!page || !isMachinePage(page.type as PageType)) return null;
   return page;
 }
 
 /** Edit-level access (spawn/kill) — re-checked on every acquire, not cached. */
-export async function canAccessMachine(actorUserId: string, terminalId: string): Promise<boolean> {
-  const page = await findTerminalPage(terminalId);
+export async function canAccessMachine(actorUserId: string, machineId: string): Promise<boolean> {
+  const page = await findMachinePage(machineId);
   if (!page) return false;
-  return canUserEditPage(actorUserId, terminalId);
+  return canUserEditPage(actorUserId, machineId);
 }
 
 /** View-level access (list/attach) — looser than edit-level. */
-export async function canViewMachine(actorUserId: string, terminalId: string): Promise<boolean> {
-  const page = await findTerminalPage(terminalId);
+export async function canViewMachine(actorUserId: string, machineId: string): Promise<boolean> {
+  const page = await findMachinePage(machineId);
   if (!page) return false;
-  return canUserViewPage(actorUserId, terminalId);
+  return canUserViewPage(actorUserId, machineId);
 }
 
 export function buildMachineBranchesDeps(): MachineBranchesDeps {
   return {
     store: {
-      list: async (terminalId, projectName) => (await getMachineBranchStore()).list(terminalId, projectName),
-      findByName: async (terminalId, projectName, branchName) =>
-        (await getMachineBranchStore()).findByName(terminalId, projectName, branchName),
+      list: async (machineId, projectName) => (await getMachineBranchStore()).list(machineId, projectName),
+      findByName: async (machineId, projectName, branchName) =>
+        (await getMachineBranchStore()).findByName(machineId, projectName, branchName),
       findById: async (id) => (await getMachineBranchStore()).findById(id),
       create: async (input) => (await getMachineBranchStore()).create(input),
       updateSandboxId: async (input) => (await getMachineBranchStore()).updateSandboxId(input),
-      remove: async (terminalId, projectName, branchName) =>
-        (await getMachineBranchStore()).remove(terminalId, projectName, branchName),
+      remove: async (machineId, projectName, branchName) =>
+        (await getMachineBranchStore()).remove(machineId, projectName, branchName),
     },
     projectStore: {
-      findByName: async (terminalId, name) => (await getMachineProjectStore()).findByName(terminalId, name),
+      findByName: async (machineId, name) => (await getMachineProjectStore()).findByName(machineId, name),
     },
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),

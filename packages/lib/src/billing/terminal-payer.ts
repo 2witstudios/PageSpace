@@ -6,7 +6,7 @@
  * `createResolveSandboxActorContext`, interactive PTY sessions via
  * `makeTerminalCheckAuth`) resolves `tenantId` to the ACTING drive's
  * `ownerId` — correct for an 'own' machine (the agent's own page, in its own
- * drive), but a `MachineRef` of `{ kind: 'existing', terminalId }` can address
+ * drive), but a `MachineRef` of `{ kind: 'existing', machineId }` can address
  * a Terminal page in a DIFFERENT drive (Terminal scope is page-permission-based,
  * not per-drive — tasks/terminal.md). In that case `tenantId` is the ACTOR's
  * drive owner, not the referenced machine's — so this resolves the referenced

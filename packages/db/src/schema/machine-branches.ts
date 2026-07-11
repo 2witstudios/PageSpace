@@ -16,8 +16,8 @@ import { pages } from './core';
  * isolation between two branches of the same project means two distinct
  * Sprites, never a shared filesystem.
  *
- * Addressed by (terminalId, projectName, branchName) — the same
- * (terminalId, name) identity Projects already use, rather than a
+ * Addressed by (machineId, projectName, branchName) — the same
+ * (machineId, name) identity Projects already use, rather than a
  * project-row id FK, so this stays consistent with how `machine_projects` is
  * looked up everywhere else and needs no join to resolve a project's
  * `repoUrl` before cloning. `sessionKey` is the opaque HMAC name this
@@ -33,7 +33,7 @@ export const machineBranches = pgTable('machine_branches', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
 
-  terminalId: text('terminalId')
+  machineId: text('machineId')
     .notNull()
     .references(() => pages.id, { onDelete: 'cascade' }),
 
@@ -46,9 +46,9 @@ export const machineBranches = pgTable('machine_branches', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
-  terminalIdIdx: index('machine_branches_terminal_id_idx').on(table.terminalId),
-  terminalProjectBranchUnique: uniqueIndex('machine_branches_terminal_project_branch_idx').on(
-    table.terminalId,
+  machineIdIdx: index('machine_branches_machine_id_idx').on(table.machineId),
+  machineProjectBranchUnique: uniqueIndex('machine_branches_machine_project_branch_idx').on(
+    table.machineId,
     table.projectName,
     table.branchName,
   ),
@@ -59,8 +59,8 @@ export const machineBranchesRelations = relations(machineBranches, ({ one }) => 
     fields: [machineBranches.ownerId],
     references: [users.id],
   }),
-  terminal: one(pages, {
-    fields: [machineBranches.terminalId],
+  machine: one(pages, {
+    fields: [machineBranches.machineId],
     references: [pages.id],
   }),
 }));

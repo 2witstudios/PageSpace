@@ -28,6 +28,8 @@ import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 interface ActiveStreamRow {
   messageId: string;
   conversationId: string;
+  /** ISO timestamp of the stream's start; stamps synthesized bubbles with a `createdAt`. */
+  startedAt?: string;
   /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
   parts?: UIMessagePart[];
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
@@ -265,6 +267,7 @@ export function useChannelStreamSocket(
             triggeredBy: stream.triggeredBy,
             isOwn,
             parts: foldedParts,
+            startedAt: stream.startedAt,
           });
           if (isOwn) {
             ownStreamIds.add(stream.messageId);
@@ -295,6 +298,7 @@ export function useChannelStreamSocket(
         conversationId: payload.conversationId,
         triggeredBy: payload.triggeredBy,
         isOwn: false,
+        startedAt: payload.startedAt,
       });
 
       startConsume(payload.messageId, payload.conversationId);

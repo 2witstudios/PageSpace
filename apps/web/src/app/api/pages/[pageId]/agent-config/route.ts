@@ -87,7 +87,7 @@ export async function GET(
         availableTerminals = await db
           .select({ id: pages.id, title: pages.title })
           .from(pages)
-          .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+          .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'MACHINE'), eq(pages.isTrashed, false)));
       }
     } catch (error) {
       loggers.api.error('Error fetching available terminals:', error as Error);
@@ -192,8 +192,8 @@ export async function PATCH(
     }
 
     // Validate machines: shape-check each entry (MachineRef contract), cap the
-    // array length, then verify every "existing" terminalId points to a
-    // non-trashed TERMINAL page the requesting user can access — mirrors the
+    // array length, then verify every "existing" machineId points to a
+    // non-trashed MACHINE page the requesting user can access — mirrors the
     // GET availableTerminals scoping, so a caller can't attach a Terminal
     // outside their access via a direct API call.
     if (machines !== undefined) {
@@ -203,17 +203,17 @@ export async function PATCH(
           { status: 400 }
         );
       }
-      const terminalIds = machines
-        .filter((m): m is { kind: 'existing'; terminalId: string } => m.kind === 'existing')
-        .map((m) => m.terminalId);
-      if (terminalIds.length > 0) {
+      const machineIds = machines
+        .filter((m): m is { kind: 'existing'; machineId: string } => m.kind === 'existing')
+        .map((m) => m.machineId);
+      if (machineIds.length > 0) {
         const accessiblePageIds = new Set(await getUserAccessiblePagesInDrive(userId, page.driveId));
         const validTerminals = await db
           .select({ id: pages.id })
           .from(pages)
-          .where(and(inArray(pages.id, terminalIds), eq(pages.type, 'TERMINAL'), eq(pages.isTrashed, false)));
+          .where(and(inArray(pages.id, machineIds), eq(pages.type, 'MACHINE'), eq(pages.isTrashed, false)));
         const validIds = new Set(validTerminals.filter((t) => accessiblePageIds.has(t.id)).map((t) => t.id));
-        const invalidIds = terminalIds.filter((id) => !validIds.has(id));
+        const invalidIds = machineIds.filter((id) => !validIds.has(id));
         if (invalidIds.length > 0) {
           return NextResponse.json(
             { error: `Invalid terminal reference(s): ${invalidIds.join(', ')}` },

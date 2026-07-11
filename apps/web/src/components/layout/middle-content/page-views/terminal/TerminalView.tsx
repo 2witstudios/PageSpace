@@ -34,7 +34,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
 
       {isAdmin && (
         <div className="flex-1 min-h-0">
-          <TerminalWorkspace terminalId={pageId} />
+          <TerminalWorkspace machineId={pageId} />
         </div>
       )}
     </motion.div>

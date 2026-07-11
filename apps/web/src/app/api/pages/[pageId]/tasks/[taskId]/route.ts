@@ -16,6 +16,7 @@ import { syncTaskDueDateTrigger, cancelTaskDueDateTrigger, fireCompletionTrigger
 import { checkSubTasksComplete, SUBTASKS_INCOMPLETE_STATUS } from '@/lib/tasks/completion-guard';
 import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -387,7 +388,7 @@ export async function PATCH(
   }
 
   // Fetch with relations (including assignees)
-  const taskWithRelations = await db.query.taskItems.findFirst({
+  const fetchedTask = await db.query.taskItems.findFirst({
     where: eq(taskItems.id, updatedTask.id),
     with: {
       assignee: {
@@ -415,9 +416,11 @@ export async function PATCH(
     },
   });
 
-  if (!taskWithRelations) {
+  if (!fetchedTask) {
     return NextResponse.json({ error: 'Task not found after update' }, { status: 404 });
   }
+
+  const taskWithRelations = await decryptTaskUserRelationsOne(fetchedTask);
 
   const responseTitle = taskWithRelations.page?.title ?? '';
 

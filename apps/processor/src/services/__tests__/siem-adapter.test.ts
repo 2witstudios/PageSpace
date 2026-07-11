@@ -492,6 +492,7 @@ describe('sendWebhook', () => {
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
     expect(result.error).toContain('SSRF blocked');
+    expect(result.errorClass).toBe('ssrf_blocked');
   });
 
   it('returns retryable failure on 500 response', async () => {
@@ -503,6 +504,23 @@ describe('sendWebhook', () => {
     const result = await sendWebhook(webhookConfig, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(true);
+    expect(result.errorClass).toBe('http_server_error');
+  });
+
+  it('classifies a 5xx as http_server_error while keeping the raw body on error (logging contract)', async () => {
+    // The receiver's body may embed secrets/PII. It must stay on `error` (for
+    // the operator-only stdout log) but must NOT become the errorClass that is
+    // persisted and surfaced on /health. See #989.
+    const secretBody = 'invalid token: sk-live-abc123; user=42; at handler (/srv/app.js:99)';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: vi.fn().mockResolvedValue(secretBody),
+    }));
+    const result = await sendWebhook(webhookConfig, [makeEntry()]);
+    expect(result.errorClass).toBe('http_server_error');
+    expect(result.error).toContain(secretBody);
+    expect(result.errorClass).not.toContain('sk-live-abc123');
   });
 
   it('returns non-retryable failure on 401 response', async () => {
@@ -514,6 +532,7 @@ describe('sendWebhook', () => {
     const result = await sendWebhook(webhookConfig, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
+    expect(result.errorClass).toBe('http_client_error');
   });
 
   it('returns retryable failure on network error', async () => {
@@ -522,6 +541,7 @@ describe('sendWebhook', () => {
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(true);
     expect(result.error).toBe('Network error');
+    expect(result.errorClass).toBe('transport_error');
   });
 
   it('handles 429 as retryable', async () => {
@@ -533,6 +553,7 @@ describe('sendWebhook', () => {
     const result = await sendWebhook(webhookConfig, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(true);
+    expect(result.errorClass).toBe('http_server_error');
   });
 });
 
@@ -577,6 +598,7 @@ describe('sendSyslogTcp', () => {
     const result = await sendSyslogTcp(config, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(true);
+    expect(result.errorClass).toBe('transport_error');
   });
 
   it('resolves with failure when socket emits error', async () => {
@@ -703,6 +725,7 @@ describe('sendSyslog', () => {
     const result = await sendSyslog(tcpConfig, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
+    expect(result.errorClass).toBe('ssrf_blocked');
   });
 
   it('returns failure when validation throws', async () => {
@@ -711,6 +734,7 @@ describe('sendSyslog', () => {
     expect(result.success).toBe(false);
     expect(result.retryable).toBe(false);
     expect(result.error).toContain('DNS error');
+    expect(result.errorClass).toBe('transport_error');
   });
 
   it('routes to TCP when protocol is tcp', async () => {
@@ -765,6 +789,7 @@ describe('deliverToSiem', () => {
     const result = await deliverToSiem(config, [makeEntry()]);
     expect(result.success).toBe(false);
     expect(result.error).toBe('Invalid SIEM configuration');
+    expect(result.errorClass).toBe('invalid_config');
   });
 
   it('calls sendWebhook when webhook type', async () => {

@@ -47,8 +47,14 @@ vi.mock('@pagespace/lib/onprem-defaults', () => ({
   getOnPremUserDefaults: vi.fn(() => ({ subscriptionTier: 'business' })),
 }));
 
-vi.mock('@pagespace/lib/auth/verification-utils', () => ({
-  createVerificationToken: vi.fn().mockResolvedValue('mock-verification-token'),
+// The script now delegates one-time link minting to the shared
+// `generateOnPremSetupLink` helper (which touches the DB). Mock it so this test
+// stays focused on the script's dual-lookup / prepareUserWrite behavior; the
+// helper's own token format is covered by onprem-setup-link.test.ts.
+vi.mock('@pagespace/lib/auth/onprem-setup-link', () => ({
+  generateOnPremSetupLink: vi
+    .fn()
+    .mockResolvedValue('http://localhost:3000/api/auth/magic-link/verify?token=ps_magic_mock'),
 }));
 
 vi.mock('@paralleldrive/cuid2', () => ({

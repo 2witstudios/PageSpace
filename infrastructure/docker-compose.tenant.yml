@@ -31,17 +31,71 @@ services:
     networks:
       - internal
 
+  # Trust plane: dedicated Admin Postgres for the tamper-evident security audit
+  # chain, isolated from the app database in every deployment mode (#890).
+  #
+  # CREDENTIAL MODEL (Phase 2): ADMIN_POSTGRES_* is the OWNER/bootstrap role and
+  # is handed ONLY to this container and the migrate one-shot — the owner would
+  # bypass the zero-trust grants in drizzle-admin/0001. Runtime services connect
+  # as per-service LOGIN users (provisioned by the migrate one-shot via
+  # db:provision:admin-users from the ADMIN_*_PASSWORD vars):
+  #   web       → admin_app_user       (admin_app template)
+  #   processor → admin_processor_user (admin_chainer + admin_siem templates)
+  #   realtime  → none (no audit path; the tenant stack has no admin app)
+  #
+  # UPGRADING an existing deployment: a pre-Phase-1 .env has no ADMIN_POSTGRES_*
+  # vars and a pre-Phase-2 .env has no ADMIN_APP/PROCESSOR/READER_PASSWORD vars,
+  # so this stack refuses to start (required-var errors below) until they are
+  # APPENDED to the existing .env — see infrastructure/UPGRADE.md. Never re-run
+  # generate-tenant-env.sh on a live deployment.
+  postgres-admin:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_admin_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${ADMIN_POSTGRES_DB:-pagespace_admin}
+      POSTGRES_USER: ${ADMIN_POSTGRES_USER:-pagespace}
+      POSTGRES_PASSWORD: ${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ADMIN_POSTGRES_USER:-pagespace} -d ${ADMIN_POSTGRES_DB:-pagespace_admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - internal
+
   migrate:
     image: ghcr.io/2witstudios/pagespace-migrate:${IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-admin:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://${ADMIN_POSTGRES_USER:-pagespace}:${ADMIN_POSTGRES_PASSWORD:?ADMIN_POSTGRES_* missing from .env - see infrastructure/UPGRADE.md (Phase 1 admin DB)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_APP_PASSWORD: ${ADMIN_APP_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
+      ADMIN_PROCESSOR_PASSWORD: ${ADMIN_PROCESSOR_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
+      ADMIN_READER_PASSWORD: ${ADMIN_READER_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
+      ADMIN_ERASER_PASSWORD: ${ADMIN_ERASER_PASSWORD:?ADMIN_ERASER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 GDPR eraser login user)}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
         bun run db:migrate &&
+        echo 'Starting admin database migrations...' &&
+        bun run db:migrate:admin &&
+        echo 'Provisioning admin login users...' &&
+        bun run db:provision:admin-users &&
         echo 'Migrations complete'
       "
     networks:
@@ -80,6 +134,10 @@ services:
       - cache_storage:/data/cache
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://admin_processor_user:${ADMIN_PROCESSOR_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      # Fresh installs set true in .env (generator/template); upgrades leave it
+      # unset so the chainer refuses to fork the eras pre-backfill (UPGRADE.md).
+      AUDIT_CHAINER_ALLOW_GENESIS: ${AUDIT_CHAINER_ALLOW_GENESIS:-}
       FILE_STORAGE_PATH: /data/files
       CACHE_PATH: /data/cache
       PORT: "3003"
@@ -135,6 +193,8 @@ services:
       DEPLOYMENT_MODE: tenant
       NEXT_PUBLIC_DEPLOYMENT_MODE: tenant
       DATABASE_URL: postgresql://${POSTGRES_USER:-pagespace}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-pagespace}
+      ADMIN_DATABASE_URL: postgresql://admin_app_user:${ADMIN_APP_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
+      ADMIN_ERASER_DATABASE_URL: postgresql://admin_gdpr_eraser_user:${ADMIN_ERASER_PASSWORD:?ADMIN_ERASER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 GDPR eraser login user)}@postgres-admin:5432/${ADMIN_POSTGRES_DB:-pagespace_admin}
       FILE_STORAGE_PATH: /app/storage
       PROCESSOR_URL: http://processor:3003
       CRON_SECRET: ${CRON_SECRET}
@@ -236,5 +296,6 @@ networks:
 
 volumes:
   postgres_data:
+  postgres_admin_data:
   file_storage:
   cache_storage:

@@ -24,7 +24,7 @@ interface TerminalAccessConfig {
 }
 
 function machineKey(machine: MachineRef): string {
-  return machine.kind === 'own' ? 'own' : machine.terminalId;
+  return machine.kind === 'own' ? 'own' : machine.machineId;
 }
 
 export function TerminalAccessCard() {
@@ -105,7 +105,7 @@ export function TerminalAccessCard() {
   }
 
   const usedTerminalIds = new Set(
-    config.machines.filter((m): m is { kind: 'existing'; terminalId: string } => m.kind === 'existing').map((m) => m.terminalId),
+    config.machines.filter((m): m is { kind: 'existing'; machineId: string } => m.kind === 'existing').map((m) => m.machineId),
   );
   const hasOwnMachine = config.machines.some((m) => m.kind === 'own');
   const availableTerminalsById = new Map(config.availableTerminals.map((t) => [t.id, t]));
@@ -133,7 +133,7 @@ export function TerminalAccessCard() {
     if (!config || !selectedTerminalId) return;
     persist({
       terminalAccess: config.terminalAccess,
-      machines: [...config.machines, { kind: 'existing', terminalId: selectedTerminalId }],
+      machines: [...config.machines, { kind: 'existing', machineId: selectedTerminalId }],
     });
     setSelectedTerminalId('');
   }
@@ -185,7 +185,7 @@ export function TerminalAccessCard() {
                 {config.machines.map((machine, index) => {
                   const label = machine.kind === 'own'
                     ? 'Own machine'
-                    : availableTerminalsById.get(machine.terminalId)?.title ?? 'Unknown terminal';
+                    : availableTerminalsById.get(machine.machineId)?.title ?? 'Unknown terminal';
                   return (
                     <div
                       key={machineKey(machine)}

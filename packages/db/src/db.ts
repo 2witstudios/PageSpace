@@ -4,7 +4,9 @@ import { schema } from './schema';
 import { registerPool, getPoolStats } from './pool-stats';
 import 'dotenv/config';
 
-const pool = new Pool({
+// Exported for the adminDb break-glass path (admin-db.ts), which binds an
+// admin-schema client over this same pool — no second connection pool.
+export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
   max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 10,

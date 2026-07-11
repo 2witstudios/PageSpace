@@ -224,6 +224,29 @@ describe('useNotificationStore', () => {
 
       expect(useNotificationStore.getState().unreadCount).toBe(0);
     });
+
+    it('regression: given a notification already marked read, calling markAsRead again should be a no-op (does not double-decrement unreadCount)', () => {
+      const notif = createMockNotification({ id: 'to-read', isRead: false });
+      useNotificationStore.setState({ notifications: [notif], unreadCount: 3 });
+      const { markAsRead } = useNotificationStore.getState();
+
+      // Two independent UI surfaces (e.g. an in-app toast and a native OS
+      // notification) can both call markAsRead for the same notification —
+      // the second call must not decrement unreadCount again.
+      markAsRead('to-read');
+      markAsRead('to-read');
+
+      expect(useNotificationStore.getState().unreadCount).toBe(2);
+    });
+
+    it('given an unknown notification ID, should not decrement unreadCount', () => {
+      useNotificationStore.setState({ notifications: [], unreadCount: 3 });
+      const { markAsRead } = useNotificationStore.getState();
+
+      markAsRead('does-not-exist');
+
+      expect(useNotificationStore.getState().unreadCount).toBe(3);
+    });
   });
 
   describe('markAllAsRead', () => {

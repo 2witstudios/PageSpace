@@ -8,6 +8,7 @@ import {
   extractDashboardFileViewRefs,
   rewriteDashboardFileViewLinks,
 } from '@/lib/canvas/file-view-links';
+import { useNonce } from '@/contexts/NonceContext';
 
 interface CanvasFrameProps {
   html: string;
@@ -44,6 +45,7 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
  * in-app view and the published artifact render identically.
  */
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
+  const nonce = useNonce();
   const [previewHtml, setPreviewHtml] = useState(html);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const { resolvedTheme } = useTheme();
@@ -94,8 +96,8 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // injectThemeBridge: true injects a script that listens for theme messages
   // so the canvas iframe's dark/light state matches the app's current theme.
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true }),
-    [previewHtml, title],
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, nonce }),
+    [previewHtml, title, nonce],
   );
 
   // Send the current theme to the canvas iframe whenever it changes or the

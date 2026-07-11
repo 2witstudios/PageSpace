@@ -40,6 +40,11 @@ vi.mock('../siem-delivery-worker', () => ({
   processSiemDelivery: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Mock audit chainer worker (dynamically imported by queue-manager)
+vi.mock('../audit-chainer-worker', () => ({
+  processAuditChainer: vi.fn().mockResolvedValue({ outcome: 'idle', drained: 0 }),
+}));
+
 // Mock workers
 vi.mock('../text-extractor', () => ({
   needsTextExtraction: vi.fn().mockReturnValue(false),
@@ -113,7 +118,7 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(8);
+      expect(mockBossWork).toHaveBeenCalledTimes(9);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
@@ -122,7 +127,8 @@ describe('QueueManager', () => {
       expect(mockBossWork.mock.calls[5][0]).toBe('siem-delivery');
       expect(mockBossWork.mock.calls[6][0]).toBe('pull-verify');
       expect(mockBossWork.mock.calls[7][0]).toBe('account-erasure');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(8);
+      expect(mockBossWork.mock.calls[8][0]).toBe('audit-chainer');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(9);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
@@ -131,7 +137,12 @@ describe('QueueManager', () => {
       expect(mockBossCreateQueue).toHaveBeenCalledWith('video-process');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('account-erasure');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('audit-chainer');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
+      // Same cadence + no-stack pattern as siem-delivery: retryLimit 0 so
+      // overlapping scheduled runs never pile up; the advisory lock inside
+      // the worker serializes any overlap that still happens.
+      expect(mockBossSchedule).toHaveBeenCalledWith('audit-chainer', '*/30 * * * * *', {}, { retryLimit: 0 });
     }, 30000);
 
     it('handles queue creation errors gracefully', async () => {
@@ -341,6 +352,7 @@ describe('QueueManager', () => {
       expect(status['text-extract']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['ocr-process']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['siem-delivery']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
+      expect(status['audit-chainer']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
     });
 
     it('maps queue states correctly', async () => {

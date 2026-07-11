@@ -1,0 +1,14 @@
+-- Anchor readback for the periodic verifier (#890 Phase 2, leaf 5).
+--
+-- The runtime cutover binds the periodic chain verifier (apps/web cron
+-- verify-audit-chain, connecting as admin_app) to the Admin PG, and that
+-- verifier now matches published anchors against the chain
+-- (matchAnchorsAgainstChain). admin_app therefore needs to READ the witness
+-- surface it is checking the chain against.
+--
+-- This deliberately widens the leaf-3 matrix by exactly one SELECT:
+-- anchors are public witness statements (seq, head hash, timestamp,
+-- signature — no PII), admin_app can already SELECT the chain itself, and
+-- the append-only invariant is untouched: still NOBODY holds UPDATE,
+-- DELETE, or TRUNCATE on security_audit_anchors.
+GRANT SELECT ON security_audit_anchors TO admin_app;

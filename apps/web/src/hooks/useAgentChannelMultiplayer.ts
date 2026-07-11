@@ -118,7 +118,7 @@ export function useAgentChannelMultiplayer({
       if (stream && stream.parts.length > 0 && stream.conversationId === agentConversationIdRef.current) {
         setLocalMessagesRef.current((prev) => [
           ...prev,
-          synthesizeAssistantMessage(messageId, stream.parts),
+          synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt),
         ]);
         return;
       }

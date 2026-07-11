@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useTerminalWorkspaceStore, selectWorkspace } from '../useTerminalWorkspaceStore';
+import { useTerminalWorkspaceStore, selectWorkspace, type WorkspaceState } from '../useTerminalWorkspaceStore';
 
 const reset = () => useTerminalWorkspaceStore.setState({ workspaces: {} });
+
+function allPanes(workspace: WorkspaceState | undefined) {
+  return workspace?.columns.flatMap((column) => column.panes) ?? [];
+}
 
 describe('useTerminalWorkspaceStore', () => {
   beforeEach(() => {
@@ -24,18 +28,18 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given ensureWorkspace is called for a new terminalId, should create a single-pane workspace', () => {
+  it('given ensureWorkspace is called for a new machineId, should create a single-pane workspace', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
-      given: 'ensureWorkspace is called for a new terminalId',
+      given: 'ensureWorkspace is called for a new machineId',
       should: 'create a single-pane workspace',
-      actual: workspace?.panes.length,
+      actual: allPanes(workspace).length,
       expected: 1,
     }).toEqual({
-      given: 'ensureWorkspace is called for a new terminalId',
+      given: 'ensureWorkspace is called for a new machineId',
       should: 'create a single-pane workspace',
       actual: 1,
       expected: 1,
@@ -93,7 +97,7 @@ describe('useTerminalWorkspaceStore', () => {
     expect({
       given: 'two ensured workspaces',
       should: 'keep them independent',
-      actual: { w1Scope: workspace1?.panes[0].scope, w2Scope: workspace2?.panes[0].scope },
+      actual: { w1Scope: allPanes(workspace1)[0].scope, w2Scope: allPanes(workspace2)[0].scope },
       expected: { w1Scope: { name: 'only-in-1' }, w2Scope: null },
     }).toEqual({
       given: 'two ensured workspaces',
@@ -112,7 +116,7 @@ describe('useTerminalWorkspaceStore', () => {
     expect({
       given: 'openTerminal',
       should: 'write the scope into the active pane',
-      actual: workspace?.panes.find((p) => p.id === workspace.activePaneId)?.scope,
+      actual: allPanes(workspace).find((p) => p.id === workspace?.activePaneId)?.scope,
       expected: { name: 'my-terminal' },
     }).toEqual({
       given: 'openTerminal',
@@ -122,22 +126,43 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given split, should add a second pane and activate it', () => {
+  it('given splitRight, should add a second column and activate its pane', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
-    useTerminalWorkspaceStore.getState().split('terminal-1');
+    const before = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
+    useTerminalWorkspaceStore.getState().splitRight('terminal-1', before!.activePaneId);
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
-      given: 'split',
-      should: 'add a second pane and activate it',
-      actual: { paneCount: workspace?.panes.length, activeIsNewPane: workspace?.activePaneId !== workspace?.panes[0].id },
-      expected: { paneCount: 2, activeIsNewPane: true },
+      given: 'splitRight',
+      should: 'add a second column and activate its pane',
+      actual: { columnCount: workspace?.columns.length, activeIsNewPane: workspace?.activePaneId !== before?.activePaneId },
+      expected: { columnCount: 2, activeIsNewPane: true },
     }).toEqual({
-      given: 'split',
-      should: 'add a second pane and activate it',
-      actual: { paneCount: 2, activeIsNewPane: true },
-      expected: { paneCount: 2, activeIsNewPane: true },
+      given: 'splitRight',
+      should: 'add a second column and activate its pane',
+      actual: { columnCount: 2, activeIsNewPane: true },
+      expected: { columnCount: 2, activeIsNewPane: true },
+    });
+  });
+
+  it('given splitDown, should stack a new pane in the same column', () => {
+    useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
+    const before = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
+    useTerminalWorkspaceStore.getState().splitDown('terminal-1', before!.activePaneId);
+
+    const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
+
+    expect({
+      given: 'splitDown',
+      should: 'stack a new pane in the same column',
+      actual: { columnCount: workspace?.columns.length, paneCountInColumn: workspace?.columns[0]?.panes.length },
+      expected: { columnCount: 1, paneCountInColumn: 2 },
+    }).toEqual({
+      given: 'splitDown',
+      should: 'stack a new pane in the same column',
+      actual: { columnCount: 1, paneCountInColumn: 2 },
+      expected: { columnCount: 1, paneCountInColumn: 2 },
     });
   });
 
@@ -145,7 +170,7 @@ describe('useTerminalWorkspaceStore', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
     const before = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
-    useTerminalWorkspaceStore.getState().closePane('terminal-1', before!.panes[0].id);
+    useTerminalWorkspaceStore.getState().closePane('terminal-1', allPanes(before)[0].id);
     const after = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
 
     expect({
@@ -163,10 +188,11 @@ describe('useTerminalWorkspaceStore', () => {
 
   it('given selectPane, should activate the chosen pane', () => {
     useTerminalWorkspaceStore.getState().ensureWorkspace('terminal-1');
-    useTerminalWorkspaceStore.getState().split('terminal-1');
+    const before = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
+    useTerminalWorkspaceStore.getState().splitRight('terminal-1', before!.activePaneId);
 
     const workspace = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
-    const firstPaneId = workspace!.panes[0].id;
+    const firstPaneId = allPanes(workspace)[0].id;
     useTerminalWorkspaceStore.getState().selectPane('terminal-1', firstPaneId);
 
     const after = selectWorkspace('terminal-1')(useTerminalWorkspaceStore.getState());
@@ -184,21 +210,22 @@ describe('useTerminalWorkspaceStore', () => {
     });
   });
 
-  it('given actions on a terminalId that was never ensured, should be a no-op', () => {
+  it('given actions on a machineId that was never ensured, should be a no-op', () => {
     useTerminalWorkspaceStore.getState().openTerminal('never-ensured', { name: 'ghost' });
-    useTerminalWorkspaceStore.getState().split('never-ensured');
+    useTerminalWorkspaceStore.getState().splitRight('never-ensured', 'anything');
+    useTerminalWorkspaceStore.getState().splitDown('never-ensured', 'anything');
     useTerminalWorkspaceStore.getState().closePane('never-ensured', 'anything');
     useTerminalWorkspaceStore.getState().selectPane('never-ensured', 'anything');
 
     const workspace = selectWorkspace('never-ensured')(useTerminalWorkspaceStore.getState());
 
     expect({
-      given: 'actions on a terminalId that was never ensured',
+      given: 'actions on a machineId that was never ensured',
       should: 'be a no-op',
       actual: workspace,
       expected: undefined,
     }).toEqual({
-      given: 'actions on a terminalId that was never ensured',
+      given: 'actions on a machineId that was never ensured',
       should: 'be a no-op',
       actual: undefined,
       expected: undefined,

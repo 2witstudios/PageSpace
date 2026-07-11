@@ -268,6 +268,22 @@ export const errorLogs = pgTable('error_logs', {
   endpointIdx: index('idx_errors_endpoint').on(table.endpoint),
 }));
 
+/**
+ * Error resolution workflow (#890 Phase 3). Post-cutover the error rows
+ * themselves live in immutable ClickHouse, so the mutable resolved-flag
+ * workflow is keyed off-row here in main PG by the error row's stable id
+ * (same id space for CH rows and legacy PG error_logs rows). Readers fetch
+ * error rows from their store and merge these rows in app code — the two
+ * stores are never SQL-joined; the resolve action writes only this table.
+ */
+export const errorResolutions = pgTable('error_resolutions', {
+  errorId: text('error_id').primaryKey(),
+  resolved: boolean('resolved').default(true).notNull(),
+  resolvedAt: timestamp('resolved_at', { mode: 'date' }).defaultNow().notNull(),
+  resolvedBy: text('resolved_by'),
+  resolution: text('resolution'),
+});
+
 // `activity_operation` is a text column, not an enum. The column stores values
 // constrained at the TS layer via the ActivityOperation string-literal union in
 // packages/lib/src/monitoring/activity-logger.ts. DB-level enum constraint was

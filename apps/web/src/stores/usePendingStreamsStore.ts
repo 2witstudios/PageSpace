@@ -11,6 +11,8 @@ export interface PendingStream {
   triggeredBy: { userId: string; displayName: string };
   parts: UIMessagePart[];
   isOwn: boolean;
+  /** ISO timestamp of the stream's start, used to stamp synthesized bubbles with a `createdAt`. */
+  startedAt?: string;
 }
 
 interface PendingStreamsState {

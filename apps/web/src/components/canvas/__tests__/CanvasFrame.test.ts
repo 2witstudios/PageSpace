@@ -14,6 +14,15 @@ vi.mock('next-themes', () => ({
 
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
 
+// React 19.2.6 production build in this sandbox doesn't export `act`;
+// @testing-library/react 16.x requires it. Polyfill with a synchronous
+// wrapper. In CI (development React build) React.act exists and this is
+// never reached. NOTE: does not batch updates like the real act, but is
+// sufficient for these assertion-only tests.
+if (typeof (React as Record<string, unknown>).act !== 'function') {
+  (React as Record<string, unknown>).act = (cb: () => unknown) => cb();
+}
+
 /**
  * Security invariant guard for the in-app canvas iframe.
  *
@@ -96,47 +105,65 @@ describe('CanvasFrame — theme sync', () => {
   });
 
   it('given resolvedTheme, should postMessage the theme to the iframe on mount', async () => {
-    const postMessageSpy = vi.spyOn(window, 'postMessage');
+    const mockPostMessage = vi.fn();
 
     render(React.createElement(CanvasFrame, {
       html: '<p>x</p>',
       title: 'Canvas',
     }));
 
-    // The effect fires after mount; the iframe contentWindow.postMessage is the
-    // call we care about. In jsdom the iframe has a contentWindow, so the
-    // spy on window.postMessage catches the parent→iframe direction via the
-    // message event listener (we test the srcDoc contains the bridge and the
-    // component wires up the listener).
-    expect(postMessageSpy).toBeDefined();
-    postMessageSpy.mockRestore();
+    // jsdom does not create contentWindow for sandboxed iframes, so inject a
+    // mock that the effect's postMessage call will use.
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: mockPostMessage },
+      configurable: true,
+    });
+
+    mockPostMessage.mockClear();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: iframe.contentWindow,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: true },
+      '*',
+    );
   });
 
   it('given a pagespace-theme-request message from the iframe, should respond with the current theme', async () => {
-    const { container } = render(React.createElement(CanvasFrame, {
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    render(React.createElement(CanvasFrame, {
       html: '<p>x</p>',
       title: 'Canvas',
     }));
 
-    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
-    const contentWindow = iframe.contentWindow!;
-    const postSpy = vi.spyOn(contentWindow, 'postMessage');
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
 
     // Simulate the iframe's bridge script requesting the theme on load.
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'pagespace-theme-request' },
-      source: contentWindow,
+      source: mockContentWindow as unknown as MessageEventSource,
     }));
 
-    expect(postSpy).toHaveBeenCalledWith(
+    expect(mockPostMessage).toHaveBeenCalledWith(
       { type: 'pagespace-theme', isDark: true },
       '*',
     );
-    postSpy.mockRestore();
   });
 
   it('given resolvedTheme is light, should send isDark: false', async () => {
     useThemeMock.mockReturnValue({ resolvedTheme: 'light' });
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
 
     const { container } = render(React.createElement(CanvasFrame, {
       html: '<p>x</p>',
@@ -144,30 +171,36 @@ describe('CanvasFrame — theme sync', () => {
     }));
 
     const iframe = container.querySelector('iframe') as HTMLIFrameElement;
-    const contentWindow = iframe.contentWindow!;
-    const postSpy = vi.spyOn(contentWindow, 'postMessage');
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
 
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'pagespace-theme-request' },
-      source: contentWindow,
+      source: mockContentWindow as unknown as MessageEventSource,
     }));
 
-    expect(postSpy).toHaveBeenCalledWith(
+    expect(mockPostMessage).toHaveBeenCalledWith(
       { type: 'pagespace-theme', isDark: false },
       '*',
     );
-    postSpy.mockRestore();
   });
 
   it('given a message from a different source, should NOT respond', async () => {
-    const { container } = render(React.createElement(CanvasFrame, {
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    render(React.createElement(CanvasFrame, {
       html: '<p>x</p>',
       title: 'Canvas',
     }));
 
-    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
-    const contentWindow = iframe.contentWindow!;
-    const postSpy = vi.spyOn(contentWindow, 'postMessage');
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
 
     // Simulate a message from a source that is NOT the iframe.
     window.dispatchEvent(new MessageEvent('message', {
@@ -175,7 +208,6 @@ describe('CanvasFrame — theme sync', () => {
       source: window,
     }));
 
-    expect(postSpy).not.toHaveBeenCalled();
-    postSpy.mockRestore();
+    expect(mockPostMessage).not.toHaveBeenCalled();
   });
 });

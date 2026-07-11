@@ -38,6 +38,24 @@ describe('synthesizeAssistantMessage', () => {
     expect(msg.parts.map((p) => p.type)).toEqual(['text', 'tool-list_pages']);
   });
 
+  it('given an ISO startedAt, should attach it as a createdAt Date', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [{ type: 'text' as const, text: 'hi' }], '2024-01-01T00:00:00.000Z');
+
+    expect(msg.createdAt).toEqual(new Date('2024-01-01T00:00:00.000Z'));
+  });
+
+  it('given no startedAt, should omit createdAt entirely (not set it to undefined)', () => {
+    const msg = synthesizeAssistantMessage('msg-1', []);
+
+    expect('createdAt' in msg).toBe(false);
+  });
+
+  it('given an unparseable startedAt, should omit createdAt rather than attach an Invalid Date', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [], 'not-a-date');
+
+    expect('createdAt' in msg).toBe(false);
+  });
+
   it('given the same input twice, should produce structurally equal messages but referentially independent parts arrays', () => {
     const parts = [{ type: 'text' as const, text: 'hi' }];
     const a = synthesizeAssistantMessage('msg-1', parts);
