@@ -83,8 +83,10 @@ export type ReconnectPlan =
  * `preOpenDrop` is what keeps a COLD Sprite openable. A Sprite has no wake API —
  * an incoming request wakes it (docs.sprites.dev/concepts/lifecycle) — so the
  * first `createSession` against a hibernated VM IS its wake, and Fly's
- * wake-on-request can drop that first connection before it ever opens ("closed
- * before open"). At that moment there is no known id (we were creating one) and
+ * wake-on-request can drop that first connection before it ever opens (surfaced
+ * as an opaque WebSocket error — hence the caller classifies it structurally, by
+ * the absence of a 'spawn', not by its text). At that moment there is no known id
+ * (we were creating one) and
  * nothing live (the VM is still booting): identical, on the surface, to a
  * genuinely dead shell. Without this flag that state reads as `fatal` and the
  * user gets `exit -1` instead of a prompt. A pre-open drop is provably a

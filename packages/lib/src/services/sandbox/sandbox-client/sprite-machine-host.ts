@@ -88,11 +88,11 @@ function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise
 // NOTE: an abandoned attempt's WebSocket cannot be torn down through the SDK's
 // public API — `SpriteCommand` exposes only start/wait/kill/signal/resize, and
 // `kill` is `signal`, which no-ops unless the socket is already OPEN; the
-// underlying `WSCommand.close()` is private. A socket that failed with "closed
-// before open" is already closed by definition, so the residue is limited to the
-// pathological case where the transport reports nothing at all and we abandon it
-// at the wall-clock cap. Bounded by kill frequency, and not fixable here without
-// an SDK change.
+// underlying `WSCommand.close()` is private. A socket that already reported a
+// close is closed by definition, so the residue is limited to the pathological
+// case where the transport reports nothing at all and we abandon it at the
+// wall-clock cap. Bounded by kill frequency, and not fixable here without an SDK
+// change.
 
 function wrapSpriteStream(command: SpriteCommandLike): MachineStream {
   return {
@@ -145,8 +145,8 @@ function wrapSpriteHandle({
      * Opening a stream (attachSession/createSession) is itself an exec, so it IS
      * the wake for a hibernated Sprite — there is no wake API
      * (docs.sprites.dev/concepts/lifecycle). But Fly's wake-on-request can drop
-     * that FIRST connection before it opens ("closed before open"), and this path
-     * had no retry at all: `killAgentTerminal` attaches and immediately SIGKILLs,
+     * that FIRST connection before it ever opens, and this path had no retry at
+     * all: `killAgentTerminal` attaches and immediately SIGKILLs,
      * so a dropped wake silently failed the kill and left the row behind. The
      * exec path (`withWakeRetry`) and the realtime PTY (`openPtyShell`'s bounded
      * reconnect) both already absorb that drop; this is the third caller, and now

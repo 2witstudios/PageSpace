@@ -5,7 +5,9 @@
  * FIRST thing that touches a hibernated Sprite — and therefore the thing that
  * wakes it (docs.sprites.dev/concepts/lifecycle: there is no wake API; an
  * incoming request wakes the VM). Fly's wake-on-request can drop that first
- * connection while the VM boots, which the SDK surfaces as "closed before open".
+ * connection while the VM boots — surfaced as an opaque WebSocket error, which is
+ * why the shell classifies the drop STRUCTURALLY (no 'spawn', no output => the
+ * socket never opened) rather than by matching the error's text.
  *
  * That drop used to land on the throwaway `sh -c :` exec, which absorbed it via
  * `withWakeRetry`. Now it lands on the real session-open, so `openPtyShell`'s

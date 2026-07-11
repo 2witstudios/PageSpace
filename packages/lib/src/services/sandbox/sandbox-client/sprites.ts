@@ -302,12 +302,13 @@ function runSpawned(
 // Cold-start exec retry. A hibernated Sprite has NO explicit wake API — an
 // incoming request to it (i.e. any exec) wakes it automatically
 // (docs.sprites.dev/concepts/lifecycle), so the FIRST REAL operation is the
-// wake. Fly's wake-on-request can drop that first connection while the VM boots
-// — the SDK surfaces it as a "closed before open" error. That failure is
-// provably pre-open (the command never started), so retrying it is safe and IS
-// the wake handshake. We retry ONLY that signal: a post-open failure (timeout,
-// output overflow, non-zero exit, mid-command socket drop) may have already run
-// the command and must NOT be retried.
+// wake. Fly's wake-on-request can drop that first connection while the VM boots.
+// Such a failure is provably PRE-OPEN (the command never started), so retrying it
+// is safe and IS the wake handshake — see `isPreOpenWakeError` for how that is
+// detected (structurally, from the absence of the SDK's `spawn` event; the error's
+// text cannot be trusted for it). We retry ONLY that signal: a post-open failure
+// (timeout, output overflow, non-zero exit, mid-command socket drop) may have
+// already run the command and must NOT be retried.
 export const MAX_EXEC_ATTEMPTS = 3;
 export const RETRY_BASE_DELAY_MS = 500;
 const FS_OP_TIMEOUT_MS = 30_000;
