@@ -4,8 +4,14 @@
  * Why not `@media (hover: none)` / `(pointer: coarse)` alone?
  * The iOS app sets `ios.preferredContentMode: 'recommended'`, which gives the
  * iPad desktop-class browsing: it reports `hover: hover` and `pointer: fine`.
- * A CSS-only gate is therefore dead on the exact device that needs it — see the
- * previously-dead `[@media(hover:none)]` rule this module replaces.
+ * A CSS-only gate is therefore dead on the exact device that needs it — the
+ * `[@media(hover:none)]` rule in MessageHoverToolbar had been silently inert on
+ * that iPad for exactly this reason.
+ *
+ * This module does not *replace* those media queries — it backstops them. They
+ * still cover iPhone and Android with zero JS; this covers the one device they
+ * cannot see. Both gates ship together so that if this script never runs,
+ * everything the media query already handled keeps working.
  *
  * `navigator.maxTouchPoints` is the only reliable tell: iPadOS reports 5 even in
  * desktop-class mode, while real macOS reports 0. The repo already trusts this
@@ -32,8 +38,11 @@ export function detectCoarsePointer(): boolean {
 }
 
 /**
- * The pre-paint inline script stamped into <body> by the root layout. Kept here
- * (rather than inline in layout.tsx) so the logic and its unit tests live
- * together. Must stay behaviourally identical to `detectCoarsePointer`.
+ * The pre-paint inline script stamped into <body> by the root layout. It has to
+ * be a hand-minified copy of `detectCoarsePointer` — it runs before any bundle
+ * loads — which makes it the one real maintenance hazard here. It is kept in this
+ * file, beside the function it mirrors, and a parity test in
+ * `__tests__/pointer-capability.test.ts` asserts the two agree on every device in
+ * the matrix. Change one without the other and that test fails.
  */
 export const POINTER_CAPABILITY_SCRIPT = `(function(){try{var C=window.Capacitor;var t=(C&&C.isNativePlatform&&C.isNativePlatform())||(window.matchMedia&&window.matchMedia('(pointer: coarse)').matches)||((navigator.maxTouchPoints||0)>1&&/iPad|Macintosh|iPhone/.test(navigator.userAgent));if(t){document.documentElement.setAttribute('data-pointer','coarse');}}catch(e){}})();`;
