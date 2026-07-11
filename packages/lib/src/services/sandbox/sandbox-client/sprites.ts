@@ -7,15 +7,21 @@
  * `getOrCreate` resumes an existing Sprite by name or creates a fresh one.
  *
  * Provisioning is locked down, never platform defaults:
- *  - **Egress** — the deny-by-default L3 network policy is (re-)applied on EVERY
- *    hand-back, whether the Sprite was just created or resumed by name. Sprites
- *    default to open outbound, so a Sprite reused after a crash between
- *    `createSprite` and its original lockdown would otherwise run the next
- *    command with open egress; reapplying on resume closes that window (and lets
- *    a tightened allowlist take effect on a warm session). On a FRESH Sprite a
- *    lockdown failure destroys it and rejects; on a RESUMED one we never destroy
- *    a warm session we don't own the lifecycle of, but we still refuse to hand it
- *    back — the call rejects so no command runs without a confirmed policy.
+ *  - **Egress** — the deny-by-default L3 network policy is applied when it is not
+ *    already known-good: on a FRESH create (a new Sprite starts with the
+ *    platform's open outbound), on a hash mismatch (the desired policy changed),
+ *    and when the caller records no applied hash at all (unknown → fail closed).
+ *    A warm resume whose recorded hash still matches skips it: the policy is a
+ *    persistent file (`/.sprite/policy/network.json`) that survives hibernation,
+ *    so re-pushing an identical policy on every hand-back was pure chatter on the
+ *    connect critical path. The crash window the old unconditional re-apply
+ *    defended (a crash between `createSprite` and its lockdown) is closed by
+ *    ORDERING instead: the caller links the session only after `getOrCreate`
+ *    resolves, so an unlocked Sprite is never reachable from a session row. See
+ *    `../egress-lockdown.ts`. On a FRESH Sprite a lockdown failure destroys it and
+ *    rejects; on a RESUMED one we never destroy a warm session we don't own the
+ *    lifecycle of, but we still refuse to hand it back — the call rejects so no
+ *    command runs without a confirmed policy.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
  *    defaults.
@@ -46,6 +52,7 @@
 // pure transformation logic and type-safe wrappers; it never touches the SDK.
 import type { NetworkPolicy, SpriteConfig } from '@fly/sprites';
 import { buildSpriteNetworkPolicy } from '../egress';
+import { hashPolicy, shouldApplyPolicy } from '../egress-lockdown';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import type {
   ExecSandboxClient,
@@ -691,26 +698,27 @@ export function classifyProvisionError(error: unknown): SandboxProvisionError {
 }
 
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
-// Called on every hand-back (fresh or resumed) so a Sprite is never returned
-// with open/unknown egress. When `destroyOnFailure` is set (a FRESH create), a
-// lockdown failure destroys the just-created Sprite before propagating; on a
-// resumed Sprite we never destroy a warm session, but the error still propagates
-// so the caller refuses to hand back a Sprite without a confirmed policy.
+// Called only when the policy is NOT already known-good on this Sprite (fresh
+// create, hash mismatch, or unknown recorded state — see `shouldApplyPolicy`), so
+// a Sprite is never returned with open/unknown egress and a warm resume pays no
+// redundant control-plane round-trip. When `destroyOnFailure` is set (a FRESH
+// create), a lockdown failure destroys the just-created Sprite before
+// propagating; on a resumed Sprite we never destroy a warm session, but the error
+// still propagates so the caller refuses to hand back a Sprite without a
+// confirmed policy.
 async function applyEgressLockdown({
   sdk,
   sprite,
-  options,
+  policy,
   destroyOnFailure,
 }: {
   sdk: SpritesSdk;
   sprite: SpriteInstanceLike;
-  options: SandboxCreateOptions;
+  policy: NetworkPolicy;
   destroyOnFailure: boolean;
 }): Promise<void> {
   try {
-    await sprite.updateNetworkPolicy(
-      buildSpriteNetworkPolicy({ egressAllowlist: options.egressAllowlist, egressMode: options.egressMode }),
-    );
+    await sprite.updateNetworkPolicy(policy);
     // Use spawn + runSpawned (30 s wall-clock) to create the workspace dir instead
     // of filesystem().mkdir(). The filesystem API uses a bare fetch() with no
     // AbortSignal — it hangs for 52–90 s when the Sprite VM is cold-booting and
@@ -788,7 +796,7 @@ export function createSpriteHandleCache(sdk: SpritesSdk): SpritesSdk {
 
 export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSandboxClient {
   return {
-    async getOrCreate({ name, options }) {
+    async getOrCreate({ name, options, appliedPolicyHash }) {
       // Resume by name when the Sprite already exists; create fresh ONLY on a
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
@@ -809,8 +817,18 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
           sprite = await sdk.createSprite(spriteName, options.caps);
           fresh = true;
         }
-        // Re-apply the deny-default egress lockdown on BOTH paths — see file header.
-        await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: fresh });
+        // Lock down egress only when it is not already known-good on this Sprite
+        // (fresh create / changed policy / unknown recorded state) — see file
+        // header and `../egress-lockdown.ts`. A warm resume under the same policy
+        // skips the control-plane round-trip and the `mkdir` exec entirely: the
+        // policy file and the sandbox root are both persistent.
+        const policy = buildSpriteNetworkPolicy({
+          egressAllowlist: options.egressAllowlist,
+          egressMode: options.egressMode,
+        });
+        if (shouldApplyPolicy({ fresh, appliedPolicyHash, desiredPolicyHash: hashPolicy(policy) })) {
+          await applyEgressLockdown({ sdk, sprite, policy, destroyOnFailure: fresh });
+        }
         return wrap(sprite);  // wrap sets sandboxId = sprite.name = spriteName (truncated)
       } catch (error) {
         // Normalize every provisioning failure (rate limit / conflict / outage)

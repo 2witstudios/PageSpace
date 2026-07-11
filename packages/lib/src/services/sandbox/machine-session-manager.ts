@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
 import type { SandboxCreateOptions } from './sandbox-options';
+import { hashSandboxEgressPolicy } from './egress-lockdown';
 import { resolveSandboxNetworkOptions } from './network-options';
 import { getConfiguredEgressIpTag } from './egress-ip';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
@@ -10,6 +11,20 @@ export interface SandboxHandle {
   sandboxId: string;
 }
 
+export interface SandboxGetOrCreateArgs {
+  name: string;
+  options: SandboxCreateOptions;
+  /**
+   * Hash of the egress policy this sandbox is already known to be running under
+   * (`hashSandboxEgressPolicy`, persisted on the session row when the driver last
+   * confirmed a lockdown). The driver re-applies the policy only when this is
+   * absent (unknown → fail closed) or stale; a warm resume under the same policy
+   * skips the control-plane round-trip, because the Sprite's policy file is
+   * persistent and survives hibernation. See `egress-lockdown.ts`.
+   */
+  appliedPolicyHash?: string | null;
+}
+
 /**
  * The provider-agnostic slice of the sandbox client this layer drives, injected
  * so this lifecycle owns no execution path (the Fly Sprites driver implements
@@ -17,7 +32,7 @@ export interface SandboxHandle {
  * to a known id (null if it has vanished); `stop` tears down.
  */
 export interface SandboxClient {
-  getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<SandboxHandle>;
+  getOrCreate(args: SandboxGetOrCreateArgs): Promise<SandboxHandle>;
   get(args: { sandboxId: string }): Promise<SandboxHandle | null>;
   stop(args: { sandboxId: string }): Promise<void>;
 }
@@ -135,12 +150,26 @@ export interface MachineSessionRecord {
   sandboxId: string;
   userId: string;
   lastActiveAt: Date;
+  /**
+   * Hash of the egress policy last confirmed applied to this sandbox, or null
+   * when unknown (a session that predates the record, or whose write was lost).
+   * Null makes the next hand-back re-apply the lockdown — fail closed.
+   */
+  egressPolicyHash: string | null;
 }
 
 export interface MachineSessionStore {
   findBySessionKey(sessionKey: string): Promise<MachineSessionRecord | null>;
-  save(input: { sessionKey: string; pageId: string; sandboxId: string; userId: string; now: Date }): Promise<void>;
-  touch(args: { sessionKey: string; now: Date }): Promise<void>;
+  save(input: {
+    sessionKey: string;
+    pageId: string;
+    sandboxId: string;
+    userId: string;
+    egressPolicyHash: string;
+    now: Date;
+  }): Promise<void>;
+  /** Advances `lastActiveAt`; also records `egressPolicyHash` when a new policy was just applied. */
+  touch(args: { sessionKey: string; now: Date; egressPolicyHash?: string }): Promise<void>;
   remove(sessionKey: string): Promise<void>;
 }
 
@@ -187,11 +216,18 @@ async function safeRemove(store: MachineSessionStore, sessionKey: string): Promi
   }
 }
 
-async function safeTouch(store: MachineSessionStore, sessionKey: string, now: Date): Promise<void> {
+async function safeTouch(
+  store: MachineSessionStore,
+  sessionKey: string,
+  now: Date,
+  egressPolicyHash?: string,
+): Promise<void> {
   try {
-    await store.touch({ sessionKey, now });
+    await store.touch({ sessionKey, now, egressPolicyHash });
   } catch {
-    // best-effort
+    // Best-effort. A lost policy-hash write only costs a redundant re-apply on
+    // the next hand-back (the record stays stale → `shouldApplyPolicy` says yes),
+    // never an unlocked Sprite.
   }
 }
 
@@ -227,6 +263,12 @@ async function provisionFreshMachine({
 
   let sandboxId: string;
   try {
+    // No `appliedPolicyHash`: there is no session row, so nothing is known about
+    // this name's egress state. The driver locks it down (fresh create, or a
+    // resume of an orphaned Sprite whose policy we cannot vouch for) and rejects
+    // if it cannot — so the session below is only ever linked to a VM whose
+    // policy is confirmed. That ordering, not re-application, is what keeps a
+    // crash between `createSprite` and lockdown from ever being handed back.
     const handle = await deps.client.getOrCreate({ name: key, options });
     sandboxId = handle.sandboxId;
   } catch (error) {
@@ -240,7 +282,14 @@ async function provisionFreshMachine({
   }
 
   try {
-    await deps.store.save({ sessionKey: key, pageId, userId, sandboxId, now: deps.now() });
+    await deps.store.save({
+      sessionKey: key,
+      pageId,
+      userId,
+      sandboxId,
+      egressPolicyHash: hashSandboxEgressPolicy(options),
+      now: deps.now(),
+    });
   } catch (error) {
     // The sandbox exists but we could not record the link — tear it down to
     // prevent an unreachable, unaudited orphan.
@@ -279,11 +328,16 @@ export async function acquireMachineSession(
       persistent: true,
     });
 
-    // Reconnect to an existing session, re-applying the open egress policy via
-    // getOrCreate on every hand-back. This covers: (a) normal reconnects to warm
-    // or hibernating VMs, (b) transparent re-provision if the VM has since been
-    // destroyed (getOrCreate recreates it under the same name so the sandboxId
-    // stays stable), (c) policy migration for sessions created before this change.
+    // Reconnect to an existing session via getOrCreate. This covers: (a) normal
+    // reconnects to warm or hibernating VMs, (b) transparent re-provision if the
+    // VM has since been destroyed (getOrCreate recreates it under the same name
+    // so the sandboxId stays stable), (c) policy migration — a changed policy is
+    // detected by hash and pushed once, then recorded.
+    //
+    // The policy is NOT re-pushed when the recorded hash already matches: it is a
+    // persistent file on the Sprite that survives hibernation, so re-applying it
+    // on every hand-back (including each 60s re-auth tick) was a control-plane
+    // round-trip plus a `mkdir` exec bought for nothing on the connect path.
     // Shared by `resume` (within the warm window) and `noop` (persistent-idle:
     // VM is hibernating). A hibernating VM is NOT pre-warmed here: it has no
     // explicit wake API (docs.sprites.dev/concepts/lifecycle) and wakes on any
@@ -300,9 +354,20 @@ export async function acquireMachineSession(
       if (!enablement.ok) {
         return { ok: false, reason: enablement.reason };
       }
+      const options = terminalSandboxOptions();
+      const desiredPolicyHash = hashSandboxEgressPolicy(options);
+      const appliedPolicyHash = existing?.egressPolicyHash ?? null;
       try {
-        const handle = await deps.client.getOrCreate({ name: key, options: machineSandboxOptions() });
-        await safeTouch(deps.store, key, deps.now());
+        const handle = await deps.client.getOrCreate({ name: key, options, appliedPolicyHash });
+        // getOrCreate resolved, so the VM is confirmed to be running the desired
+        // policy — record the hash when it moved (an unchanged one is already
+        // recorded), which is what lets the NEXT hand-back skip the re-apply.
+        await safeTouch(
+          deps.store,
+          key,
+          deps.now(),
+          appliedPolicyHash === desiredPolicyHash ? undefined : desiredPolicyHash,
+        );
         return { ok: true, sandboxId: handle.sandboxId, sessionKey: key, resumed: true };
       } catch (error) {
         const meta = { reason: 'provision_failed', userId, pageId, driveId };
@@ -375,23 +440,30 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
         sandboxId: row.sandboxId,
         userId: row.userId,
         lastActiveAt: row.lastActiveAt,
+        egressPolicyHash: row.egressPolicyHash,
       };
     },
 
-    async save({ sessionKey, pageId, sandboxId, userId, now }) {
+    async save({ sessionKey, pageId, sandboxId, userId, egressPolicyHash, now }) {
       await db
         .insert(machineSessions)
-        .values({ sessionKey, pageId, sandboxId, userId, lastActiveAt: now, updatedAt: now })
+        .values({ sessionKey, pageId, sandboxId, userId, egressPolicyHash, lastActiveAt: now, updatedAt: now })
         .onConflictDoUpdate({
           target: machineSessions.sessionKey,
-          set: { sandboxId, userId, lastActiveAt: now, updatedAt: now },
+          set: { sandboxId, userId, egressPolicyHash, lastActiveAt: now, updatedAt: now },
         });
     },
 
-    async touch({ sessionKey, now }) {
+    async touch({ sessionKey, now, egressPolicyHash }) {
       await db
         .update(machineSessions)
-        .set({ lastActiveAt: now, updatedAt: now })
+        .set({
+          lastActiveAt: now,
+          updatedAt: now,
+          // Only overwrite the recorded policy when a new one was just applied —
+          // an omitted hash must not blank the existing record.
+          ...(egressPolicyHash === undefined ? {} : { egressPolicyHash }),
+        })
         .where(eq(machineSessions.sessionKey, sessionKey));
     },
 

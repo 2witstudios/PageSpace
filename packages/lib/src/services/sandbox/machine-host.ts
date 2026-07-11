@@ -113,6 +113,12 @@ export interface MachineHost {
     name: string;
     substrate: MachineSubstrateSpec;
     options: SandboxCreateOptions;
+    /**
+     * Hash of the egress policy this machine is already known to run under (see
+     * `egress-lockdown.ts`). Absent/stale → the backend re-applies the lockdown;
+     * matching → it skips the redundant push on a warm resume.
+     */
+    appliedPolicyHash?: string | null;
   }): Promise<MachineHandle>;
   attach(args: { machineId: string }): Promise<MachineHandle | null>;
   kill(args: { machineId: string }): Promise<void>;

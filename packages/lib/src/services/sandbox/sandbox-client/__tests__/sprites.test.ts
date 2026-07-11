@@ -14,6 +14,8 @@ import {
 } from '../sprites';
 import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
+import { hashSandboxEgressPolicy } from '../../egress-lockdown';
+import { SANDBOX_ROOT } from '../../sandbox-paths';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
@@ -109,8 +111,14 @@ function fakeSprite(
 }
 
 function makeSdk(over: Partial<SpritesSdk> = {}) {
-  const calls = { created: [] as string[], deleted: [] as string[], policies: 0 };
-  const sprite = fakeSprite({ updateNetworkPolicy: async () => { calls.policies += 1; } });
+  const calls = { created: [] as string[], deleted: [] as string[], policies: 0, spawned: [] as string[] };
+  const sprite = fakeSprite({
+    updateNetworkPolicy: async () => { calls.policies += 1; },
+    spawn: (file, args = []) => {
+      calls.spawned.push([file, ...args].join(' '));
+      return fakeCommand({ exitCode: 0 });
+    },
+  });
   const sdk: SpritesSdk = {
     getSprite: async () => sprite,
     createSprite: async (name) => {
@@ -153,13 +161,39 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(calls.created).toEqual([]);
   });
 
-  it('given an existing Sprite, should RE-APPLY the egress lockdown on resume (crash-window guard)', async () => {
+  it('given a resume with NO recorded policy hash, should apply the lockdown (fail closed)', async () => {
     const { sdk, calls } = makeSdk();
     const client = createSpritesSandboxClient({ sdk });
     await client.getOrCreate({ name: 'k', options });
-    // Reused Sprites default to open egress; the lockdown must be reapplied so a
-    // Sprite created-but-not-yet-locked-down before a crash never runs open.
+    // Unknown egress state (a session predating the record, or a lost write): the
+    // Sprite is never handed back without a confirmed policy.
     expect(calls.policies).toBe(1);
+    expect(calls.created).toEqual([]);
+  });
+
+  it('given a resume whose recorded policy hash matches, should apply NEITHER the policy NOR the mkdir', async () => {
+    const { sdk, calls } = makeSdk();
+    const client = createSpritesSandboxClient({ sdk });
+    await client.getOrCreate({ name: 'k', options, appliedPolicyHash: hashSandboxEgressPolicy(options) });
+    // The policy file (/.sprite/policy/network.json) and the sandbox root are both
+    // persistent — re-pushing them on a warm hand-back is pure chatter on the
+    // connect critical path.
+    expect(calls.policies).toBe(0);
+    expect(calls.spawned).toEqual([]);
+    expect(calls.created).toEqual([]);
+  });
+
+  it('given a resume whose recorded policy hash is stale, should re-apply the policy once', async () => {
+    const { sdk, calls } = makeSdk();
+    const client = createSpritesSandboxClient({ sdk });
+    // e.g. the egress mode changed since this Sprite was locked down.
+    await client.getOrCreate({
+      name: 'k',
+      options,
+      appliedPolicyHash: hashSandboxEgressPolicy({ ...options, egressMode: 'open' }),
+    });
+    expect(calls.policies).toBe(1);
+    expect(calls.spawned).toEqual([`mkdir -p ${SANDBOX_ROOT}`]);
     expect(calls.created).toEqual([]);
   });
 
@@ -200,7 +234,7 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(calls.created).toEqual([]);
   });
 
-  it('given no existing Sprite, should create fresh and apply the egress lockdown', async () => {
+  it('given no existing Sprite, should create fresh and apply the lockdown + sandbox root exactly once', async () => {
     const { sdk, calls } = makeSdk({
       getSprite: async () => {
         throw new Error('not found');
@@ -208,6 +242,21 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     });
     const client = createSpritesSandboxClient({ sdk });
     await client.getOrCreate({ name: 'k', options });
+    expect(calls.created).toEqual(['k']);
+    expect(calls.policies).toBe(1);
+    expect(calls.spawned).toEqual([`mkdir -p ${SANDBOX_ROOT}`]);
+  });
+
+  it('given a fresh create with a matching recorded hash, should STILL apply the lockdown', async () => {
+    const { sdk, calls } = makeSdk({
+      getSprite: async () => {
+        throw new Error('not found');
+      },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    // A recycled name: the recorded hash describes the DESTROYED Sprite. The new
+    // one starts on the platform default (open outbound), so it must be locked down.
+    await client.getOrCreate({ name: 'k', options, appliedPolicyHash: hashSandboxEgressPolicy(options) });
     expect(calls.created).toEqual(['k']);
     expect(calls.policies).toBe(1);
   });

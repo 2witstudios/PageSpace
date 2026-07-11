@@ -29,11 +29,18 @@ function makeStore(): MachineSessionStore {
         userId: input.userId,
         sandboxId: input.sandboxId,
         lastActiveAt: input.now,
+        egressPolicyHash: input.egressPolicyHash,
       });
     },
-    touch: async ({ sessionKey, now }) => {
+    touch: async ({ sessionKey, now, egressPolicyHash }) => {
       const row = rows.get(sessionKey);
-      if (row) rows.set(sessionKey, { ...row, lastActiveAt: now });
+      if (row) {
+        rows.set(sessionKey, {
+          ...row,
+          lastActiveAt: now,
+          egressPolicyHash: egressPolicyHash ?? row.egressPolicyHash,
+        });
+      }
     },
     remove: async (sessionKey) => {
       rows.delete(sessionKey);

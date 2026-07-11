@@ -219,8 +219,8 @@ export function createSpriteMachineHost({
   return {
     // `substrate.size` is intentionally unused here — see the file header:
     // Sprite has one resource tier, driven entirely by `options.caps`.
-    async provision({ name, options }) {
-      const exec = await client.getOrCreate({ name, options });
+    async provision({ name, options, appliedPolicyHash }) {
+      const exec = await client.getOrCreate({ name, options, appliedPolicyHash });
       return wrapSpriteHandle({ sdk, exec, streamOpenTimeoutMs });
     },
 

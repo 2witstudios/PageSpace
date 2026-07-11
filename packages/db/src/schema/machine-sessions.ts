@@ -40,6 +40,17 @@ export const machineSessions = pgTable('machine_sessions', {
   // Fly Sprite id — used to reconnect and to tear down.
   sandboxId: text('sandboxId').notNull(),
 
+  // Hash of the egress network policy last CONFIRMED applied to this sandbox
+  // (services/sandbox/egress-lockdown.ts). The Sprite policy is a persistent file
+  // that survives hibernation, so a hand-back whose desired policy hashes to this
+  // value skips re-pushing it — the redundant control-plane round-trip that used
+  // to sit on every terminal connect and every 60s re-auth tick. NULL = unknown
+  // (a row that predates this column, or a lost write) → the lockdown is applied
+  // and recorded on the next hand-back. Fail-closed by construction: an unlocked
+  // sandbox is never linked to a row, because the link is written only after the
+  // driver confirms the policy.
+  egressPolicyHash: text('egressPolicyHash'),
+
   lastActiveAt: timestamp('lastActiveAt', { mode: 'date' }).defaultNow().notNull(),
 
   // Watermark for the idle-storage reconcile cron (Machine Epic 3): the

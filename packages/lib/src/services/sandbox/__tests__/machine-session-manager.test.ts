@@ -8,6 +8,8 @@ import {
   type SandboxClient,
 } from '../machine-session-manager';
 import { resolveSandboxNetworkOptions } from '../network-options';
+import { hashSandboxEgressPolicy } from '../egress-lockdown';
+import { assert } from './riteway';
 
 const SECRET = 'x'.repeat(32);
 const NOW = new Date('2026-06-01T12:00:00.000Z');
@@ -37,12 +39,19 @@ function makeStore(seed?: MachineSessionRecord) {
         userId: input.userId,
         sandboxId: input.sandboxId,
         lastActiveAt: input.now,
+        egressPolicyHash: input.egressPolicyHash,
       });
     },
-    touch: async ({ sessionKey, now }) => {
+    touch: async ({ sessionKey, now, egressPolicyHash }) => {
       calls.touch += 1;
       const row = rows.get(sessionKey);
-      if (row) rows.set(sessionKey, { ...row, lastActiveAt: now });
+      if (row) {
+        rows.set(sessionKey, {
+          ...row,
+          lastActiveAt: now,
+          egressPolicyHash: egressPolicyHash ?? row.egressPolicyHash,
+        });
+      }
     },
     remove: async (sessionKey) => {
       calls.remove += 1;
@@ -54,13 +63,17 @@ function makeStore(seed?: MachineSessionRecord) {
 
 function makeClient(overrides: Partial<SandboxClient> = {}) {
   const calls = {
-    getOrCreate: [] as Array<{ name: string; options: import('../sandbox-options').SandboxCreateOptions }>,
+    getOrCreate: [] as Array<{
+      name: string;
+      options: import('../sandbox-options').SandboxCreateOptions;
+      appliedPolicyHash?: string | null;
+    }>,
     get: [] as string[],
     stop: [] as string[],
   };
   const client: SandboxClient = {
-    getOrCreate: async ({ name, options }) => {
-      calls.getOrCreate.push({ name, options });
+    getOrCreate: async ({ name, options, appliedPolicyHash }) => {
+      calls.getOrCreate.push({ name, options, appliedPolicyHash });
       return { sandboxId: 'sbx-new' };
     },
     get: async ({ sandboxId }) => {
@@ -82,9 +95,13 @@ function seedRecord(over: Partial<MachineSessionRecord> = {}): MachineSessionRec
     userId: 'u1',
     sandboxId: 'sbx-existing',
     lastActiveAt: new Date('2026-06-01T11:59:00.000Z'),
+    egressPolicyHash: null,
     ...over,
   };
 }
+
+/** The hash the manager will derive for the machine's own (open-egress) policy. */
+const terminalPolicyHash = hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'terminal' }));
 
 describe('deriveMachineSessionKey', () => {
   it('given the same inputs, returns the same key every time', () => {
@@ -380,6 +397,79 @@ describe('acquireMachineSession', () => {
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.remove).toBe(0);
     expect(storeCalls.touch).toBe(1);
+  });
+});
+
+describe('acquireMachineSession — egress policy record', () => {
+  const acquire = (store: MachineSessionStore, client: SandboxClient) =>
+    acquireMachineSession({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
+    });
+
+  it('records the applied policy hash when provisioning fresh', async () => {
+    const { store, rows } = makeStore();
+    const { client } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a fresh provision',
+      should: 'persist the hash of the policy the driver confirmed applied',
+      actual: rows.get(keyFor())?.egressPolicyHash,
+      expected: terminalPolicyHash,
+    });
+  });
+
+  it('links the session only after the driver confirms the lockdown', async () => {
+    const { store, calls: storeCalls } = makeStore();
+    const { client } = makeClient({
+      getOrCreate: async () => {
+        throw new Error('policy api down');
+      },
+    });
+    const result = await acquire(store, client);
+    assert({
+      given: 'a fresh provision whose lockdown fails',
+      should: 'refuse the hand-back and write NO session row (never link an unlocked sandbox)',
+      actual: { ok: result.ok, saves: storeCalls.save },
+      expected: { ok: false, saves: 0 },
+    });
+  });
+
+  it('hands the recorded hash to the driver on reconnect', async () => {
+    const { store } = makeStore(seedRecord({ egressPolicyHash: terminalPolicyHash }));
+    const { client, calls } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a reconnect to a session whose policy is already recorded',
+      should: 'pass that hash to getOrCreate so an unchanged policy is not re-applied',
+      actual: calls.getOrCreate.map((c) => c.appliedPolicyHash),
+      expected: [terminalPolicyHash],
+    });
+  });
+
+  it('reports no recorded hash for a legacy session', async () => {
+    const { store } = makeStore(seedRecord({ egressPolicyHash: null }));
+    const { client, calls } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a reconnect to a session that predates the policy record',
+      should: 'pass a null hash so the driver fails closed and re-applies',
+      actual: calls.getOrCreate.map((c) => c.appliedPolicyHash),
+      expected: [null],
+    });
+  });
+
+  it('records the new hash after a policy change', async () => {
+    const { store, rows } = makeStore(seedRecord({ egressPolicyHash: 'stale-hash' }));
+    const { client } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a reconnect whose desired policy differs from the recorded one',
+      should: 'record the newly applied hash so the NEXT hand-back can skip the re-apply',
+      actual: rows.get(keyFor())?.egressPolicyHash,
+      expected: terminalPolicyHash,
+    });
   });
 });
 

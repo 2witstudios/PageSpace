@@ -47,8 +47,10 @@ export function createExecClientFromMachineHost(
   substrate: MachineSubstrateSpec,
 ): ExecSandboxClient {
   return {
-    async getOrCreate({ name, options }) {
-      return adaptMachineHandleToExecutableSandbox(await host.provision({ name, substrate, options }));
+    async getOrCreate({ name, options, appliedPolicyHash }) {
+      return adaptMachineHandleToExecutableSandbox(
+        await host.provision({ name, substrate, options, appliedPolicyHash }),
+      );
     },
     async get({ sandboxId }) {
       const handle = await host.attach({ machineId: sandboxId });
