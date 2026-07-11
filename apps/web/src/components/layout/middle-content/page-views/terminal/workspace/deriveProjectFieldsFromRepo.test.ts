@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveProjectFieldsFromRepo } from './Navigator';
+import { deriveProjectFieldsFromRepo } from './MachineTree';
 
 describe('deriveProjectFieldsFromRepo', () => {
   it('given a full_name with an owner, should derive the short repo name', () => {

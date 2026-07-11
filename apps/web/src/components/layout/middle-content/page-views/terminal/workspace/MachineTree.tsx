@@ -12,20 +12,9 @@ import {
   Github,
   GitBranch,
   Plus,
-  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import {
   Dialog,
   DialogContent,
@@ -52,6 +41,8 @@ import { useMachineBranches } from '@/hooks/useMachineBranches';
 import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
 import { useProviders } from '@/hooks/useIntegrations';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
+import ConfirmRemoveDialog from './ConfirmRemoveDialog';
+import RemoveButton from './RemoveButton';
 import EmptyState from './EmptyState';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
@@ -96,6 +87,11 @@ function TreeRow({
   onRemove?(): void;
   removeTitle?: string;
 }) {
+  // With no onSelect action, clicking the label falls back to expand/collapse
+  // (matching the old Navigator's whole-row-click affordance) rather than being
+  // a dead, disabled button. When onSelect IS provided it wins, so selection
+  // stays decoupled from expansion for callers that use it.
+  const onLabelClick = onSelect ?? onToggleExpand;
   return (
     <div className="group flex items-center gap-1 rounded-sm py-1 pr-1 hover:bg-accent/50">
       {onToggleExpand ? (
@@ -113,23 +109,14 @@ function TreeRow({
       )}
       <button
         type="button"
-        onClick={onSelect}
-        disabled={!onSelect}
-        className={cn('flex flex-1 items-center gap-1 text-left', !onSelect && 'cursor-default')}
+        onClick={onLabelClick}
+        disabled={!onLabelClick}
+        className={cn('flex flex-1 items-center gap-1 text-left', !onLabelClick && 'cursor-default')}
       >
         {icon}
         <span className={cn('truncate', labelClassName)}>{label}</span>
       </button>
-      {onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="invisible size-5 shrink-0 rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:visible"
-          title={removeTitle}
-        >
-          <X className="mx-auto size-3.5" />
-        </button>
-      )}
+      {onRemove && removeTitle && <RemoveButton onClick={onRemove} label={removeTitle} />}
     </div>
   );
 }
@@ -287,55 +274,6 @@ function BranchNode({
   );
 }
 
-function ConfirmRemoveDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  title: string;
-  description: string;
-  onConfirm(): Promise<unknown>;
-}) {
-  const [removing, setRemoving] = useState(false);
-
-  const handleConfirm = async () => {
-    setRemoving(true);
-    try {
-      await onConfirm();
-      onOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove');
-    } finally {
-      setRemoving(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={open} onOpenChange={(v) => !removing && onOpenChange(v)}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleConfirm}
-            disabled={removing}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {removing ? 'Removing…' : 'Remove'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
 function GithubRepoPicker({
   repos,
   isLoading,
@@ -387,7 +325,8 @@ function GithubRepoPicker({
   );
 }
 
-function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
+/** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
+export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
   const segments = repo.full_name.split('/');
   return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
 }

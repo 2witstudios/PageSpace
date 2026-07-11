@@ -25,7 +25,7 @@ const fetcher = (url: string) =>
   });
 
 /**
- * Backs the Terminal Navigator's "Add project" repo picker — the connected
+ * Backs the Machine tree's "Add project" repo picker — the connected
  * user's own GitHub repos, fetched only while the dialog housing the picker
  * is open (pass `enabled: false` otherwise).
  */
