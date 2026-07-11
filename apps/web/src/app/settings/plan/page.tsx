@@ -223,11 +223,18 @@ export default function PlanPage() {
     // the pre-checkout plan for minutes after a successful upgrade.
     router.replace('/settings/plan?success=true');
     router.refresh();
-    await Promise.all([
-      fetchSubscriptionData(),
-      mutate('/api/subscriptions/status'),
-      mutate('/api/credits'),
-    ]);
+    try {
+      await Promise.all([
+        fetchSubscriptionData(),
+        mutate('/api/subscriptions/status'),
+        mutate('/api/credits'),
+      ]);
+    } catch (err) {
+      // The checkout itself already succeeded; a failed revalidation only means
+      // stale display data, so it must not reject out of here as an unhandled
+      // rejection. The SWR keys recover on their next poll or focus.
+      console.error('Post-checkout cache refresh failed', err);
+    }
   };
 
   const handleCheckoutCancel = () => {

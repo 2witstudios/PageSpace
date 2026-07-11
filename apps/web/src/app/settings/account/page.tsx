@@ -129,12 +129,15 @@ export default function AccountPage() {
     }
   }, [user]);
 
-  // Redirect if not authenticated
+  // Redirect if not authenticated — except while deleting the account, which nulls
+  // `user` on purpose (endSession) and then hard-navigates to the marketing home.
+  // Without this guard that deliberate exit races with a client push to /auth/signin,
+  // flashing the sign-in page at the user for a second on their way out.
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (!authLoading && !user && !isDeletingAccount) {
       router.push("/auth/signin");
     }
-  }, [authLoading, user, router]);
+  }, [authLoading, user, isDeletingAccount, router]);
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault();

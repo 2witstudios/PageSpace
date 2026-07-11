@@ -44,6 +44,27 @@ describe('resolveSigninNext', () => {
         resolveSigninNext({ paramNext: '/dashboard/from-param', browserPath: '/dashboard/from-browser' }),
       ).toBe('/dashboard/from-param');
     });
+
+    // Under a rewrite, useSearchParams reads the BROWSER url — so a junk `?next=` the
+    // user arrived with is visible here even though middleware already rejected it.
+    // Its mere presence must not shadow the deep link we can still recover.
+    it('recovers the deep link even when the browser url carries a rejected next=', () => {
+      expect(
+        resolveSigninNext({
+          paramNext: '/settings/billing', // outside the allowlist — middleware dropped it
+          browserPath: '/dashboard/drv_abc?next=/settings/billing',
+        }),
+      ).toBe('/dashboard/drv_abc');
+    });
+
+    it('strips only the rejected next=, keeping the rest of the query', () => {
+      expect(
+        resolveSigninNext({
+          paramNext: 'https://evil.example',
+          browserPath: '/dashboard/drv_abc?next=https://evil.example&tab=chat',
+        }),
+      ).toBe('/dashboard/drv_abc?tab=chat');
+    });
   });
 
   describe('open-redirect safety', () => {
