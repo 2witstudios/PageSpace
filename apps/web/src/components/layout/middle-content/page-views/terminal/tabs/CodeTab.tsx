@@ -226,41 +226,25 @@ function BranchFiles({
     return <div className="px-3 py-2 text-xs text-muted-foreground">Opening checkout…</div>;
   }
 
+  const retry = () => setAttempt((a) => a + 1);
+
   if (state.status === 'absent') {
     const copy = CHECKOUT_ABSENT_COPY[state.reason];
     return (
-      <div className="flex flex-col items-start gap-1 px-3 py-2" data-testid="checkout-absent">
+      <SidebarNotice testId="checkout-absent" actionLabel="Check again" onAction={retry}>
         <p className="text-xs font-medium">{copy.title}</p>
         <p className="text-xs text-muted-foreground">{copy.description}</p>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 px-1.5 text-xs"
-          onClick={() => setAttempt((a) => a + 1)}
-        >
-          Check again
-        </Button>
-      </div>
+      </SidebarNotice>
     );
   }
 
   if (state.status === 'error') {
     return (
-      <div className="flex flex-col items-start gap-1 px-3 py-2">
+      <SidebarNotice testId="checkout-error" actionLabel="Retry" onAction={retry}>
         <p className="min-w-0 truncate text-xs text-destructive" title={state.message}>
           {state.message}
         </p>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-6 px-1.5 text-xs"
-          onClick={() => setAttempt((a) => a + 1)}
-        >
-          Retry
-        </Button>
-      </div>
+      </SidebarNotice>
     );
   }
 
@@ -272,5 +256,29 @@ function BranchFiles({
       onSelectFile={onSelectFile}
       selectedPath={selectedPath}
     />
+  );
+}
+
+/** A sidebar row explaining why there are no files to show, plus the one action
+ * that could change that. Shared by the absent and error states — they differ in
+ * their words, not their shape. */
+function SidebarNotice({
+  testId,
+  actionLabel,
+  onAction,
+  children,
+}: {
+  testId: string;
+  actionLabel: string;
+  onAction(): void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-1 px-3 py-2" data-testid={testId}>
+      {children}
+      <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={onAction}>
+        {actionLabel}
+      </Button>
+    </div>
   );
 }
