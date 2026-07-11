@@ -11,21 +11,18 @@ export default defineConfig({
     css: true,
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
-    // Fit the web suite's memory on the 16 GB CI runner. Fork workers peak
-    // DURING test execution; the main process peaks AFTER (forks have exited)
-    // while it aggregates 833 files' results — the two peaks don't sum. So:
-    //   - cap concurrency at 2 forks, each with a 7 GB heap → ~14 GB during tests
-    //   - the `test` script gives the main process 8 GB for the aggregation
-    // execArgv also stops the forks inheriting the main's larger NODE_OPTIONS
-    // ceiling (V8 lazily grows to whatever limit it is given). 4 concurrent
-    // forks at the ~4 GB each file-set needs saturated the runner and OOM'd a
-    // worker flakily depending on how test files sharded across them; halving
-    // the fork count doubles the files each handles, hence the larger per-fork
-    // heap.
+    // Fit the web suite's memory on the 16 GB CI runner. A fork worker's heap
+    // grows roughly linearly with the number of files it runs (~17 MB/file, so
+    // the whole 833-file suite is ~14 GB of retained module graph however it is
+    // split across concurrent forks) — near the runner limit. The `test` script
+    // solves this by running the suite in two SEQUENTIAL shards (separate
+    // processes that fully release memory between them), so each shard covers
+    // ~half the files: ~104 files per fork across the default 4 forks, ~1.7 GB
+    // each. The 3 GB per-fork cap both leaves headroom for transient spikes and
+    // stops the forks inheriting the main process's larger NODE_OPTIONS ceiling
+    // (V8 lazily grows to whatever limit it is given).
     pool: 'forks',
-    poolOptions: {
-      forks: { execArgv: ['--max-old-space-size=7168'], minForks: 2, maxForks: 2 },
-    },
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=3072'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],

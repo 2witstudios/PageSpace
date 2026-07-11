@@ -9,7 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch --yes",
-    "test": "NODE_OPTIONS='--max-old-space-size=8192' vitest run",
+    "test": "NODE_OPTIONS='--max-old-space-size=8192' vitest run --shard=1/2 && NODE_OPTIONS='--max-old-space-size=8192' vitest run --shard=2/2",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
