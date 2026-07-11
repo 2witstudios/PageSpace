@@ -64,6 +64,10 @@ const isShellEntryPath = (pathname: string): boolean =>
  * rather than passed along to be rejected there.
  */
 const buildSigninUrl = (req: NextRequest): URL => {
+  // Resolved against req.url, so the origin is always this request's own — a rewrite
+  // to a *foreign* origin would be a server-side proxy instruction rather than a
+  // client-side hop, but that is unreachable here by construction, however the Host
+  // header is set. Same idiom as the WELL_KNOWN_REWRITES rewrite below.
   const url = new URL(SIGNIN_PATH, req.url);
   const explicitNext = req.nextUrl.searchParams.get('next');
 
