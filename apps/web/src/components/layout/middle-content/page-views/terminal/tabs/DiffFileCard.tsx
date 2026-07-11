@@ -118,8 +118,9 @@ function DiffBody({
   const note = cn(NOTE_CLASS, 'text-muted-foreground');
 
   if (error) return <div className={cn(NOTE_CLASS, 'text-destructive')}>Failed to load diff: {error.message}</div>;
-  // SWR only leaves `data` undefined while the request is in flight, so this IS
-  // the loading state — a separate isLoading branch said the same thing twice.
+  // Error FIRST, then no-data-yet: SWR's isLoading is "in flight AND no data",
+  // regardless of a cached error, so checking it first would flicker
+  // Loading <-> Failed while an errored key auto-retries.
   if (!data) return <div className={note}>Loading diff…</div>;
   if (data.notApplicable) {
     // Near-unreachable (the toggle doesn't offer a not-applicable scope), but an

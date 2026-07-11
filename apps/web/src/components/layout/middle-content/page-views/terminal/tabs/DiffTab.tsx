@@ -222,10 +222,11 @@ function BranchDiffPane({
         //     panel, the two inactive triggers point at ids present nowhere in the
         //     DOM — the exact dangling-IDREF violation the Tabs wrapper above
         //     exists to avoid.
-        //  2. `key={option}` gives each scope its own subtree, so switching scope
-        //     UNMOUNTS the old panel. Without it an expanded card whose path exists
-        //     in both scopes stays open across the switch and immediately refetches
-        //     its pair — an extra sandbox git exec per open card, every switch.
+        //  2. one panel PER SCOPE means switching scope unmounts the old panel's
+        //     children (Presence gates them on `present`). Collapsed to a single
+        //     panel, an expanded card whose path exists in both scopes stays open
+        //     across the switch and immediately refetches its pair — an extra
+        //     sandbox git exec per open card, every switch.
         //
         // Radix renders only the ACTIVE panel's children, so this is still one
         // rendered list, not three.
@@ -269,9 +270,15 @@ function DiffFileList({
   if (error) {
     return <div className="p-4 text-sm text-destructive">Failed to load diff: {error.message}</div>;
   }
-  // SWR only leaves `data` undefined while the FIRST request is in flight — a
-  // refresh keeps the previous data and flips isValidating instead — so this IS
-  // the loading state, and a separate isLoading branch said the same thing twice.
+  // Error FIRST, then no-data-yet. SWR reads data/error from the CURRENT key's
+  // cache entry, so on a scope switch `data` is immediately undefined and the
+  // previous scope's diff can never leak — this is the loading state, and a
+  // separate isLoading branch said the same thing twice.
+  //
+  // The order also matters on a retry: SWR's isLoading is "in flight AND no data",
+  // regardless of a cached error, so an errored key that auto-retries would flicker
+  // Loading <-> Failed if isLoading were checked first. Holding the error steady and
+  // signalling the retry through the spinning Refresh icon is the honest reading.
   if (!data) {
     return <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>;
   }
