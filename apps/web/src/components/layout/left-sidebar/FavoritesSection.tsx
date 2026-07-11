@@ -4,6 +4,7 @@ import { useState, useCallback, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ExternalLink, Folder, MoreHorizontal, Star } from "lucide-react";
 import { useTabsStore } from "@/stores/useTabsStore";
+import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import {
   Collapsible,
@@ -148,6 +149,7 @@ interface FavoriteItemProps {
 
 function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, hideTabActions }: FavoriteItemProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const isTouchDevice = useTouchDevice();
 
   const title =
     favorite.itemType === "drive"
@@ -202,7 +204,7 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, hideTabA
             size="icon"
             className={cn(
               "absolute right-1 h-6 w-6 transition-opacity",
-              isHovered ? "opacity-100" : "opacity-0"
+              isTouchDevice || isHovered ? "opacity-100" : "opacity-0"
             )}
             onClick={(e) => e.stopPropagation()}
           >

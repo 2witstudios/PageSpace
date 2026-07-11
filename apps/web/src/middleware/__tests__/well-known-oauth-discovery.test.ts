@@ -1,14 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
 
-// NextResponse.rewrite() only exists in the edge runtime; the node/vitest env
-// doesn't provide it. Polyfill it (before middleware is imported) so we can
-// assert the middleware rewrites the discovery URL. In production the real
-// edge-runtime rewrite records the target in the x-middleware-rewrite header.
-if (typeof (NextResponse as { rewrite?: unknown }).rewrite !== 'function') {
-  (NextResponse as unknown as { rewrite: (url: URL | string) => Response }).rewrite = (url) =>
-    new Response(null, { status: 200, headers: { 'x-middleware-rewrite': String(url) } });
-}
+// NextResponse.rewrite() only exists in the edge runtime. It is modelled in
+// src/test/next-server-stub.ts (the `next/server` alias for tests), which is the
+// single source of truth — this file used to carry its own local polyfill, and a
+// second test asserting on rewrites promptly missed it and failed only in CI.
 
 // Mock all runtime dependencies so middleware() can run without a real DB/session.
 vi.mock('@/lib/logging/edge-logger', () => ({
@@ -19,8 +15,13 @@ vi.mock('@/middleware/monitoring', () => ({
   monitoringMiddleware: vi.fn((_req, handler: () => unknown) => handler()),
 }));
 const createSecureResponse = vi.fn(() => ({ response: { status: 200, headers: new Headers() } }));
+const createSecureRewrite = vi.fn((destination: URL) => ({
+  response: NextResponse.rewrite(destination),
+  nonce: 'test-nonce',
+}));
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse,
+  createSecureRewrite,
   createSecureErrorResponse: vi.fn(),
   isPublicPageRoute: vi.fn(() => false),
   isPublishedSiteHost: vi.fn(() => false),
@@ -58,14 +59,28 @@ describe('middleware — RFC 8414 discovery URL', () => {
     expect(response.status).not.toBe(307);
   });
 
+  // Control case: a protected page still gets the signin treatment, so the
+  // discovery rewrite above is demonstrably a carve-out and not the norm.
+  // Deliberately NOT /dashboard — that path is now its own carve-out (the iOS
+  // shell's entry point rewrites rather than redirects; see the case below).
   it('still redirects other unauthenticated non-API routes to sign-in (control case)', async () => {
     createSecureResponse.mockClear();
-    const req = new NextRequest('https://pagespace.ai/dashboard');
+    const req = new NextRequest('https://pagespace.ai/settings/plan');
 
     const response = await middleware(req);
 
     expect(createSecureResponse).not.toHaveBeenCalled();
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toContain('/auth/signin');
+  });
+
+  it('rewrites — never redirects — unauthenticated /dashboard, so the iOS shell is not punted to Safari', async () => {
+    createSecureResponse.mockClear();
+    const req = new NextRequest('https://pagespace.ai/dashboard');
+
+    const response = await middleware(req);
+
+    expect(response.headers.get('x-middleware-rewrite')).toContain('/auth/signin');
+    expect(response.status).not.toBe(307);
   });
 });

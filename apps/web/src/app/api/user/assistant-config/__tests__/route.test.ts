@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mockGetOrCreateConfig = vi.hoisted(() => vi.fn());
 const mockUpdateConfig = vi.hoisted(() => vi.fn());
-const mockGetAvailableTerminals = vi.hoisted(() => vi.fn());
+const mockGetAvailableMachines = vi.hoisted(() => vi.fn());
 const mockValidateMachines = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/auth/request-auth', () => ({
@@ -38,10 +38,10 @@ vi.mock('@pagespace/lib/integrations/repositories/config-repository', () => ({
   updateConfig: mockUpdateConfig,
 }));
 
-vi.mock('@/lib/repositories/global-terminal-config-repository', () => ({
+vi.mock('@/lib/repositories/global-machine-config-repository', () => ({
   MAX_MACHINES: 20,
-  globalTerminalConfigRepository: {
-    getAvailableTerminals: mockGetAvailableTerminals,
+  globalMachineConfigRepository: {
+    getAvailableMachines: mockGetAvailableMachines,
     validateMachines: mockValidateMachines,
   },
 }));
@@ -76,7 +76,7 @@ describe('GET /api/user/assistant-config audit', () => {
     vi.clearAllMocks();
     mockAuth();
     mockGetOrCreateConfig.mockResolvedValue(mockConfig);
-    mockGetAvailableTerminals.mockResolvedValue([]);
+    mockGetAvailableMachines.mockResolvedValue([]);
   });
 
   it('logs read audit event on successful config retrieval', async () => {
@@ -94,30 +94,30 @@ describe('GET /api/user/assistant-config terminal access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuth();
-    mockGetAvailableTerminals.mockResolvedValue([{ id: 't1', title: 'Shared Terminal' }]);
+    mockGetAvailableMachines.mockResolvedValue([{ id: 't1', title: 'Shared Terminal' }]);
   });
 
-  it('given terminalAccess is unset (legacy row), should default to false with an empty machines array', async () => {
+  it('given machineAccess is unset (legacy row), should default to false with an empty machines array', async () => {
     mockGetOrCreateConfig.mockResolvedValue(mockConfig);
     const request = new Request('http://localhost/api/user/assistant-config');
     const response = await GET(request);
     const body = await response.json();
-    expect(body.config.terminalAccess).toBe(false);
+    expect(body.config.machineAccess).toBe(false);
     expect(body.config.machines).toEqual([]);
   });
 
-  it('given a configured terminalAccess/machines row, should return them plus availableTerminals', async () => {
+  it('given a configured machineAccess/machines row, should return them plus availableMachines', async () => {
     mockGetOrCreateConfig.mockResolvedValue({
       ...mockConfig,
-      terminalAccess: true,
+      machineAccess: true,
       machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
     });
     const request = new Request('http://localhost/api/user/assistant-config');
     const response = await GET(request);
     const body = await response.json();
-    expect(body.config.terminalAccess).toBe(true);
+    expect(body.config.machineAccess).toBe(true);
     expect(body.config.machines).toEqual([{ kind: 'own' }, { kind: 'existing', machineId: 't1' }]);
-    expect(body.config.availableTerminals).toEqual([{ id: 't1', title: 'Shared Terminal' }]);
+    expect(body.config.availableMachines).toEqual([{ id: 't1', title: 'Shared Terminal' }]);
   });
 });
 
@@ -150,17 +150,17 @@ describe('PUT /api/user/assistant-config terminal access', () => {
     mockAuth();
   });
 
-  it('given valid machines, should validate against the Home drive and persist terminalAccess/machines', async () => {
+  it('given valid machines, should validate against the Home drive and persist machineAccess/machines', async () => {
     mockValidateMachines.mockResolvedValue({ ok: true });
     mockUpdateConfig.mockResolvedValue({
       ...mockConfig,
-      terminalAccess: true,
+      machineAccess: true,
       machines: [{ kind: 'own' }],
     });
     const request = new Request('http://localhost/api/user/assistant-config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ terminalAccess: true, machines: [{ kind: 'own' }] }),
+      body: JSON.stringify({ machineAccess: true, machines: [{ kind: 'own' }] }),
     });
 
     const response = await PUT(request);
@@ -170,9 +170,9 @@ describe('PUT /api/user/assistant-config terminal access', () => {
     expect(mockUpdateConfig).toHaveBeenCalledWith(
       expect.anything(),
       mockUserId,
-      expect.objectContaining({ terminalAccess: true, machines: [{ kind: 'own' }] }),
+      expect.objectContaining({ machineAccess: true, machines: [{ kind: 'own' }] }),
     );
-    expect(body.config.terminalAccess).toBe(true);
+    expect(body.config.machineAccess).toBe(true);
     expect(body.config.machines).toEqual([{ kind: 'own' }]);
   });
 

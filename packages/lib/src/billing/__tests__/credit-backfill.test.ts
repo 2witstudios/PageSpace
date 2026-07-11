@@ -38,7 +38,7 @@ const mockEmitCreditsUpdated = vi.hoisted(() => vi.fn().mockResolvedValue(undefi
 vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated }));
 
 import { backfillCredits } from '../credit-backfill';
-import { TERMINAL_MARKUP_BPS } from '../credit-pricing';
+import { MACHINE_MARKUP_BPS } from '../credit-pricing';
 
 // Captures the WHERE clause handed to the orphan sweep so tests can assert the
 // query shape (e.g. that success:false rows are no longer excluded).
@@ -212,7 +212,7 @@ describe('backfillCredits', () => {
     expect(lastOrphanWhere).toBeDefined();
   });
 
-  it("recovers a source:'terminal' orphan at TERMINAL_MARKUP_BPS instead of the shared default markup", async () => {
+  it("recovers a source:'terminal' orphan at MACHINE_MARKUP_BPS instead of the shared default markup", async () => {
     // The crash-recovery gap Codex flagged on PR #1955: a terminal usage row that
     // reached aiUsageLogs but crashed before consumeCredits claimed a ledger row
     // has no stored markup to replay — this sweep must reconstruct it from the
@@ -225,7 +225,7 @@ describe('backfillCredits', () => {
       aiUsageLogId: 'aul_term',
       userId: 'u_term',
       costDollars: 0.02,
-      markupBpsOverride: TERMINAL_MARKUP_BPS,
+      markupBpsOverride: MACHINE_MARKUP_BPS,
     });
   });
 

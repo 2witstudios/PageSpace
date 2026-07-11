@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { mutate } from 'swr';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -210,8 +211,30 @@ export default function PlanPage() {
     // Brief delay for webhook to process
     await new Promise(r => setTimeout(r, 2000));
 
-    // Hard refresh - guaranteed fresh data for both plan page and navbar
-    window.location.href = '/settings/plan?success=true';
+    // Refetch in place rather than reloading the document. A hard navigation to a
+    // path outside /dashboard is cancelled and punted to Safari by the iOS shell,
+    // blanking the WebView (see lib/navigation/app-navigator.ts); router.replace is
+    // pushState and never reaches that policy check.
+    //
+    // The document reload this replaces refreshed the navbar as well as this page,
+    // so the SWR caches it used to blow away must be invalidated by hand — the tier
+    // label in UserDropdown (/api/subscriptions/status, a 5-minute refreshInterval)
+    // and the credit balance (/api/credits, no polling at all) would otherwise show
+    // the pre-checkout plan for minutes after a successful upgrade.
+    router.replace('/settings/plan?success=true');
+    router.refresh();
+    try {
+      await Promise.all([
+        fetchSubscriptionData(),
+        mutate('/api/subscriptions/status'),
+        mutate('/api/credits'),
+      ]);
+    } catch (err) {
+      // The checkout itself already succeeded; a failed revalidation only means
+      // stale display data, so it must not reject out of here as an unhandled
+      // rejection. The SWR keys recover on their next poll or focus.
+      console.error('Post-checkout cache refresh failed', err);
+    }
   };
 
   const handleCheckoutCancel = () => {

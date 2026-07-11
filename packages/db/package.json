@@ -47,9 +47,9 @@
       "types": "./dist/schema/sandbox-sessions.d.ts",
       "default": "./dist/schema/sandbox-sessions.js"
     },
-    "./schema/terminal-sessions": {
-      "types": "./dist/schema/terminal-sessions.d.ts",
-      "default": "./dist/schema/terminal-sessions.js"
+    "./schema/machine-sessions": {
+      "types": "./dist/schema/machine-sessions.d.ts",
+      "default": "./dist/schema/machine-sessions.js"
     },
     "./schema/machine-projects": {
       "types": "./dist/schema/machine-projects.d.ts",

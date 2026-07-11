@@ -19,6 +19,13 @@ const MOCK_API_CORS_HEADERS: Record<string, string> = {
 
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse: () => ({ response: NextResponse.json({ ok: true }, { status: 200 }) }),
+  // Kept faithful to the real implementation's rewrite: the whole point of the
+  // /dashboard branch is that Next emits an x-middleware-rewrite header instead
+  // of a 307, so a stub that dropped it would assert nothing.
+  createSecureRewrite: (destination: URL) => ({
+    response: NextResponse.rewrite(destination),
+    nonce: 'test-nonce',
+  }),
   createSecureErrorResponse: (body: unknown, status: number) => NextResponse.json(body, { status }),
   isPublicPageRoute: () => false,
   isPublishedSiteHost: () => false,
@@ -204,5 +211,126 @@ describe('middleware — CORS for Bearer-authenticated API routes', () => {
     expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST');
     expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
     expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+});
+
+// The iOS shell remote-loads https://pagespace.ai/dashboard. Capacitor's
+// WKNavigationDelegate cancels any top-level navigation whose URL does not start
+// with that exact string and opens it in system Safari instead, leaving the
+// WebView with no document — the black screen on every cold launch with no
+// session cookie. A *redirect* to /auth/signin trips that. A *rewrite* is not a
+// navigation at all, so the signin page renders in place and the shell survives.
+// This is scoped to /dashboard (the shell's only entry point); everywhere else
+// must keep the honest redirect and its correct URL bar.
+describe('middleware — unauthenticated /dashboard rewrites instead of redirecting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  const rewriteTarget = (response: NextResponse): string | null =>
+    response.headers.get('x-middleware-rewrite');
+
+  it.each([['/dashboard'], ['/dashboard/drv_abc/pg_xyz'], ['/dashboard/drv_abc?tab=chat']])(
+    'rewrites %s to a BARE /auth/signin',
+    async (pathname) => {
+      const response = await middleware(buildRequest(pathname));
+
+      const target = rewriteTarget(response);
+      expect(target).not.toBeNull();
+      const url = new URL(target as string);
+      expect(url.pathname).toBe('/auth/signin');
+
+      // No next= on the rewrite, deliberately. A rewrite leaves the browser URL alone, so
+      // the browser is still ON the deep link and the client reads it off the path. Putting
+      // it here too would have the server render a value the client cannot see — and it
+      // reaches the DOM (the signup link's href), i.e. a hydration mismatch.
+      expect(url.searchParams.get('next')).toBeNull();
+
+      // A rewrite is emphatically not a redirect — a 307 here is the bug.
+      expect(response.status).not.toBe(307);
+      expect(response.headers.get('location')).toBeNull();
+    },
+  );
+
+  // The last hydration hole: a `next=` on a /dashboard URL is visible to the client (which
+  // reads the browser URL) but not to the server (which renders the bare rewrite
+  // destination), and nextPath reaches the DOM. Nothing in the app produces such a URL, but
+  // a crafted one must not be able to desync the two renders — so it is redirected away
+  // first. Safe under the iOS shell: still under /dashboard, so it passes the prefix test.
+  it('redirects a /dashboard URL carrying a crafted next= to the same URL without it, rather than rewriting', async () => {
+    const response = await middleware(buildRequest('/dashboard/drv_abc?tab=chat&next=%2Fdashboard%2Fother'));
+
+    expect(response.status).toBe(307);
+    expect(rewriteTarget(response)).toBeNull();
+
+    const location = new URL(response.headers.get('location') as string);
+    // Redirected back to /dashboard (NOT to signin) — so it still prefix-matches
+    // server.url and the iOS shell will not punt it to Safari. And no `next` is left, so
+    // the follow-up request rewrites cleanly and cannot loop.
+    expect(location.pathname).toBe('/dashboard/drv_abc');
+    expect(location.searchParams.get('next')).toBeNull();
+    expect(location.searchParams.get('tab')).toBe('chat');
+  });
+
+  it('still REDIRECTS an unauthenticated page request outside /dashboard, with next= preserved', async () => {
+    const response = await middleware(buildRequest('/activate?user_code=ABCD-EFGH'));
+
+    expect(response.status).toBe(307);
+    expect(rewriteTarget(response)).toBeNull();
+
+    const location = new URL(response.headers.get('location') as string);
+    expect(location.pathname).toBe('/auth/signin');
+    expect(location.searchParams.get('next')).toBe('/activate?user_code=ABCD-EFGH');
+  });
+
+  // The redirect path is the only one that carries next=, so it is where the
+  // reconstruction rules have to be pinned down.
+  describe('next= on the redirect', () => {
+    const location = (response: NextResponse): URL =>
+      new URL(response.headers.get('location') as string);
+
+    // Drives the isSafeNextPath guard in buildSigninUrl to FALSE. Without a
+    // non-allowlisted path in this suite the guard is dead weight: every other case
+    // reconstructs a candidate under /dashboard or /activate, which always passes, so
+    // deleting the check entirely would not fail a single other test here.
+    it('omits next= entirely for a page outside SIGNIN_NEXT_ALLOWED_PREFIXES', async () => {
+      const response = await middleware(buildRequest('/settings/plan'));
+
+      expect(response.status).toBe(307);
+      expect(location(response).searchParams.get('next')).toBeNull();
+    });
+
+    // next= is always the path actually requested. A caller-supplied one is dropped rather
+    // than honoured — otherwise a query param could override the real destination.
+    it('ignores a caller-supplied next= and preserves the actually-requested path', async () => {
+      const response = await middleware(buildRequest('/activate?next=%2Fdashboard%2Felsewhere'));
+
+      expect(location(response).searchParams.get('next')).toBe('/activate');
+    });
+
+    it('drops an off-origin next= instead of passing it through', async () => {
+      const response = await middleware(buildRequest('/activate?next=https%3A%2F%2Fevil.example%2Fx'));
+
+      // Falls back to the requested path; the attacker-supplied value never survives.
+      expect(location(response).searchParams.get('next')).toBe('/activate');
+    });
+
+    // A soft nav that hits an expired session carries Next's RSC cache-buster. Landing the
+    // user back on `/activate?_rsc=abc` after signin would be stale and meaningless.
+    it("strips Next's _rsc cache-buster from the preserved deep link", async () => {
+      const response = await middleware(buildRequest('/activate?user_code=ABCD&_rsc=1a2b3c'));
+
+      expect(location(response).searchParams.get('next')).toBe('/activate?user_code=ABCD');
+    });
+  });
+
+  it('does not rewrite for an unauthenticated API request under /api — that still 401s', async () => {
+    const response = await middleware(buildRequest('/api/pages/xyz'));
+
+    expect(response.status).toBe(401);
+    expect(rewriteTarget(response)).toBeNull();
   });
 });

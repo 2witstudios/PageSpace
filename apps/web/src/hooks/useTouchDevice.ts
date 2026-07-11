@@ -2,9 +2,14 @@
 
 import { useSyncExternalStore } from "react";
 
+import { detectCoarsePointer } from "@/lib/pointer-capability";
+
 /**
  * Detects if the current device is a touch device.
- * Uses coarse pointer detection which is more reliable than touch event checks.
+ *
+ * Delegates to `detectCoarsePointer()` — `(pointer: coarse)` alone is not enough,
+ * because a desktop-class iPad (the Capacitor app's default content mode, and
+ * iPad Safari's "Request Desktop Site") reports `pointer: fine`.
  */
 
 const TOUCH_QUERY = "(pointer: coarse)";
@@ -32,12 +37,7 @@ const subscribe = (callback: () => void) => {
   };
 };
 
-const getSnapshot = () => {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  return window.matchMedia(TOUCH_QUERY).matches;
-};
+const getSnapshot = () => detectCoarsePointer();
 
 const getServerSnapshot = () => false;
 

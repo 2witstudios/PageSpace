@@ -75,7 +75,7 @@ export interface MachineBranchesDeps {
   host: MachineHost;
   substrate: MachineSubstrateSpec;
   options: SandboxCreateOptions;
-  /** Server-held secret for session-key derivation (same secret as terminal-session-manager.ts). */
+  /** Server-held secret for session-key derivation (same secret as machine-session-manager.ts). */
   secret: string;
   /** REQUIRED full-egress enablement gate — a branch-terminal's Sprite runs open egress, same as a human Terminal. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;

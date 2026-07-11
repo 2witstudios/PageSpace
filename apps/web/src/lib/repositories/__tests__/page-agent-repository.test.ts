@@ -153,36 +153,36 @@ describe('getAgentById', () => {
     }));
   }
 
-  it('coerces a NULL machines column to an empty array and terminalAccess to false', async () => {
-    mockSelectResult({ ...basePageRow, terminalAccess: null, machines: null });
+  it('coerces a NULL machines column to an empty array and machineAccess to false', async () => {
+    mockSelectResult({ ...basePageRow, machineAccess: null, machines: null });
 
     const agent = await pageAgentRepository.getAgentById('agent_1');
 
-    expect(agent?.terminalAccess).toBe(false);
+    expect(agent?.machineAccess).toBe(false);
     expect(agent?.machines).toEqual([]);
   });
 
-  it('coerces missing terminalAccess/machines fields (pre-existing row) to defaults', async () => {
+  it('coerces missing machineAccess/machines fields (pre-existing row) to defaults', async () => {
     mockSelectResult({ ...basePageRow });
 
     const agent = await pageAgentRepository.getAgentById('agent_1');
 
-    expect(agent?.terminalAccess).toBe(false);
+    expect(agent?.machineAccess).toBe(false);
     expect(agent?.machines).toEqual([]);
   });
 
-  it('passes through a populated machines column and terminalAccess: true', async () => {
+  it('passes through a populated machines column and machineAccess: true', async () => {
     const machines = [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }];
-    mockSelectResult({ ...basePageRow, terminalAccess: true, machines });
+    mockSelectResult({ ...basePageRow, machineAccess: true, machines });
 
     const agent = await pageAgentRepository.getAgentById('agent_1');
 
-    expect(agent?.terminalAccess).toBe(true);
+    expect(agent?.machineAccess).toBe(true);
     expect(agent?.machines).toEqual(machines);
   });
 
   it('discards a malformed machines column rather than surfacing bad data', async () => {
-    mockSelectResult({ ...basePageRow, terminalAccess: false, machines: [{ kind: 'bogus' }] });
+    mockSelectResult({ ...basePageRow, machineAccess: false, machines: [{ kind: 'bogus' }] });
 
     const agent = await pageAgentRepository.getAgentById('agent_1');
 

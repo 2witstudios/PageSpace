@@ -115,7 +115,7 @@ type PageLookupResult = {
   pageTreeScope: PageTreeScope | null;
   toolExposureMode: 'upfront' | 'search';
   userScopedAccess: boolean;
-  terminalAccess: boolean;
+  machineAccess: boolean;
   machines: unknown;
   description: string | null;
   allowPageAgents: boolean;
@@ -163,7 +163,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   pageTreeScope: 'children',
   toolExposureMode: 'upfront',
   userScopedAccess: false,
-  terminalAccess: false,
+  machineAccess: false,
   machines: null,
   description: null,
   allowPageAgents: true,

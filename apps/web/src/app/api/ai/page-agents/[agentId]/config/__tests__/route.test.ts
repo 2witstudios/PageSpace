@@ -135,7 +135,7 @@ const mockAgent = (overrides: Partial<{
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
-  terminalAccess: boolean;
+  machineAccess: boolean;
   machines: Array<{ kind: 'own' } | { kind: 'existing'; machineId: string }>;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
@@ -149,7 +149,7 @@ const mockAgent = (overrides: Partial<{
   aiModel: overrides.aiModel ?? 'claude-3-opus',
   toolExposureMode: overrides.toolExposureMode ?? 'upfront',
   isTrashed: overrides.isTrashed ?? false,
-  terminalAccess: overrides.terminalAccess ?? false,
+  machineAccess: overrides.machineAccess ?? false,
   machines: overrides.machines ?? [],
 });
 

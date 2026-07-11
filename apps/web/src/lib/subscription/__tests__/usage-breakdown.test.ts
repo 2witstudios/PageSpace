@@ -139,7 +139,7 @@ describe('aggregateUsageBreakdown', () => {
   });
 
   describe('byMachine (Terminal Epic 3 usage surface)', () => {
-    const terminalRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
+    const machineRow = (over: Partial<UsageLedgerRow>): UsageLedgerRow =>
       row({
         source: 'terminal',
         model: 'terminal-machine',
@@ -151,9 +151,9 @@ describe('aggregateUsageBreakdown', () => {
     it('groups terminal rows by pageId, summing spend and active seconds', () => {
       const r = aggregateUsageBreakdown(
         [
-          terminalRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 10_000, durationMs: 30_000 }),
-          terminalRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 5_000, durationMs: 10_000 }),
-          terminalRow({ pageId: 'page-b', pageTitle: 'Scratch', chargeMillicents: 20_000, durationMs: 60_000 }),
+          machineRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 10_000, durationMs: 30_000 }),
+          machineRow({ pageId: 'page-a', pageTitle: 'My Project', chargeMillicents: 5_000, durationMs: 10_000 }),
+          machineRow({ pageId: 'page-b', pageTitle: 'Scratch', chargeMillicents: 20_000, durationMs: 60_000 }),
         ],
         PERIOD,
       );
@@ -175,8 +175,8 @@ describe('aggregateUsageBreakdown', () => {
     it('collapses rows with no resolvable page into one "Unattributed machine" bucket rather than dropping them', () => {
       const r = aggregateUsageBreakdown(
         [
-          terminalRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
-          terminalRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
+          machineRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
+          machineRow({ pageId: null, pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 }),
         ],
         PERIOD,
       );
@@ -186,7 +186,7 @@ describe('aggregateUsageBreakdown', () => {
 
     it('falls back to "Untitled machine" when the page has no title (deleted/unresolvable page)', () => {
       const r = aggregateUsageBreakdown(
-        [terminalRow({ pageId: 'page-c', pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 })],
+        [machineRow({ pageId: 'page-c', pageTitle: null, chargeMillicents: 5_000, durationMs: 5_000 })],
         PERIOD,
       );
       expect(r.byMachine[0]).toMatchObject({ pageId: 'page-c', label: 'Untitled machine' });
@@ -194,7 +194,7 @@ describe('aggregateUsageBreakdown', () => {
 
     it('tolerates a null durationMs (e.g. an idle-storage charge, which has no wall-clock window) as 0 runtime without dropping its cost', () => {
       const r = aggregateUsageBreakdown(
-        [terminalRow({ pageId: 'page-d', pageTitle: 'Storage-billed page', chargeMillicents: 5_000, durationMs: null })],
+        [machineRow({ pageId: 'page-d', pageTitle: 'Storage-billed page', chargeMillicents: 5_000, durationMs: null })],
         PERIOD,
       );
       expect(r.byMachine[0]).toMatchObject({ pageId: 'page-d', activeSeconds: 0, spendCents: 5, calls: 1 });
@@ -204,8 +204,8 @@ describe('aggregateUsageBreakdown', () => {
       const r = aggregateUsageBreakdown(
         [
           row({ source: 'chat', chargeMillicents: 900_000 }), // huge non-terminal spend
-          terminalRow({ pageId: 'page-a', pageTitle: 'A', chargeMillicents: 7_500 }),
-          terminalRow({ pageId: 'page-b', pageTitle: 'B', chargeMillicents: 2_500 }),
+          machineRow({ pageId: 'page-a', pageTitle: 'A', chargeMillicents: 7_500 }),
+          machineRow({ pageId: 'page-b', pageTitle: 'B', chargeMillicents: 2_500 }),
         ],
         PERIOD,
       );
@@ -218,8 +218,8 @@ describe('aggregateUsageBreakdown', () => {
     it('sorts byMachine by spend descending', () => {
       const r = aggregateUsageBreakdown(
         [
-          terminalRow({ pageId: 'small', pageTitle: 'Small', chargeMillicents: 1_000 }),
-          terminalRow({ pageId: 'big', pageTitle: 'Big', chargeMillicents: 50_000 }),
+          machineRow({ pageId: 'small', pageTitle: 'Small', chargeMillicents: 1_000 }),
+          machineRow({ pageId: 'big', pageTitle: 'Big', chargeMillicents: 50_000 }),
         ],
         PERIOD,
       );

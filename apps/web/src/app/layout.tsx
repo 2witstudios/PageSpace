@@ -10,6 +10,7 @@ import ClientTrackingProvider from "@/components/providers/ClientTrackingProvide
 import ConsentProvider from "@/components/providers/ConsentProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { getRequestNonce } from "@/lib/request-nonce";
+import { POINTER_CAPABILITY_SCRIPT } from "@/lib/pointer-capability";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -99,6 +100,15 @@ export default async function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        {/* Stamp data-pointer="coarse" on <html> before first paint so the
+            unlayered touch rules in globals.css apply without a flash of hidden
+            controls. Emitted only client-side: the server renders no attribute,
+            so desktop SSR output is unchanged. <html> carries
+            suppressHydrationWarning, so the pre-paint mutation is free. */}
+        <script
+          nonce={nonce}
+          dangerouslySetInnerHTML={{ __html: POINTER_CAPABILITY_SCRIPT }}
+        />
         {/* Set webpack nonce for dynamically loaded chunks (next/dynamic) */}
         <script
           nonce={nonce}

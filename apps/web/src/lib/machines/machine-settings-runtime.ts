@@ -17,7 +17,7 @@
  * each branch's OWN Sprite (tracked in `machine_branches`, which — unlike the
  * Machine's own session — has no idle reaper, so a delete that skipped them would
  * leak microVMs), then the Machine's own persistent Sprite (resolved the same way
- * the shell/session layer does: derive the `terminal_sessions` key from (tenant,
+ * the shell/session layer does: derive the `machine_sessions` key from (tenant,
  * drive, page), look up its `sandboxId`, kill through the `MachineHost` seam).
  * Everything runs inside `teardown()` so any host error surfaces AFTER the page is
  * trashed, landing in `deleteMachine`'s recoverable path. Only the Machine's OWN
@@ -49,10 +49,10 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import {
-  createDbTerminalSessionStore,
-  deriveTerminalSessionKey,
+  createDbMachineSessionStore,
+  deriveMachineSessionKey,
   getSandboxSessionSecret,
-} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+} from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { isMachinePage } from '@pagespace/lib/content/page-types.config';
@@ -192,14 +192,14 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
         columns: { ownerId: true },
       });
       const sessionKey = drive
-        ? deriveTerminalSessionKey({
+        ? deriveMachineSessionKey({
             tenantId: drive.ownerId,
             driveId: page.driveId,
             pageId: machineId,
             secret: getSandboxSessionSecret(),
           })
         : null;
-      const sessionStore = await createDbTerminalSessionStore();
+      const sessionStore = await createDbMachineSessionStore();
       const session = sessionKey ? await sessionStore.findBySessionKey(sessionKey) : null;
 
       if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
@@ -226,7 +226,7 @@ export function createMachineSpriteTeardown(): MachineSpriteTeardown {
         try {
           await sessionStore.remove(sessionKey);
         } catch {
-          // Sprite is dead; a stale terminal_sessions row is harmless (the reaper
+          // Sprite is dead; a stale machine_sessions row is harmless (the reaper
           // or a re-provision under the same key reclaims it).
         }
       }

@@ -82,11 +82,11 @@ export async function GET(
     // Terminal pages in this drive the requesting user can see, for the
     // "use existing machine" picker. Scoped to this page's own drive —
     // additional agent drives are a separate follow-up.
-    let availableTerminals: Array<{ id: string; title: string }> = [];
+    let availableMachines: Array<{ id: string; title: string }> = [];
     try {
       const accessiblePageIds = await getUserAccessiblePagesInDrive(userId, page.driveId);
       if (accessiblePageIds.length > 0) {
-        availableTerminals = await db
+        availableMachines = await db
           .select({ id: pages.id, title: pages.title })
           .from(pages)
           .where(and(inArray(pages.id, accessiblePageIds), eq(pages.type, 'MACHINE'), eq(pages.isTrashed, false)));
@@ -112,9 +112,9 @@ export async function GET(
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
-      terminalAccess: page.terminalAccess ?? false,
+      machineAccess: page.machineAccess ?? false,
       machines: isMachineRefArray(page.machines) ? page.machines : [],
-      availableTerminals,
+      availableMachines,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -150,7 +150,7 @@ export async function PATCH(
       includePageTree,
       pageTreeScope,
       toolExposureMode,
-      terminalAccess,
+      machineAccess,
       machines,
       expectedRevision,
     } = body;
@@ -196,7 +196,7 @@ export async function PATCH(
     // Validate machines: shape-check each entry (MachineRef contract), cap the
     // array length, then verify every "existing" machineId points to a
     // non-trashed MACHINE page the requesting user can access — mirrors the
-    // GET availableTerminals scoping, so a caller can't attach a Terminal
+    // GET availableMachines scoping, so a caller can't attach a Terminal
     // outside their access via a direct API call.
     if (machines !== undefined) {
       if (!isMachineRefArray(machines) || machines.length > MAX_MACHINES) {
@@ -210,11 +210,11 @@ export async function PATCH(
         .map((m) => m.machineId);
       if (machineIds.length > 0) {
         const accessiblePageIds = new Set(await getUserAccessiblePagesInDrive(userId, page.driveId));
-        const validTerminals = await db
+        const validMachines = await db
           .select({ id: pages.id })
           .from(pages)
           .where(and(inArray(pages.id, machineIds), eq(pages.type, 'MACHINE'), eq(pages.isTrashed, false)));
-        const validIds = new Set(validTerminals.filter((t) => accessiblePageIds.has(t.id)).map((t) => t.id));
+        const validIds = new Set(validMachines.filter((t) => accessiblePageIds.has(t.id)).map((t) => t.id));
         const invalidIds = machineIds.filter((id) => !validIds.has(id));
         if (invalidIds.length > 0) {
           return NextResponse.json(
@@ -287,8 +287,8 @@ export async function PATCH(
       }
     }
 
-    if (terminalAccess !== undefined) {
-      updateData.terminalAccess = Boolean(terminalAccess);
+    if (machineAccess !== undefined) {
+      updateData.machineAccess = Boolean(machineAccess);
     }
 
     if (machines !== undefined) {
@@ -366,7 +366,7 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
-      terminalAccess: responsePage.terminalAccess ?? false,
+      machineAccess: responsePage.machineAccess ?? false,
       machines: isMachineRefArray(responsePage.machines) ? responsePage.machines : [],
     });
   } catch (error) {

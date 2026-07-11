@@ -17,14 +17,14 @@ import {
 } from '@pagespace/lib/services/sandbox/containment';
 import {
   getSandboxSessionSecret,
-  acquireTerminalSandbox,
-  createDbTerminalSessionStore,
-  deriveTerminalSessionKey,
-} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+  acquireMachineSession,
+  createDbMachineSessionStore,
+  deriveMachineSessionKey,
+} from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
-import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/terminal-storage-billing';
+import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
-import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
@@ -34,7 +34,7 @@ import {
 } from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
 import { deriveAgentTerminalSessionKey, agentTerminalScopeFromNames } from './terminal/agent-terminal-session-key';
-import { buildAgentTerminalCheckAuth, resolveTerminalSandbox } from './terminal/agent-terminal-access';
+import { buildAgentTerminalCheckAuth, resolveMachineSandbox } from './terminal/agent-terminal-access';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
@@ -74,7 +74,7 @@ dotenv.config({ path: '../../.env' });
 const agentTerminalSessionMap = createTerminalSessionMap();
 
 // Cache the DB terminal session store promise at module level (created once, not per-connection).
-const dbTerminalSessionStorePromise = createDbTerminalSessionStore();
+const dbMachineSessionStorePromise = createDbMachineSessionStore();
 const dbMachineBranchStorePromise = createDbMachineBranchStore();
 const dbMachineAgentTerminalStorePromise = createDbMachineAgentTerminalStore();
 const dbMachineProjectStorePromise = createDbMachineProjectStore();
@@ -97,12 +97,23 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
 /**
  * Acquires the OWNING Machine's persistent Sprite for `AgentTerminalMachineSandbox`
  * (machine/project scope share this one Sprite — see `agent-terminals.ts`),
- * re-authorizing `actorUserId` (resume re-authz) on every call, waking a
- * resumed (possibly hibernated) Sprite before handing its id back so a fresh
- * PTY spawn never races a cold Sprite. Mirrors the acquisition the retired
- * human terminal's `makeTerminalCheckAuth` used to perform inline.
+ * re-authorizing `actorUserId` (resume re-authz) on every call. Mirrors the
+ * acquisition the retired human terminal's `makeTerminalCheckAuth` used to
+ * perform inline.
+ *
+ * Does NOT wake the Sprite, and does not read it a second time to try. A Sprite
+ * has no explicit wake API — an incoming request wakes it automatically
+ * (docs.sprites.dev/concepts/lifecycle) — so the PTY's own `createSession` /
+ * `attachSession` IS the wake, and it already carries the bounded pre-open retry
+ * that the cold-start drop needs (`withWakeRetry` / `openPtyShell`'s reconnect).
+ * The `sh -c :` this used to run first bought nothing but a SECOND cold start on
+ * the slowest path we have.
+ *
+ * `sdk` is threaded in (rather than resolved here) so the whole connect —
+ * acquire, auth, launch resolution — shares ONE `createSpriteHandleCache` and
+ * therefore ONE underlying `getSprite`.
  */
-function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
+function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTerminalMachineSandbox {
   // The caller (resolveProjectOrMachineLocation, agent-terminals.ts) collapses
   // every acquire failure to one generic 'machine_unavailable' reason — log the
   // SPECIFIC reason here so it's still visible in realtime logs for triage.
@@ -122,12 +133,12 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
       const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
       if (!guardrail.allowed) return deny(guardrail.reason, machineId);
 
-      const [store, sdk] = await Promise.all([dbTerminalSessionStorePromise, getRealtimeSpritesSdk()]);
+      const store = await dbMachineSessionStorePromise;
       const rawClient = createSpritesSandboxClient({ sdk });
       const host = createSpriteMachineHost({ sdk, client: rawClient });
       const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
 
-      const result = await acquireTerminalSandbox({
+      const result = await acquireMachineSession({
         pageId: machineId,
         driveId: pageRow.driveId,
         tenantId: driveRow.ownerId,
@@ -148,15 +159,6 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
         },
       });
       if (!result.ok) return deny(result.reason, machineId);
-
-      if (result.resumed) {
-        try {
-          const sprite = await sdk.getSprite(result.sandboxId);
-          await ensureSpriteAwake(sprite);
-        } catch {
-          return deny('provision_failed', machineId);
-        }
-      }
 
       recordMachineActivity({ machineKey: machineId, now: nowMs });
 
@@ -180,23 +182,23 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
  * Shell adapter over the pure `deriveAgentTerminalSessionKey`
  * (`agent-terminal-session-key.ts`): maps the transport's optional
  * (projectName, branchName) pair into the discriminated scope and keys off the
- * owning Machine Terminal page id (`terminalId`), NOT the Sprite `sandboxId`.
- * Keying on `terminalId` means a warm reattach never has to resolve the Sprite
+ * owning Machine Terminal page id (`machineId`), NOT the Sprite `sandboxId`.
+ * Keying on `machineId` means a warm reattach never has to resolve the Sprite
  * before the fast-path map lookup can run.
  */
 function buildAgentTerminalSessionKey({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   name,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName?: string;
   branchName?: string;
   name: string;
 }): string {
   return deriveAgentTerminalSessionKey({
-    terminalId,
+    machineId,
     scope: agentTerminalScopeFromNames({ projectName, branchName }),
     name,
   });
@@ -206,12 +208,20 @@ function buildAgentTerminalSessionKey({
  * Resolve the Sprite a FRESH agent-terminal PTY will attach to (lazy sprite
  * resolution — leaf 1-2): resolve the (scope, name) target down to its Machine
  * Sprite via `resolveAgentTerminal` (machine/project scope may reconnect/resume
- * the Sprite through `buildMachineSandbox`), then read that Sprite exactly once.
- * Deliberately NOT part of the access decision — a Sprite is woken automatically
- * by any exec, so authorization never needs to touch it (see
- * `agent-terminal-access.ts`). Full getSprite collapse is leaf 1-4.
+ * the Sprite through `buildMachineSandbox`), then read that Sprite. Deliberately
+ * NOT part of the access decision — a Sprite is woken automatically by any exec,
+ * so authorization never needs to touch it (see `agent-terminal-access.ts`).
+ *
+ * ONE `createSpriteHandleCache` is built here, per connect, and threaded through
+ * BOTH halves — the machine acquire (whose `getOrCreate` probes the Sprite by
+ * name) and the launch resolution below (which needs the raw handle for the PTY).
+ * They read the same Sprite, so they now share one control-plane round-trip
+ * instead of paying for two. The cache is deliberately connect-scoped, never
+ * module-scoped: a Sprite handle is a live object, and a process-lifetime cache
+ * would keep serving one that has since been destroyed and re-created under the
+ * same name.
  */
-function resolveAgentTerminalSandbox({
+async function resolveAgentTerminalSandbox({
   userId,
   machineId,
   projectName,
@@ -224,7 +234,9 @@ function resolveAgentTerminalSandbox({
   branchName?: string;
   name: string;
 }) {
-  return resolveTerminalSandbox(
+  const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+
+  return resolveMachineSandbox(
     { machineId, projectName, branchName, name },
     {
       resolveAgentTerminal: async (target) => {
@@ -242,14 +254,14 @@ function resolveAgentTerminalSandbox({
             branchStore,
             store: agentTerminalStore,
             projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
-            machineSandbox: buildMachineSandbox(userId),
+            machineSandbox: buildMachineSandbox(userId, sdk),
           },
         });
       },
-      getSprite: async (sandboxId) => {
-        const sdk = await getRealtimeSpritesSdk();
-        return sdk.getSprite(sandboxId);
-      },
+      // Served from the cache the acquire above already populated (machine/project
+      // scope). A branch-scope target never acquires, so this is its one and only
+      // read.
+      getSprite: (sandboxId) => sdk.getSprite(sandboxId),
     },
   );
 }
@@ -289,7 +301,7 @@ const makeAgentTerminalCheckAuth = buildAgentTerminalCheckAuth({
   // or woken, so the reattach fast path and the 60s re-auth tick can both afford
   // to run it. It is what keeps a deleted project/branch/agent-terminal row from
   // going unnoticed now that the sandbox resolution is lazy.
-  resolveTerminalRow: async ({ machineId, projectName, branchName, name }) => {
+  resolveMachineRow: async ({ machineId, projectName, branchName, name }) => {
     const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
       dbMachineBranchStorePromise,
       dbMachineAgentTerminalStorePromise,
@@ -325,8 +337,8 @@ const makeAgentTerminalCheckAuth = buildAgentTerminalCheckAuth({
       },
     }).catch(() => {});
   },
-  buildSessionKey: ({ terminalId, projectName, branchName, name }) =>
-    buildAgentTerminalSessionKey({ terminalId, projectName, branchName, name }),
+  buildSessionKey: ({ machineId, projectName, branchName, name }) =>
+    buildAgentTerminalSessionKey({ machineId, projectName, branchName, name }),
   logDenied: (reason, context) => loggers.realtime.warn('Agent terminal auth denied', { reason, ...context }),
   logSandboxLookupFailed: (context) => loggers.realtime.warn('Agent terminal sandbox lookup failed', { reason: 'provision_failed', ...context }),
 });
@@ -659,15 +671,15 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                     sessionMap: agentTerminalSessionMap,
                     // The machine's conventional 'shell' agent terminal (the retired
                     // human `terminal:*` family's replacement) is keyed on the owning
-                    // Terminal page id (`pageId` == the checkAuth `terminalId`), so its
+                    // Terminal page id (`pageId` == the checkAuth `machineId`), so its
                     // in-memory sessionKey is derivable WITHOUT resolving the Sprite. We
-                    // still gate on the persisted terminal_sessions record existing (no
+                    // still gate on the persisted machine_sessions record existing (no
                     // provisioning) so we only target a shell that has actually run.
                     resolveSessionKey: async ({ tenantId, driveId, pageId }) => {
-                        const store = await dbTerminalSessionStorePromise;
-                        const key = deriveTerminalSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() });
+                        const store = await dbMachineSessionStorePromise;
+                        const key = deriveMachineSessionKey({ tenantId, driveId, pageId, secret: getSandboxSessionSecret() });
                         const record = await store.findBySessionKey(key);
-                        return record ? buildAgentTerminalSessionKey({ terminalId: pageId, name: SHELL_AGENT_TERMINAL_NAME }) : null;
+                        return record ? buildAgentTerminalSessionKey({ machineId: pageId, name: SHELL_AGENT_TERMINAL_NAME }) : null;
                     },
                 },
                 body,

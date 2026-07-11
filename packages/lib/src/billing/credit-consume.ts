@@ -44,7 +44,7 @@ export interface ConsumeCreditsInput {
   /**
    * Per-call override for the markup applied at settle, in basis points.
    * Absent for every ordinary AI-model call (they get the shared global
-   * {@link MARKUP_BPS}); terminal/Machine billing passes `TERMINAL_MARKUP_BPS`
+   * {@link MARKUP_BPS}); terminal/Machine billing passes `MACHINE_MARKUP_BPS`
    * here so its 1.5× substrate floor holds independent of AI markup changes.
    */
   markupBpsOverride?: number;
