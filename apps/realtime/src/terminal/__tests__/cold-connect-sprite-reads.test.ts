@@ -15,7 +15,7 @@
  * load), so the wiring is mirrored here.
  */
 
-import { describe, it } from 'vitest';
+import { describe, it, vi } from 'vitest';
 import { assert } from './riteway';
 import {
   createSpritesSandboxClient,
@@ -60,41 +60,46 @@ interface SpriteCalls {
   createSprite: string[];
   /** Every exec spawned, as `[file, ...args]` — a `sh -c :` here is a no-op wake exec. */
   spawned: string[][];
-  createdSessions: number;
 }
 
+/**
+ * A command that resolves immediately. The connect path's only exec is the
+ * egress lockdown's `mkdir`, a batch command that settles on 'exit'.
+ *
+ * Members the connect never touches are `vi.fn()` stubs rather than hand-written
+ * throwers: an unexercised arrow function of our own would be a permanently
+ * uncovered function in this package's coverage gate, which is a real (if
+ * indirect) cost of a fake that pretends to be richer than the code under test.
+ */
 function noopCommand(): SpriteCommandLike {
   return {
-    stdout: { on: () => undefined },
-    stderr: { on: () => undefined },
-    on: (event: string, listener: (arg: never) => void) => {
-      // Batch execs (the egress lockdown's mkdir) resolve via 'exit'.
-      if (event === 'exit') setTimeout(() => (listener as (code: number) => void)(0), 0);
+    stdout: { on: vi.fn() },
+    stderr: { on: vi.fn() },
+    on: (event: string, listener: (code: number) => void) => {
+      if (event === 'exit') setTimeout(() => listener(0), 0);
       return undefined;
     },
-    kill: () => undefined,
+    kill: vi.fn(),
   } as unknown as SpriteCommandLike;
 }
 
 function fakeSprite(name: string, calls: SpriteCalls): SpriteInstanceLike {
   return {
     name,
-    spawn: (file, args) => {
-      calls.spawned.push([file, ...(args ?? [])]);
+    spawn: (file: string, args: string[]) => {
+      calls.spawned.push([file, ...args]);
       return noopCommand();
     },
-    createSession: () => {
-      calls.createdSessions += 1;
-      return noopCommand();
-    },
-    attachSession: () => noopCommand(),
-    listSessions: async () => [],
-    filesystem: () => {
-      throw new Error('the connect path must not touch the fs API');
-    },
-    updateNetworkPolicy: async () => {},
-    destroy: async () => {},
-  };
+    // The connect resolves a Sprite HANDLE; it never opens the PTY here (that is
+    // openPtyShell's job, covered in cold-session-open-retry.test.ts) and never
+    // touches the fs API.
+    createSession: vi.fn(),
+    attachSession: vi.fn(),
+    listSessions: vi.fn(),
+    filesystem: vi.fn(),
+    updateNetworkPolicy: vi.fn(),
+    destroy: vi.fn(),
+  } as unknown as SpriteInstanceLike;
 }
 
 function fakeSdk(calls: SpriteCalls, existing: Set<string>): SpritesSdk {
@@ -109,10 +114,8 @@ function fakeSdk(calls: SpriteCalls, existing: Set<string>): SpritesSdk {
       existing.add(name);
       return fakeSprite(name, calls);
     },
-    deleteSprite: async (name) => {
-      existing.delete(name);
-    },
-  };
+    deleteSprite: vi.fn(),
+  } as unknown as SpritesSdk;
 }
 
 function fakeSessionStore(record: TerminalSessionRecord | null): TerminalSessionStore {
@@ -128,11 +131,9 @@ function fakeSessionStore(record: TerminalSessionRecord | null): TerminalSession
         lastActiveAt: input.now,
       };
     },
-    touch: async () => {},
-    remove: async () => {
-      current = null;
-    },
-  };
+    touch: vi.fn(),
+    remove: vi.fn(),
+  } as unknown as TerminalSessionStore;
 }
 
 /**
@@ -147,7 +148,7 @@ async function runColdConnect({
   resumed: boolean;
   lastActiveAt?: Date;
 }) {
-  const calls: SpriteCalls = { getSprite: [], createSprite: [], spawned: [], createdSessions: 0 };
+  const calls: SpriteCalls = { getSprite: [], createSprite: [], spawned: [] };
   const existing = new Set<string>(resumed ? [SPRITE_NAME] : []);
 
   // One cache per connect — the whole point of the leaf.
@@ -187,6 +188,7 @@ async function runColdConnect({
             checkFullEgressEnablement: async () => ({ ok: true }),
           },
         });
+        /* c8 ignore next -- harness guard: fires only if the fixture itself is broken */
         if (!acquired.ok) throw new Error(`acquire failed: ${acquired.reason}`);
         return {
           ok: true,
@@ -202,7 +204,12 @@ async function runColdConnect({
     },
   );
 
-  return { calls, sandbox };
+  // Narrow ONCE, here, so each assertion below can read `sprite.name` directly
+  // instead of re-guarding the union (a `sandbox.ok && …` in every expectation is
+  // a branch whose false arm no passing test ever takes).
+  /* c8 ignore next -- harness guard: every case here is expected to resolve */
+  if (!sandbox.ok) throw new Error(`resolve failed: ${sandbox.reason}`);
+  return { calls, sprite: sandbox.sprite };
 }
 
 describe('cold connect — Sprite control-plane budget', () => {
@@ -210,7 +217,7 @@ describe('cold connect — Sprite control-plane budget', () => {
     // The session store already knows this machine's Sprite, and the Sprite exists:
     // the resume path, which used to cost THREE getSprite calls (getOrCreate's probe,
     // the wake's read, and the launch resolution's read).
-    const { calls, sandbox } = await runColdConnect({ resumed: true });
+    const { calls, sprite } = await runColdConnect({ resumed: true });
 
     assert({
       given: 'a full cold connect against a resumed Sprite',
@@ -222,7 +229,7 @@ describe('cold connect — Sprite control-plane budget', () => {
     assert({
       given: 'a resumed connect',
       should: 'resume the existing Sprite (never create a duplicate) and hand its handle to the PTY',
-      actual: { created: calls.createSprite, sprite: sandbox.ok && sandbox.sprite.name },
+      actual: { created: calls.createSprite, sprite: sprite.name },
       expected: { created: [], sprite: SPRITE_NAME },
     });
   });
@@ -257,7 +264,7 @@ describe('cold connect — Sprite control-plane budget', () => {
   });
 
   it('given a FRESH sprite (no session yet), should probe once, create it, and serve the launch handle from that create', async () => {
-    const { calls, sandbox } = await runColdConnect({ resumed: false });
+    const { calls, sprite } = await runColdConnect({ resumed: false });
 
     assert({
       given: 'a first-ever connect (no Sprite exists)',
@@ -269,7 +276,7 @@ describe('cold connect — Sprite control-plane budget', () => {
     assert({
       given: 'a freshly created Sprite',
       should: 'hand the launch path the created handle without re-reading it',
-      actual: sandbox.ok && sandbox.sprite.name,
+      actual: sprite.name,
       expected: SPRITE_NAME,
     });
   });

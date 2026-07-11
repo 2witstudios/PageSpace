@@ -12,13 +12,36 @@ const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
  * fakeCommand) — every `provision()` call in this suite drives the REAL
  * `applyEgressLockdown`, which spawns its own `mkdir` command via the fake
  * Sprite, so the default must resolve on its own or provisioning hangs.
+ *
+ * `autoSpawn` mirrors the real SDK's WSCommand, which emits `spawn` once the
+ * WebSocket actually opens (`cmd.start().then(() => cmd.emit('spawn'))`). That
+ * is the signal `stream()` waits on before handing a stream back, so a fake that
+ * never emitted it would model a socket that never opens.
  */
-function fakeCommand(over: Partial<SpriteCommandLike> & { autoExit?: boolean } = {}) {
-  const { autoExit = true, ...commandOver } = over;
+function fakeCommand(
+  over: Partial<SpriteCommandLike> & { autoExit?: boolean; autoSpawn?: boolean; error?: Error } = {},
+) {
+  const { autoExit = true, autoSpawn = true, error, ...commandOver } = over;
   const events = new EventEmitter();
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
   const killed: string[] = [];
+  // Whether the socket has already opened. Several tests build their command
+  // BEFORE the code under test attaches its listeners, so a one-shot 'spawn'
+  // would fire into the void and the consumer would wait for an open that
+  // already happened. A real open is a STATE, not just an event — so replay it
+  // to a late subscriber, exactly as an already-open socket would present.
+  let spawned = false;
+  if (error) {
+    // A failed/flapping connection emits 'error' and never 'spawn'.
+    setTimeout(() => events.emit('error', error), 0);
+  }
+  if (autoSpawn) {
+    setTimeout(() => {
+      spawned = true;
+      events.emit('spawn');
+    }, 0);
+  }
   if (autoExit) {
     setTimeout(() => events.emit('exit', 0), 0);
   }
@@ -26,7 +49,13 @@ function fakeCommand(over: Partial<SpriteCommandLike> & { autoExit?: boolean } =
     stdout: { on: (event, listener) => stdout.on(event, listener) },
     stderr: { on: (event, listener) => stderr.on(event, listener) },
     stdin: { write: () => {} },
-    on: (event, listener) => events.on(event, listener as (...args: unknown[]) => void),
+    on: (event, listener) => {
+      if (event === 'spawn' && spawned) {
+        setTimeout(() => (listener as () => void)(), 0);
+        return events;
+      }
+      return events.on(event, listener as (...args: unknown[]) => void);
+    },
     kill: (signal) => {
       killed.push(signal ?? 'SIGTERM');
     },
@@ -199,6 +228,59 @@ describe('createSpriteMachineHost', () => {
 
     await handle.stream({ sessionId: 'existing-session' });
     expect(attachedId).toBe('existing-session');
+  });
+
+  // Regression (sprites 1-4): the PTY stream is the ONLY exec path that had no
+  // cold-start retry. `killAgentTerminal` attaches a stream and immediately
+  // SIGKILLs it, so once the explicit wake exec was removed, a hibernated Sprite
+  // could drop that first (waking) connection pre-open and the kill would fail
+  // outright — leaving a live PTY and its tracking row behind.
+  it('given a cold Sprite that drops the first stream attach pre-open, should retry and still deliver a killable stream', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            if (attempts === 1) {
+              // The cold VM drops the wake connection before it ever opens.
+              return fakeCommand({
+                autoExit: false,
+                autoSpawn: false,
+                error: new Error('WebSocket closed before open: code=1006'),
+              }).command;
+            }
+            return fakeCommand({ autoExit: false }).command;
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    const stream = await handle.stream({ sessionId: 'existing-session' });
+    stream.kill('SIGKILL');
+
+    expect(attempts).toBe(2); // first attach dropped pre-open, retried onto the woken VM
+  });
+
+  it('given a stream attach that fails POST-open, should surface the error rather than retrying a session that may already be running', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            return fakeCommand({ autoExit: false, autoSpawn: false, error: new Error('session is gone') }).command;
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.stream({ sessionId: 'existing-session' })).rejects.toThrow('session is gone');
+    expect(attempts).toBe(1);
   });
 
   it('given listStreams, should surface only tty sessions from the underlying Sprite', async () => {

@@ -56,16 +56,15 @@ describe('cold session-open — the first real exec IS the wake', () => {
     const healthy = buildFakeCommand();
 
     const opened: string[] = [];
-    let spawned = 0;
     const sprite = {
       name: 'cold-sprite',
-      // The wake exec is GONE — a spawn here would be the `sh -c :` we deleted.
-      spawn: vi.fn(() => { spawned += 1; return buildFakeCommand(); }),
+      // The wake exec is GONE — any spawn here would be the `sh -c :` we deleted.
+      spawn: vi.fn(),
       createSession: vi.fn(() => {
         opened.push('create');
         return opened.length === 1 ? dropped : healthy;
       }),
-      attachSession: vi.fn(() => { opened.push('attach'); return healthy; }),
+      attachSession: vi.fn(),
       // The cold VM reports no live sessions yet, so the reconnect plans a fresh create.
       listSessions: vi.fn(async () => []),
       filesystem: vi.fn(),
@@ -112,12 +111,7 @@ describe('cold session-open — the first real exec IS the wake', () => {
       expected: 'user@sprite:/workspace$ ',
     });
 
-    assert({
-      given: 'the whole cold-open sequence',
-      should: 'never spawn a no-op wake exec — the session-open is the wake',
-      actual: spawned,
-      expected: 0,
-    });
+    expect(sprite.spawn).not.toHaveBeenCalled(); // no `sh -c :` — the session-open IS the wake
   });
 
   it('given a Sprite that never wakes, should still surface an exit rather than retry forever', async () => {
@@ -126,11 +120,14 @@ describe('cold session-open — the first real exec IS the wake', () => {
     const cmds = Array.from({ length: 12 }, buildFakeCommand);
     let index = 0;
 
+    const nextCommand = () => cmds[Math.min(index++, cmds.length - 1)];
     const sprite = {
       name: 'dead-sprite',
       spawn: vi.fn(),
-      createSession: vi.fn(() => cmds[Math.min(index++, cmds.length - 1)]),
-      attachSession: vi.fn(() => cmds[Math.min(index++, cmds.length - 1)]),
+      createSession: vi.fn(nextCommand),
+      // Never reached: nothing is ever live on this Sprite, so every reconnect
+      // plans a fresh create, never an attach.
+      attachSession: vi.fn(),
       listSessions: vi.fn(async () => []),
       filesystem: vi.fn(),
       updateNetworkPolicy: vi.fn(),
@@ -142,7 +139,7 @@ describe('cold session-open — the first real exec IS the wake', () => {
       sprite,
       cols: 80,
       rows: 24,
-      onOutput: () => {},
+      onOutput: vi.fn(),
       onExit: (code) => exits.push(code),
     });
 
