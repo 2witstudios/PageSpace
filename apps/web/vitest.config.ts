@@ -20,13 +20,15 @@ export default defineConfig({
     // must be able to hold a whole shard, but the shard's total data is what
     // actually lives in RAM (it does not multiply by fork count; idle forks hold
     // almost nothing). CI confirmed a single fork churns through an ENTIRE shard
-    // of fast files, so the cap must cover one-fork-takes-all: six sequential
-    // shards (~139 files ≈ 7.5 GB each, separate processes that release
-    // everything between them) with an 11 GB per-fork cap (~47% headroom over
-    // 7.5 GB for heavier shards). Peak RAM stays ~8 GB, and the `test` script's
-    // 8 GB main-process heap covers the post-shard aggregation.
+    // of fast files, and the per-file retention VARIES by shard (heavy
+    // component-render files cluster into some shards, ~50–80 MB/file). So use
+    // ten sequential shards to spread the heavy files thin (~84 files/shard) and
+    // a generous 12 GB per-fork cap: even a worst-case ~100 MB/file shard is
+    // ~8 GB, well under both the cap and the runner's RAM. Each shard is a fresh
+    // process that releases everything before the next; the `test` script's 8 GB
+    // main-process heap covers post-shard aggregation.
     pool: 'forks',
-    poolOptions: { forks: { execArgv: ['--max-old-space-size=11264'] } },
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=12288'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
