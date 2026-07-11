@@ -9,6 +9,7 @@ import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { TerminalAccessCard } from './TerminalAccessCard';
+import { ImageGenerationCard } from './ImageGenerationCard';
 
 interface ProviderAvailability {
   isAvailable: boolean;
@@ -91,6 +92,8 @@ export default function AiSettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <ImageGenerationCard />
 
       <TerminalAccessCard />
     </div>
