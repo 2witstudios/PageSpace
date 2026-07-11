@@ -89,7 +89,10 @@ export default function TabSidebar({ title, children, pane }: TabSidebarProps) {
           <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2">
             <span className={HEADER_LABEL}>{title}</span>
           </div>
-          <ScrollArea className="flex-1">{children(DESKTOP_API)}</ScrollArea>
+          {/* min-h-0: a flex child's default `min-height: auto` lets it grow to
+              its content, so without this a long tree would push the sidebar
+              past the pane's height instead of scrolling inside it. */}
+          <ScrollArea className="min-h-0 flex-1">{children(DESKTOP_API)}</ScrollArea>
         </aside>
       )}
       <div className="min-h-0 min-w-0 flex-1">{pane}</div>

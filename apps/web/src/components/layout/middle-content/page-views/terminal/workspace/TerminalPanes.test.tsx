@@ -74,17 +74,36 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
     onMobile();
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
-    const terminals = await screen.findAllByTestId('xterm');
+    await screen.findAllByTestId('xterm');
+    const visible = screen.getAllByTestId('mobile-pane').filter((pane) => pane.dataset.hidden === undefined);
 
     assert({
       given: 'the same two-pane split on a phone-width viewport',
-      should: 'render the active pane alone — two terminals at ~180px each are unusable slivers — and offer no split',
+      should: 'show only the active pane — two terminals at ~180px each are unusable slivers — and offer no split',
       actual: {
-        panes: terminals.length,
-        showsActive: terminals[0]?.textContent?.includes('right'),
+        visiblePanes: visible.length,
+        showsActive: visible[0]?.textContent?.includes('right'),
         canSplit: screen.queryByTitle('Split right') !== null,
       },
-      expected: { panes: 1, showsActive: true, canSplit: false },
+      expected: { visiblePanes: 1, showsActive: true, canSplit: false },
+    });
+  });
+
+  test('the panes it hides stay MOUNTED — hiding a pane must not tear down its PTY', async () => {
+    onMobile();
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    const terminals = await screen.findAllByTestId('xterm');
+
+    assert({
+      given: 'a pane hidden by the narrow-viewport collapse',
+      should:
+        'keep its terminal mounted — unmounting emits agent-terminal:disconnect, which loses a finished agent\'s exit code and cold-starts a fresh PTY on return',
+      actual: {
+        mountedTerminals: terminals.length,
+        hidden: screen.getAllByTestId('mobile-pane').filter((pane) => pane.dataset.hidden === 'true').length,
+      },
+      expected: { mountedTerminals: 2, hidden: 1 },
     });
   });
 

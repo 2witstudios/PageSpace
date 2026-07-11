@@ -54,21 +54,38 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
 
   // A phone cannot hold a split grid: two columns at 375px give each terminal
   // ~180px, which is narrower than an `ls -l` line and unusable for the agent
-  // output this surface exists to show. So on narrow viewports the workspace
-  // shows the ACTIVE pane alone, full-bleed, and hides the split controls — the
-  // layout itself is untouched in the store, so any panes opened on a desktop are
-  // still there (and reachable via the strip below) and reappear laid out on the
-  // next wide render.
+  // output this surface exists to show. So on narrow viewports only the ACTIVE
+  // pane is VISIBLE, full-bleed, and the split controls are hidden — the store's
+  // layout is untouched, so a desktop split is still there and comes back laid
+  // out on the next wide render.
+  //
+  // The inactive panes are HIDDEN, not unmounted. Unmounting an XtermTerminal
+  // emits `agent-terminal:disconnect`, which nulls the session's `closedFn` and
+  // arms the idle reap — so an agent that finished while its pane was off-screen
+  // would lose its final output and exit code, and coming back to that pane would
+  // cold-start a fresh PTY instead of showing the completed run. A display:none
+  // terminal keeps its socket connection and is already an explicitly supported
+  // state: XtermTerminal skips fits while the container is 0x0 and its
+  // ResizeObserver refits exactly once when the pane is shown again.
   if (isMobile) {
-    const active = panes.find((pane) => pane.id === activePaneId) ?? panes[0];
-    if (!active) return null;
+    if (panes.length === 0) return null;
+    const activeId = panes.some((pane) => pane.id === activePaneId) ? activePaneId : panes[0].id;
     return (
       <div className="flex h-full flex-col bg-background">
         {panes.length > 1 && (
-          <PaneStrip panes={panes} activePaneId={activePaneId} onSelect={(id) => selectPane(machineId, id)} />
+          <PaneStrip panes={panes} activePaneId={activeId} onSelect={(id) => selectPane(machineId, id)} />
         )}
-        <div className="min-h-0 flex-1">
-          <TerminalPane {...paneProps(active)} canSplit={false} />
+        <div className="relative min-h-0 flex-1">
+          {panes.map((pane) => (
+            <div
+              key={pane.id}
+              className={cn('absolute inset-0', pane.id !== activeId && 'hidden')}
+              data-testid="mobile-pane"
+              data-hidden={pane.id !== activeId ? 'true' : undefined}
+            >
+              <TerminalPane {...paneProps(pane)} canSplit={false} />
+            </div>
+          ))}
         </div>
       </div>
     );
