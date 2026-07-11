@@ -192,12 +192,25 @@ export const MAX_INPUT_BYTES = 4096;
  */
 export const SETTLE_HEARTBEAT_MS = 10 * 60 * 1000;
 
-/** Discover the NEWLY created session's id by diffing the Sprite's session list against a snapshot taken before it was launched. Best-effort — an ambiguous or failed lookup just means the next reconnect falls back to a fresh session, exactly like a vanished session already does. */
+/**
+ * Discover the NEWLY created session's id by diffing the Sprite's session list
+ * against a snapshot taken before it was launched. Best-effort — an ambiguous or
+ * failed lookup just means the next reconnect falls back to a fresh session,
+ * exactly like a vanished session already does.
+ *
+ * ABSTAINS when more than one new tty session appeared. One Sprite hosts every
+ * agent terminal on its machine, so a sibling terminal launching its own shell in
+ * the same window is indistinguishable from ours — and guessing wrong persists
+ * the SIBLING's id as this terminal's `streamSessionId`, pointing its next cold
+ * connect at another terminal's PTY. `newTtySessionId` in `sprites-shell.ts`
+ * already gets this right; this is the same rule.
+ */
 async function discoverNewSessionId(sprite: SpriteInstanceLike, before: { id: string }[]): Promise<string | undefined> {
   try {
     const beforeIds = new Set(before.map((s) => s.id));
     const after = await sprite.listSessions();
-    return after.find((s) => s.tty && !beforeIds.has(s.id))?.id;
+    const created = after.filter((s) => s.tty && !beforeIds.has(s.id));
+    return created.length === 1 ? created[0].id : undefined;
   } catch {
     return undefined;
   }
@@ -443,11 +456,13 @@ export function buildAgentTerminalHandlers({
    * and a cold-path racer that lost a double-mount (see `onConnect`) — both are
    * "someone else's PTY is already live under this key; join it".
    */
-  function attachToLiveSession(session: TerminalSession, sessionKey: string, connectionId: string) {
+  function attachToLiveSession(session: TerminalSession, sessionKey: string, connectionId: string, viewerUserId: string) {
     if (session.idleTimer !== undefined) {
       clearTimeout(session.idleTimer);
       session.idleTimer = undefined;
     }
+    // This viewer now owns the PTY, so they are who re-auth must keep checking.
+    session.viewerUserId = viewerUserId;
     session.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
     session.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
     sessionMap.reattach(sessionKey, connectionId);
@@ -490,12 +505,42 @@ export function buildAgentTerminalHandlers({
         // No slot to release: reattaching starts no PTY, so the access check
         // reserved none. The live session still holds the one it was created
         // with, and keeps it until it is torn down or reaped.
-        attachToLiveSession(plan.session, sessionKey, connectionId);
+        attachToLiveSession(plan.session, sessionKey, connectionId, userId);
         return;
       }
 
-      // The cold path. ONLY now is a concurrency slot reserved and the Sprite
-      // resolved: a reattach above returned without ever calling this.
+      // The cold path — slow (it resolves, and may wake, a Sprite), which makes it
+      // exactly the window a double-mount's second connect lands in. Join a create
+      // already in flight for this key rather than starting a second one: opening
+      // a second PTY here is not merely wasteful, it is destructive. Both connects
+      // would attach to the SAME persisted Sprite exec session, so discarding the
+      // duplicate afterwards would SIGKILL the process the survivor is attached to.
+      //
+      // Loop rather than check once: if the create we waited on FAILED, another
+      // connect may already have claimed the key behind it.
+      for (;;) {
+        const inFlight = sessionMap.pendingCreate(sessionKey);
+        if (inFlight === undefined) break;
+        await inFlight.catch(() => {});
+        const created = sessionMap.getByKey(sessionKey);
+        if (created !== undefined) {
+          attachToLiveSession(created, sessionKey, connectionId, userId);
+          return;
+        }
+        // That create failed and installed nothing — see if another is in flight,
+        // otherwise fall through and create it ourselves.
+      }
+
+      // Claim the key BEFORE the first await, so a connect that arrives while we
+      // are resolving joins us instead of racing us. There is no await between the
+      // loop's exit and this claim, so the claim is atomic w.r.t. the event loop.
+      // The claim is released by the `finally` below, on every exit from the cold
+      // path — success, denial, or throw.
+      let finishCreate!: () => void;
+      sessionMap.trackCreate(sessionKey, new Promise<void>((resolve) => { finishCreate = resolve; }));
+      try {
+      // ONLY now is a concurrency slot reserved and the Sprite resolved: a
+      // reattach above returned without ever calling this.
       const sandbox = await plan.access.resolveSandbox();
       if (!sandbox.ok) {
         // resolveSandbox released the slot (if it had reserved one) and logged.
@@ -522,7 +567,19 @@ export function buildAgentTerminalHandlers({
       // hold for the same still-open session.
       let holdId: string | undefined;
       if (billing) {
-        const gateResult = await billing.gate({ payerId: plan.access.payerId });
+        // The slot is already reserved, and nothing owns it yet — no session
+        // exists to release it on teardown. A gate that THROWS (a billing/DB blip)
+        // would otherwise propagate straight out of onConnect with the slot still
+        // held, and `activeByUser` is a process-lifetime counter: one transient
+        // failure would lock a free-tier user (limit 1) out of agent terminals on
+        // this replica until the process restarts.
+        let gateResult: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
+        try {
+          gateResult = await billing.gate({ payerId: plan.access.payerId });
+        } catch (error) {
+          releaseSlot();
+          throw error;
+        }
         if (!gateResult.allowed) {
           releaseSlot();
           socket.emit('agent-terminal:error', { message: 'Insufficient credits to open an agent terminal session.', connectionId });
@@ -547,6 +604,7 @@ export function buildAgentTerminalHandlers({
         command: null as unknown as PtyShell,
         sandboxId,
         sessionKey,
+        viewerUserId: userId,
         sessionId: sandbox.streamSessionId ?? undefined,
         releaseSlot,
         payerId: plan.access.payerId,
@@ -608,36 +666,6 @@ export function buildAgentTerminalHandlers({
       }
 
       session.command = shell;
-
-      // Did we LOSE a double-mount race? Another cold connect for this same key
-      // (a StrictMode/HMR remount firing while we were seconds deep in
-      // resolveSandbox — the window is widest on exactly this slow path) may have
-      // finished and claimed the key while we were awaiting. `setNew` would
-      // silently overwrite it, orphaning the winner's PTY where nothing can ever
-      // reach it to kill it and permanently stranding its concurrency slot.
-      //
-      // Discard OUR duplicate and join the winner instead — from the client's
-      // side this is indistinguishable from an ordinary reattach.
-      const winner = sessionMap.getByKey(sessionKey);
-      if (winner !== undefined) {
-        session.outputFn = () => {};
-        session.closedFn = () => {};
-        // Billing: this PTY is killed the instant it opened, so its window is the
-        // openShell-throw case, not a session that ran — RELEASE the hold rather
-        // than settling it. Clearing connectedAt/holdId first is what makes that
-        // stick: killing the shell fires onExit asynchronously, and
-        // endAgentTerminalSession would otherwise settle the very hold released
-        // here (double-handling it) against a window that never happened.
-        session.connectedAt = undefined;
-        session.holdId = undefined;
-        shell.kill();
-        releaseSlot();
-        if (holdId) void billing?.releaseHold(holdId).catch(() => {});
-        loggers.realtime.info('Agent terminal duplicate cold connect discarded (lost double-mount race)', { sessionKey, sandboxId });
-        attachToLiveSession(winner, sessionKey, connectionId);
-        return;
-      }
-
       sessionMap.setNew(sessionKey, connectionId, session);
       activeConnectionIds.add(connectionId);
 
@@ -674,7 +702,13 @@ export function buildAgentTerminalHandlers({
       const reAuthInterval = setInterval(async () => {
         const liveSession = sessionMap.getByKey(sessionKey);
         if (!liveSession) { clearInterval(reAuthInterval); return; }
-        const result = await checkAuth({ userId, machineId, projectName, branchName, name });
+        // Re-check the session's CURRENT viewer, not whoever created it. A session
+        // outlives its creator's connection: any authorized user may reattach, and
+        // `attachToLiveSession` re-points the PTY's output at them. Checking the
+        // creator would leave a reattached viewer whose access was revoked
+        // mid-session still receiving output and still able to type, because the
+        // long-gone creator is of course still authorized.
+        const result = await checkAuth({ userId: liveSession.viewerUserId, machineId, projectName, branchName, name });
         // Re-check liveness after the await: another actor (heartbeat insolvency,
         // PTY exit, idle reap) may have torn the session down while checkAuth ran —
         // acting on the stale reference would double kill/closedFn.
@@ -690,6 +724,11 @@ export function buildAgentTerminalHandlers({
       session.reAuthInterval = reAuthInterval;
 
       socket.emit('agent-terminal:ready', { connectionId });
+      } finally {
+        // Release the key claim on EVERY exit from the cold path — success, denial
+        // or throw — so a failed create never wedges the key against future connects.
+        finishCreate();
+      }
     },
 
     onInput(payload: unknown) {

@@ -490,18 +490,15 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getBySocket('attacker-sock')).toBeUndefined();
     });
 
-    it('given two CONCURRENT cold connects for the same key, should keep ONE PTY — killing the loser and returning its slot', async () => {
+    it('given two CONCURRENT cold connects for the same key, should open exactly ONE PTY — the second joins the first', async () => {
       // The genuinely racy double-mount: connect #2 arrives while connect #1 is
-      // still seconds deep in its cold resolveSandbox, so BOTH see an empty
-      // sessionMap and both open a PTY. Without a guard, setNew silently
-      // overwrites — orphaning the winner's PTY (nothing can reach it to kill it)
-      // and stranding its concurrency slot for the life of the process.
+      // still seconds deep in its cold resolveSandbox. Opening a second PTY here
+      // is not merely wasteful — when both attach to the SAME persisted Sprite exec
+      // session, discarding one would SIGKILL the process the other is attached to.
+      // So the key is claimed before the first await and #2 joins #1 instead.
       const authA = makeAuthSuccess();
       const authB = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
-      const shellA = makeShell();
-      const shellB = makeShell();
-      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
 
       await Promise.all([
@@ -509,34 +506,29 @@ describe('buildAgentTerminalHandlers', () => {
         onConnect({ ...validPayload, connectionId: 'pane-b' }),
       ]);
 
-      // Both genuinely raced down the cold path...
-      expect(openShell).toHaveBeenCalledTimes(2);
-      // ...but exactly one session survives under the shared key.
-      const survivor = sessionMap.getByKey('branch1:agent:cli');
-      expect(survivor).toBeDefined();
-      expect(survivor?.command).toBe(shellA);
-
-      // The loser's PTY is killed and its slot handed straight back — no orphan,
-      // no permanently-leaked concurrency capacity.
-      expect(shellB.kill).toHaveBeenCalled();
-      expect(authB.releaseSlot).toHaveBeenCalledTimes(1);
-
-      // The winner is untouched and still holds the one slot it reserved.
-      expect(shellA.kill).not.toHaveBeenCalled();
+      // Exactly one PTY — the loser never opened one, so there is none to kill.
+      expect(openShell).toHaveBeenCalledTimes(1);
+      // The loser never even resolved a sandbox, so it reserved no slot and no hold.
+      expect(authB.resolveSandbox).not.toHaveBeenCalled();
+      expect(authB.releaseSlot).not.toHaveBeenCalled();
       expect(authA.releaseSlot).not.toHaveBeenCalled();
 
-      // The loser's pane still gets a working terminal — it joined the winner.
-      expect(sessionMap.getBySocket('pane-b')).toBe(survivor);
+      // Both panes end up on the one live session.
+      const session = sessionMap.getByKey('branch1:agent:cli');
+      expect(session).toBeDefined();
+      expect(sessionMap.getBySocket('pane-b')).toBe(session);
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ connectionId: 'pane-b', scrollback: expect.any(String) }));
     });
 
-    it('given a lost cold-race whose orphaned PTY exits later, should NOT evict the winner from the session map', async () => {
-      const authA = makeAuthSuccess();
-      const authB = makeAuthSuccess();
-      checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
-      const shellA = makeShell();
-      const shellB = makeShell();
-      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+    it('given a CONCURRENT connect while a cold create is attaching to a PERSISTED Sprite session, should never kill that session', async () => {
+      // The destructive case: both connects resolve the SAME streamSessionId, so
+      // openPtyShell would attachSession() to one shared server-side exec session.
+      // A "discard the duplicate" strategy would SIGKILL the very process the
+      // survivor is attached to. Serializing means the second never opens one.
+      checkAuth = vi
+        .fn()
+        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared' }))
+        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
 
       await Promise.all([
@@ -544,15 +536,50 @@ describe('buildAgentTerminalHandlers', () => {
         onConnect({ ...validPayload, connectionId: 'pane-b' }),
       ]);
 
-      // The discarded PTY's kill lands asynchronously: its onExit fires AFTER the
-      // winner already owns the key. A blind deleteByKey here would evict the
-      // live winner and strand a running PTY.
-      const loserOnExit = openShell.mock.calls[1][0].onExit as (exitCode: number) => void;
-      loserOnExit(0);
+      expect(openShell).toHaveBeenCalledTimes(1);
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-shared' }));
+      // Nothing was killed — the shared Sprite session survives for the live viewer.
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')?.command).toBe(shell);
+    });
 
-      expect(sessionMap.getByKey('branch1:agent:cli')?.command).toBe(shellA);
-      // ...and the loser's slot is still only returned once, not twice.
-      expect(authB.releaseSlot).toHaveBeenCalledTimes(1);
+    it('given an in-flight cold create that FAILS, should let a queued connect create the session itself (no wedged key)', async () => {
+      const failing = makeAuthSuccess();
+      failing.resolveSandbox = vi.fn(async () => ({ ok: false as const, reason: 'provision_failed' }));
+      const succeeding = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(succeeding) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      // The failed create released its claim, so the queued connect went on to
+      // create the session rather than joining a session that never existed.
+      expect(succeeding.resolveSandbox).toHaveBeenCalledTimes(1);
+      expect(openShell).toHaveBeenCalledTimes(1);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given a fresh session where a SIBLING terminal opened a tty in the same window, should persist nothing rather than the sibling\'s id', async () => {
+      // One Sprite hosts every agent terminal on the machine. Two new tty sessions
+      // in the diff is ambiguous — guessing would point THIS terminal's next cold
+      // connect at another terminal's PTY.
+      const auth = makeAuthSuccess({ streamSessionId: null });
+      auth.sprite.listSessions = vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 'sess-ours', command: 'pagespace-cli', isActive: true, tty: true },
+          { id: 'sess-sibling', command: 'claude', isActive: true, tty: true },
+        ]);
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
     it('given two connects for the same key (double-mount remount), should not double-create — the second reattaches via getByKey', async () => {
@@ -611,6 +638,47 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).not.toHaveBeenCalled(); // natural exit — the stale re-auth must not kill
       expect(auth.releaseSlot).toHaveBeenCalledTimes(1); // slot not double-released
+    });
+
+    it('given a session reattached by a DIFFERENT user, should re-auth the CURRENT viewer, not the creator', async () => {
+      // A session outlives its creator's connection. If re-auth kept checking the
+      // creator — who of course remains authorized — a viewer who reattached and
+      // then had their access revoked would keep receiving PTY output, and could
+      // keep typing, indefinitely.
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload); // user1 creates
+
+      // user2 reattaches on their own socket.
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ viewerUserId: 'user2' });
+
+      checkAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // The tick must ask about user2 — the one actually driving the PTY.
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
+      expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+    });
+
+    it('given the reattached viewer loses access, should tear the session down at the next re-auth tick', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload); // user1 creates
+
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload); // user2 takes over the PTY
+
+      // user2's access is revoked; user1 would still pass.
+      checkAuth.mockImplementation(async ({ userId }: { userId: string }) =>
+        userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock2' });
     });
 
     it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit agent-terminal:closed with exitCode -2', async () => {
@@ -1076,17 +1144,13 @@ describe('buildAgentTerminalHandlers', () => {
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
     });
 
-    it('given a lost cold-connect race, RELEASES the duplicate\'s hold rather than settling it (even after its onExit lands)', async () => {
-      // The discarded PTY is killed the instant it opened — it ran no billable
-      // window. Its hold must be handed back, and the onExit that follows the
-      // kill must NOT then settle that same (already-released) hold.
+    it('given two CONCURRENT cold connects, places exactly ONE hold — the joiner never gates', async () => {
+      // Serializing the key means the second connect never resolves a sandbox, so
+      // it never gates and never places a hold there is nobody left to settle.
       const billing = makeBilling();
       const authA = makeAuthSuccess();
       const authB = makeAuthSuccess();
       checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
-      const shellA = makeShell();
-      const shellB = makeShell();
-      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
 
       await Promise.all([
@@ -1094,18 +1158,26 @@ describe('buildAgentTerminalHandlers', () => {
         onConnect({ ...validPayload, connectionId: 'pane-b' }),
       ]);
 
-      // Two cold paths raced, so two holds were placed; the loser's is released.
-      expect(billing.gate).toHaveBeenCalledTimes(2);
-      expect(billing.releaseHold).toHaveBeenCalledTimes(1);
+      expect(billing.gate).toHaveBeenCalledTimes(1);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
       expect(billing.trackUsage).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-1' });
+    });
 
-      // The kill's onExit lands afterwards — it must not settle the released hold.
-      const loserOnExit = openShell.mock.calls[1][0].onExit as (exitCode: number) => void;
-      loserOnExit(0);
-      expect(billing.trackUsage).not.toHaveBeenCalled();
+    it('given the billing gate THROWS after the slot was reserved, releases the slot rather than leaking it forever', async () => {
+      // `activeByUser` is a process-lifetime counter. A gate that throws with the
+      // slot still held would lock a free-tier user (limit 1) out of agent terminals
+      // on this replica until the process restarts.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const billing = makeBilling({ gate: vi.fn().mockRejectedValue(new Error('billing db blip')) });
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
 
-      // The winner is still live and still billable.
-      expect(sessionMap.getByKey('branch1:agent:cli')?.command).toBe(shellA);
+      await expect(onConnect(validPayload)).rejects.toThrow('billing db blip');
+
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+      expect(openShell).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
 
     it('reattaching to a live session does NOT place a second hold', async () => {
