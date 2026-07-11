@@ -7,15 +7,24 @@
  * `getOrCreate` resumes an existing Sprite by name or creates a fresh one.
  *
  * Provisioning is locked down, never platform defaults:
- *  - **Egress** — the deny-by-default L3 network policy is (re-)applied on EVERY
- *    hand-back, whether the Sprite was just created or resumed by name. Sprites
- *    default to open outbound, so a Sprite reused after a crash between
- *    `createSprite` and its original lockdown would otherwise run the next
- *    command with open egress; reapplying on resume closes that window (and lets
- *    a tightened allowlist take effect on a warm session). On a FRESH Sprite a
- *    lockdown failure destroys it and rejects; on a RESUMED one we never destroy
- *    a warm session we don't own the lifecycle of, but we still refuse to hand it
- *    back — the call rejects so no command runs without a confirmed policy.
+ *  - **Egress** — the deny-by-default L3 network policy is applied whenever THIS
+ *    VM is not already PROVEN to be running THIS policy: on a FRESH create (a new
+ *    Sprite starts with the platform's open outbound), on a changed policy, on a
+ *    Sprite re-created under the same name (a different VM instance, whose
+ *    predecessor's proof must not carry over), and when the caller records no
+ *    proof at all (unknown → fail closed). Only a warm resume of the same VM under
+ *    the same policy skips it: the policy is a persistent file
+ *    (`/.sprite/policy/network.json`) that survives hibernation, so re-pushing it
+ *    on every hand-back was pure chatter on the connect critical path. The proof
+ *    is a token over (Sprite instance id, policy hash) — see
+ *    `../egress-lockdown.ts`. The crash window the old unconditional re-apply
+ *    defended (a crash between `createSprite` and its lockdown) is closed by
+ *    ORDERING instead: the caller links the session only after `getOrCreate`
+ *    resolves, so an unlocked Sprite is never reachable from a session row. On a
+ *    FRESH Sprite a lockdown failure destroys it and rejects; on a RESUMED one we
+ *    never destroy a warm session we don't own the lifecycle of, but we still
+ *    refuse to hand it back — the call rejects so no command runs without a
+ *    confirmed policy.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
  *    defaults.
@@ -46,6 +55,7 @@
 // pure transformation logic and type-safe wrappers; it never touches the SDK.
 import type { NetworkPolicy, SpriteConfig } from '@fly/sprites';
 import { buildSpriteNetworkPolicy } from '../egress';
+import { hashPolicy, egressLockdownToken, shouldApplyPolicy } from '../egress-lockdown';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import type {
   ExecSandboxClient,
@@ -121,6 +131,43 @@ export interface SpriteCommandLike {
   resize?(cols: number, rows: number): void;
 }
 
+/**
+ * Pure: the `(file, args[])` to spawn `command` with a SELF-HEALING working
+ * directory, instead of handing `cwd` to the SDK as an immutable precondition.
+ *
+ * The server `chdir`s into `cwd` before spawning, so a missing directory fails
+ * the spawn outright — and `SANDBOX_ROOT` is persistent but NOT immutable: an
+ * agent that `rm -rf`s `/workspace` would otherwise brick every later command
+ * and every later PTY open. So route through a tiny `sh` that recreates + enters
+ * the directory and then `exec`s the real command (`exec` preserves the PTY, the
+ * signals, and the real exit code).
+ *
+ * cwd/command/args are passed as positional DATA args (`$0`=sh, `$1`=cwd;
+ * `shift` drops it so `"$@"` is the command and its args) — never interpolated
+ * into the script — so the no-shell-injection invariant of the arg-array form
+ * holds even for a cwd full of shell metacharacters.
+ *
+ * This is the one place that self-heal is defined: the batch path
+ * ({@link wrap}'s `runCommand`), the `MachineHost` PTY (`sprite-machine-host`),
+ * and the realtime terminal (`apps/realtime/src/terminal/sprites-shell.ts`) all
+ * spawn through it. It is also why the egress lockdown's `mkdir` no longer needs
+ * to run on every hand-back — see `../egress-lockdown.ts`.
+ */
+export function spawnWithSelfHealingCwd({
+  command,
+  args = [],
+  cwd,
+}: {
+  command: string;
+  args?: readonly string[];
+  cwd: string;
+}): [string, string[]] {
+  return [
+    'sh',
+    ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', cwd, command, ...args],
+  ];
+}
+
 /** Options for spawning a command, including PTY support. */
 export interface SpriteSpawnOptions {
   cwd?: string;
@@ -186,6 +233,22 @@ export function readSessionInfoId(message: unknown): string | undefined {
 /** The Sprite instance subset the driver consumes. */
 export interface SpriteInstanceLike {
   readonly name: string;
+  /**
+   * The platform's id for this Sprite INSTANCE, hydrated from the API response by
+   * both `getSprite` and `createSprite` (the SDK `Object.assign`s the parsed body
+   * onto the handle), so reading it costs nothing extra.
+   *
+   * Distinct from `name`, which is OURS and is reused across re-creates: a Sprite
+   * destroyed and re-provisioned under the same session key is a different VM,
+   * with a different id — and, crucially, with the platform's default OPEN egress
+   * until it is locked down. The egress record is therefore keyed on this id, not
+   * on the name (see `../egress-lockdown.ts`).
+   *
+   * Optional because the RC SDK types it optional: a build that stops reporting it
+   * must degrade to "identity unknown" → re-apply the lockdown, never to "same
+   * Sprite, skip it".
+   */
+  readonly id?: string;
   spawn(
     file: string,
     args?: string[],
@@ -513,8 +576,37 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
- * Force a hibernated VM awake via a cheap no-op exec, with the same bounded
- * cold-start retry as a real command.
+ * Pure: the directory a Sprite path lives in.
+ *
+ * Deliberately NOT `node:path.dirname`: these are paths inside the Sprite's
+ * Linux VM, and on a Windows host `path.dirname` would apply Win32 semantics
+ * (backslash separators, drive letters) to them. POSIX by construction, so the
+ * answer never depends on where the server happens to run. A path with no `/`,
+ * or one directly under the root, yields `/`.
+ */
+export function parentDir(filePath: string): string {
+  const cut = filePath.lastIndexOf('/');
+  return cut <= 0 ? '/' : filePath.slice(0, cut);
+}
+
+/**
+ * Pure: the recovery exec run between a failed filesystem op and its retry.
+ *
+ * With no directories it is a bare no-op (`sh -c :`) whose only job is to WAKE
+ * the VM; with directories it also `mkdir -p`s them, so the one exec does double
+ * duty — see {@link recoverFsViaExec}. The directories are positional DATA args
+ * (`"$@"`), never interpolated into the script, so a path full of shell
+ * metacharacters cannot escape into the command.
+ */
+export function fsRecoveryExec(ensureDirs: readonly string[] = []): [string, string[]] {
+  return ensureDirs.length === 0
+    ? ['sh', ['-c', ':']]
+    : ['sh', ['-c', 'mkdir -p "$@" 2>/dev/null || :', 'sh', ...ensureDirs]];
+}
+
+/**
+ * Recover a failed filesystem op with a single exec: wake the VM, and recreate
+ * any directories the op needs.
  *
  * THE FILESYSTEM PATH IS THE ONLY LEGITIMATE CALLER, and deliberately not
  * exported. Every OTHER operation already wakes the VM by itself: a Sprite has
@@ -523,15 +615,23 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * `attachSession` IS the wake, and prefixing one with a `sh -c :` just pays for
  * two cold starts instead of one.
  *
- * The Sprite filesystem HTTP API is the exception, and the reason this still
- * exists: it is a bare `fetch()` with no AbortSignal that does NOT wake a
- * hibernated VM — it simply hangs (52–90s observed) until Fly's proxy closes the
- * connection. So an fs op against a cold Sprite has no way to wake the VM it is
- * waiting on. This exec does it for it.
+ * The Sprite filesystem HTTP API is the exception, and the reason this exists:
+ * it is a bare `fetch()` with no AbortSignal that does NOT wake a hibernated VM
+ * — it simply hangs (52–90s observed) until Fly's proxy closes the connection.
+ * So an fs op against a cold Sprite has no way to wake the VM it is waiting on.
+ * This exec does it for it.
+ *
+ * A write ALSO fails when its parent directory is gone — the fs API does not
+ * create parents, and SANDBOX_ROOT is persistent but not immutable (a sandbox
+ * command can `rm -rf /workspace`). That used to be papered over by the egress
+ * lockdown's `mkdir` running on every hand-back; now that the lockdown is
+ * fresh-create-only (`../egress-lockdown.ts`), the write self-heals here instead
+ * — folded into the wake exec it was already paying for, so the happy path costs
+ * nothing extra.
  */
-async function wakeSpriteViaExec(sprite: SpriteInstanceLike): Promise<void> {
+async function recoverFsViaExec(sprite: SpriteInstanceLike, ensureDirs: readonly string[] = []): Promise<void> {
   await runSpawnedWithWakeRetry(
-    () => sprite.spawn('sh', ['-c', ':']),
+    () => sprite.spawn(...fsRecoveryExec(ensureDirs)),
     DEFAULT_MAX_OUTPUT_BYTES,
     FS_OP_TIMEOUT_MS,
   );
@@ -539,47 +639,42 @@ async function wakeSpriteViaExec(sprite: SpriteInstanceLike): Promise<void> {
 
 /**
  * Run a filesystem op bounded by a timeout; on the first failure (cold-start
- * hang/race) wake the VM via the exec path and retry once — see
- * `wakeSpriteViaExec` for why the fs API cannot wake the VM itself.
+ * hang/race, or a missing parent directory) recover via the exec path and retry
+ * once — see `recoverFsViaExec` for why the fs API can do neither itself.
  */
 async function fsWithWakeRetry<T>(
   sprite: SpriteInstanceLike,
   label: string,
   op: () => Promise<T>,
+  ensureDirs: readonly string[] = [],
 ): Promise<T> {
   try {
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   } catch {
-    await wakeSpriteViaExec(sprite);
+    await recoverFsViaExec(sprite, ensureDirs);
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   }
 }
 
-function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
+function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
+    // Proof of THIS VM's confirmed lockdown, for the caller to persist. Undefined
+    // on the `get` path (which applies no policy) and whenever the Sprite's
+    // identity is unknown — both of which the caller must treat as "unproven".
+    egressPolicyToken,
 
     async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes }: RunCommandArgs): Promise<SandboxRunResult> {
       // spawn (arg array), never a host-side shell string. The untrusted command
       // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
       // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
       //
-      // Self-healing cwd: when a cwd is given, don't hand it to spawn as an
-      // immutable precondition (a deleted cwd makes spawn fail outright — an agent
-      // that `rm -rf`s `/workspace` would otherwise brick the sandbox for the rest
-      // of the conversation). Instead route through a tiny `sh` wrapper that
-      // recreates + enters the cwd first, so it self-heals on the next command.
-      // cwd/cmd/args are passed as positional DATA args (`$1`=cwd; `shift` drops it
-      // so `"$@"` = cmd args…; `exec` preserves the real exit code) — never
-      // interpolated into the script, preserving the arg-array no-injection
-      // invariant. With no cwd, spawn directly as before.
+      // Self-healing cwd (see `spawnWithSelfHealingCwd`): a given cwd is never a
+      // precondition — the wrapper recreates and enters it. With no cwd, spawn
+      // directly as before.
       const spawnFn = cwd === undefined
         ? () => sprite.spawn(cmd, args, { env })
-        : () => sprite.spawn(
-            'sh',
-            ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', cwd, cmd, ...args],
-            { env },
-          );
+        : () => sprite.spawn(...spawnWithSelfHealingCwd({ command: cmd, args, cwd }), { env });
       return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs);
     },
 
@@ -587,9 +682,15 @@ function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
       const fs = sprite.filesystem('/');
       for (const file of files) {
         const data = typeof file.content === 'string' ? file.content : Buffer.from(file.content);
-        // Bounded + wake-on-cold: the fs API hangs on a hibernated VM otherwise.
-        await fsWithWakeRetry(sprite, 'write', () =>
-          fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
+        // Bounded + recover-on-failure: the fs API hangs on a hibernated VM, and
+        // it does not create parent directories — so the retry's exec both wakes
+        // the VM and recreates this file's parent (self-healing SANDBOX_ROOT,
+        // which a sandbox command can delete). One exec, either way.
+        await fsWithWakeRetry(
+          sprite,
+          'write',
+          () => fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
+          [parentDir(file.path)],
         );
       }
     },
@@ -691,26 +792,27 @@ export function classifyProvisionError(error: unknown): SandboxProvisionError {
 }
 
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
-// Called on every hand-back (fresh or resumed) so a Sprite is never returned
-// with open/unknown egress. When `destroyOnFailure` is set (a FRESH create), a
-// lockdown failure destroys the just-created Sprite before propagating; on a
-// resumed Sprite we never destroy a warm session, but the error still propagates
-// so the caller refuses to hand back a Sprite without a confirmed policy.
+// Called only when the policy is NOT already known-good on this Sprite (fresh
+// create, hash mismatch, or unknown recorded state — see `shouldApplyPolicy`), so
+// a Sprite is never returned with open/unknown egress and a warm resume pays no
+// redundant control-plane round-trip. When `destroyOnFailure` is set (a FRESH
+// create), a lockdown failure destroys the just-created Sprite before
+// propagating; on a resumed Sprite we never destroy a warm session, but the error
+// still propagates so the caller refuses to hand back a Sprite without a
+// confirmed policy.
 async function applyEgressLockdown({
   sdk,
   sprite,
-  options,
+  policy,
   destroyOnFailure,
 }: {
   sdk: SpritesSdk;
   sprite: SpriteInstanceLike;
-  options: SandboxCreateOptions;
+  policy: NetworkPolicy;
   destroyOnFailure: boolean;
 }): Promise<void> {
   try {
-    await sprite.updateNetworkPolicy(
-      buildSpriteNetworkPolicy({ egressAllowlist: options.egressAllowlist, egressMode: options.egressMode }),
-    );
+    await sprite.updateNetworkPolicy(policy);
     // Use spawn + runSpawned (30 s wall-clock) to create the workspace dir instead
     // of filesystem().mkdir(). The filesystem API uses a bare fetch() with no
     // AbortSignal — it hangs for 52–90 s when the Sprite VM is cold-booting and
@@ -788,7 +890,7 @@ export function createSpriteHandleCache(sdk: SpritesSdk): SpritesSdk {
 
 export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSandboxClient {
   return {
-    async getOrCreate({ name, options }) {
+    async getOrCreate({ name, options, appliedEgressToken }) {
       // Resume by name when the Sprite already exists; create fresh ONLY on a
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
@@ -809,9 +911,27 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
           sprite = await sdk.createSprite(spriteName, options.caps);
           fresh = true;
         }
-        // Re-apply the deny-default egress lockdown on BOTH paths — see file header.
-        await applyEgressLockdown({ sdk, sprite, options, destroyOnFailure: fresh });
-        return wrap(sprite);  // wrap sets sandboxId = sprite.name = spriteName (truncated)
+        // Lock down egress only when THIS VM is not already proven to be running
+        // THIS policy — see the file header and `../egress-lockdown.ts`. The proof
+        // is a token over (Sprite instance id, policy hash): a warm resume of the
+        // same VM under the same policy skips the control-plane round-trip and the
+        // `mkdir` exec entirely (both the policy file and the sandbox root are
+        // persistent), while a Sprite that was re-created under this name — even
+        // by a concurrent caller that has not reached its own lockdown yet — has a
+        // different id, does not match, and is locked down here rather than handed
+        // back on the platform's default open egress.
+        const policy = buildSpriteNetworkPolicy({
+          egressAllowlist: options.egressAllowlist,
+          egressMode: options.egressMode,
+        });
+        const desiredToken = egressLockdownToken({ spriteId: sprite.id, policyHash: hashPolicy(policy) });
+        if (shouldApplyPolicy({ fresh, appliedToken: appliedEgressToken, desiredToken })) {
+          await applyEgressLockdown({ sdk, sprite, policy, destroyOnFailure: fresh });
+        }
+        // wrap sets sandboxId = sprite.name = spriteName (truncated). The token is
+        // now CONFIRMED for this VM (freshly applied, or already proven) — the
+        // caller records it, and it is what lets the next hand-back skip the push.
+        return wrap(sprite, desiredToken);
       } catch (error) {
         // Normalize every provisioning failure (rate limit / conflict / outage)
         // so the lifecycle can surface a distinct reason instead of one opaque

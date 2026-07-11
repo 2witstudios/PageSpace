@@ -3,7 +3,7 @@ import type {
   SpriteCommandLike,
   SpriteSessionInfo,
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import { readSessionInfoId } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 
 /**
@@ -306,11 +306,15 @@ export function openPtyShell({
   function launchFreshSession(): void {
     currentSessionId = undefined;
     const gen = (sessionGeneration += 1);
-    current = sprite.createSession(command, args, {
+    // The cwd is NOT passed as a createSession option: the server chdirs into it
+    // and fails the open outright if it is gone, and a sandbox command can delete
+    // /workspace. The wrapper recreates + enters it, then execs the real command —
+    // which is why the egress lockdown's mkdir no longer has to run on every
+    // hand-back. See `spawnWithSelfHealingCwd`.
+    current = sprite.createSession(...spawnWithSelfHealingCwd({ command, args, cwd }), {
       tty: true,
       cols: lastCols,
       rows: lastRows,
-      cwd,
       env: TERMINAL_ENV,
     });
     current.on('message', (message) => {

@@ -2,8 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
 import { MachineStreamOpenTimeoutError } from '../../machine-host';
-import { createSpritesSandboxClient, type SpriteCommandLike, type SpriteInstanceLike, type SpritesSdk } from '../sprites';
+import {
+  createSpritesSandboxClient,
+  spawnWithSelfHealingCwd,
+  type SpriteCommandLike,
+  type SpriteInstanceLike,
+  type SpritesSdk,
+} from '../sprites';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
+import { SANDBOX_ROOT } from '../../sandbox-paths';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
@@ -203,7 +210,12 @@ describe('createSpriteMachineHost', () => {
     emitStdout('out-chunk');
     emitStderr('err-chunk');
 
-    expect(created[0]?.command).toBe('bash');
+    // The session is spawned through the self-healing-cwd wrapper (the server
+    // chdirs into cwd and fails the open if a sandbox command deleted it), which
+    // recreates + enters SANDBOX_ROOT and then execs the real command.
+    expect([created[0]?.command, created[0]?.args]).toEqual(
+      spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: SANDBOX_ROOT }),
+    );
     expect(chunks).toEqual(['out-chunk', 'err-chunk']);
   });
 

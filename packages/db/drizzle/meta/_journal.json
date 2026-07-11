@@ -1415,6 +1415,13 @@
       "when": 1783803166155,
       "tag": "0201_rename_machine_sessions_pkey",
       "breakpoints": true
+    },
+    {
+      "idx": 202,
+      "version": "7",
+      "when": 1783811607171,
+      "tag": "0202_aspiring_warpath",
+      "breakpoints": true
     }
   ]
 }
