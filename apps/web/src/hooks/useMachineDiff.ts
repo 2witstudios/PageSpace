@@ -56,17 +56,40 @@ export type MachineDiffPairResponse =
     };
 
 /**
- * Every diff SWR key (lists AND per-file pairs) starts with this, so a refresh
- * can invalidate the whole surface with one keyed predicate — the expanded
- * cards' pair keys are separate SWR entries the pane doesn't own, and revalidating
- * only the lists would leave an open card serving pre-edit content forever
- * (both hooks set `revalidateOnFocus: false`).
+ * Every diff SWR key (lists AND per-file pairs) starts with this. Both builders
+ * below emit `machineId`, `projectName`, `branchName` first and in that order, so
+ * a key for one branch is exactly `<prefix><those three>&…` — which is what makes
+ * the scoped filter below a simple, exact string test.
  */
 export const MACHINE_DIFF_KEY_PREFIX = '/api/machines/diff?';
 
-/** True for any SWR key belonging to this surface — pass to SWR's global `mutate`. */
-export function isMachineDiffKey(key: unknown): boolean {
-  return typeof key === 'string' && key.startsWith(MACHINE_DIFF_KEY_PREFIX);
+/**
+ * An SWR `mutate` filter matching every key of ONE branch's diff — its scope
+ * lists AND its expanded cards' per-file pairs.
+ *
+ * Scoped to the branch ON PURPOSE. A bare `/api/machines/diff?` prefix test would
+ * also match OTHER machines' keys, and those are not hypothetical: Machine pages
+ * are kept mounted across navigation in a bounded LRU (`TerminalKeepAliveHost`,
+ * CSS-hidden, not unmounted), so a hidden Machine page's Diff tab still holds live
+ * SWR subscriptions. Refreshing machine B would then re-fire machine A's list, its
+ * merge-base probe, and every pair it had open — real sandbox `git` execs, billed,
+ * against an unrelated and possibly stopped machine.
+ *
+ * The expanded cards' pair keys are separate SWR entries the pane doesn't own, so
+ * refreshing only the lists would leave an open card serving pre-edit content
+ * forever (both hooks set `revalidateOnFocus: false`) — hence a filter rather than
+ * two `mutate()` calls.
+ */
+export function machineDiffKeyFilter(
+  machineId: string,
+  projectName: string,
+  branchName: string,
+): (key: unknown) => boolean {
+  const branchPrefix =
+    MACHINE_DIFF_KEY_PREFIX +
+    new URLSearchParams({ machineId, projectName, branchName }).toString() +
+    '&';
+  return (key: unknown): boolean => typeof key === 'string' && key.startsWith(branchPrefix);
 }
 
 const fetcher = <T>(url: string): Promise<T> =>

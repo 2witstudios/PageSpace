@@ -9,7 +9,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => fetchWithAuth(...args),
 }));
 
-import { useMachineDiffFiles, useMachineDiffPair, isMachineDiffKey } from '../useMachineDiff';
+import { useMachineDiffFiles, useMachineDiffPair, machineDiffKeyFilter } from '../useMachineDiff';
 
 const ok = (body: unknown) => ({ ok: true, json: async () => body });
 
@@ -190,18 +190,57 @@ describe('useMachineDiffPair', () => {
   });
 });
 
-describe('isMachineDiffKey', () => {
-  test('matches list and pair keys, and nothing else', () => {
+describe('machineDiffKeyFilter', () => {
+  const key = (params: Record<string, string>) =>
+    `/api/machines/diff?${new URLSearchParams(params).toString()}`;
+
+  test("matches every key of ONE branch's diff — its lists and its open file pairs", () => {
+    const matches = machineDiffKeyFilter('m1', 'repo', 'feat/x');
+
     assert({
-      given: 'SWR keys from across the app',
-      should: 'match only this surface\'s keys, so a refresh revalidates lists AND open file pairs but not unrelated caches',
+      given: "the refresh filter for one branch, and that branch's own SWR keys",
+      should: 'match its scope lists AND its per-file pair keys — an open card owns a separate key that must revalidate too',
       actual: {
-        list: isMachineDiffKey('/api/machines/diff?machineId=m1&scope=uncommitted'),
-        pair: isMachineDiffKey('/api/machines/diff?machineId=m1&scope=uncommitted&path=src%2Fa.ts'),
-        otherRoute: isMachineDiffKey('/api/machines/files?machineId=m1'),
-        nonString: isMachineDiffKey(null),
+        uncommittedList: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/x', scope: 'uncommitted' })),
+        committedList: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/x', scope: 'committed' })),
+        pair: matches(
+          key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/x', scope: 'branch', path: 'src/a.ts', status: 'modified' }),
+        ),
       },
-      expected: { list: true, pair: true, otherRoute: false, nonString: false },
+      expected: { uncommittedList: true, committedList: true, pair: true },
+    });
+  });
+
+  test('does NOT match another machine, project, or branch', () => {
+    const matches = machineDiffKeyFilter('m1', 'repo', 'feat/x');
+
+    // Machine pages stay mounted in a keep-alive LRU, so a machine-agnostic filter
+    // would re-fire a hidden machine's git execs (list + merge-base + every open
+    // pair) on every refresh — against a machine the user isn't even looking at.
+    assert({
+      given: 'SWR keys belonging to other machines/projects/branches, and unrelated routes',
+      should: 'reject them all — a refresh must never trigger sandbox git on a machine the user is not viewing',
+      actual: {
+        otherMachine: matches(key({ machineId: 'm2', projectName: 'repo', branchName: 'feat/x', scope: 'uncommitted' })),
+        otherProject: matches(key({ machineId: 'm1', projectName: 'other', branchName: 'feat/x', scope: 'uncommitted' })),
+        otherBranch: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/y', scope: 'uncommitted' })),
+        otherRoute: matches('/api/machines/files?machineId=m1'),
+        nonString: matches(null),
+      },
+      expected: { otherMachine: false, otherProject: false, otherBranch: false, otherRoute: false, nonString: false },
+    });
+  });
+
+  test('a branch name that PREFIXES another does not match it', () => {
+    const matches = machineDiffKeyFilter('m1', 'repo', 'feat');
+
+    // The filter is a string prefix test, so the trailing '&' after branchName is
+    // load-bearing: without it, the filter for 'feat' would also swallow 'feature'.
+    assert({
+      given: "the filter for branch 'feat' and a key for branch 'feature'",
+      should: "not match — 'feat' must not swallow 'feature'",
+      actual: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feature', scope: 'uncommitted' })),
+      expected: false,
     });
   });
 });

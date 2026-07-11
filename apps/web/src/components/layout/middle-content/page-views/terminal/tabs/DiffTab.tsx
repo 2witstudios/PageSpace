@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { useMachineDiffFiles, isMachineDiffKey } from '@/hooks/useMachineDiff';
+import { useMachineDiffFiles, machineDiffKeyFilter } from '@/hooks/useMachineDiff';
 import { isMachineDiffScope, type MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import DiffFileCard from './DiffFileCard';
@@ -39,7 +39,11 @@ function emptyMessage(scope: MachineDiffScope, branchName: string, scopesApplica
   if (scope === 'uncommitted') {
     return scopesApplicable ? 'No uncommitted changes' : `No uncommitted changes on ${branchName}`;
   }
-  if (scope === 'committed') return `No commits on ${branchName} yet`;
+  // "No committed CHANGES", not "no commits": this scope measures the
+  // merge-base..HEAD diff, and a branch whose commits cancel out (a change plus
+  // its revert, or empty/merge commits) has commits but an empty diff. Say what
+  // was actually measured.
+  if (scope === 'committed') return `No committed changes on ${branchName}`;
   return `${branchName} is identical to the default branch`;
 }
 
@@ -127,15 +131,16 @@ function BranchDiffPane({
   const active: MachineDiffScope = scopesApplicable ? scope : 'uncommitted';
   const list = useMachineDiffFiles(machineId, projectName, branchName, active);
 
-  // Revalidate the WHOLE diff surface, not just the two lists this pane holds:
-  // every expanded card owns a separate pair key, and refreshing only the lists
-  // would leave an open Monaco diff showing pre-edit content indefinitely (the
-  // pair hook sets revalidateOnFocus: false, so nothing else would ever refetch
-  // it). The keyed predicate catches lists and pairs alike.
+  // Revalidate every key of THIS branch's diff — not just the two lists this pane
+  // holds, because each expanded card owns a separate pair key and refreshing only
+  // the lists would leave an open Monaco diff serving pre-edit content forever
+  // (the pair hook sets revalidateOnFocus: false, so nothing else would refetch
+  // it). Scoped to the branch, so refreshing here can't re-fire the git execs of
+  // another Machine page that's merely kept mounted in the keep-alive LRU.
   const { mutate } = useSWRConfig();
   const refresh = useCallback(() => {
-    void mutate(isMachineDiffKey);
-  }, [mutate]);
+    void mutate(machineDiffKeyFilter(machineId, projectName, branchName));
+  }, [mutate, machineId, projectName, branchName]);
 
   const availableScopes: MachineDiffScope[] = scopesApplicable
     ? ['uncommitted', 'committed', 'branch']

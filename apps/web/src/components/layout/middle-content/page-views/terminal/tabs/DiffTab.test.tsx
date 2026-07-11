@@ -41,6 +41,8 @@ let truncatedPair = false;
 let binaryPair = false;
 let truncatedEmptyList = false;
 let probeErrors = false;
+let listErrors = false;
+let pairErrors = false;
 
 // The scope toggle's behaviour is driven entirely by what the files hook returns
 // for each (branch, scope) — so the mock keys off branchName + scope: 'main'
@@ -73,21 +75,23 @@ const filesFor = (branchName: string, scope: string): MachineDiffFilesResponse =
 //
 // The binary case deliberately nulls the MODIFIED side (a deleted binary): the
 // card must sniff EITHER side, so an `&&` across the two would leak mojibake here.
-const pairFor = (enabled: boolean) => ({
-  data: enabled
-    ? {
-        notApplicable: false as const,
-        scope: 'uncommitted' as const,
-        path: 'src/uncommitted.ts',
-        original: binaryPair
-          ? { content: `PNG${NUL}${NUL}`, truncated: false }
-          : { content: 'a', truncated: false },
-        modified: binaryPair ? null : { content: 'b', truncated: truncatedPair },
-      }
-    : undefined,
-  error: undefined,
-  isLoading: false,
-});
+const pairFor = (enabled: boolean) => {
+  if (!enabled) return { data: undefined, error: undefined, isLoading: false };
+  if (pairErrors) return { data: undefined, error: new Error('blob read failed'), isLoading: false };
+  return {
+    data: {
+      notApplicable: false as const,
+      scope: 'uncommitted' as const,
+      path: 'src/uncommitted.ts',
+      original: binaryPair
+        ? { content: `PNG${NUL}${NUL}`, truncated: false }
+        : { content: 'a', truncated: false },
+      modified: binaryPair ? null : { content: 'b', truncated: truncatedPair },
+    },
+    error: undefined,
+    isLoading: false,
+  };
+};
 
 // Spy at the CALL SITE: proves DiffFileCard threads `expanded` into the hook's
 // `enabled` gate. Asserting only "no editor while collapsed" would be satisfied by
@@ -106,8 +110,9 @@ vi.mock('swr', async (importOriginal) => {
 vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks/useMachineDiff')>();
   return {
-    // Keep the real key predicate — the refresh path depends on it.
-    isMachineDiffKey: actual.isMachineDiffKey,
+    // Keep the REAL key filter — the refresh path's correctness depends on it,
+    // and a stubbed one would let a machine-agnostic predicate slip through.
+    machineDiffKeyFilter: actual.machineDiffKeyFilter,
     useMachineDiffFiles: (
       _machineId: string,
       projectName: string | null,
@@ -120,6 +125,16 @@ vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
         return {
           data: undefined,
           error: new Error('Branch machine unreachable'),
+          isLoading: false,
+          isValidating: false,
+          mutate: vi.fn(),
+        };
+      }
+      // The ACTIVE list failing (as opposed to the probe) must surface, not spin.
+      if (listErrors && scope === 'uncommitted') {
+        return {
+          data: undefined,
+          error: new Error('sandbox unreachable'),
           isLoading: false,
           isValidating: false,
           mutate: vi.fn(),
@@ -159,6 +174,8 @@ describe('DiffTab', () => {
     binaryPair = false;
     truncatedEmptyList = false;
     probeErrors = false;
+    listErrors = false;
+    pairErrors = false;
   });
 
   test('shows the empty placeholder until a branch is selected', () => {
@@ -334,17 +351,71 @@ describe('DiffTab', () => {
     // key. Refreshing via the keyed predicate is what stops an open Monaco diff
     // from serving pre-edit content forever (both hooks are revalidateOnFocus:
     // false) — so assert the predicate actually reaches a pair key.
+    //
+    // And it must be SCOPED to this branch: Machine pages stay mounted in a
+    // keep-alive LRU, so a machine-agnostic predicate would re-fire another
+    // machine's git execs (list + merge-base + every open pair) on every refresh.
     const predicate = swrMutate.mock.calls[0]?.[0] as ((key: unknown) => boolean) | undefined;
+    const key = (params: Record<string, string>) =>
+      `/api/machines/diff?${new URLSearchParams(params).toString()}`;
+    const mine = { machineId: 'm1', projectName: 'repo', branchName: 'feature' };
+
     assert({
       given: 'the Refresh button clicked',
-      should: "call SWR's global mutate with a predicate matching BOTH list and per-file pair keys",
+      should: "revalidate THIS branch's list and per-file pair keys — and nothing else's",
       actual: {
         called: swrMutate.mock.calls.length,
-        matchesList: predicate?.('/api/machines/diff?machineId=m1&scope=uncommitted'),
-        matchesPair: predicate?.('/api/machines/diff?machineId=m1&scope=uncommitted&path=src%2Fa.ts'),
-        matchesUnrelated: predicate?.('/api/machines/files?machineId=m1'),
+        myList: predicate?.(key({ ...mine, scope: 'uncommitted' })),
+        myPair: predicate?.(key({ ...mine, scope: 'uncommitted', path: 'src/a.ts', status: 'modified' })),
+        otherMachine: predicate?.(key({ ...mine, machineId: 'm2', scope: 'uncommitted' })),
+        otherBranch: predicate?.(key({ ...mine, branchName: 'other', scope: 'uncommitted' })),
+        otherProject: predicate?.(key({ ...mine, projectName: 'other-repo', scope: 'uncommitted' })),
+        unrelatedRoute: predicate?.('/api/machines/files?machineId=m1'),
       },
-      expected: { called: 1, matchesList: true, matchesPair: true, matchesUnrelated: false },
+      expected: {
+        called: 1,
+        myList: true,
+        myPair: true,
+        otherMachine: false,
+        otherBranch: false,
+        otherProject: false,
+        unrelatedRoute: false,
+      },
+    });
+  });
+
+  test('a failed changed-file list surfaces the error instead of an endless spinner', async () => {
+    listErrors = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+
+    await waitFor(() => screen.getByText(/Failed to load diff/i));
+    assert({
+      given: 'the changed-file list request failing',
+      should: 'show the real error — falling through to a permanent "Loading…" would hide a dead machine',
+      actual: {
+        error: screen.queryByText(/Failed to load diff: sandbox unreachable/i) !== null,
+        stuckLoading: screen.queryByText('Loading changed files…') !== null,
+      },
+      expected: { error: true, stuckLoading: false },
+    });
+  });
+
+  test("a failed file pair surfaces the error inside the card", async () => {
+    pairErrors = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await userEvent.click(await waitFor(() => screen.getByText('src/uncommitted.ts')));
+
+    await waitFor(() => screen.getByText(/Failed to load diff/i));
+    assert({
+      given: 'one file\'s diff pair failing to load',
+      should: 'show the error in that card and mount no editor',
+      actual: {
+        error: screen.queryByText(/Failed to load diff: blob read failed/i) !== null,
+        editor: screen.queryByTestId('monaco-diff') !== null,
+      },
+      expected: { error: true, editor: false },
     });
   });
 

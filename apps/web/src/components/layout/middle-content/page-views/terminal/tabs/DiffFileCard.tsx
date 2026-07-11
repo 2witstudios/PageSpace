@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useId } from 'react';
 import dynamic from 'next/dynamic';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -62,6 +62,9 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
     file,
     expanded,
   );
+  // Ties aria-expanded to the region it actually controls — without an id to
+  // point at, the button announces an expanded state referring to nothing.
+  const bodyId = useId();
 
   return (
     <div className="overflow-hidden rounded-md border border-border">
@@ -69,6 +72,7 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
         type="button"
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
+        aria-controls={bodyId}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-accent/50"
       >
         {expanded ? (
@@ -91,7 +95,7 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
       </button>
 
       {expanded && (
-        <div className="border-t border-border">
+        <div id={bodyId} className="border-t border-border">
           <DiffBody path={file.path} data={data} error={error} isLoading={isLoading} />
         </div>
       )}
