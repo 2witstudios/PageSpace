@@ -11,14 +11,21 @@ export default defineConfig({
     css: true,
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
-    // Pin each fork worker's heap. The `test` script raises the *main* process's
-    // heap (it aggregates 833 files' results and needs >4 GB), and that env
-    // value would otherwise be inherited by the forks too — where V8 lazily
-    // grows to whatever ceiling it is given and one fork balloons and OOMs.
-    // execArgv overrides the inherited limit for forks, holding them at the
-    // 4 GB where they already run cleanly, so main and workers are decoupled.
+    // Fit the web suite's memory on the 16 GB CI runner. Fork workers peak
+    // DURING test execution; the main process peaks AFTER (forks have exited)
+    // while it aggregates 833 files' results — the two peaks don't sum. So:
+    //   - cap concurrency at 2 forks, each with a 7 GB heap → ~14 GB during tests
+    //   - the `test` script gives the main process 8 GB for the aggregation
+    // execArgv also stops the forks inheriting the main's larger NODE_OPTIONS
+    // ceiling (V8 lazily grows to whatever limit it is given). 4 concurrent
+    // forks at the ~4 GB each file-set needs saturated the runner and OOM'd a
+    // worker flakily depending on how test files sharded across them; halving
+    // the fork count doubles the files each handles, hence the larger per-fork
+    // heap.
     pool: 'forks',
-    poolOptions: { forks: { execArgv: ['--max-old-space-size=4096'] } },
+    poolOptions: {
+      forks: { execArgv: ['--max-old-space-size=7168'], minForks: 2, maxForks: 2 },
+    },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
