@@ -96,14 +96,81 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
       }
       const holdId = gate.holdId;
 
+      /**
+       * Settle the reserved hold against real provider spend.
+       *
+       * INVARIANT: once the OpenRouter round-trip COMPLETES we have been charged, so the
+       * spend must be recorded — even if a later step (saving the file) fails. Releasing
+       * the hold there instead would leave real provider spend with no ai_usage_logs row
+       * and no debit. `success` marks whether the user got a usable image; the cost is
+       * billed either way (trackAIUsage bills when success is true OR tokens were used,
+       * and image calls carry no tokens — so failed-but-billable spend passes success:true
+       * with an `error` tag to stay billable while remaining auditable).
+       */
+      const settleSpend = async (args: {
+        providerCostDollars?: number;
+        generationIds: string[];
+        mediaType?: string;
+        driveId?: string;
+        pageId?: string;
+        error?: string;
+      }) => {
+        const resolved = resolveImageCost(args.providerCostDollars);
+        await AIMonitoring.trackUsage({
+          userId,
+          provider: 'openrouter',
+          model,
+          providerCostDollars: resolved.costDollars,
+          costSource: resolved.costSource,
+          openrouterGenerationIds: args.generationIds,
+          holdId,
+          success: true,
+          source: 'image_generation',
+          conversationId: context?.conversationId,
+          driveId: args.driveId,
+          pageId: args.pageId,
+          ...(args.error ? { error: args.error } : {}),
+          metadata: {
+            imageModel: model,
+            mediaType: args.mediaType,
+            costSource: resolved.costSource,
+            ...(args.error ? { outcome: args.error } : {}),
+          },
+        }).catch(async (metErr) => {
+          // trackUsage is what settles the hold; if it threw, the hold was neither settled
+          // nor released and would strand the reserved credits until TTL expiry. Release it
+          // explicitly. The spend is then UNBILLED — log loudly so the gap is visible during
+          // the rollout, but never fail the user-facing result over a metering error.
+          imageLogger.error('Failed to record image usage — spend is UNBILLED', metErr as Error, {
+            userId: maskIdentifier(userId),
+            model,
+            costDollars: resolved.costDollars,
+            costSource: resolved.costSource,
+            generationIds: args.generationIds,
+          });
+          if (holdId) await releaseHold(holdId).catch(() => {});
+        });
+      };
+
       let image;
       try {
         image = await generateImageBytes({ prompt, model, aspectRatio });
       } catch (error) {
-        if (holdId) await releaseHold(holdId).catch(() => {});
+        // A completed-but-empty generation was still billed by OpenRouter → settle it.
+        // A transport/auth failure never reached the provider → release the hold.
+        if (error instanceof ImageGenerationError && error.billable) {
+          await settleSpend({
+            providerCostDollars: error.providerCostDollars,
+            generationIds: error.generationIds,
+            error: 'no_image_returned',
+          });
+        } else if (holdId) {
+          await releaseHold(holdId).catch(() => {});
+        }
         imageLogger.warn('Image generation failed', {
           userId: maskIdentifier(userId),
           model,
+          billable: error instanceof ImageGenerationError ? error.billable : false,
           error: error instanceof Error ? error.message : String(error),
         });
         return {
@@ -126,7 +193,14 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
           prompt,
         });
       } catch (error) {
-        if (holdId) await releaseHold(holdId).catch(() => {});
+        // The image WAS generated (and billed) — settle the spend rather than release,
+        // otherwise real provider cost goes unrecorded. The user still gets a failure.
+        await settleSpend({
+          providerCostDollars: image.providerCostDollars,
+          generationIds: image.generationIds,
+          mediaType: image.mediaType,
+          error: 'store_failed',
+        });
         imageLogger.error('Failed to save generated image', error as Error, {
           userId: maskIdentifier(userId),
         });
@@ -137,37 +211,12 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
         return { success: false, error: message };
       }
 
-      // Settle the hold at the real cost (or the flat estimate when OpenRouter omits it).
-      const resolved = resolveImageCost(image.providerCostDollars);
-      await AIMonitoring.trackUsage({
-        userId,
-        provider: 'openrouter',
-        model,
-        providerCostDollars: resolved.costDollars,
-        costSource: resolved.costSource,
-        openrouterGenerationIds: image.generationIds,
-        holdId,
-        success: true,
-        source: 'image_generation',
-        conversationId: context?.conversationId,
+      await settleSpend({
+        providerCostDollars: image.providerCostDollars,
+        generationIds: image.generationIds,
+        mediaType: image.mediaType,
         driveId: created.driveId,
         pageId: created.pageId,
-        metadata: { imageModel: model, mediaType: image.mediaType, costSource: resolved.costSource },
-      }).catch(async (error) => {
-        // trackUsage settles the hold; if it threw, the hold was neither settled nor
-        // released, so it would strand the reserved credits until TTL expiry. Release it
-        // explicitly. The generation itself is then UNBILLED (we paid OpenRouter but
-        // recorded nothing) — log loudly so the gap is visible in the rollout, but never
-        // fail the user-facing result over a metering error.
-        imageLogger.error('Failed to record image usage — generation is UNBILLED', error as Error, {
-          userId: maskIdentifier(userId),
-          model,
-          costDollars: resolved.costDollars,
-          costSource: resolved.costSource,
-          generationIds: image.generationIds,
-          pageId: created.pageId,
-        });
-        if (holdId) await releaseHold(holdId).catch(() => {});
       });
 
       imageLogger.info('Image generated', {

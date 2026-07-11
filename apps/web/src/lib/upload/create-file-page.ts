@@ -82,6 +82,24 @@ export function sha256Hex(buffer: Buffer): string {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
+/** Pure: file extension for a generated-image media type (used for the download filename). */
+export function extensionForMediaType(mediaType: string): string {
+  const map: Record<string, string> = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/svg+xml': '.svg',
+  };
+  return map[mediaType.toLowerCase()] ?? '';
+}
+
+/** Pure: a download-friendly filename for the generated image (title + real extension). */
+export function imageFileName(title: string, mediaType: string): string {
+  const ext = extensionForMediaType(mediaType);
+  return title.toLowerCase().endsWith(ext) ? title : `${title}${ext}`;
+}
+
 /** Pure: build the FILE page row. `filePath` = the content hash (the view route reads it). */
 export function buildImageFilePageValues(params: {
   pageId: string;
@@ -102,13 +120,19 @@ export function buildImageFilePageValues(params: {
     title: params.title,
     type: PageType.FILE,
     content: '',
-    processingStatus: 'pending',
+    // A generated image needs no extraction: the bytes ARE the final artifact and no
+    // processor job is enqueued for it. Stamp the terminal status the processor would
+    // assign to an image ('visual'), NOT 'pending' — otherwise the page would sit in
+    // "still being processed" forever and `read_page` could never show the assistant
+    // the image it just created.
+    processingStatus: 'visual',
+    extractionMethod: 'visual',
     position: params.position,
     driveId: params.driveId,
     parentId: params.parentId,
     fileSize: params.fileSize,
     mimeType: params.mimeType,
-    originalFileName: params.title,
+    originalFileName: imageFileName(params.title, params.mimeType),
     filePath: params.contentHash,
     contentHash: params.contentHash,
     fileMetadata: {
@@ -157,7 +181,17 @@ async function defaultResolveGalleryParent(userId: string): Promise<{ driveId: s
   return { driveId, parentId: folder.id };
 }
 
-/** Shell: the three-insert transaction (files → pages(FILE) → filePages junction). */
+/**
+ * Shell: the three-insert transaction (files → pages(FILE) → filePages junction).
+ *
+ * NOTE vs the upload path: `api/upload/complete` guards the content-addressed `files` row
+ * with `canLinkExistingFileRow` (a cross-tenant claim check) because there the CONTENT HASH
+ * is attacker-chosen — a client can claim a hash it doesn't own. Here the bytes are produced
+ * server-side by the image model and hashed server-side, so a caller cannot steer the hash to
+ * collide with another tenant's blob, and the guard has nothing to defend. Linking an existing
+ * row is therefore safe (it is the same bytes, deduplicated) and storage is charged only on
+ * first insert. If this helper ever accepts caller-supplied bytes/hashes, reinstate the guard.
+ */
 async function defaultPersist(write: FilePageWrite): Promise<{ fileWasInserted: boolean }> {
   return db.transaction(async (tx) => {
     // Content-addressed store: only the FIRST insert of a given hash adds bytes, so

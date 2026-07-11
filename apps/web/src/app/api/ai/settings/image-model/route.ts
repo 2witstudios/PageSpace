@@ -12,7 +12,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 /**
  * PATCH /api/ai/settings/image-model
  * Sets (or clears with null) the user's chosen OpenRouter image-generation model.
- * Pro+ gated; validated against the live image-capable model list.
+ * Admin-only during rollout; validated against the live image-capable model list.
  */
 export async function PATCH(request: Request) {
   try {

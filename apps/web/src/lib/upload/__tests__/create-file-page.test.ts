@@ -4,6 +4,7 @@ import {
   sha256Hex,
   buildImageFilePageValues,
   createImageFilePage,
+  imageFileName,
   GENERATED_IMAGES_FOLDER,
   ImageStorageQuotaError,
   type FilePageWrite,
@@ -32,6 +33,37 @@ describe('buildImageFilePageValues (pure)', () => {
       should: 'set type FILE, filePath=hash, contentHash=hash',
       actual: { type: v.type, filePath: v.filePath, contentHash: v.contentHash, parentId: v.parentId, position: v.position },
       expected: { type: 'FILE', filePath: HASH, contentHash: HASH, parentId: 'folder1', position: 3 },
+    });
+  });
+
+  it('marks the page as visual (terminal), never pending — no processor job is enqueued', () => {
+    // 'pending' would leave read_page reporting "still being processed" forever.
+    assert({
+      given: 'a generated image (bytes are the final artifact)',
+      should: 'stamp the terminal visual status the processor would assign',
+      actual: { processingStatus: v.processingStatus, extractionMethod: v.extractionMethod },
+      expected: { processingStatus: 'visual', extractionMethod: 'visual' },
+    });
+  });
+
+  it('gives the stored file a real extension for downloads', () => {
+    assert({
+      given: 'an image/jpeg generation titled "red panda"',
+      should: 'store originalFileName with a .jpg extension',
+      actual: v.originalFileName,
+      expected: 'red panda.jpg',
+    });
+    assert({
+      given: 'a png media type',
+      should: 'map to .png',
+      actual: imageFileName('cat', 'image/png'),
+      expected: 'cat.png',
+    });
+    assert({
+      given: 'an unknown media type',
+      should: 'leave the title unchanged rather than invent an extension',
+      actual: imageFileName('cat', 'image/unknown'),
+      expected: 'cat',
     });
   });
 

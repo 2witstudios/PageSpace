@@ -27,17 +27,26 @@ describe('resolveImageCost (pure)', () => {
     });
   });
 
-  it('treats zero / non-finite provider cost as absent (estimate)', () => {
+  it('treats an authoritative ZERO cost as real (free image models must not be charged)', () => {
     assert({
-      given: 'a zero provider cost',
-      should: 'use the estimate branch',
-      actual: resolveImageCost(0, 0.05).costSource,
-      expected: 'estimate',
+      given: 'usage.cost === 0 from a free OpenRouter image model',
+      should: 'bill $0 as a real cost, NOT fall through to the estimate',
+      actual: resolveImageCost(0, 0.05),
+      expected: { costDollars: 0, costSource: 'openrouter' },
     });
+  });
+
+  it('treats non-finite / absent provider cost as absent (estimate)', () => {
     assert({
       given: 'a NaN provider cost',
       should: 'use the estimate branch',
       actual: resolveImageCost(Number.NaN, 0.05).costSource,
+      expected: 'estimate',
+    });
+    assert({
+      given: 'a null provider cost',
+      should: 'use the estimate branch',
+      actual: resolveImageCost(null, 0.05).costSource,
       expected: 'estimate',
     });
   });

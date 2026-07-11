@@ -21,7 +21,25 @@ vi.mock('@/lib/upload/create-file-page', () => ({
   ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
 }));
 
+// The tool falls back to a DB read of users.role when `isAdmin` isn't threaded via
+// experimental_context (v1 completions / consult / ask_agent). Mock that read.
+const dbState = vi.hoisted(() => ({ role: 'user' as string, tier: 'pro' as string }));
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => [{ role: dbState.role, tier: dbState.tier }],
+        }),
+      }),
+    }),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', role: 'role', subscriptionTier: 'subscriptionTier' } }));
+
 import { imageGenerationTools } from '../image-generation-tools';
+import { ImageGenerationError } from '@/lib/ai/core/image-generation';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
 
@@ -40,6 +58,8 @@ beforeEach(() => {
   trackUsage.mockResolvedValue(undefined);
   generateImageBytes.mockReset();
   createImageFilePage.mockReset();
+  dbState.role = 'user';
+  dbState.tier = 'pro';
 });
 
 describe('generate_image registration', () => {
@@ -94,6 +114,85 @@ describe('generate_image execute', () => {
     expect(res.success).toBe(false);
     expect(releaseHold).toHaveBeenCalledWith('hold-2');
     expect(createImageFilePage).not.toHaveBeenCalled();
+  });
+
+  it('SETTLES (does not release) when the image saves fail — OpenRouter was already billed', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-store' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.07,
+      generationIds: ['gen-x'],
+    });
+    createImageFilePage.mockRejectedValue(new Error('s3 down'));
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    // The spend MUST be recorded — releasing here would leave real provider cost unbilled.
+    expect(trackUsage).toHaveBeenCalledOnce();
+    const usage = trackUsage.mock.calls[0][0] as { holdId: string; providerCostDollars: number; error?: string };
+    expect(usage).toMatchObject({ holdId: 'hold-store', providerCostDollars: 0.07, error: 'store_failed' });
+    expect(releaseHold).not.toHaveBeenCalled();
+  });
+
+  it('SETTLES when the model completed but returned no image (billable), releases when the call never landed', async () => {
+    // billable: completed round-trip, no image → settle the real cost
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-empty' });
+    const billable = new ImageGenerationError('Image model returned no image for the given prompt.', {
+      billable: true,
+      providerCostDollars: 0.02,
+      generationIds: ['gen-e'],
+    });
+    generateImageBytes.mockRejectedValue(billable);
+
+    let res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+    expect(res.success).toBe(false);
+    expect(trackUsage).toHaveBeenCalledOnce();
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({
+      holdId: 'hold-empty',
+      providerCostDollars: 0.02,
+      error: 'no_image_returned',
+    });
+    expect(releaseHold).not.toHaveBeenCalled();
+
+    // non-billable: transport failure, never reached the provider → release
+    trackUsage.mockClear();
+    releaseHold.mockClear();
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-net' });
+    generateImageBytes.mockRejectedValue(new Error('ECONNRESET'));
+
+    res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+    expect(res.success).toBe(false);
+    expect(releaseHold).toHaveBeenCalledWith('hold-net');
+    expect(trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a DB role read when isAdmin is absent from context (non-chat callers)', async () => {
+    // v1 completions / consult / ask_agent omit isAdmin — the tool must self-defend.
+    dbState.role = 'user';
+    let res = (await run({ prompt: 'x' }, { userId: 'u1' })) as { success: boolean };
+    expect(res.success).toBe(false);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+
+    dbState.role = 'admin';
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'h' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.01,
+      generationIds: [],
+    });
+    createImageFilePage.mockResolvedValue({ pageId: 'p', driveId: 'd', parentId: 'g' });
+    res = (await run({ prompt: 'x' }, { userId: 'u1' })) as { success: boolean };
+    expect(res.success).toBe(true);
   });
 
   it('releases the hold when metering fails, without failing the user-facing result', async () => {

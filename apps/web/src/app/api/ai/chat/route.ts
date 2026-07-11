@@ -78,7 +78,10 @@ import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/contex
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
-const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
+// Runtime-override tools: added independently of the agent's saved allowlist, so they
+// must stay directly callable in 'search' exposure mode — routing them through
+// execute_tool would hit that tool's allowlist check and be rejected.
+const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -719,8 +722,8 @@ export async function POST(request: Request) {
       filteredTools = { ...filteredTools, web_search: webSearchToolDef };
     }
 
-    // Step 4b: image generation is a Pro+-gated runtime toggle (same override pattern).
-    // Only exposed when the composer toggle is on AND the user is an app admin (rollout gate).
+    // Step 4b: image generation is an ADMIN-ONLY runtime toggle (same override pattern as
+    // web_search). Only exposed when the composer toggle is on AND the user is an app admin.
     if (
       shouldExposeImageGen({
         imageGenEnabled: imageGenEnabled === true,

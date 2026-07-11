@@ -26,11 +26,29 @@ export interface GeneratedImage {
   generationIds: string[];
 }
 
-/** Thrown when the model returns no image (mapped by the tool to a failed result). */
+/**
+ * Thrown when the model returns no image (mapped by the tool to a failed result).
+ *
+ * BILLING: an "empty" generation still means the OpenRouter round-trip COMPLETED and we
+ * were charged for it, so the error carries the cost/generation ids. The caller must
+ * SETTLE that spend rather than release the hold — otherwise real provider spend goes
+ * unrecorded. A transport/auth failure (no completed call, hence no cost) is a plain
+ * Error and is free to release. `billable` distinguishes the two.
+ */
 export class ImageGenerationError extends Error {
-  constructor(message: string) {
+  readonly billable: boolean;
+  readonly providerCostDollars?: number;
+  readonly generationIds: string[];
+
+  constructor(
+    message: string,
+    opts: { billable?: boolean; providerCostDollars?: number; generationIds?: string[] } = {},
+  ) {
     super(message);
     this.name = 'ImageGenerationError';
+    this.billable = opts.billable ?? false;
+    this.providerCostDollars = opts.providerCostDollars;
+    this.generationIds = opts.generationIds ?? [];
   }
 }
 
@@ -111,7 +129,13 @@ export async function generateImageBytes(
 
   const image = extractImageFromResult(result);
   if (!image) {
-    throw new ImageGenerationError('Image model returned no image for the given prompt.');
+    // The call completed (and was billed) but produced no image — surface the spend so
+    // the caller settles it instead of releasing the hold.
+    throw new ImageGenerationError('Image model returned no image for the given prompt.', {
+      billable: true,
+      providerCostDollars: extractImageCost(result),
+      generationIds: extractImageGenerationIds(result),
+    });
   }
 
   return {

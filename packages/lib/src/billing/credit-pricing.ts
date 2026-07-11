@@ -150,16 +150,19 @@ export interface ResolvedImageCost {
 
 /**
  * Pure: resolve the billable dollar cost for one image generation.
- * - Given OpenRouter's authoritative `usage.cost` (a finite number > 0), bill it verbatim
- *   with `costSource: 'openrouter'`.
- * - Otherwise fall back to a flat per-image estimate with `costSource: 'estimate'`.
+ * - Given OpenRouter's authoritative `usage.cost` (any finite number >= 0), bill it
+ *   verbatim with `costSource: 'openrouter'`. ZERO is a real, authoritative price — free
+ *   image models exist on OpenRouter — so it must NOT fall through to the estimate, which
+ *   would charge for a free generation.
+ * - Only when the cost is absent (undefined/null/non-finite) fall back to a flat per-image
+ *   estimate with `costSource: 'estimate'`.
  * No I/O; `fallbackDollars` is injectable for tests.
  */
 export function resolveImageCost(
   providerCostDollars: number | null | undefined,
   fallbackDollars: number = IMAGE_GEN_FALLBACK_COST_DOLLARS,
 ): ResolvedImageCost {
-  if (typeof providerCostDollars === 'number' && Number.isFinite(providerCostDollars) && providerCostDollars > 0) {
+  if (typeof providerCostDollars === 'number' && Number.isFinite(providerCostDollars) && providerCostDollars >= 0) {
     return { costDollars: providerCostDollars, costSource: 'openrouter' };
   }
   return { costDollars: fallbackDollars, costSource: 'estimate' };

@@ -159,8 +159,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const handleProviderModelChange = onProviderModelChange ?? setProviderSettings;
 
     // Load settings on mount. Even when provider/model come from props (page-AI
-    // chat), we still need the store's subscriptionTier so the Pro+-gated Image
-    // toggle reflects the user's plan. loadSettings is idempotent (guarded by
+    // chat), we still need the store's isAdmin flag so the admin-gated Image toggle
+    // reflects the user's access. loadSettings is idempotent (guarded by
     // isInitialized) and page-AI keeps using its own provider props for the selector.
     useEffect(() => {
       loadSettings();
