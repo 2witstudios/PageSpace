@@ -19,12 +19,14 @@ export default defineConfig({
     // seen running an entire shard while the others sat idle — so a fork's heap
     // must be able to hold a whole shard, but the shard's total data is what
     // actually lives in RAM (it does not multiply by fork count; idle forks hold
-    // almost nothing). So: five sequential shards (~167 files ≈ 8 GB each,
-    // separate processes that release everything between them) with a 9 GB
-    // per-fork cap that covers even one-fork-takes-all. The `test` script's
-    // 8 GB is for the main process's post-shard aggregation. Peak stays ~8-10 GB.
+    // almost nothing). CI confirmed a single fork churns through an ENTIRE shard
+    // of fast files, so the cap must cover one-fork-takes-all: six sequential
+    // shards (~139 files ≈ 7.5 GB each, separate processes that release
+    // everything between them) with an 11 GB per-fork cap (~47% headroom over
+    // 7.5 GB for heavier shards). Peak RAM stays ~8 GB, and the `test` script's
+    // 8 GB main-process heap covers the post-shard aggregation.
     pool: 'forks',
-    poolOptions: { forks: { execArgv: ['--max-old-space-size=9216'] } },
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=11264'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
