@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET } from '../render-document';
+import { renderCanvasDocument, deriveDescription, escapeHtml, BASELINE_CSP, BASELINE_RESET, THEME_BRIDGE_SCRIPT } from '../render-document';
 
 describe('renderCanvasDocument', () => {
   it('given any input, should return a full HTML document', () => {
@@ -153,6 +153,31 @@ describe('renderCanvasDocument', () => {
   it('given no baseTarget (published page), should NOT inject a <base> element', () => {
     const out = renderCanvasDocument({ html: '<a href="https://example.com">x</a>' });
     expect(out).not.toContain('<base');
+  });
+});
+
+describe('renderCanvasDocument — theme bridge', () => {
+  it('given injectThemeBridge: true, should inject the bridge script inside <head>', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
+    const head = out.slice(0, out.indexOf('</head>'));
+    expect(head).toContain(THEME_BRIDGE_SCRIPT);
+  });
+
+  it('given no injectThemeBridge, should NOT inject the bridge script', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>' });
+    expect(out).not.toContain('pagespace-theme');
+  });
+
+  it('given injectThemeBridge: true, the bridge script should listen for postMessage and request the theme on load', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
+    expect(out).toContain("e.data.type==='pagespace-theme'");
+    expect(out).toContain('classList.toggle');
+    expect(out).toContain("postMessage({type:'pagespace-theme-request'}");
+  });
+
+  it('given injectThemeBridge: true, the bridge should toggle a dark class (matching next-themes convention)', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
+    expect(out).toContain("'dark'");
   });
 });
 

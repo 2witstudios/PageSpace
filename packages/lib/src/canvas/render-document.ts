@@ -92,6 +92,15 @@ export interface RenderCanvasDocumentInput {
    * keep the unchanged `BASELINE_CSP` (`form-action 'none'`, no `connect-src`).
    */
   formActionOrigin?: string;
+  /**
+   * When true, injects a lightweight <script> into <head> that listens for
+   * `pagespace-theme` postMessage from the parent and toggles a `dark` class
+   * on the iframe's `<html>`. Used by the in-app canvas view so the canvas
+   * matches the app's theme (the sandboxed iframe is an opaque origin with no
+   * access to the parent's DOM). Published pages omit this — they are
+   * standalone documents and use `prefers-color-scheme` for OS-level matching.
+   */
+  injectThemeBridge?: boolean;
 }
 
 /**
@@ -129,6 +138,23 @@ export const BASELINE_CSP =
  * targeting html/body still win because the author CSS is concatenated after.
  */
 export const BASELINE_RESET = 'html,body{margin:0;padding:0;}';
+
+/**
+ * Inline script injected when `injectThemeBridge` is true. Listens for theme
+ * messages from the parent window (postMessage works across opaque origins) and
+ * toggles a `dark` class on `<html>`, matching the convention used by next-themes
+ * (attribute="class") and the PageSpace ThemeProvider.
+ *
+ * On load, immediately requests the current theme from the parent so the
+ * initial render matches before the parent's `resolvedTheme` effect fires.
+ */
+export const THEME_BRIDGE_SCRIPT =
+  "<script>(function(){" +
+  "window.addEventListener('message',function(e){" +
+  "if(e.data&&e.data.type==='pagespace-theme'&&typeof e.data.isDark==='boolean'){" +
+  "document.documentElement.classList.toggle('dark',e.data.isDark);}});" +
+  "try{window.parent.postMessage({type:'pagespace-theme-request'},'*');}catch(e){}" +
+  "})();</script>";
 
 // Re-exported for existing consumers — the implementation lives in a
 // dependency-free shared module so non-canvas modules (e.g. forms) don't
@@ -209,7 +235,7 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[]): {
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin } = input;
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge } = input;
   const csp = buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts);
@@ -252,6 +278,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     ogTags +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
+    (injectThemeBridge ? THEME_BRIDGE_SCRIPT : '') +
     '</head><body>' +
     body +
     '</body></html>'

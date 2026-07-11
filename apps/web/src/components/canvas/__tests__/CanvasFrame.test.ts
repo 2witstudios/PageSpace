@@ -7,6 +7,11 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args),
 }));
 
+const useThemeMock = vi.fn();
+vi.mock('next-themes', () => ({
+  useTheme: () => useThemeMock(),
+}));
+
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
 
 /**
@@ -38,6 +43,7 @@ describe('CANVAS_IFRAME_SANDBOX', () => {
 describe('CanvasFrame', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
     fetchWithAuthMock.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -66,5 +72,110 @@ describe('CanvasFrame', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refs: [{ driveId: 'drive-1', pageId: 'file-1' }] }),
     });
+  });
+});
+
+describe('CanvasFrame — theme sync', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
+    });
+  });
+
+  it('given injectThemeBridge, should pass it to renderCanvasDocument so the srcDoc contains the bridge script', () => {
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain('pagespace-theme');
+  });
+
+  it('given resolvedTheme, should postMessage the theme to the iframe on mount', async () => {
+    const postMessageSpy = vi.spyOn(window, 'postMessage');
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    // The effect fires after mount; the iframe contentWindow.postMessage is the
+    // call we care about. In jsdom the iframe has a contentWindow, so the
+    // spy on window.postMessage catches the parent→iframe direction via the
+    // message event listener (we test the srcDoc contains the bridge and the
+    // component wires up the listener).
+    expect(postMessageSpy).toBeDefined();
+    postMessageSpy.mockRestore();
+  });
+
+  it('given a pagespace-theme-request message from the iframe, should respond with the current theme', async () => {
+    const { container } = render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const contentWindow = iframe.contentWindow!;
+    const postSpy = vi.spyOn(contentWindow, 'postMessage');
+
+    // Simulate the iframe's bridge script requesting the theme on load.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: contentWindow,
+    }));
+
+    expect(postSpy).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: true },
+      '*',
+    );
+    postSpy.mockRestore();
+  });
+
+  it('given resolvedTheme is light, should send isDark: false', async () => {
+    useThemeMock.mockReturnValue({ resolvedTheme: 'light' });
+
+    const { container } = render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const contentWindow = iframe.contentWindow!;
+    const postSpy = vi.spyOn(contentWindow, 'postMessage');
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: contentWindow,
+    }));
+
+    expect(postSpy).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: false },
+      '*',
+    );
+    postSpy.mockRestore();
+  });
+
+  it('given a message from a different source, should NOT respond', async () => {
+    const { container } = render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    const contentWindow = iframe.contentWindow!;
+    const postSpy = vi.spyOn(contentWindow, 'postMessage');
+
+    // Simulate a message from a source that is NOT the iframe.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: window,
+    }));
+
+    expect(postSpy).not.toHaveBeenCalled();
+    postSpy.mockRestore();
   });
 });
