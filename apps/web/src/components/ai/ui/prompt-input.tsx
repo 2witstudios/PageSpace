@@ -326,7 +326,10 @@ export function PromptInputAttachment({
             </div>
             <Button
               aria-label="Remove attachment"
-              className="absolute inset-0 size-5 cursor-pointer rounded p-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 [&>svg]:size-2.5"
+              // On touch the button is pinned visible (globals.css) while the
+              // thumbnail beneath it stays visible too — there is no hover to fade
+              // it out — so give the ✕ a backdrop to stay legible over an image.
+              className="absolute inset-0 size-5 cursor-pointer rounded p-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 touch:bg-background/80 [&>svg]:size-2.5"
               onClick={(e) => {
                 e.stopPropagation();
                 attachments.remove(data.id);

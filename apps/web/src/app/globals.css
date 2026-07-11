@@ -40,19 +40,19 @@ svg.lucide {
 /* Reveal pair: a resting `opacity-0` that a group-hover restores to full.
    `pointer-events: auto` is required — MessageHoverToolbar and prompt-input pair
    their `opacity-0` with `pointer-events-none`, so opacity alone would leave the
-   buttons visible but dead. */
+   buttons visible but dead.
+
+   The `group-hover:opacity-0` exclusion matters: an element that fades OUT on
+   hover (to expose a control beneath it) also carries the `opacity-0` substring.
+   Without the guard, adding any `:opacity-100` variant to such an element — a
+   `focus-within:opacity-100`, say — would drag it into this rule and pin the
+   fade-out permanently VISIBLE, hiding whatever it covers. We reveal controls;
+   we do not simulate a whole hover state. Elements that fade out are simply left
+   alone, at their natural resting opacity. */
 :where([data-pointer='coarse'])
-  [class*='opacity-0'][class*='group-hover'][class*=':opacity-100']:not([data-hover-only]) {
+  [class*='opacity-0'][class*='group-hover'][class*=':opacity-100']:not([class*='group-hover:opacity-0']):not([data-hover-only]) {
   opacity: 1;
   pointer-events: auto;
-}
-
-/* The other half of a reveal pair: an element that fades OUT on hover to expose
-   the control underneath (the attachment thumbnail under its remove button).
-   Pin it to the hover state too, rather than letting the rule above invert it. */
-:where([data-pointer='coarse'])
-  [class*='group-hover:opacity-0']:not([class*=':opacity-100']):not([data-hover-only]) {
-  opacity: 0;
 }
 
 /* Display-based reveals (`hidden group-hover:inline`), not opacity-based. Only

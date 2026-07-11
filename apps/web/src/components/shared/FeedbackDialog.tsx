@@ -316,10 +316,17 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
                   <button
                     type="button"
                     onClick={() => removeFile(af.id)}
-                    // A full-bleed black scrim — pinning it visible on touch would
-                    // permanently black out the screenshot preview.
+                    // Opted out of the blanket reveal: this is a full-bleed black
+                    // scrim, and pinning it visible would black out the screenshot
+                    // preview on every phone.
+                    //
+                    // But leaving it at opacity-0 is not good enough either — a
+                    // `<button>` still takes taps, so on touch this was an invisible
+                    // full-bleed destructive target: tap your screenshot to inspect
+                    // it, silently delete it instead. On touch it becomes a real
+                    // corner delete badge; on desktop the hover scrim is unchanged.
                     data-hover-only=""
-                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                    className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center touch:inset-auto touch:top-1 touch:right-1 touch:size-6 touch:rounded-full touch:bg-black/60 touch:opacity-100"
                   >
                     <X className="w-4 h-4 text-white" />
                   </button>
