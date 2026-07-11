@@ -1,14 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { NextRequest, NextResponse } from 'next/server';
 
-// NextResponse.rewrite() only exists in the edge runtime; the node/vitest env
-// doesn't provide it. Polyfill it (before middleware is imported) so we can
-// assert the middleware rewrites the discovery URL. In production the real
-// edge-runtime rewrite records the target in the x-middleware-rewrite header.
-if (typeof (NextResponse as { rewrite?: unknown }).rewrite !== 'function') {
-  (NextResponse as unknown as { rewrite: (url: URL | string) => Response }).rewrite = (url) =>
-    new Response(null, { status: 200, headers: { 'x-middleware-rewrite': String(url) } });
-}
+// NextResponse.rewrite() only exists in the edge runtime. It is modelled in
+// src/test/next-server-stub.ts (the `next/server` alias for tests), which is the
+// single source of truth — this file used to carry its own local polyfill, and a
+// second test asserting on rewrites promptly missed it and failed only in CI.
 
 // Mock all runtime dependencies so middleware() can run without a real DB/session.
 vi.mock('@/lib/logging/edge-logger', () => ({
