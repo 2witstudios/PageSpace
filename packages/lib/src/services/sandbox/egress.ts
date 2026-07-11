@@ -79,6 +79,22 @@ const INTERNAL_SURFACE_DENY_DOMAINS: readonly string[] = Object.freeze([
   '*.t3.tigrisfiles.io', // Tigris public object-storage subdomains
 ]);
 
+// The internal-surface DNS zones a caller must never be able to ALLOW. Derived
+// from the deny list (leading `*.` stripped, deduped) so the two stay in
+// lockstep — a future deny addition automatically extends this filter. Needed
+// because the internal denies are wildcards/apexes: a caller-supplied MORE
+// specific allow (e.g. `foo.internal` beats `*.internal`) would win under the
+// documented precedence ("an exact match beats a subdomain wildcard") and reopen
+// the surface. So `sanitizeEgressAllowlist` drops any entry inside these zones.
+const INTERNAL_SURFACE_ZONES: readonly string[] = Object.freeze(
+  Array.from(new Set(INTERNAL_SURFACE_DENY_DOMAINS.map((d) => d.replace(/^\*\./, '')))),
+);
+
+/** True when `host` is one of the internal zones or a subdomain of one. */
+function targetsInternalSurface(host: string): boolean {
+  return INTERNAL_SURFACE_ZONES.some((zone) => host === zone || host.endsWith(`.${zone}`));
+}
+
 /**
  * Explicit deny rules for the Fly internal surface. Returns a FRESH array of
  * fresh rule objects on every call (clone-safe — a caller cannot mutate a shared
@@ -109,7 +125,9 @@ const WILDCARD_PREFIX = '*.';
  * literal (Sprites `domain` rules are DNS-pattern only — IPs are not matched, so
  * an IP "allow" is a silent no-op that misleads; the platform blocks raw IPs on
  * its own), or any non-host string (URL, scheme, path, `host:port`) is dropped
- * rather than passed through.
+ * rather than passed through. Entries inside the internal-surface zones are also
+ * dropped so a caller can never emit an allow that beats the wildcard internal
+ * deny under the documented precedence.
  */
 export function sanitizeEgressAllowlist(egressAllowlist: readonly string[] = []): string[] {
   const seen = new Set<string>();
@@ -123,6 +141,7 @@ export function sanitizeEgressAllowlist(egressAllowlist: readonly string[] = [])
     if (base.length === 0) continue; // bare `*.`
     if (isIP(base) !== 0) continue; // reject IPv4/IPv6 literals (incl. `*.1.2.3.4`)
     if (!HOSTNAME_RE.test(base)) continue; // reject URLs, schemes, host:port, paths, `*.*`
+    if (targetsInternalSurface(base)) continue; // never allow the internal surface
     if (seen.has(entry)) continue;
     seen.add(entry);
     hosts.push(entry);

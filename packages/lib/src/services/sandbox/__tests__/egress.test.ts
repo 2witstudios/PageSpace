@@ -158,6 +158,38 @@ describe('buildSpriteNetworkPolicy — allowlist mode', () => {
       expected: buildSpriteNetworkPolicy({ egressAllowlist: ['pypi.org'] }),
     });
   });
+
+  it('never emits an allow rule for an internal-surface host (no specificity bypass)', () => {
+    // An exact/more-specific ALLOW would beat the wildcard internal deny under the
+    // documented precedence, so a caller-supplied internal host must be dropped.
+    const { rules } = buildSpriteNetworkPolicy({
+      egressAllowlist: [
+        'foo.internal',
+        'evil.flycast',
+        'sub.fly.storage.tigris.dev',
+        't3.tigrisfiles.io',
+        '*.internal',
+        'registry.npmjs.org',
+      ],
+    });
+    assert({
+      given: 'an allowlist mixing internal-surface hosts with a legit registry',
+      should: 'allow only the legit host and never allow any internal-surface host',
+      actual: rules.filter((r) => r.action === 'allow'),
+      expected: [{ domain: 'registry.npmjs.org', action: 'allow' }],
+    });
+  });
+
+  it('collapses to pure deny-all when the allowlist is only internal-surface hosts', () => {
+    assert({
+      given: 'an allowlist of only internal-surface hosts',
+      should: 'drop them all and collapse to pure deny-all',
+      actual: buildSpriteNetworkPolicy({
+        egressAllowlist: ['foo.internal', '_api.internal', '*.flycast', 'fly.storage.tigris.dev'],
+      }),
+      expected: { rules: [{ domain: '*', action: 'deny' }] },
+    });
+  });
 });
 
 describe('buildSpriteNetworkPolicy — open mode', () => {
@@ -342,6 +374,37 @@ describe('sanitizeEgressAllowlist', () => {
       should: 'dedupe after canonicalization',
       actual: sanitizeEgressAllowlist(['Example.com', 'example.com', '*.Example.com', '*.example.com']),
       expected: ['example.com', '*.example.com'],
+    });
+  });
+
+  it('drops entries that target the internal surface (exact, subdomain, or wildcard)', () => {
+    assert({
+      given: 'allowlist entries inside the internal-surface zones',
+      should: 'drop every one so no allow can beat the wildcard internal deny',
+      actual: sanitizeEgressAllowlist([
+        'foo.internal',
+        '_api.internal',
+        '*.internal',
+        'flycast',
+        'evil.flycast',
+        '*.flycast',
+        'fly.storage.tigris.dev',
+        'sub.fly.storage.tigris.dev',
+        '*.fly.storage.tigris.dev',
+        't3.tigrisfiles.io',
+        'x.t3.tigrisfiles.io',
+      ]),
+      expected: [],
+    });
+  });
+
+  it('keeps public hosts that merely share a parent domain with an internal zone', () => {
+    // Only the exact internal zones are blocked; a sibling public host is fine.
+    assert({
+      given: 'a public host that shares a parent domain but is not an internal zone',
+      should: 'keep it',
+      actual: sanitizeEgressAllowlist(['other.tigrisfiles.io', 'notinternal.com']),
+      expected: ['other.tigrisfiles.io', 'notinternal.com'],
     });
   });
 });
