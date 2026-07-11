@@ -217,8 +217,20 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     }
     const releaseSlot = () => deps.releaseSlot(userId);
 
-    // Only NOW — a fresh PTY must be created — resolve/read the Sprite.
-    const sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
+    // Only NOW — a fresh PTY must be created — resolve/read the Sprite. If this
+    // REJECTS (a DB error inside resolveAgentTerminal, a failed store/SDK
+    // lookup) rather than returning a deny, the reserved slot must still be
+    // released before the rejection propagates — otherwise a transient failure
+    // permanently consumes the user's concurrency capacity. Re-throw so the
+    // socket surface is unchanged (the PTY bridge's onConnect .catch emits the
+    // generic error).
+    let sandbox: ResolveTerminalSandboxResult;
+    try {
+      sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
+    } catch (error) {
+      releaseSlot();
+      throw error;
+    }
     if (!sandbox.ok) {
       releaseSlot();
       if (sandbox.reason === 'provision_failed') {

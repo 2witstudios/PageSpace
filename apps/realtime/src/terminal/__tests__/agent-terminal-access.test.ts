@@ -450,6 +450,34 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
   });
 
+  it('releases the reserved slot and re-throws when sandbox resolution REJECTS', async () => {
+    let releases = 0;
+    const boom = new Error('db blip during resolveAgentTerminal');
+    const { deps } = buildDeps({
+      releaseSlot: () => {
+        releases += 1;
+      },
+      resolveSandbox: async () => {
+        throw boom;
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    let thrown: unknown;
+    try {
+      await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert({
+      given: 'a resolveSandbox that rejects after the slot was reserved',
+      should: 'release the slot and propagate the original error (unchanged socket surface)',
+      actual: { releases, thrown },
+      expected: { releases: 1, thrown: boom },
+    });
+  });
+
   it('audits the resolved launch command (override preferred) on success', async () => {
     const audits: string[] = [];
     const { deps } = buildDeps({
