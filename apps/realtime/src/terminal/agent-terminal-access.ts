@@ -170,26 +170,27 @@ export interface AgentTerminalCheckAuthDeps {
  */
 export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): AgentTerminalCheckAuthFn {
   return async ({ userId, machineId, projectName, branchName, name }) => {
-    // Gather the read-only inputs. Access level and the page row have no data
-    // dependency, so fetch them together.
-    const [access, pageRow] = await Promise.all([
-      deps.getAccessLevel(userId, machineId),
-      deps.getPageDriveId(machineId),
-    ]);
-
-    // `canRunCode` and the drive/user rows all key off the page's driveId, so
-    // they are only meaningful once the page resolves.
-    const codeAuth = pageRow
+    // Gather the read-only inputs, short-circuiting I/O exactly as the fused
+    // checkAuth did: no page read without edit access, and no drive/user read
+    // once code execution is denied. This keeps a denied attach from issuing DB
+    // round-trips it would then ignore — and, more importantly, keeps a
+    // transient DB error on a downstream table from turning a clean, specific
+    // denial (e.g. code_execution_disabled) into a thrown generic connection
+    // error. `getDriveAndUser` batches its two reads internally.
+    const access = await deps.getAccessLevel(userId, machineId);
+    const pageRow = access?.canEdit ? await deps.getPageDriveId(machineId) : undefined;
+    const codeAuth: { ok: true } | { ok: false; reason: string } = pageRow
       ? await deps.canRunCode({ userId, driveId: pageRow.driveId, requestOrigin: 'user' })
-      : ({ ok: false, reason: 'page_not_found' } as const);
-    const { driveRow, userRow } = pageRow
-      ? await deps.getDriveAndUser({ driveId: pageRow.driveId, userId })
-      : { driveRow: undefined, userRow: undefined };
+      : { ok: false, reason: 'page_not_found' };
+    const { driveRow, userRow } =
+      pageRow && codeAuth.ok
+        ? await deps.getDriveAndUser({ driveId: pageRow.driveId, userId })
+        : { driveRow: undefined, userRow: undefined };
 
-    // Read-only gates first, WITHOUT reserving a slot. Passing slotAcquired:true
-    // isolates the read-only verdict (the slot gate is the pure function's last
-    // check), preserving the original ordering where no concurrency slot is
-    // reserved on any read-only failure.
+    // Read-only gates first, WITHOUT reserving a slot. The slot is a RESERVATION
+    // (handled below), not a read, so a read-only denial never reserves — and
+    // then has to release — one; passing slotAcquired:true isolates that
+    // read-only verdict (the slot is the pure decision's final gate).
     const readOnly = decideAgentTerminalAccess({ access, pageRow, codeAuth, driveRow, slotAcquired: true });
     if (!readOnly.allow) {
       deps.logDenied(readOnly.reason, { userId, machineId });
@@ -201,19 +202,12 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
 
-    // Read-only gates passed -> reserve the concurrency slot, then re-run the
-    // full decision (now the slot gate is real). A slot-exhaustion denial can
-    // only occur here, where acquireSlot returned false — nothing to release.
-    const decision = decideAgentTerminalAccess({
-      access,
-      pageRow,
-      codeAuth,
-      driveRow,
-      slotAcquired: deps.acquireSlot({ userId, tier }),
-    });
-    if (!decision.allow) {
-      deps.logDenied(decision.reason, { userId, machineId });
-      return { ok: false, reason: decision.reason };
+    // Read-only gates passed -> reserve the concurrency slot. Failing to reserve
+    // IS the concurrency_limit denial (the pure decision's final gate, exercised
+    // in its unit tests); nothing to release, since acquireSlot reserved nothing.
+    if (!deps.acquireSlot({ userId, tier })) {
+      deps.logDenied('concurrency_limit', { userId, machineId });
+      return { ok: false, reason: 'concurrency_limit' };
     }
     const releaseSlot = () => deps.releaseSlot(userId);
 
@@ -244,7 +238,7 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     deps.writeAudit({
       userId,
       actorEmail,
-      driveId: decision.driveId,
+      driveId: readOnly.driveId,
       command: sandbox.commandOverride ?? sandbox.command,
     });
 
@@ -260,7 +254,7 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
       args: sandbox.args,
       commandOverride: sandbox.commandOverride,
       streamSessionId: sandbox.streamSessionId,
-      payerId: decision.payerId,
+      payerId: readOnly.payerId,
     };
   };
 }

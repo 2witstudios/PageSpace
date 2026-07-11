@@ -253,12 +253,31 @@ function sandboxSpy(resolve: () => Promise<ResolveAgentTerminalResult>): Sandbox
   return spy;
 }
 
-function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): { deps: AgentTerminalCheckAuthDeps } {
+type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number };
+
+/** Default deps whose read functions COUNT their own invocations, so a
+ * short-circuit test can assert "this table was never queried" via `calls`
+ * without defining a never-called override arrow (which would count against
+ * function coverage). Overrides replace a default entirely. */
+function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
+  deps: AgentTerminalCheckAuthDeps;
+  calls: DepCalls;
+} {
+  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0 };
   const base: AgentTerminalCheckAuthDeps = {
     getAccessLevel: async () => ({ canEdit: true }),
-    getPageDriveId: async () => ({ driveId: 'drive-1' }),
-    canRunCode: async () => ({ ok: true }),
-    getDriveAndUser: async () => ({ driveRow: { ownerId: 'payer-1' }, userRow: { subscriptionTier: 'pro', email: 'a@b.c' } }),
+    getPageDriveId: async () => {
+      calls.getPageDriveId += 1;
+      return { driveId: 'drive-1' };
+    },
+    canRunCode: async () => {
+      calls.canRunCode += 1;
+      return { ok: true };
+    },
+    getDriveAndUser: async () => {
+      calls.getDriveAndUser += 1;
+      return { driveRow: { ownerId: 'payer-1' }, userRow: { subscriptionTier: 'pro', email: 'a@b.c' } };
+    },
     resolveActorEmail: async (email) => email ?? '',
     acquireSlot: () => true,
     releaseSlot: () => {},
@@ -278,7 +297,7 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): { deps:
     logDenied: () => {},
     logSandboxLookupFailed: () => {},
   };
-  return { deps: { ...base, ...overrides } };
+  return { deps: { ...base, ...overrides }, calls };
 }
 
 describe('buildAgentTerminalCheckAuth', () => {
@@ -299,18 +318,8 @@ describe('buildAgentTerminalCheckAuth', () => {
 
   it('denies with page_not_found (skipping canRunCode + drive lookup) when the machine page is missing', async () => {
     const sandbox = sandboxSpy(async () => resolvedOk);
-    let canRunCodeCalls = 0;
-    let driveLookups = 0;
-    const { deps } = buildDeps({
+    const { deps, calls } = buildDeps({
       getPageDriveId: async () => undefined,
-      canRunCode: async () => {
-        canRunCodeCalls += 1;
-        return { ok: true };
-      },
-      getDriveAndUser: async () => {
-        driveLookups += 1;
-        return { driveRow: { ownerId: 'payer-1' }, userRow: undefined };
-      },
       resolveSandbox: sandbox.fn,
     });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
@@ -320,7 +329,7 @@ describe('buildAgentTerminalCheckAuth', () => {
     assert({
       given: 'a missing machine page row',
       should: 'deny with page_not_found without probing canRunCode, the drive, or a Sprite',
-      actual: { result, canRunCodeCalls, driveLookups, spriteCalls: sandbox.getSpriteCalls.length },
+      actual: { result, canRunCodeCalls: calls.canRunCode, driveLookups: calls.getDriveAndUser, spriteCalls: sandbox.getSpriteCalls.length },
       expected: { result: { ok: false, reason: 'page_not_found' }, canRunCodeCalls: 0, driveLookups: 0, spriteCalls: 0 },
     });
   });
@@ -346,6 +355,36 @@ describe('buildAgentTerminalCheckAuth', () => {
       should: 'release the slot, log the denial, and return the reason',
       actual: { result, releases, denials },
       expected: { result: { ok: false, reason: 'not_found' }, releases: 1, denials: [{ reason: 'not_found' }] },
+    });
+  });
+
+  it('short-circuits on a code-execution denial WITHOUT querying drives/users (a clean deny cannot be corrupted by a downstream DB error)', async () => {
+    const { deps, calls } = buildDeps({
+      canRunCode: async () => ({ ok: false, reason: 'code_execution_disabled' }),
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'a code_execution_disabled denial',
+      should: 'return that clean denial without touching the drive/user tables',
+      actual: { result, driveLookups: calls.getDriveAndUser },
+      expected: { result: { ok: false, reason: 'code_execution_disabled' }, driveLookups: 0 },
+    });
+  });
+
+  it('does not read the machine page when the user lacks edit access (short-circuit)', async () => {
+    const { deps, calls } = buildDeps({ getAccessLevel: async () => ({ canEdit: false }) });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'a user without edit access',
+      should: 'deny with no_edit_access without reading the page row',
+      actual: { result, pageReads: calls.getPageDriveId },
+      expected: { result: { ok: false, reason: 'no_edit_access' }, pageReads: 0 },
     });
   });
 
@@ -430,23 +469,36 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
   });
 
-  it('releases the reserved slot when sandbox resolution fails', async () => {
+  it('releases the slot and routes provision_failed to the sandbox-lookup logger (with sandboxId)', async () => {
     let releases = 0;
+    const sandboxLookupFailures: Array<Record<string, unknown>> = [];
+    const denials: string[] = [];
     const { deps } = buildDeps({
       releaseSlot: () => {
         releases += 1;
       },
       resolveSandbox: async () => ({ ok: false, reason: 'provision_failed', sandboxId: 'sbx-1' }),
+      logSandboxLookupFailed: (ctx) => {
+        sandboxLookupFailures.push(ctx);
+      },
+      logDenied: (reason) => {
+        denials.push(reason);
+      },
     });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
     const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
 
     assert({
-      given: 'a sandbox resolution failure after the slot was reserved',
-      should: 'return the failure reason and release the slot',
-      actual: { result, releases },
-      expected: { result: { ok: false, reason: 'provision_failed' }, releases: 1 },
+      given: 'a vanished-Sprite (provision_failed) sandbox result after the slot was reserved',
+      should: 'release the slot and log via logSandboxLookupFailed with the sandboxId, NOT logDenied',
+      actual: { result, releases, sandboxLookupFailures, denials },
+      expected: {
+        result: { ok: false, reason: 'provision_failed' },
+        releases: 1,
+        sandboxLookupFailures: [{ userId: 'u-1', sandboxId: 'sbx-1' }],
+        denials: [],
+      },
     });
   });
 
