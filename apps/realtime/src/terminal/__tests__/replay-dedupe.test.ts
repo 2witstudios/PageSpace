@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   EMPTY_SEEN,
+  MAX_MATCH_CANDIDATES,
   MAX_PENDING_BYTES,
   MAX_SEEN_BYTES,
   flushReplay,
@@ -185,24 +186,24 @@ describe('planReplayEmission corroboration (pure)', () => {
     expect(state.resolved).toBe(true);
   });
 
-  it('given self-similar output that puts the anchor at thousands of offsets, should give up rather than scan them all', () => {
-    // The sandbox chooses these bytes and this runs on the shared realtime event
-    // loop, so an unbounded candidate scan — each candidate costing a multi-KiB
-    // compare — is a DoS surface. Every match here is uncorroborated (the padding
-    // is not preceded by our history), so the search must bail, not grind.
-    const padded = deliver(lines('history', 1000), Buffer.alloc(16 * 1024, 0x20));
-    const chunk = Buffer.concat([buf('unseen output\r\n'), Buffer.alloc(200 * 1024, 0x20)]);
+  it('given more uncorroborated anchor recurrences than the candidate bound, should give up rather than scan on', () => {
+    // The candidate scan is work the SANDBOX chooses: self-similar output can put
+    // the anchor at thousands of offsets, each costing a multi-KiB compare, on the
+    // shared realtime event loop. The bound is what stops that — and giving up is
+    // safe (the bytes go out verbatim), so the observable proof of the bound is that
+    // a TRUE match sitting beyond it is NOT found.
+    const anchor = seen.subarray(seen.length - 8 * 1024);
+    const decoy = Buffer.concat([buf('decoy\r\n'), anchor]); // uncorroborated: junk in front
+    const decoys = Buffer.concat(Array.from({ length: MAX_MATCH_CANDIDATES + 2 }, () => decoy));
+    const genuine = Buffer.concat([seen, buf('the real tail\r\n')]); // would corroborate
+    const chunk = Buffer.concat([decoys, genuine]);
 
-    const start = process.hrtime.bigint();
-    const { emit, state } = planReplayEmission({ seen: padded, chunk, state: freshReplayState() });
-    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+    const { emit, state } = planReplayEmission({ seen, chunk, state: freshReplayState() });
 
+    // The bound was hit before the genuine match: nothing suppressed, nothing lost.
     expect(emit.length).toBe(0);
-    expect(state.resolved).toBe(false); // unprovable → held, then flushed verbatim
-    // Deliberately loose: this guards against an UNBOUNDED scan (thousands of
-    // multi-KiB compares), not against a few ms of jitter. A shared CI box can be
-    // slow without being broken; only a missing bound blows through a budget this wide.
-    expect(elapsedMs).toBeLessThan(2_000);
+    expect(state.resolved).toBe(false);
+    expect(state.pending.length).toBe(chunk.length);
   });
 });
 
@@ -259,21 +260,36 @@ describe('rememberDelivered (pure)', () => {
     tail = rememberDelivered(tail, buf('END'));
     const seen = materializeSeen(tail);
 
-    expect(tail.bytes).toBeLessThanOrEqual(MAX_SEEN_BYTES + 3);
+    expect(tail.bytes).toBe(MAX_SEEN_BYTES);
     expect(seen.subarray(seen.length - 3).toString('utf8')).toBe('END');
   });
 
-  it('given many small chunks, should not re-copy the whole history for each one', () => {
-    // A 64 KiB memcpy per delivered chunk is a real cost for a shell that writes in
-    // small bursts: the history is kept as chunks and joined once per attach.
-    let tail = EMPTY_SEEN;
-    const start = process.hrtime.bigint();
-    for (let i = 0; i < 20_000; i += 1) tail = rememberDelivered(tail, buf('x'.repeat(100)));
-    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+  it('given a single chunk BIGGER than the bound, then a small one, should keep a full history (not collapse to the prompt)', () => {
+    // The trim must never take the history BELOW the bound. Evicting whole chunks
+    // and stopping once the total fits does exactly that: the oversized chunk evicts
+    // everything, and the next byte evicts IT — leaving a 3-byte history. The anchor
+    // collapses with it, no replay can align again, and the banner reprints on every
+    // watchdog cycle. This module produces oversized chunks itself: the give-up flush
+    // emits one buffer of up to MAX_PENDING_BYTES, and a cold attach can deliver a
+    // whole scrollback in a single frame.
+    const hugeFlush = Buffer.alloc(100 * 1024, 0x61); // > MAX_SEEN_BYTES, as a flush emits
+    let tail = rememberDelivered(EMPTY_SEEN, hugeFlush);
+    tail = rememberDelivered(tail, buf('$ ')); // ...then an ordinary prompt
 
-    expect(tail.bytes).toBeLessThanOrEqual(MAX_SEEN_BYTES + 100);
-    // Loose on purpose: a full re-copy per chunk is ~650x the work, so it misses a
-    // budget this wide by orders of magnitude. CI jitter does not.
-    expect(elapsedMs).toBeLessThan(3_000);
+    expect(tail.bytes).toBe(MAX_SEEN_BYTES); // NOT 2
+    expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
+  });
+
+  it('given many small chunks, should retain them AS chunks (not re-copy the whole history each time)', () => {
+    // Appending to one growing 64 KiB Buffer copies all of it, per chunk, forever —
+    // ~650x write amplification for a shell that writes in small bursts. The history
+    // is kept as the chunks it arrived in and joined once per attach, so the proof is
+    // structural: the retained history is many chunks, not one.
+    let tail = EMPTY_SEEN;
+    for (let i = 0; i < 2_000; i += 1) tail = rememberDelivered(tail, buf('x'.repeat(100)));
+
+    expect(tail.bytes).toBe(MAX_SEEN_BYTES);
+    expect(tail.chunks.length).toBeGreaterThan(100);
+    expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
   });
 });

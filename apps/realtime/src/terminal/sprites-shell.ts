@@ -180,7 +180,7 @@ const REPLAY_SETTLE_MS = 500;
  * gap alone is not one. A shell that is CHATTY across the reconnect (a running
  * build, a repainting TUI) never goes quiet, so a gap timer would be re-armed by
  * every chunk and the buffered bytes would be withheld until MAX_PENDING_BYTES:
- * a quarter-megabyte of dead terminal.
+ * a megabyte of dead terminal.
  *
  * This deadline is also what keeps the suppression SAFE. The dedupe may only
  * search bytes that are actually the replay; searching live output risks matching
@@ -317,6 +317,9 @@ export function openPtyShell({
     };
 
     cmd.stdout.on('data', (chunk) => {
+      // The terminal is gone (killed, or a real exit): nothing may reach the client
+      // after that, and nothing may re-arm a timer against a shell nobody is watching.
+      if (closed) return;
       // A dead socket can still drain chunks its stream had buffered. Forward them —
       // dropping them would lose the dying shell's last words whenever the reconnect
       // CREATES a fresh session rather than reattaching, because nothing would ever
@@ -352,6 +355,7 @@ export function openPtyShell({
       if (windowTimer === undefined) windowTimer = setTimeout(closeReplayWindow, REPLAY_WINDOW_MS);
     });
     cmd.stderr.on('data', (chunk) => {
+      if (closed) return;
       opened = true;
       // Never deduped — the replay is a stdout stream — but it must not JUMP the
       // stdout we are still holding: close the window first so ordering on the wire

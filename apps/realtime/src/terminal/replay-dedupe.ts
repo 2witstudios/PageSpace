@@ -148,8 +148,16 @@ export const EMPTY_SEEN: SeenTail = { chunks: [], bytes: 0 };
 
 /**
  * Record bytes just delivered to the client, dropping history past the bound.
- * Whole chunks are dropped, so the tail may carry slightly more than
- * MAX_SEEN_BYTES — bounded, and cheaper than re-slicing.
+ *
+ * Trims TO the bound, never below it. Evicting whole chunks and stopping as soon as
+ * the total fits would do exactly that: one chunk bigger than the bound — and this
+ * module produces them itself, since the give-up flush emits a single buffer of up
+ * to MAX_PENDING_BYTES, and a cold attach can deliver an entire scrollback in one
+ * frame — evicts everything before it, and then the next byte evicts THAT, leaving
+ * the history equal to one prompt. The anchor would collapse with it, no replay
+ * would ever align again, and the banner would reprint on every watchdog cycle: the
+ * very bug this module exists to fix, resurrected by an input it produced. So an
+ * oversized head chunk is SLICED, not dropped.
  */
 export function rememberDelivered(seen: SeenTail, emitted: Buffer): SeenTail {
   if (emitted.length === 0) return seen;
@@ -157,9 +165,16 @@ export function rememberDelivered(seen: SeenTail, emitted: Buffer): SeenTail {
   // pool, and keeping the view would pin that whole parent allocation.
   const chunks = [...seen.chunks, Buffer.from(emitted)];
   let bytes = seen.bytes + emitted.length;
-  while (bytes > MAX_SEEN_BYTES && chunks.length > 1) {
-    bytes -= chunks[0].length;
-    chunks.shift();
+  while (bytes > MAX_SEEN_BYTES) {
+    const head = chunks[0];
+    const excess = bytes - MAX_SEEN_BYTES;
+    if (head.length <= excess) {
+      chunks.shift();
+      bytes -= head.length;
+      continue;
+    }
+    chunks[0] = Buffer.from(head.subarray(excess));
+    bytes -= excess;
   }
   return { chunks, bytes };
 }

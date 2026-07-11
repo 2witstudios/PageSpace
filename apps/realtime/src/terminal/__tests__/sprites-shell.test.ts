@@ -1038,8 +1038,8 @@ describe('openPtyShell', () => {
     it('given a CHATTY shell across the reconnect, emits within the replay window instead of stalling to the byte cap', async () => {
       // The quiet-gap timer alone is not a bound: a build or a repainting TUI
       // never goes quiet, so every chunk would re-arm it and the terminal would
-      // sit dead until MAX_PENDING_BYTES (256 KiB). The hard window is what makes
-      // the worst case a redraw rather than a quarter-megabyte stall.
+      // sit dead all the way to MAX_PENDING_BYTES (1 MiB). The hard window is what
+      // makes the worst case a redraw rather than a megabyte-long stall.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1229,6 +1229,33 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
       attachCmd._stdout.emit('data', 'unalignable\r\n'); // buffered, settle armed
       shell.kill();
+      // The settle timer the kill cancelled must not fire output at a client that is
+      // no longer there.
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
+    it('given a chunk still in flight when the terminal is killed, does not deliver it', async () => {
+      // Once the replay has resolved, chunks are delivered straight through — so a
+      // chunk that lands after kill() would reach `onOutput`, i.e. `appendScrollback`
+      // and a socket emit, for a session the caller has already torn down.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', BANNER); // the replay resolves; nothing emitted
+
+      shell.kill();
+      attachCmd._stdout.emit('data', 'in flight after the kill\r\n');
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(outputs(onOutput)).toEqual([BANNER]);
