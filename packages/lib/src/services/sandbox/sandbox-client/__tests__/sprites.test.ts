@@ -4,6 +4,7 @@ import {
   createSpritesSandboxClient,
   isSpriteNotFoundError,
   classifyProvisionError,
+  readSessionInfoId,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
@@ -15,6 +16,17 @@ import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
+
+/**
+ * riteway-style assertion (given/should/actual/expected) on top of vitest — the
+ * repo doesn't vendor riteway, so keep the contract and drop the package.
+ */
+function assert<T>({ given, should, actual, expected }: { given: string; should: string; actual: T; expected: T }): void {
+  it(`given ${given}, should ${should}`, () => {
+    expect(actual).toEqual(expected);
+  });
+}
+
 
 /**
  * A fake `SpriteCommand` mirroring the SDK shape the driver consumes: stdout /
@@ -657,5 +669,78 @@ describe('ExecutableSandbox file ops', () => {
     const { sdk: sdkMissing } = makeSdk({ getSprite: async () => fakeSprite({ fs: missing }) });
     const miss = await createSpritesSandboxClient({ sdk: sdkMissing }).get({ sandboxId: 'k' });
     expect(await miss!.readFileToBuffer({ path: '/workspace/missing.txt' })).toBeNull();
+  });
+});
+
+
+describe('readSessionInfoId (pure)', () => {
+  assert({
+    given: "the server's session_info frame for a freshly created exec session",
+    should: 'return the authoritative session id it carries',
+    actual: readSessionInfoId({ type: 'session_info', session_id: 'sess-authoritative', command: 'bash', tty: true }),
+    expected: 'sess-authoritative',
+  });
+
+  assert({
+    given: 'the EXACT frame captured from the live Sprites API on a create socket',
+    should: 'return its session_id — pins the real wire shape, not an idealized one',
+    // Recorded verbatim from api.sprites.dev while creating a tty session:
+    //   {"type":"session_info","session_id":"20","command":"bash",
+    //    "created":1783791670,"cols":0,"rows":0,"is_owner":true,"tty":true}
+    // Note `is_owner: true` (we created it) and that the id is a SHORT NUMERIC
+    // STRING — not a uuid. Nothing may assume its format.
+    actual: readSessionInfoId({
+      type: 'session_info',
+      session_id: '20',
+      command: 'bash',
+      created: 1783791670,
+      cols: 0,
+      rows: 0,
+      is_owner: true,
+      tty: true,
+    }),
+    expected: '20',
+  });
+
+  assert({
+    given: 'a non-session_info control frame (a port notification, a resize ack)',
+    should: 'return undefined — only session_info names a session',
+    actual: readSessionInfoId({ type: 'port_open', port: 3000, session_id: 'sess-1' }),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'a session_info frame with no session_id',
+    should: 'return undefined rather than an empty/garbage id',
+    actual: readSessionInfoId({ type: 'session_info', command: 'bash' }),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'a session_info frame whose session_id is an empty string',
+    should: 'return undefined — an empty id is not attachable',
+    actual: readSessionInfoId({ type: 'session_info', session_id: '' }),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'a session_info frame whose session_id is not a string',
+    should: 'return undefined (defensive against a shifting RC wire format)',
+    actual: readSessionInfoId({ type: 'session_info', session_id: 42 }),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'a raw non-JSON text frame the SDK passed through as a string',
+    should: 'return undefined',
+    actual: readSessionInfoId('some raw terminal text'),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'a null message',
+    should: 'return undefined',
+    actual: readSessionInfoId(null),
+    expected: undefined,
   });
 });

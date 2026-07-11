@@ -3,10 +3,34 @@ import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resol
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { TerminalSession } from '../terminal-session-map';
-import type { PtyShell } from '../sprites-shell';
+import type { PtyShell, OpenPtyShellArgs } from '../sprites-shell';
 import { assert } from './riteway';
 import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+
+/**
+ * Fire the `onSessionId` callback the handler handed to `openShell` — i.e. do
+ * what `openPtyShell` does when the created session announces its id on its own
+ * socket. Non-null asserted rather than optional-chained: the handler ALWAYS
+ * supplies this callback, and `?.` would silently no-op (passing the test for
+ * the wrong reason) if it ever stopped doing so.
+ */
+function announceSessionId(openShellFn: ReturnType<typeof vi.fn>, sessionId: string): void {
+  const args = openShellFn.mock.calls[0][0] as OpenPtyShellArgs;
+  expect(args.onSessionId).toBeDefined();
+  (args.onSessionId as (id: string) => void)(sessionId);
+}
+
+/**
+ * A promise whose settlement the test drives. Preferred over a
+ * `let resolve = () => {}` placeholder: that throwaway arrow is never called, so
+ * v8 scores it as an uncovered function.
+ */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
   return { id, data: { user: { id: userId } }, emit: vi.fn() };
@@ -330,22 +354,49 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
-    it('given a FRESH session with no known streamSessionId, should discover and persist the new Sprite session id', async () => {
+    it('given a FRESH session whose shell reports its authoritative id, should persist that id', async () => {
+      // The shell learns the id from the created session's own socket and hands it
+      // up via onSessionId — the handler no longer discovers anything itself.
       const auth = makeAuthSuccess({ streamSessionId: null });
-      // Before launch: no sessions yet. After launch: the newly created one appears.
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 'sess-new', command: 'pagespace-cli', isActive: true, tty: true }]);
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
+
+      announceSessionId(openShell, 'sess-new');
       await vi.advanceTimersByTimeAsync(0);
 
       expect(persistStreamSessionId).toHaveBeenCalledWith({ agentTerminalId: 'agent-terminal-1', sessionId: 'sess-new' });
     });
 
-    it('given a fresh session where listSessions returns nothing new, should not call persistStreamSessionId', async () => {
+    it('given two sessions announced in quick succession, should persist them IN ORDER (a dead id must not win)', async () => {
+      // A flapping Sprite creates session A, drops, then creates B. Two un-awaited
+      // UPDATEs would race; if A's landed last the DB would name a session that is
+      // already dead, sending the next cold connect at a corpse. The writes are
+      // chained, so the last session announced is the last one written.
+      const writes: string[] = [];
+      const slowFirst = deferred<void>();
+      persistStreamSessionId = vi.fn().mockImplementationOnce(async (a: { sessionId: string }) => {
+        await slowFirst.promise;            // A's write is slow...
+        writes.push(a.sessionId);
+      }).mockImplementation(async (a: { sessionId: string }) => {
+        writes.push(a.sessionId);           // ...B's would otherwise overtake it
+      });
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ streamSessionId: null })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      const args = openShell.mock.calls[0][0] as OpenPtyShellArgs;
+      const announce = args.onSessionId as (id: string) => void;
+      announce('sess-a');
+      announce('sess-b');
+      slowFirst.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(writes).toEqual(['sess-a', 'sess-b']); // B last — the live session wins
+      expect(sessionMap.getByKey('branch1:agent:cli')?.sessionId).toBe('sess-b');
+    });
+
+    it('given a FRESH session whose shell never reports an id, should not call persistStreamSessionId', async () => {
       const auth = makeAuthSuccess({ streamSessionId: null, sessions: [] });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
@@ -355,31 +406,42 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
-    it('given a FRESH session where the post-launch listSessions call rejects, should discover no new session id rather than throwing', async () => {
+    it('given a FRESH session, should NOT list the Sprite\'s sessions at all (identity comes from the create handle, not a diff)', async () => {
+      // The retired before/after listSessions diff added two control-plane round
+      // trips to every cold connect AND could not tell our new shell from a
+      // sibling terminal's. Both are gone: the connect path never lists.
       const auth = makeAuthSuccess({ streamSessionId: null });
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockRejectedValueOnce(new Error('sprite unreachable'));
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
 
-      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
-      expect(persistStreamSessionId).not.toHaveBeenCalled();
+      expect(auth.sprite.listSessions).not.toHaveBeenCalled();
+      expect(openShell).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
-    it('given the pre-launch listSessions snapshot rejects, should still open the shell (defaults to an empty snapshot)', async () => {
+    it('given a persist that rejects with a NON-Error value, should coerce it and still not throw', async () => {
       const auth = makeAuthSuccess({ streamSessionId: null });
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockRejectedValueOnce(new Error('sprite unreachable'))
-        .mockResolvedValueOnce([]);
+      persistStreamSessionId = vi.fn().mockRejectedValue('db string blip');
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
-      expect(openShell).toHaveBeenCalled();
+      announceSessionId(openShell, 'sess-new');
+      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given a persist that rejects, should not throw out of the connect (best-effort persistence)', async () => {
+      const auth = makeAuthSuccess({ streamSessionId: null });
+      persistStreamSessionId = vi.fn().mockRejectedValue(new Error('db unreachable'));
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      announceSessionId(openShell, 'sess-new');
+      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
@@ -562,24 +624,28 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
-    it('given a fresh session where a SIBLING terminal opened a tty in the same window, should persist nothing rather than the sibling\'s id', async () => {
-      // One Sprite hosts every agent terminal on the machine. Two new tty sessions
-      // in the diff is ambiguous — guessing would point THIS terminal's next cold
-      // connect at another terminal's PTY.
-      const auth = makeAuthSuccess({ streamSessionId: null });
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
+    it('given a fresh session where a SIBLING terminal opened a tty in the same window, should persist OUR id (never the sibling\'s)', async () => {
+      // One Sprite hosts every agent terminal on the machine. The retired diff saw
+      // two new tty sessions, could not tell which was ours, and had to abstain —
+      // persisting nothing precisely when the machine was busiest. Our shell now
+      // learns its id on its own socket, so a sibling is simply irrelevant: we
+      // persist the right id instead of abstaining.
+      const auth = makeAuthSuccess({
+        streamSessionId: null,
+        sessions: [
           { id: 'sess-ours', command: 'pagespace-cli', isActive: true, tty: true },
           { id: 'sess-sibling', command: 'claude', isActive: true, tty: true },
-        ]);
+        ],
+      });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
+
+      announceSessionId(openShell, 'sess-ours');
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(persistStreamSessionId).not.toHaveBeenCalled();
+      expect(persistStreamSessionId).toHaveBeenCalledWith({ agentTerminalId: 'agent-terminal-1', sessionId: 'sess-ours' });
+      expect(persistStreamSessionId).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-sibling' }));
     });
 
     it('given two connects for the same key (double-mount remount), should not double-create — the second reattaches via getByKey', async () => {
@@ -943,6 +1009,38 @@ describe('buildAgentTerminalHandlers', () => {
       expect(billing.trackUsage).not.toHaveBeenCalled();
     });
 
+    it('given the END-of-session settle rejects, should log and still tear the session down (billing never blocks cleanup)', async () => {
+      // The last settle is fire-and-forget: a billing/DB outage at the moment a
+      // terminal closes must not strand the session in the map (leaking its slot
+      // and its PTY) — the window is lost, the terminal is not.
+      const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue(new Error('ledger unreachable')) });
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      await vi.advanceTimersByTimeAsync(5_000);
+      onExitArg(0);
+      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: 0, connectionId: 'sock1' });
+    });
+
+    it('given the end-of-session settle rejects with a NON-Error value, should still log without throwing', async () => {
+      // The catch normalizes an arbitrary thrown value; a bare string must not
+      // blow up the logger call and take the teardown down with it.
+      const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue('ledger string blip') });
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      onExitArg(0);
+      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
+
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+
     it('on natural shell exit, settles the hold to the real connected-window seconds and never releases it separately', async () => {
       const billing = makeBilling();
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
@@ -1135,6 +1233,90 @@ describe('buildAgentTerminalHandlers', () => {
 
         // Settle succeeded; only the re-hold failed (and with a non-Error) — session stays alive.
         expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      });
+
+      it('given the session ends while the re-hold GATE is in flight, releases the fresh hold instead of leaking it', async () => {
+        // The heartbeat settled, then asked for a hold covering the NEXT window.
+        // If the terminal closes while that gate is still running, the hold it
+        // returns belongs to a session that no longer exists — nobody is left to
+        // settle or release it, so it would sit on the payer's balance until its
+        // TTL expired. It must be handed straight back.
+        const reHold = deferred<{ allowed: boolean; holdId: string }>();
+        const billing = makeBilling({
+          gate: vi
+            .fn()
+            .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' }) // the connect-time hold
+            .mockImplementationOnce(() => reHold.promise), // re-hold hangs
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat: settle done, gate in flight
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0);                                           // terminal closes mid-gate
+        reHold.resolve({ allowed: true, holdId: 'hold-2' });    // the now-orphaned hold lands
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(billing.releaseHold).toHaveBeenCalledWith('hold-2');
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      });
+
+      it('given the session ends while the re-hold gate is in flight and the gate returns NO hold, releases nothing', async () => {
+        // Same race, but the gate allowed the window without reserving anything —
+        // there is no hold to hand back, and releaseHold(undefined) must not fire.
+        const reHold = deferred<{ allowed: boolean }>();
+        const billing = makeBilling({
+          gate: vi
+            .fn()
+            .mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' })
+            .mockImplementationOnce(() => reHold.promise),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0);
+        reHold.resolve({ allowed: true }); // allowed, but no hold reserved
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(billing.releaseHold).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      });
+
+      it('given the session ends while a SUCCEEDING heartbeat settle is in flight, does not re-hold for the dead session', async () => {
+        // Mirror of the failing-settle race: the settle lands fine, but by then the
+        // terminal is gone. Asking the gate for the next window's hold would
+        // reserve credit for a session nobody will ever settle or release.
+        const settle = deferred<void>();
+        const billing = makeBilling({
+          trackUsage: vi.fn().mockImplementationOnce(() => settle.promise).mockResolvedValue(undefined),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // heartbeat: settle in flight
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0);          // terminal closes while the settle is still running
+        settle.resolve();      // ...and the settle then SUCCEEDS
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Only the connect-time gate ran: no hold was taken out for a dead session.
+        expect(billing.gate).toHaveBeenCalledTimes(1);
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      });
+
+      it('given a session with no resolved payer, heartbeats settle nothing (an unmetered session is not billable)', async () => {
+        const billing = makeBilling();
+        checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ payerId: '' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        expect(billing.trackUsage).not.toHaveBeenCalled();
         expect(shell.kill).not.toHaveBeenCalled();
         expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
       });
