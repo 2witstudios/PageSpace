@@ -542,12 +542,14 @@ describe('DiffTab', () => {
     await waitFor(() => screen.getByText(/Failed to load diff/i));
     assert({
       given: 'the changed-file list request failing',
-      should: 'show the real error — falling through to a permanent "Loading…" would hide a dead machine',
+      should: 'show the real error with a retry — falling through to a permanent "Loading…" would hide a dead machine',
       actual: {
-        error: screen.queryByText(/Failed to load diff: sandbox unreachable/i) !== null,
+        error: screen.queryByText(/Failed to load diff/i) !== null,
+        detail: screen.queryByText(/sandbox unreachable/i) !== null,
+        retry: screen.queryByRole('button', { name: 'Retry' }) !== null,
         stuckLoading: screen.queryByText('Loading changed files…') !== null,
       },
-      expected: { error: true, stuckLoading: false },
+      expected: { error: true, detail: true, retry: true, stuckLoading: false },
     });
   });
 

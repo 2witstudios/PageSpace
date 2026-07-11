@@ -250,10 +250,23 @@ function runSpawned(
       return next;
     };
 
+    // The SDK emits 'spawn' exactly when `start()` resolves — i.e. the socket is
+    // open (and, for an attach, `session_info` has arrived). It is therefore the
+    // authoritative boundary between "this never ran" and "this may have run",
+    // which is the only question the retry needs answered. See `isPreOpenWakeError`
+    // for why the error's TEXT cannot answer it.
+    let opened = false;
+    command.on('spawn', () => {
+      opened = true;
+    });
+
     command.stdout.on('data', (chunk) => {
+      // Output proves the connection opened, even if the 'spawn' event was missed.
+      opened = true;
       stdoutLen = collect(stdoutChunks, chunk, stdoutLen);
     });
     command.stderr.on('data', (chunk) => {
+      opened = true;
       stderrLen = collect(stderrChunks, chunk, stderrLen);
     });
     command.on('exit', (code) => {
@@ -264,7 +277,10 @@ function runSpawned(
       });
     });
     command.on('error', (error) => {
-      fail(error);
+      // A failure BEFORE the socket opened never started the command, so it is
+      // safe to re-run. One that arrives after may already have run it, and must
+      // not be.
+      fail(opened ? error : markPreOpenDrop(error));
     });
 
     if (timeoutMs && timeoutMs > 0) {
@@ -283,53 +299,151 @@ function runSpawned(
   });
 }
 
-// Cold-start exec retry. A hibernated Sprite wakes on the exec WebSocket, and
-// Fly's wake-on-request can drop the FIRST connection while the VM boots — the
-// SDK surfaces that as a "closed before open" error. That failure is provably
-// pre-open (the command never started), so retrying it is safe and is the
-// documented wake handshake. We retry ONLY that signal: a post-open failure
+// Cold-start exec retry. A hibernated Sprite has NO explicit wake API — an
+// incoming request to it (i.e. any exec) wakes it automatically
+// (docs.sprites.dev/concepts/lifecycle), so the FIRST REAL operation is the
+// wake. Fly's wake-on-request can drop that first connection while the VM boots.
+// Such a failure is provably PRE-OPEN (the command never started), so retrying it
+// is safe and IS the wake handshake — see `isPreOpenWakeError` for how that is
+// detected (structurally, from the absence of the SDK's `spawn` event; the error's
+// text cannot be trusted for it). We retry ONLY that signal: a post-open failure
 // (timeout, output overflow, non-zero exit, mid-command socket drop) may have
 // already run the command and must NOT be retried.
-const MAX_EXEC_ATTEMPTS = 3;
-const RETRY_BASE_DELAY_MS = 500;
+export const MAX_EXEC_ATTEMPTS = 3;
+export const RETRY_BASE_DELAY_MS = 500;
 const FS_OP_TIMEOUT_MS = 30_000;
 
-function isPreOpenWakeError(error: unknown): boolean {
+/**
+ * Marks an error that reached us BEFORE the command's socket opened.
+ *
+ * This is a STRUCTURAL fact, recorded by whoever was watching the connection, not
+ * a guess made afterwards from the error's text. The distinction matters because
+ * the text is not usable: `@fly/sprites` has no `ws` dependency — it drives the
+ * global (undici) WebSocket, whose own file header notes that "the standard
+ * WebSocket API does not expose HTTP error responses on connection failure". On a
+ * failed handshake undici fires `error` BEFORE `close`, and the SDK registers its
+ * `error` listener first (websocket.js), so the first thing a consumer sees is
+ * `WebSocket error: <opaque>` — NOT the `WebSocket closed before open: …` string
+ * that only gets emitted afterwards, from the `close` listener. Matching on that
+ * string alone therefore misses the very cold-start drop it was written for.
+ *
+ * Non-enumerable and symbol-keyed so marking never alters an error's identity,
+ * message, or JSON shape — callers still see exactly the error the SDK threw.
+ */
+const PRE_OPEN_DROP = Symbol.for('pagespace.sandbox.preOpenDrop');
+
+function markPreOpenDrop(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null) {
+    Object.defineProperty(error, PRE_OPEN_DROP, { value: true, enumerable: false, configurable: true });
+  }
+  return error;
+}
+
+/**
+ * Pure: is this failure a drop that happened BEFORE the connection opened (and so
+ * provably never ran the command, making a re-run safe)?
+ *
+ * Answers structurally: a failure observed while still waiting for the SDK's
+ * `spawn` event — which fires exactly when `start()` resolves — never ran the
+ * command. Every pre-open failure is marked at the point it is observed, so
+ * production relies on the mark alone.
+ *
+ * The `closed before open` text check below is a DEFENSIVE fallback, not a
+ * load-bearing one: the SDK emits that string as an `error` event inside the
+ * pre-open window too, so it is already marked structurally by the time anyone
+ * asks. It survives only to classify an error that reached a caller without
+ * having been observed pre-open (a hand-constructed one, or a future SDK that
+ * stops emitting `spawn`). Do not add new signals here — mark at the source.
+ *
+ * A timeout or an output overflow is never retryable: the command may already
+ * have run.
+ */
+export function isPreOpenWakeError(error: unknown): boolean {
   if (error instanceof SandboxCommandTimeoutError || error instanceof SandboxOutputLimitError) {
     return false;
   }
+  if (typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[PRE_OPEN_DROP] === true) {
+    return true;
+  }
   const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  // Emitted by the SDK's WSCommand before the socket ever opens — see
-  // @fly/sprites websocket.js ("WebSocket closed before open: …").
   return msg.includes('closed before open');
+}
+
+/** Record that `error` reached the caller before the connection ever opened. */
+export function asPreOpenDrop(error: unknown): unknown {
+  return markPreOpenDrop(error);
+}
+
+/** Pure: the linear backoff between wake attempts (attempt is 1-based). */
+export function wakeRetryDelayMs(attempt: number, baseDelayMs: number = RETRY_BASE_DELAY_MS): number {
+  return baseDelayMs * attempt;
+}
+
+export type WakeRetryPlan = { retry: true; delayMs: number } | { retry: false };
+
+/**
+ * Pure: after `attempt` (1-based) failed with `error`, should the operation be
+ * re-run, and after how long? Bounded by `maxAttempts` so a Sprite that never
+ * wakes surfaces its error instead of looping forever.
+ */
+export function planWakeRetry({
+  error,
+  attempt,
+  maxAttempts = MAX_EXEC_ATTEMPTS,
+  baseDelayMs = RETRY_BASE_DELAY_MS,
+}: {
+  error: unknown;
+  attempt: number;
+  maxAttempts?: number;
+  baseDelayMs?: number;
+}): WakeRetryPlan {
+  if (!isPreOpenWakeError(error)) return { retry: false };
+  if (attempt >= maxAttempts) return { retry: false };
+  return { retry: true, delayMs: wakeRetryDelayMs(attempt, baseDelayMs) };
 }
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export interface WakeRetryOptions {
+  maxAttempts?: number;
+  baseDelayMs?: number;
+  /** Injected so the schedule can be asserted without real timers. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /**
- * Spawn + collect with a bounded retry on the cold-start wake handshake. The
- * command is (re-)spawned per attempt via `spawnFn` so each retry opens a fresh
- * WebSocket. Only a pre-open wake failure is retried; everything else propagates
- * on the first occurrence.
+ * The retry executor: a thin shell around the pure `planWakeRetry` schedule that
+ * re-runs an INJECTED operation on the cold-start wake handshake. `op` is a
+ * factory, not a promise — each attempt must open a FRESH connection (a settled
+ * promise cannot be retried).
  */
-async function runSpawnedWithWakeRetry(
+export async function withWakeRetry<T>(
+  op: (attempt: number) => Promise<T>,
+  { maxAttempts = MAX_EXEC_ATTEMPTS, baseDelayMs = RETRY_BASE_DELAY_MS, sleep = delay }: WakeRetryOptions = {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await op(attempt);
+    } catch (error) {
+      const plan = planWakeRetry({ error, attempt, maxAttempts, baseDelayMs });
+      if (!plan.retry) throw error;
+      await sleep(plan.delayMs);
+    }
+  }
+}
+
+/**
+ * Spawn + collect with the bounded cold-start wake retry. The command is
+ * (re-)spawned per attempt via `spawnFn` so each retry opens a fresh WebSocket.
+ */
+function runSpawnedWithWakeRetry(
   spawnFn: () => SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,
 ): Promise<SandboxRunResult> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_EXEC_ATTEMPTS; attempt += 1) {
-    try {
-      return await runSpawned(spawnFn(), maxBytes, timeoutMs);
-    } catch (error) {
-      lastError = error;
-      if (!isPreOpenWakeError(error) || attempt === MAX_EXEC_ATTEMPTS) throw error;
-      await delay(RETRY_BASE_DELAY_MS * attempt);
-    }
-  }
-  throw lastError;
+  return withWakeRetry(() => runSpawned(spawnFn(), maxBytes, timeoutMs));
 }
 
 /** Reject if `p` has not settled within `ms` — the Sprite filesystem API uses a
@@ -354,14 +468,23 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
- * Force a hibernated VM awake via the designated exec/WebSocket path (a cheap
- * no-op), with the same cold-start retry as a real command. Used to recover a
- * filesystem op that hit a cold VM before retrying it, and by the realtime
- * terminal path to wake a resumed Sprite BEFORE opening the interactive PTY
- * (`openPtyShell`'s `bash` spawn isn't wrapped in the cold-start retry, so a
- * dropped first wake would otherwise leave the terminal stuck connecting).
+ * Force a hibernated VM awake via a cheap no-op exec, with the same bounded
+ * cold-start retry as a real command.
+ *
+ * THE FILESYSTEM PATH IS THE ONLY LEGITIMATE CALLER, and deliberately not
+ * exported. Every OTHER operation already wakes the VM by itself: a Sprite has
+ * no explicit wake API — an incoming request wakes it automatically
+ * (docs.sprites.dev/concepts/lifecycle) — so an exec, a `createSession` or an
+ * `attachSession` IS the wake, and prefixing one with a `sh -c :` just pays for
+ * two cold starts instead of one.
+ *
+ * The Sprite filesystem HTTP API is the exception, and the reason this still
+ * exists: it is a bare `fetch()` with no AbortSignal that does NOT wake a
+ * hibernated VM — it simply hangs (52–90s observed) until Fly's proxy closes the
+ * connection. So an fs op against a cold Sprite has no way to wake the VM it is
+ * waiting on. This exec does it for it.
  */
-export async function ensureSpriteAwake(sprite: SpriteInstanceLike): Promise<void> {
+async function wakeSpriteViaExec(sprite: SpriteInstanceLike): Promise<void> {
   await runSpawnedWithWakeRetry(
     () => sprite.spawn('sh', ['-c', ':']),
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -371,9 +494,8 @@ export async function ensureSpriteAwake(sprite: SpriteInstanceLike): Promise<voi
 
 /**
  * Run a filesystem op bounded by a timeout; on the first failure (cold-start
- * hang/race) wake the VM via the exec path and retry once. The filesystem API
- * itself never wakes a cold VM and never times out, so without this a `writeFile`
- * / `readFile` against a hibernated Sprite hangs indefinitely.
+ * hang/race) wake the VM via the exec path and retry once — see
+ * `wakeSpriteViaExec` for why the fs API cannot wake the VM itself.
  */
 async function fsWithWakeRetry<T>(
   sprite: SpriteInstanceLike,
@@ -383,7 +505,7 @@ async function fsWithWakeRetry<T>(
   try {
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   } catch {
-    await ensureSpriteAwake(sprite);
+    await wakeSpriteViaExec(sprite);
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   }
 }
@@ -561,6 +683,62 @@ async function applyEgressLockdown({
     }
     throw error;
   }
+}
+
+/**
+ * Wrap an SDK so every `getSprite` for the same name within this wrapper's
+ * lifetime resolves ONE underlying read, memoized by name.
+ *
+ * A single cold terminal connect used to read the same Sprite up to three times:
+ * once inside `getOrCreate` (the resume probe), once to wake it, and once more
+ * to hand the raw instance to the PTY layer. A `getSprite` is a control-plane
+ * round-trip, so those were two avoidable network hops on the SLOWEST path we
+ * have. Build ONE cache per connect and thread it through the whole resolution
+ * (acquire -> auth -> launch) and the Sprite is read exactly once.
+ *
+ * Two details make the memo safe rather than merely fast:
+ *  - A REJECTION is never cached. `getOrCreate`'s create path *expects*
+ *    `getSprite` to reject (not-found) before it calls `createSprite`; caching
+ *    that rejection would make every later read of the name fail forever. A
+ *    transient 429/5xx is evicted for the same reason — a retry must be a real
+ *    retry.
+ *  - `createSprite` SEEDS the cache and `deleteSprite` EVICTS it, so the fresh
+ *    path needs no second read to see its own Sprite, and a destroyed one is
+ *    never served from cache.
+ *
+ * Scope it to one request/connect, never to the process: the handle is a live
+ * control-plane object, and a process-lifetime cache would pin a Sprite that has
+ * since been destroyed and re-created under the same name.
+ */
+export function createSpriteHandleCache(sdk: SpritesSdk): SpritesSdk {
+  const handles = new Map<string, Promise<SpriteInstanceLike>>();
+
+  return {
+    getSprite(name) {
+      const cached = handles.get(name);
+      if (cached) return cached;
+
+      const pending = sdk.getSprite(name);
+      handles.set(name, pending);
+      pending.catch(() => {
+        // Evict, don't memoize a failure — see the doc above. Guarded so a late
+        // rejection can't evict a handle a subsequent create already seeded.
+        if (handles.get(name) === pending) handles.delete(name);
+      });
+      return pending;
+    },
+
+    async createSprite(name, config) {
+      const sprite = await sdk.createSprite(name, config);
+      handles.set(name, Promise.resolve(sprite));
+      return sprite;
+    },
+
+    async deleteSprite(name) {
+      handles.delete(name);
+      await sdk.deleteSprite(name);
+    },
+  };
 }
 
 export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSandboxClient {

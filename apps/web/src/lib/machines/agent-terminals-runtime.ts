@@ -19,6 +19,10 @@
  * every acquire, never trusting a permission check cached from an earlier
  * request. `branchStore.findById` needs no such threading (a branch lookup by
  * its own row id carries no actor context either way).
+ *
+ * Acquiring never WAKES the Sprite: there is no wake API, and a hibernated
+ * Sprite wakes on any incoming request (docs.sprites.dev/concepts/lifecycle), so
+ * the kill path's own `attachSession` is the wake.
  */
 
 import { eq } from '@pagespace/db/operators';
@@ -32,7 +36,6 @@ import {
   getSandboxSessionSecret,
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { checkMachineRuntimeGuardrail, recordMachineActivity } from '@pagespace/lib/services/sandbox/quota';
-import { ensureSpriteAwake, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
@@ -76,20 +79,6 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
     throw error;
   });
   return sandboxClientPromise;
-}
-
-/** The raw Sprites SDK — only needed to wake a RESUMED (possibly hibernating) Sprite before a caller (e.g. a kill) attaches to its PTY session directly, bypassing the `ExecSandboxClient`'s wake-retry-wrapped exec path. */
-let spritesSdkPromise: Promise<SpritesSdk> | null = null;
-function getSpritesSdk(): Promise<SpritesSdk> {
-  spritesSdkPromise ??= (async () => {
-    assertSandboxRuntime();
-    const { getProductionSpritesSdk } = await import('@/lib/sandbox/sprites-client');
-    return getProductionSpritesSdk();
-  })().catch((error) => {
-    spritesSdkPromise = null;
-    throw error;
-  });
-  return spritesSdkPromise;
 }
 
 let terminalSessionStorePromise: ReturnType<typeof createDbTerminalSessionStore> | null = null;
@@ -179,20 +168,13 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
 
       if (!result.ok) return { ok: false, reason: result.reason };
 
-      // Wake a resumed (possibly hibernating) Sprite before handing its id back —
-      // a caller that then attaches to its PTY session directly (e.g. killAgentTerminal's
-      // host.attach/stream, unlike the wake-retry-wrapped exec path) would otherwise race
-      // a cold Sprite. Mirrors apps/realtime/src/index.ts's buildMachineSandbox.
-      if (result.resumed) {
-        try {
-          const sdk = await getSpritesSdk();
-          const sprite = await sdk.getSprite(result.sandboxId);
-          await ensureSpriteAwake(sprite);
-        } catch {
-          return { ok: false, reason: 'provision_failed' };
-        }
-      }
-
+      // NO wake exec here, and no second getSprite to run one with. A Sprite has no
+      // explicit wake API — an incoming request wakes it automatically
+      // (docs.sprites.dev/concepts/lifecycle) — so whatever the caller does next IS
+      // the wake: killAgentTerminal's `host.attach` -> `stream` opens an
+      // `attachSession` WebSocket, which wakes the VM exactly like an exec does. The
+      // `sh -c :` this used to run first just paid for a second cold start. Mirrors
+      // apps/realtime/src/index.ts's buildMachineSandbox.
       recordMachineActivity({ machineKey: machineId, now: nowMs });
       return { ok: true, sandboxId: result.sandboxId };
     },

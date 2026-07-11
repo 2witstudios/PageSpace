@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
+import { MachineStreamOpenTimeoutError } from '../../machine-host';
 import { createSpritesSandboxClient, type SpriteCommandLike, type SpriteInstanceLike, type SpritesSdk } from '../sprites';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
@@ -12,13 +13,31 @@ const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
  * fakeCommand) — every `provision()` call in this suite drives the REAL
  * `applyEgressLockdown`, which spawns its own `mkdir` command via the fake
  * Sprite, so the default must resolve on its own or provisioning hangs.
+ *
+ * `autoSpawn` mirrors the real SDK's WSCommand, which emits `spawn` once the
+ * WebSocket actually opens (`cmd.start().then(() => cmd.emit('spawn'))`). That
+ * is the signal `stream()` waits on before handing a stream back, so a fake that
+ * never emitted it would model a socket that never opens.
  */
-function fakeCommand(over: Partial<SpriteCommandLike> & { autoExit?: boolean } = {}) {
-  const { autoExit = true, ...commandOver } = over;
+function fakeCommand(
+  over: Partial<SpriteCommandLike> & { autoExit?: boolean; autoSpawn?: boolean; error?: Error } = {},
+) {
+  const { autoExit = true, autoSpawn = true, error, ...commandOver } = over;
   const events = new EventEmitter();
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
   const killed: string[] = [];
+  if (error) {
+    // A failed/flapping connection emits 'error' and never 'spawn'.
+    setTimeout(() => events.emit('error', error), 0);
+  }
+  if (autoSpawn) {
+    // One-shot, exactly like the real SDK's `cmd.start().then(() => cmd.emit('spawn'))`.
+    // Deliberately NOT replayed to a late subscriber: the consumer under test must
+    // register its listener synchronously, before this macrotask runs, and a fake
+    // that replayed the event would hide a regression that stopped doing so.
+    setTimeout(() => events.emit('spawn'), 0);
+  }
   if (autoExit) {
     setTimeout(() => events.emit('exit', 0), 0);
   }
@@ -156,14 +175,20 @@ describe('createSpriteMachineHost', () => {
   });
 
   it('given stream with no sessionId, should create a fresh interactive session and stream its combined stdout/stderr', async () => {
-    const { command, emitStdout, emitStderr } = fakeCommand();
+    // Built LAZILY, inside createSession — exactly when the real SDK builds it, so
+    // its one-shot 'spawn' cannot fire before `stream()` has attached its listener.
+    let emitStdout!: (chunk: string) => void;
+    let emitStderr!: (chunk: string) => void;
     const created: { command: string; args: string[] }[] = [];
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
           createSession: (cmd, args) => {
             created.push({ command: cmd, args: args ?? [] });
-            return command;
+            const fake = fakeCommand({ autoExit: false });
+            emitStdout = fake.emitStdout;
+            emitStderr = fake.emitStderr;
+            return fake.command;
           },
         }),
     });
@@ -201,6 +226,105 @@ describe('createSpriteMachineHost', () => {
     expect(attachedId).toBe('existing-session');
   });
 
+  // Regression (sprites 1-4): the PTY stream is the ONLY exec path that had no
+  // cold-start retry. `killAgentTerminal` attaches a stream and immediately
+  // SIGKILLs it, so once the explicit wake exec was removed, a hibernated Sprite
+  // could drop that first (waking) connection pre-open and the kill would fail
+  // outright — leaving a live PTY and its tracking row behind.
+  it('given a cold Sprite that drops the first stream attach pre-open, should retry and still deliver a killable stream', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            if (attempts === 1) {
+              // The cold VM drops the wake connection before it ever opens.
+              return fakeCommand({
+                autoExit: false,
+                autoSpawn: false,
+                error: new Error('WebSocket closed before open: code=1006'),
+              }).command;
+            }
+            return fakeCommand({ autoExit: false }).command;
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    const stream = await handle.stream({ sessionId: 'existing-session' });
+    stream.kill('SIGKILL');
+
+    expect(attempts).toBe(2); // first attach dropped pre-open, retried onto the woken VM
+  });
+
+  it('given every attach attempt drops pre-open, should give up on the bounded schedule rather than retry forever', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            return fakeCommand({
+              autoExit: false,
+              autoSpawn: false,
+              error: new Error('WebSocket error: TypeError (url: wss://sprite/exec/dead)'),
+            }).command;
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.stream({ sessionId: 'dead' })).rejects.toThrow();
+    expect(attempts).toBe(3); // MAX_EXEC_ATTEMPTS — bounded, not infinite
+  });
+
+  it('given the socket OPENS, should hand back the stream — a later error belongs to the consumer, not the retry', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            return fakeCommand({ autoExit: false }).command; // emits spawn
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    const stream = await handle.stream({ sessionId: 'live' });
+    stream.kill('SIGKILL');
+    expect(attempts).toBe(1);
+  });
+
+  // The PRODUCER of the timeout. Without this, a regression to the old
+  // "resolve optimistically at the cap" behavior would pass every other test in
+  // the suite — and silently hand killAtLocation a stream whose socket never
+  // opened, whose SIGKILL goes nowhere, and whose row it would then delete.
+  it('given a stream that never reports whether it opened, should reject with MachineStreamOpenTimeoutError (never resolve optimistically)', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          // Reports NOTHING: no spawn, no exit, no error. A socket in limbo.
+          attachSession: () => fakeCommand({ autoExit: false, autoSpawn: false }).command,
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    // Inject a short cap rather than faking timers: provisioning's own egress
+    // `mkdir` needs real timers to settle, so a global fake-timer swap here would
+    // deadlock the setup instead of testing the wait.
+    const host = createSpriteMachineHost({ sdk, client, streamOpenTimeoutMs: 20 });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.stream({ sessionId: 'sess-limbo' })).rejects.toBeInstanceOf(MachineStreamOpenTimeoutError);
+  });
+
   it('given listStreams, should surface only tty sessions from the underlying Sprite', async () => {
     const { sdk } = makeSdk({
       getSprite: async () =>
@@ -222,11 +346,21 @@ describe('createSpriteMachineHost', () => {
   it('given a MachineStream, should write/resize/kill through to the underlying command', async () => {
     const writes: unknown[] = [];
     const resizes: Array<[number, number]> = [];
-    const { command } = fakeCommand({
-      stdin: { write: (data) => writes.push(data) },
-      resize: (c, r) => resizes.push([c, r]),
+    let killed: string[] = [];
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          createSession: () => {
+            const fake = fakeCommand({
+              autoExit: false,
+              stdin: { write: (data) => writes.push(data) },
+              resize: (c, r) => resizes.push([c, r]),
+            });
+            killed = (fake.command as unknown as { killed: string[] }).killed;
+            return fake.command;
+          },
+        }),
     });
-    const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: () => command }) });
     const client = createSpritesSandboxClient({ sdk });
     const host = createSpriteMachineHost({ sdk, client });
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
@@ -238,12 +372,13 @@ describe('createSpriteMachineHost', () => {
 
     expect(writes).toEqual(['ls\n']);
     expect(resizes).toEqual([[100, 40]]);
-    expect((command as unknown as { killed: string[] }).killed).toEqual(['SIGKILL']);
+    expect(killed).toEqual(['SIGKILL']);
   });
 
   it('given a MachineStream with no stdin (batch command reused as a stream), should throw on write rather than silently drop input', async () => {
-    const { command } = fakeCommand({ stdin: undefined });
-    const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: () => command }) });
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ createSession: () => fakeCommand({ autoExit: false, stdin: undefined }).command }),
+    });
     const client = createSpritesSandboxClient({ sdk });
     const host = createSpriteMachineHost({ sdk, client });
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });

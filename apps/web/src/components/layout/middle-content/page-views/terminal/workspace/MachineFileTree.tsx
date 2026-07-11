@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { SidebarLoading, SidebarNotice } from '../tabs/tab-states';
 import { readErrorBody } from '../tabs/checkout-states';
 
 export interface MachineFileTreeProps {
@@ -191,28 +192,21 @@ function DirectoryChildren({ path, ctx }: { path: string; ctx: TreeContext }) {
   }, [needsLoad, loadDirectory, path]);
 
   if (state === undefined || state.status === 'loading') {
-    return <div className="px-2 py-1 text-xs text-muted-foreground">Loading…</div>;
+    return <SidebarLoading message="Loading files…" />;
   }
   if (state.status === 'error') {
     return (
-      <div className="flex items-center gap-1 px-2 py-1 text-xs text-destructive">
-        <span className="min-w-0 truncate" title={state.message}>
-          {state.message}
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-5 shrink-0 px-1.5 text-xs"
-          onClick={() => void loadDirectory(path)}
-        >
-          Retry
-        </Button>
-      </div>
+      <SidebarNotice
+        testId="file-tree-error"
+        tone="destructive"
+        title={state.message}
+        actionLabel="Retry"
+        onAction={() => void loadDirectory(path)}
+      />
     );
   }
   if (state.entries.length === 0) {
-    return <div className="px-2 py-1 text-xs text-muted-foreground">Empty</div>;
+    return <SidebarNotice title="Empty folder" />;
   }
   return (
     <>

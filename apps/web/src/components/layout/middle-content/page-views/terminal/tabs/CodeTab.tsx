@@ -29,12 +29,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { FileCode2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import MachineFileTree from '../workspace/MachineFileTree';
 import CodeFilePane from './CodeFilePane';
+import TabSidebar from './TabSidebar';
+import { PaneNotice, SidebarLoading, SidebarNotice } from './tab-states';
 import {
   CHECKOUT_ABSENT_COPY,
   asAbsentReason,
@@ -85,12 +85,37 @@ export default function CodeTab({ machineId }: CodeTabProps) {
   }, []);
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Code</span>
-        </div>
-        <ScrollArea className="flex-1">
+    <TabSidebar
+      title="Code"
+      pane={
+        branch && path ? (
+          // Deliberately UNKEYED. Keying by path would tear down and recreate
+          // Monaco on every file click; the pane doesn't need it, because it
+          // refuses to render a state belonging to a different file. Keying by
+          // branch would be dead code: a branch switch clears `path` in the same
+          // update, so the pane unmounts anyway.
+          <CodeFilePane
+            machineId={machineId}
+            projectName={branch.projectName}
+            branchName={branch.branchName}
+            path={path}
+          />
+        ) : (
+          <PaneNotice
+            icon={<FileCode2 className="size-6 text-muted-foreground" />}
+            title={branch ? 'No file open' : 'No branch selected'}
+            description={
+              branch ? 'Select a file to view its contents.' : 'Select a branch to browse its checkout.'
+            }
+          />
+        )
+      }
+    >
+      {({ close }) => (
+        <>
+          {/* Picking a BRANCH must not close the sheet on mobile — the file the
+              user is actually after is one level further in, in the tree that
+              picking the branch just revealed. Only opening a file closes it. */}
           <MachineTree machineId={machineId} onSelectNode={onSelectNode} />
           {branch && (
             <div className="border-t border-border">
@@ -109,42 +134,17 @@ export default function CodeTab({ machineId }: CodeTabProps) {
                 machineId={machineId}
                 projectName={branch.projectName}
                 branchName={branch.branchName}
-                onSelectFile={onSelectFile}
+                onSelectFile={(next) => {
+                  onSelectFile(next);
+                  close();
+                }}
                 selectedPath={path}
               />
             </div>
           )}
-        </ScrollArea>
-      </aside>
-      <div className="min-w-0 flex-1">
-        {branch && path ? (
-          // Deliberately UNKEYED. Keying by path would tear down and recreate
-          // Monaco on every file click; the pane doesn't need it, because it
-          // refuses to render a state belonging to a different file. Keying by
-          // branch would be dead code: a branch switch clears `path` in the same
-          // update, so the pane unmounts anyway.
-          <CodeFilePane
-            machineId={machineId}
-            projectName={branch.projectName}
-            branchName={branch.branchName}
-            path={path}
-          />
-        ) : (
-          <CodeTabPlaceholder hasBranch={branch !== null} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CodeTabPlaceholder({ hasBranch }: { hasBranch: boolean }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <FileCode2 className="size-6 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">
-        {hasBranch ? 'Select a file to view its contents.' : 'Select a branch to browse its checkout.'}
-      </p>
-    </div>
+        </>
+      )}
+    </TabSidebar>
   );
 }
 
@@ -232,7 +232,7 @@ function BranchFiles({
   }, [machineId, projectName, branchName, attempt]);
 
   if (state.status === 'loading') {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">Opening checkout…</div>;
+    return <SidebarLoading message="Opening checkout…" />;
   }
 
   const retry = () => setAttempt((a) => a + 1);
@@ -240,20 +240,25 @@ function BranchFiles({
   if (state.status === 'absent') {
     const copy = CHECKOUT_ABSENT_COPY[state.reason];
     return (
-      <SidebarNotice testId="checkout-absent" actionLabel="Check again" onAction={retry}>
-        <p className="text-xs font-medium">{copy.title}</p>
-        <p className="text-xs text-muted-foreground">{copy.description}</p>
-      </SidebarNotice>
+      <SidebarNotice
+        testId="checkout-absent"
+        title={copy.title}
+        description={copy.description}
+        actionLabel="Check again"
+        onAction={retry}
+      />
     );
   }
 
   if (state.status === 'error') {
     return (
-      <SidebarNotice testId="checkout-error" actionLabel="Retry" onAction={retry}>
-        <p className="min-w-0 truncate text-xs text-destructive" title={state.message}>
-          {state.message}
-        </p>
-      </SidebarNotice>
+      <SidebarNotice
+        testId="checkout-error"
+        tone="destructive"
+        title={state.message}
+        actionLabel="Retry"
+        onAction={retry}
+      />
     );
   }
 
@@ -265,29 +270,5 @@ function BranchFiles({
       onSelectFile={onSelectFile}
       selectedPath={selectedPath}
     />
-  );
-}
-
-/** A sidebar row explaining why there are no files to show, plus the one action
- * that could change that. Shared by the absent and error states — they differ in
- * their words, not their shape. */
-function SidebarNotice({
-  testId,
-  actionLabel,
-  onAction,
-  children,
-}: {
-  testId: string;
-  actionLabel: string;
-  onAction(): void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-start gap-1 px-3 py-2" data-testid={testId}>
-      {children}
-      <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={onAction}>
-        {actionLabel}
-      </Button>
-    </div>
   );
 }
