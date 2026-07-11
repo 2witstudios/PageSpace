@@ -209,7 +209,10 @@ function BranchDiffPane({
           <Button
             variant="ghost"
             size="icon"
-            className="size-8"
+            // shrink-0: its sibling is a scrolling toggle in a min-w-0 row, so
+            // without this the flex layout would squeeze the button instead of
+            // letting the toggle scroll.
+            className="size-8 shrink-0"
             onClick={refresh}
             disabled={refreshing}
             title="Refresh diff"

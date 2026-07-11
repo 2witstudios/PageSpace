@@ -18,6 +18,13 @@
  * branch, a file) and must NOT when a click merely expands a tree row — only the
  * caller knows which of its clicks is which. On desktop `close` is a no-op, so
  * callers wire it unconditionally.
+ *
+ * A closed Sheet renders nothing, so on a narrow viewport the sidebar body only
+ * mounts once the user opens it — the tree's fetches are deferred until then, and
+ * a re-open re-fetches and starts from a collapsed tree. That's the intended
+ * trade: force-mounting it to hold expansion state would fire every tab's tree
+ * requests on a phone whether or not the sidebar was ever opened, and a refetch on
+ * open is the right default anyway for a live working tree.
  */
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
