@@ -42,6 +42,7 @@ import { AlertTriangle, FileQuestion, RefreshCw } from 'lucide-react';
 import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/language-detection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Button } from '@/components/ui/button';
+import { PaneLoading, PaneNotice } from './tab-states';
 import { CHECKOUT_ABSENT_COPY, asAbsentReason, readErrorBody, type CheckoutAbsentReason } from './checkout-states';
 
 // Monaco pulls the editor bundle + `window`, so it must never SSR — matches
@@ -206,28 +207,30 @@ export default function CodeFilePane({ machineId, projectName, branchName, path 
         </div>
       </div>
       <div className="min-h-0 flex-1">
-        {current.status === 'loading' && (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Loading file…</div>
-        )}
+        {current.status === 'loading' && <PaneLoading message="Loading file…" />}
         {current.status === 'binary' && (
-          <PaneMessage testId="binary-file">
-            <FileQuestion className="size-6 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">{fileName} is a binary file — no preview available.</p>
-          </PaneMessage>
+          <PaneNotice
+            testId="binary-file"
+            icon={<FileQuestion className="size-6 text-muted-foreground" />}
+            title={`${fileName} is a binary file`}
+            description="No preview available."
+          />
         )}
         {current.status === 'absent' && (
-          <PaneMessage testId="checkout-absent-pane">
-            <p className="text-sm font-medium">{CHECKOUT_ABSENT_COPY[current.reason].title}</p>
-            <p className="text-sm text-muted-foreground">{CHECKOUT_ABSENT_COPY[current.reason].description}</p>
-          </PaneMessage>
+          <PaneNotice
+            testId="checkout-absent-pane"
+            title={CHECKOUT_ABSENT_COPY[current.reason].title}
+            description={CHECKOUT_ABSENT_COPY[current.reason].description}
+          />
         )}
         {current.status === 'error' && (
-          <PaneMessage testId="file-error">
-            <p className="max-w-md text-sm text-destructive">{current.message}</p>
-            <Button type="button" variant="outline" size="sm" onClick={reload}>
-              Retry
-            </Button>
-          </PaneMessage>
+          <PaneNotice
+            testId="file-error"
+            tone="destructive"
+            title={current.message}
+            actionLabel="Retry"
+            onAction={reload}
+          />
         )}
         {current.status === 'loaded' && (
           <MonacoEditor
@@ -238,14 +241,6 @@ export default function CodeFilePane({ machineId, projectName, branchName, path 
           />
         )}
       </div>
-    </div>
-  );
-}
-
-function PaneMessage({ testId, children }: { testId: string; children: React.ReactNode }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid={testId}>
-      {children}
     </div>
   );
 }

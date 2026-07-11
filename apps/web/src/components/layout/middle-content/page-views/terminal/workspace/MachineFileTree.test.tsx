@@ -271,9 +271,9 @@ describe('MachineFileTree', () => {
 
     assert({
       given: 'an expanded directory whose listing has not resolved yet',
-      should: 'render a loading row under that directory',
-      actual: screen.getByText('Loading…').textContent,
-      expected: 'Loading…',
+      should: 'render the shared sidebar loading row under that directory',
+      actual: screen.getByText('Loading files…').textContent,
+      expected: 'Loading files…',
     });
   });
 
@@ -338,13 +338,13 @@ describe('MachineFileTree', () => {
     renderTree();
 
     await expandFolder('src');
-    const empty = await waitFor(() => screen.getByText('Empty'));
+    const empty = await waitFor(() => screen.getByText('Empty folder'));
 
     assert({
       given: 'an expanded directory with no entries',
-      should: 'render an "Empty" row instead of nothing',
+      should: 'render an explicit empty row instead of nothing',
       actual: empty.textContent,
-      expected: 'Empty',
+      expected: 'Empty folder',
     });
   });
 });

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { Loader2, Trash2, TriangleAlert } from 'lucide-react';
+import { Trash2, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { del as apiDelete } from '@/lib/auth/auth-fetch';
 import { useMachineSettings } from '@/hooks/useMachineSettings';
+import { PaneLoading, PaneNotice, Spinner } from './tab-states';
 
 /**
  * The Machine page's Settings tab: a full-width form over the machine-settings
@@ -85,27 +86,24 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   }
 
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <PaneLoading message="Loading settings…" />;
   }
 
   if (!settings) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3">
-        <p className="text-sm text-muted-foreground">Could not load machine settings.</p>
-        <Button type="button" variant="outline" size="sm" onClick={reload}>
-          Retry
-        </Button>
-      </div>
+      <PaneNotice
+        tone="destructive"
+        title="Could not load machine settings"
+        description="The Machine may be starting up, or the request failed."
+        actionLabel="Retry"
+        onAction={reload}
+      />
     );
   }
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
+      <div className="mx-auto flex max-w-2xl flex-col gap-6 p-4 sm:p-6">
         {/* Form-level, not per-card: any field or toggle below can be the one
             saving. An in-flight save is SURFACED, never ENFORCED — disabling the
             controls would swallow the very click that triggered the save (a
@@ -114,7 +112,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
         <div className="flex h-4 items-center justify-end">
           {pendingSaves > 0 && (
             <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Spinner className="size-3.5" />
               Saving…
             </span>
           )}
@@ -226,7 +224,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
                     disabled={deleting}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
-                    {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {deleting && <Spinner className="size-4 text-current" />}
                     {deleting ? 'Deleting…' : 'Delete Machine'}
                   </AlertDialogAction>
                 </AlertDialogFooter>
