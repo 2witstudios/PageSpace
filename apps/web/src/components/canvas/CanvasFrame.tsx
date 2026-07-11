@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme } from 'next-themes';
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
@@ -46,6 +47,8 @@ export const CANVAS_IFRAME_SANDBOX = 'allow-scripts allow-popups allow-popups-to
 export function CanvasFrame({ html, title }: CanvasFrameProps) {
   const nonce = useNonce();
   const [previewHtml, setPreviewHtml] = useState(html);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const { resolvedTheme } = useTheme();
 
   useEffect(() => {
     const refs = extractDashboardFileViewRefs(html);
@@ -90,13 +93,46 @@ export function CanvasFrame({ html, title }: CanvasFrameProps) {
   // baseTarget '_blank': inside the sandboxed frame an ordinary <a href> (no
   // target) would navigate the frame itself — and many sites refuse framing —
   // so default links to a new tab (works with the iframe's allow-popups).
+  // injectThemeBridge: true injects a script that listens for theme messages
+  // so the canvas iframe's dark/light state matches the app's current theme.
   const srcDoc = useMemo(
-    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', nonce }),
+    () => renderCanvasDocument({ html: previewHtml, title, baseTarget: '_blank', injectThemeBridge: true, nonce }),
     [previewHtml, title, nonce],
   );
 
+  // Send the current theme to the canvas iframe whenever it changes or the
+  // iframe content reloads (srcDoc change). postMessage works across opaque
+  // origins (sandbox without allow-same-origin), so the iframe's theme bridge
+  // can toggle a `dark` class to match the app. If the iframe hasn't loaded its
+  // bridge script yet, the message is harmlessly dropped — the iframe will send
+  // a 'pagespace-theme-request' when ready (see handler below).
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe?.contentWindow || !resolvedTheme) return;
+    iframe.contentWindow.postMessage(
+      { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
+      '*',
+    );
+  }, [resolvedTheme, srcDoc]);
+
+  // Respond to the iframe's initial theme request, which fires on load before
+  // the resolvedTheme effect above catches it.
+  useEffect(() => {
+    function handleMessage(e: MessageEvent) {
+      if (e.source !== iframeRef.current?.contentWindow) return;
+      if (e.data?.type !== 'pagespace-theme-request') return;
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: 'pagespace-theme', isDark: resolvedTheme === 'dark' },
+        '*',
+      );
+    }
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [resolvedTheme]);
+
   return (
     <iframe
+      ref={iframeRef}
       srcDoc={srcDoc}
       sandbox={CANVAS_IFRAME_SANDBOX}
       referrerPolicy="no-referrer"
