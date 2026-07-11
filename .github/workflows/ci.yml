@@ -68,16 +68,19 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bunx turbo run test:coverage --filter='!@pagespace/processor' --filter='!web'
 
-      # apps/web runs its full suite for correctness but WITHOUT v8 coverage
-      # instrumentation. The app executes ~1500 source modules across its tests;
-      # the v8 coverage provider's end-of-run source-map remap of that graph has
-      # a live set >12 GB (still growing at the cap — GC frees nothing), which
-      # OOMs the 16 GB runner regardless of --max-old-space-size. The istanbul
-      # provider fits memory but its instrumentation breaks ~170 of these test
-      # files. So web is gated on test correctness here: every web test still
-      # runs and must pass (including the auth decision-branch tests in
-      # src/lib/auth/__tests__). Only the coverage-% computation is skipped in
-      # CI; run it locally with `bun run --filter web test:coverage`.
+      # apps/web runs its full suite for correctness but WITHOUT v8 coverage.
+      # The auth-barrel refactor made 285 test files load real modules instead of
+      # a wholesale barrel mock, growing the executed graph to ~1500 modules. Two
+      # consequences on the 16 GB runner: (1) the v8 coverage provider's
+      # end-of-run source-map remap of that graph has a live set >12 GB (still
+      # growing at the cap — GC frees nothing), unfixable by any
+      # --max-old-space-size, and istanbul fits memory but breaks ~170 of these
+      # test files; (2) even the plain test run's main process needs >4 GB to
+      # aggregate 833 files' results (the `test` script bumps it to 8 GB). So web
+      # is gated on test correctness here — every web test runs and must pass,
+      # including the auth decision-branch tests in src/lib/auth/__tests__. Only
+      # the coverage-% computation is skipped in CI; run it locally with
+      # `bun run --filter web test:coverage`.
       - name: Run web tests (Node 24, no coverage — see note above)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test

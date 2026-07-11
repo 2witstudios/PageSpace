@@ -11,6 +11,14 @@ export default defineConfig({
     css: true,
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
+    // Pin each fork worker's heap. The `test` script raises the *main* process's
+    // heap (it aggregates 833 files' results and needs >4 GB), and that env
+    // value would otherwise be inherited by the forks too — where V8 lazily
+    // grows to whatever ceiling it is given and one fork balloons and OOMs.
+    // execArgv overrides the inherited limit for forks, holding them at the
+    // 4 GB where they already run cleanly, so main and workers are decoupled.
+    pool: 'forks',
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=4096'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
