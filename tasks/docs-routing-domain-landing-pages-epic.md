@@ -107,7 +107,7 @@ Full review of the Phase 1 diff (schema, resolver, mirror pipeline, API, UI) bef
 
 **Requirements**:
 - Given the mirror-pipeline change is the highest-risk part, should verify a domain WITHOUT an override still produces an identical mirror to today (no regression for the common case).
-- Given the new FK columns reference `pages.id`, should verify page deletion/trashing correctly clears or falls back the override (via `onDelete: 'set null'` plus the API-layer validation), not left dangling.
+- Given the new FK columns reference `pages.id`, should verify the override never points at a dead page: hard deletion is handled by `onDelete: 'set null'` on the FK itself, but trashing is a soft delete that does NOT touch the FK — that case relies entirely on the resolver-level fallback (`resolveBackfillRootCopy` treating a trashed/unpublished override target as absent) and API-layer validation rejecting trashed pages on write, so both paths need explicit test coverage, not just the hard-delete one.
 - Given this touches billing-adjacent surface area (custom domains already have a plan-tier `limit`), should flag to product/billing whether per-domain overrides should also be tier-gated, without blocking this PR on that decision.
 - Given tests should exist for the resolver and API validation, should verify coverage for: override set, override unset, override page later trashed, override page from a different drive (rejected).
 

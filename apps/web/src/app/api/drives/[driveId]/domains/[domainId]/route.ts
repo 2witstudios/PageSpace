@@ -75,13 +75,37 @@ export async function PATCH(
 
     let updated: typeof customDomains.$inferSelect | undefined;
 
-    if (body.data.isPrimary) {
-      // Only a live host can be primary — the primary domain is the canonical
-      // SEO host and the link shown on published pages, so it must actually serve.
-      if (target.status !== 'active') {
-        return NextResponse.json({ error: 'Only an active domain can be set as primary' }, { status: 400 });
+    // Validate the ENTIRE payload before any mutation runs. A mixed payload
+    // (e.g. isPrimary + an invalid publishLandingPageId) must not partially
+    // apply — checking each field only inside its own mutation block let the
+    // isPrimary change commit before the landing-page validation could reject
+    // the request, so a 400 response could still carry a real, persisted
+    // primary-domain change.
+    if (body.data.isPrimary && target.status !== 'active') {
+      return NextResponse.json({ error: 'Only an active domain can be set as primary' }, { status: 400 });
+    }
+    // Same gate as the drive-wide 404 page (packages/lib/src/services/drive-service.ts):
+    // must exist, belong to this drive, be non-trashed, and be a CANVAS page —
+    // the override is rendered through the canvas publish pipeline like the
+    // drive-wide default it's overriding.
+    if (typeof body.data.publishLandingPageId === 'string') {
+      if (!(await isValidDriveNotFoundPage(driveId, body.data.publishLandingPageId))) {
+        return NextResponse.json(
+          { error: 'Landing page must be a non-trashed Canvas page in this drive' },
+          { status: 400 },
+        );
       }
+    }
+    if (typeof body.data.publishNotFoundPageId === 'string') {
+      if (!(await isValidDriveNotFoundPage(driveId, body.data.publishNotFoundPageId))) {
+        return NextResponse.json(
+          { error: '404 page must be a non-trashed Canvas page in this drive' },
+          { status: 400 },
+        );
+      }
+    }
 
+    if (body.data.isPrimary) {
       // Clear-then-set in a transaction so the drive always has exactly one primary
       // (also guarded by the partial unique index custom_domains_primary_per_drive).
       [updated] = await db.transaction(async (tx) => {
@@ -128,27 +152,6 @@ export async function PATCH(
     }
 
     if (body.data.publishLandingPageId !== undefined || body.data.publishNotFoundPageId !== undefined) {
-      // Same gate as the drive-wide 404 page (packages/lib/src/services/drive-service.ts):
-      // must exist, belong to this drive, be non-trashed, and be a CANVAS page —
-      // the override is rendered through the canvas publish pipeline like the
-      // drive-wide default it's overriding.
-      if (typeof body.data.publishLandingPageId === 'string') {
-        if (!(await isValidDriveNotFoundPage(driveId, body.data.publishLandingPageId))) {
-          return NextResponse.json(
-            { error: 'Landing page must be a non-trashed Canvas page in this drive' },
-            { status: 400 },
-          );
-        }
-      }
-      if (typeof body.data.publishNotFoundPageId === 'string') {
-        if (!(await isValidDriveNotFoundPage(driveId, body.data.publishNotFoundPageId))) {
-          return NextResponse.json(
-            { error: '404 page must be a non-trashed Canvas page in this drive' },
-            { status: 400 },
-          );
-        }
-      }
-
       [updated] = await db
         .update(customDomains)
         .set({
@@ -160,14 +163,21 @@ export async function PATCH(
 
       // Re-mirror just this host so the new override (or its clearing) takes
       // effect immediately rather than waiting on the next unrelated publish.
-      // Best-effort: the DB update has already committed either way.
-      mirrorDriveToCustomHost(driveId, target.hostname, renderDomainNotFoundOverride).catch((err) => {
+      // Awaited (like the isPrimary re-render above) so the response reflects
+      // reality — the domain is actually serving the new override, or the
+      // drive default it fell back to, before we report success. Best-effort
+      // by contract: a storage hiccup here is logged and swallowed rather
+      // than failing the request — the DB update already committed either
+      // way, and the next unrelated publish/backfill re-resolves it.
+      try {
+        await mirrorDriveToCustomHost(driveId, target.hostname, renderDomainNotFoundOverride);
+      } catch (err) {
         loggers.api.warn('Failed to re-mirror host after landing/404 override change', {
           driveId,
           hostname: target.hostname,
           error: err instanceof Error ? err.message : String(err),
         });
-      });
+      }
 
       auditRequest(request, {
         eventType: 'data.write',

@@ -278,6 +278,21 @@ describe('PATCH /api/drives/[driveId]/domains/[domainId] (set primary)', () => {
     const res = await PATCH(makePatchReq(), ctx());
     expect(res.status).toBe(500);
   });
+
+  it('rejects a mixed payload without partially applying the primary-domain change', async () => {
+    // isPrimary is valid on its own (domain is active), but the accompanying
+    // publishLandingPageId is not — the whole request must be rejected before
+    // either mutation runs, not just the invalid half.
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    isValidDriveNotFoundPage.mockResolvedValue(false);
+
+    const res = await PATCH(makePatchReq({ isPrimary: true, publishLandingPageId: 'invalid-page-id' }), ctx());
+
+    expect(res.status).toBe(400);
+    expect(dbTransaction).not.toHaveBeenCalled();
+    expect(dbUpdate).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe('PATCH /api/drives/[driveId]/domains/[domainId] (landing/404 page overrides)', () => {
