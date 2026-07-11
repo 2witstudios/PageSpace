@@ -12,7 +12,6 @@ import {
   Github,
   GitBranch,
   Plus,
-  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -43,6 +42,7 @@ import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
 import { useProviders } from '@/hooks/useIntegrations';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
+import RemoveButton from './RemoveButton';
 import EmptyState from './EmptyState';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
@@ -87,6 +87,11 @@ function TreeRow({
   onRemove?(): void;
   removeTitle?: string;
 }) {
+  // With no onSelect action, clicking the label falls back to expand/collapse
+  // (matching the old Navigator's whole-row-click affordance) rather than being
+  // a dead, disabled button. When onSelect IS provided it wins, so selection
+  // stays decoupled from expansion for callers that use it.
+  const onLabelClick = onSelect ?? onToggleExpand;
   return (
     <div className="group flex items-center gap-1 rounded-sm py-1 pr-1 hover:bg-accent/50">
       {onToggleExpand ? (
@@ -104,27 +109,14 @@ function TreeRow({
       )}
       <button
         type="button"
-        onClick={onSelect}
-        disabled={!onSelect}
-        className={cn('flex flex-1 items-center gap-1 text-left', !onSelect && 'cursor-default')}
+        onClick={onLabelClick}
+        disabled={!onLabelClick}
+        className={cn('flex flex-1 items-center gap-1 text-left', !onLabelClick && 'cursor-default')}
       >
         {icon}
         <span className={cn('truncate', labelClassName)}>{label}</span>
       </button>
-      {onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          // Hover-reveal, but kept in the tab order and revealed on keyboard
-          // focus (opacity, not visibility) so keyboard users can reach it —
-          // same chrome-free reveal pattern as TerminalPanes' pane controls.
-          className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-          title={removeTitle}
-          aria-label={removeTitle}
-        >
-          <X className="mx-auto size-3.5" />
-        </button>
-      )}
+      {onRemove && removeTitle && <RemoveButton onClick={onRemove} label={removeTitle} />}
     </div>
   );
 }

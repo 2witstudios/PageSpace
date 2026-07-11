@@ -3,7 +3,7 @@
 import { useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
-import { Plus, TerminalSquare, X } from 'lucide-react';
+import { Plus, TerminalSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -28,6 +28,7 @@ import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/servic
 import { useTerminalWorkspaceStore, type OpenTerminalScope } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import ConfirmRemoveDialog from '../workspace/ConfirmRemoveDialog';
+import RemoveButton from '../workspace/RemoveButton';
 
 const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
 
@@ -159,17 +160,7 @@ function TerminalList({
               {terminal.agentType}
             </span>
           </button>
-          <button
-            type="button"
-            onClick={() => setPendingRemove(terminal.name)}
-            // Hover-reveal, but kept in the tab order and revealed on keyboard
-            // focus (opacity, not visibility) so keyboard users can reach it.
-            className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-            title="Remove terminal"
-            aria-label={`Remove terminal ${terminal.name}`}
-          >
-            <X className="mx-auto size-3.5" />
-          </button>
+          <RemoveButton onClick={() => setPendingRemove(terminal.name)} label={`Remove terminal ${terminal.name}`} />
         </div>
       ))}
       <ConfirmRemoveDialog
