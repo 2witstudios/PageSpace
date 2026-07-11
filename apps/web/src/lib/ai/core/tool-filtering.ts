@@ -118,6 +118,10 @@ export const WRITE_TOOLS = new Set([
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 
+// Image-generation tools (a runtime composer toggle, like web search — filtered
+// independently of the saved per-agent allow-list).
+const IMAGE_GEN_TOOLS = new Set(['generate_image']);
+
 // Presence of any of these in a request's tool set means the agent already has
 // a full git/gh CLI toolkit — used to detect overlap with the GitHub OAuth
 // integration tools below. Sourced from sandbox-git-tools.ts (single source of
@@ -192,6 +196,28 @@ export function isWebSearchTool(toolName: string): boolean {
  */
 export function isAccountLevelOnlyTool(toolName: string): boolean {
   return ACCOUNT_LEVEL_ONLY_TOOLS.has(toolName);
+}
+
+/**
+ * Check if a tool is an image-generation tool
+ */
+export function isImageGenTool(toolName: string): boolean {
+  return IMAGE_GEN_TOOLS.has(toolName);
+}
+
+/**
+ * Filter tools based on the image-generation toggle.
+ * Returns all tools when enabled, or excludes generate_image when disabled.
+ */
+export function filterToolsForImageGen<T>(
+  tools: Record<string, T>,
+  imageGenEnabled: boolean
+): Record<string, T> {
+  if (imageGenEnabled) return tools;
+
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !isImageGenTool(name))
+  );
 }
 
 /**
