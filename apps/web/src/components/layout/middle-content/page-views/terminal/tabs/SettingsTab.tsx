@@ -61,15 +61,23 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   const [nameDraft, setNameDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
 
-  // Only the FIRST load blocks on a spinner. `reloadToken` refetches (retry after
-  // a load error, resync after a failed save) revalidate in place, so a failed
-  // toggle doesn't flash the whole form away and back.
-  const hasLoaded = useRef(false);
+  // Which machine's settings we currently hold. A `reloadToken` refetch of the
+  // SAME machine (retry after a load error, resync after a failed save)
+  // revalidates in place, so a failed toggle doesn't flash the whole form away
+  // and back — but a different `machineId` must block on the spinner rather than
+  // render the previous machine's settings as if they were this one's.
+  const loadedFor = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    if (!hasLoaded.current) setLoading(true);
+    if (loadedFor.current !== machineId) {
+      // Drop the previous machine's settings before loading a different one —
+      // otherwise a FAILED load would fall through to rendering the old machine's
+      // name/toggles under the new machine's identity.
+      setSettings(null);
+      setLoading(true);
+    }
     (async () => {
       try {
         const response = await fetchWithAuth(
@@ -78,7 +86,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
         if (!response.ok) throw new Error('Failed to load machine settings');
         const json = (await response.json()) as { settings: MachineSettings };
         if (!cancelled) {
-          hasLoaded.current = true;
+          loadedFor.current = machineId;
           setSettings(json.settings);
           setNameDraft(json.settings.name);
           setDescriptionDraft(json.settings.description ?? '');

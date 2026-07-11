@@ -202,6 +202,28 @@ describe('SettingsTab', () => {
     }));
   });
 
+  test('switching machineId never renders the previous machine\'s settings', async () => {
+    fetchWithAuth
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: baseSettings }) })
+      // The second machine fails to load — the first machine's settings must NOT
+      // linger on screen under the new machine's identity.
+      .mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+    const { rerender } = render(<SettingsTab machineId="m1" />);
+    await screen.findByLabelText('Name');
+
+    rerender(<SettingsTab machineId="m2" />);
+
+    await waitFor(() => assert({
+      given: 'a switch to a machine whose settings fail to load',
+      should: 'show the error state, not the previous machine\'s stale form',
+      actual: {
+        staleForm: screen.queryByLabelText('Name') !== null,
+        errored: screen.queryByRole('button', { name: /retry/i }) !== null,
+      },
+      expected: { staleForm: false, errored: true },
+    }));
+  });
+
   test('a first-load failure shows the error state and Retry refetches', async () => {
     fetchWithAuth
       .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
