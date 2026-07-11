@@ -24,26 +24,23 @@ export type MachineDiffFilesResponse =
     };
 
 /**
- * One SIDE of a file's diff — `{ content, truncated }`, NOT a bare string.
+ * One file's original/modified pair for a scope.
  *
- * This ALIASES the server's own return type rather than re-declaring the shape,
- * on purpose: the first cut of this hook hand-copied a `string | null` side, the
- * fetcher's `as Promise<T>` cast laundered it past the compiler, and every file
- * expansion handed Monaco an object. Aliasing the source of truth means a future
- * server-side change to a side's shape breaks THIS file at typecheck instead of
- * silently at runtime. (`import type` is erased at build — no server code or
- * node dependency reaches the client bundle.)
+ * Each SIDE is the server's own `MachineDiffSideContent` — `{ content, truncated }`,
+ * NOT a bare string — imported rather than re-declared ON PURPOSE. The first cut of
+ * this hook hand-copied a `string | null` side, the fetcher's `as Promise<T>` cast
+ * laundered it past the compiler, and every file expansion handed Monaco an object.
+ * Importing the source of truth means a future server-side change to a side's shape
+ * breaks THIS file at typecheck instead of silently at runtime. (`import type` is
+ * erased at build — no server code or node dependency reaches the client bundle.)
  *
  * The `truncated` flag has to survive to the renderer: a git-blob side is cut at
- * `runGitInSandbox`'s 256 KB stdout cap and a working-tree side at 2 MB, and
- * diffing a cut-off side against a whole one paints the file's untouched tail as
+ * `runGitInSandbox`'s 256 KB stdout cap and a working-tree side at 2 MB, and diffing
+ * a cut-off side against a whole one paints the file's untouched tail as
  * removed/added lines.
- */
-export type MachineDiffSide = MachineDiffSideContent;
-
-/**
- * One file's original/modified pair for a scope. A side is `null` when the file
- * doesn't exist there (an added file's original, a deleted file's modified).
+ *
+ * A side is `null` when the file doesn't exist there (an added file's original, a
+ * deleted file's modified).
  */
 export type MachineDiffPairResponse =
   | { notApplicable: true }
@@ -51,8 +48,8 @@ export type MachineDiffPairResponse =
       notApplicable: false;
       scope: MachineDiffScope;
       path: string;
-      original: MachineDiffSide | null;
-      modified: MachineDiffSide | null;
+      original: MachineDiffSideContent | null;
+      modified: MachineDiffSideContent | null;
     };
 
 const MACHINE_DIFF_KEY_PREFIX = '/api/machines/diff?';

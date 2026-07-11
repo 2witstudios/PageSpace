@@ -54,7 +54,7 @@ interface DiffFileCardProps {
  */
 export default function DiffFileCard({ machineId, projectName, branchName, scope, file }: DiffFileCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const { data, error, isLoading } = useMachineDiffPair(
+  const { data, error } = useMachineDiffPair(
     machineId,
     projectName,
     branchName,
@@ -96,37 +96,38 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
 
       {expanded && (
         <div id={bodyId} className="border-t border-border">
-          <DiffBody path={file.path} data={data} error={error} isLoading={isLoading} />
+          <DiffBody path={file.path} data={data} error={error} />
         </div>
       )}
     </div>
   );
 }
 
-const NOTE_CLASS = 'px-3 py-4 text-xs text-muted-foreground';
+const NOTE_CLASS = 'px-3 py-4 text-xs';
 
 /** The expanded card's body — every state the pair can be in, and nothing silently blank. */
 function DiffBody({
   path,
   data,
   error,
-  isLoading,
 }: {
   path: string;
   data: MachineDiffPairResponse | undefined;
   error: Error | undefined;
-  isLoading: boolean;
 }) {
-  if (isLoading) return <div className={NOTE_CLASS}>Loading diff…</div>;
-  if (error) return <div className="px-3 py-4 text-xs text-destructive">Failed to load diff: {error.message}</div>;
-  if (!data) return <div className={NOTE_CLASS}>Loading diff…</div>;
+  const note = cn(NOTE_CLASS, 'text-muted-foreground');
+
+  if (error) return <div className={cn(NOTE_CLASS, 'text-destructive')}>Failed to load diff: {error.message}</div>;
+  // SWR only leaves `data` undefined while the request is in flight, so this IS
+  // the loading state — a separate isLoading branch said the same thing twice.
+  if (!data) return <div className={note}>Loading diff…</div>;
   if (data.notApplicable) {
     // Near-unreachable (the toggle doesn't offer a not-applicable scope), but an
     // expanded card with a blank body would be worse than saying so.
-    return <div className={NOTE_CLASS}>This scope doesn&apos;t apply on this branch.</div>;
+    return <div className={note}>This scope doesn&apos;t apply on this branch.</div>;
   }
   if (looksBinary(data.original) || looksBinary(data.modified)) {
-    return <div className={NOTE_CLASS}>Binary file — no text diff to show.</div>;
+    return <div className={note}>Binary file — no text diff to show.</div>;
   }
 
   const truncated = data.original?.truncated || data.modified?.truncated;

@@ -72,12 +72,28 @@ interface MachineTreeProps {
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
 }
 
+/**
+ * The node's identity as a string. A `switch` over `level`, so a fourth level can't
+ * be added without the compiler pointing here — the pairwise comparison this
+ * replaced needed a second `b.level === …` check on every branch purely to
+ * re-narrow the type, which read like a real (and confusing) extra condition.
+ * NUL-joined for the same reason the Diff tab's React keys are: these names can
+ * contain '/' and ':'.
+ */
+function nodeKey(node: MachineTreeNode): string {
+  switch (node.level) {
+    case 'machine':
+      return 'machine';
+    case 'project':
+      return `project\u0000${node.projectName}`;
+    case 'branch':
+      return `branch\u0000${node.projectName}\u0000${node.branchName}`;
+  }
+}
+
 /** Do two tree nodes address the same thing? */
 export function isSameMachineTreeNode(a: MachineTreeNode | null | undefined, b: MachineTreeNode | null | undefined): boolean {
-  if (!a || !b || a.level !== b.level) return false;
-  if (a.level === 'machine') return true;
-  if (a.level === 'project') return b.level === 'project' && a.projectName === b.projectName;
-  return b.level === 'branch' && a.projectName === b.projectName && a.branchName === b.branchName;
+  return a != null && b != null && nodeKey(a) === nodeKey(b);
 }
 
 /** Presentation-only Machine → Project → Branch tree, reusable across any tab that needs this navigation shape (Terminal, Diff, …). Has no opinion on what a row click does — callers own that via `onSelectNode`. */

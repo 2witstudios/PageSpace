@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { useMachineDiffFiles, machineDiffKeyFilter } from '@/hooks/useMachineDiff';
+import { useMachineDiffFiles, machineDiffKeyFilter, type MachineDiffFilesResponse } from '@/hooks/useMachineDiff';
 import { isMachineDiffScope, type MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import DiffFileCard from './DiffFileCard';
@@ -212,22 +212,23 @@ function BranchDiffPane({
       {!probeResolved ? (
         <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>
       ) : (
-        availableScopes.map((option) => (
-          // Radix renders only the ACTIVE scope's content, so this is one list,
-          // not three — it just gives each trigger a real panel to control.
-          <TabsContent key={option} value={option} className="min-h-0 flex-1">
-            <ScrollArea className="h-full">
-              <DiffFileList
-                machineId={machineId}
-                projectName={projectName}
-                branchName={branchName}
-                scope={active}
-                scopesApplicable={scopesApplicable}
-                list={list}
-              />
-            </ScrollArea>
-          </TabsContent>
-        ))
+        // ONE panel, for the active scope. Radix unmounts inactive TabsContent, so
+        // rendering one per scope produced identical DOM. It exists to give the
+        // active trigger a real tabpanel to control — the whole reason Tabs wraps
+        // the list rather than just the triggers.
+        <TabsContent value={active} className="min-h-0 flex-1">
+          <ScrollArea className="h-full">
+            <DiffFileList
+              machineId={machineId}
+              projectName={projectName}
+              branchName={branchName}
+              scope={active}
+              scopesApplicable={scopesApplicable}
+              data={list.data}
+              error={list.error}
+            />
+          </ScrollArea>
+        </TabsContent>
       )}
     </Tabs>
   );
@@ -239,23 +240,23 @@ function DiffFileList({
   branchName,
   scope,
   scopesApplicable,
-  list,
+  data,
+  error,
 }: {
   machineId: string;
   projectName: string;
   branchName: string;
   scope: MachineDiffScope;
   scopesApplicable: boolean;
-  list: ReturnType<typeof useMachineDiffFiles>;
+  data: MachineDiffFilesResponse | undefined;
+  error: Error | undefined;
 }) {
-  const { data, error, isLoading } = list;
-
-  if (isLoading) {
-    return <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>;
-  }
   if (error) {
     return <div className="p-4 text-sm text-destructive">Failed to load diff: {error.message}</div>;
   }
+  // SWR only leaves `data` undefined while the FIRST request is in flight — a
+  // refresh keeps the previous data and flips isValidating instead — so this IS
+  // the loading state, and a separate isLoading branch said the same thing twice.
   if (!data) {
     return <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>;
   }
