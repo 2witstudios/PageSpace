@@ -1,6 +1,4 @@
 ALTER TABLE "terminal_sessions" RENAME TO "machine_sessions";--> statement-breakpoint
-ALTER TABLE "pages" RENAME COLUMN "terminalAccess" TO "machineAccess";--> statement-breakpoint
-ALTER TABLE "global_assistant_config" RENAME COLUMN "terminal_access" TO "machine_access";--> statement-breakpoint
 ALTER TABLE "machine_sessions" DROP CONSTRAINT "terminal_sessions_sessionKey_unique";--> statement-breakpoint
 ALTER TABLE "machine_sessions" DROP CONSTRAINT "terminal_sessions_pageId_pages_id_fk";
 --> statement-breakpoint

@@ -230,10 +230,12 @@ export const globalAssistantConfig = pgTable('global_assistant_config', {
   // Whether to include drive integrations by default
   inheritDriveIntegrations: boolean('inherit_drive_integrations').default(true).notNull(),
 
-  // Terminal epics — global assistant parallel: same machineAccess/machines[]
+  // Machine epics — global assistant parallel: same machineAccess/machines[]
   // (MachineRef) shape as PageAgentConfig (packages/db/src/schema/core.ts's
   // pages.machineAccess/pages.machines), scoped per-user instead of per-page.
-  machineAccess: boolean('machine_access').default(false).notNull(),
+  // Physical column stays "terminal_access" — same live-traffic reason as
+  // pages.machineAccess above (read/written by api/user/assistant-config).
+  machineAccess: boolean('terminal_access').default(false).notNull(),
   machines: jsonb('machines'), // MachineRef[]; machines[0] is the default active machine
   // Lazily-provisioned personal Terminal page backing this user's "own"
   // machine (the global assistant has no agent page of its own to serve as

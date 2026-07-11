@@ -1,6 +1,6 @@
 {
   "id": "c1f6a9e2-7b34-4d58-9a01-3e7c5b8d2f10",
-  "prevId": "ee173e71-cb74-48c0-9675-c72bc1c5f767",
+  "prevId": "3040370b-3d3c-4400-b2a4-c8f9f928db34",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2231,8 +2231,8 @@
           "notNull": true,
           "default": false
         },
-        "machineAccess": {
-          "name": "machineAccess",
+        "terminalAccess": {
+          "name": "terminalAccess",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -11754,8 +11754,8 @@
           "notNull": true,
           "default": true
         },
-        "machine_access": {
-          "name": "machine_access",
+        "terminal_access": {
+          "name": "terminal_access",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
