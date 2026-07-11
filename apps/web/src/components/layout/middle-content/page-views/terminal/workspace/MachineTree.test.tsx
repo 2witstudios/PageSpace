@@ -133,6 +133,28 @@ describe('MachineTree', () => {
     });
   });
 
+  test('the selected node is highlighted and marked aria-current', async () => {
+    renderTree({
+      onSelectNode: vi.fn(),
+      selectedNode: { level: 'branch', projectName: 'my-repo', branchName: 'main' },
+    });
+
+    await expandRowFor('my-repo');
+    const branchRow = (await waitFor(() => screen.getByText('main'))).closest('.group') as HTMLElement;
+    const projectRow = screen.getByText('my-repo').closest('.group') as HTMLElement;
+
+    // Without this the Diff tab gives no sign of which branch it is diffing.
+    assert({
+      given: 'a selectedNode naming one branch',
+      should: 'mark THAT row current (and not its siblings/ancestors)',
+      actual: {
+        branch: branchRow.getAttribute('aria-current'),
+        project: projectRow.getAttribute('aria-current'),
+      },
+      expected: { branch: 'true', project: null },
+    });
+  });
+
   test('a node included by isNodeSelectable still selects (and does not expand)', async () => {
     const onSelectNode = vi.fn();
     renderTree({ onSelectNode, isNodeSelectable: (node: MachineTreeNode) => node.level === 'branch' });

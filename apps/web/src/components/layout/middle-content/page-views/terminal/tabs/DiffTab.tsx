@@ -79,7 +79,16 @@ export default function DiffTab({ machineId }: { machineId: string }) {
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Branches</span>
         </div>
         <ScrollArea className="flex-1">
-          <MachineTree machineId={machineId} onSelectNode={onSelectNode} isNodeSelectable={isNodeSelectable} />
+          <MachineTree
+            machineId={machineId}
+            onSelectNode={onSelectNode}
+            isNodeSelectable={isNodeSelectable}
+            // Without this the tree gives no sign of which branch is being
+            // diffed — the only clue would be the path in the pane header.
+            selectedNode={
+              selected ? { level: 'branch', projectName: selected.projectName, branchName: selected.branchName } : null
+            }
+          />
         </ScrollArea>
       </aside>
       <div className="min-w-0 flex-1">
