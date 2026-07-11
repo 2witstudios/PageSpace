@@ -1,11 +1,38 @@
 /**
- * Idle-storage reconcile (Terminal Epic 3) — periodically meters the cost of
- * a Machine's PERSISTENT filesystem, whether the machine is active or
- * hibernating. Sprites' storage volume is NOT free while hibernating (only
- * CPU/mem are), so a Machine left idle-but-not-torn-down still accrues this
- * cost — see credit-pricing.ts's `TERMINAL_STORAGE_USD_PER_GB_MONTH` and
- * terminal-pricing.ts's `calculateTerminalStorageCostDollars`, whose first
- * caller this is.
+ * Storage reconcile (Sprites Platform Alignment 6-1) — periodically meters the
+ * cost of a Machine's PERSISTENT filesystem, whether the machine is active or
+ * hibernating. The platform bills for the bytes a machine has ACTUALLY written
+ * (TRIM-friendly — deleting files lowers the bill), NOT the provisioned volume
+ * size (docs.sprites.dev/concepts/lifecycle). So this bills the last PERSISTED
+ * MEASURED footprint (`terminal-storage-measure.ts` captures it opportunistically
+ * while the sprite is already awake for real work), never the provisioned cap —
+ * a machine that wrote 200MB is metered at 200MB, not the 5GB allocation. See
+ * credit-pricing.ts's `TERMINAL_STORAGE_USD_PER_GB_MONTH` and
+ * terminal-pricing.ts's `calculateTerminalStorageCostDollars`.
+ *
+ * NEVER wakes a paused sprite to measure — that would recreate the Phase-3
+ * keep-awake billing bug. The cron reads only what real-work wakes have already
+ * persisted; a machine that has never been measured bills a conservative 0
+ * floor (NOT the provisioned cap) for that window, and its watermark still
+ * advances so the un-measured span is not billed retroactively when a
+ * measurement lands (clean cutover from the old allocation-billing). Bounded
+ * exception: the FIRST measured window spans from the last watermark advance to
+ * now, so at most ONE reconcile interval of pre-measurement time is billed once,
+ * at the measured rate — a deliberate, bounded, one-time residual (a single
+ * watermark carries no separate "measurement started here" marker).
+ *
+ * Known trade-offs of the "never wake to measure" rule (favouring the platform's
+ * hard no-keep-awake constraint over perfect accuracy):
+ *   • Coverage: measurement is captured only on wake paths that call
+ *     `measureMachineStorageOpportunistically` (the agent tool-runner today). A
+ *     machine exercised ONLY through a wake path that doesn't yet measure (e.g.
+ *     interactive-PTY-only) stays never-measured and bills the 0 floor until such
+ *     a path wires measurement in — an under-count, strictly better than the old
+ *     flat-cap over-bill, and closed by wiring more wake paths (follow-up).
+ *   • Shrink lag: a machine that frees storage then hibernates without any
+ *     further real-work wake keeps billing its last (higher) measured footprint;
+ *     it self-corrects on the next wake. `staleMeasurements` surfaces how many
+ *     rows are billing on an ageing measurement so this is observable.
  *
  * `terminal_sessions` already enumerates every known machine: a row is only
  * ever deleted on explicit session-end/crash, NOT on idle — persistent
@@ -36,21 +63,66 @@
  */
 
 import { calculateTerminalStorageCostDollars } from '../../monitoring/terminal-pricing';
+import { bytesToGB } from './terminal-storage-measure';
 import { loggers } from '../../logging/logger-config';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** A billing month, for prorating the monthly storage rate over an elapsed span. Not tied to any subscription's actual renewal cycle — storage accrual is metered independently of it. */
 export const MS_PER_STORAGE_MONTH = 30 * MS_PER_DAY;
 
-/** Pure: GB-months accrued by `storageGB` of persistent storage over `elapsedMs`. Non-positive inputs accrue nothing. */
-export function computeElapsedGbMonths(input: { storageGB: number; elapsedMs: number }): number {
-  if (input.storageGB <= 0 || input.elapsedMs <= 0) return 0;
-  return (input.storageGB * input.elapsedMs) / MS_PER_STORAGE_MONTH;
+/**
+ * A persisted measurement older than this (on a machine NOT currently awake) is
+ * flagged stale by `pickBillableGB`. Informational only — the reconcile still
+ * bills the last measured value (it must NEVER wake a sprite to re-measure);
+ * the flag exists so a persistently-stale machine can be surfaced/alerted. An
+ * awake machine is refreshed opportunistically, so an old timestamp there isn't
+ * stale — a fresh measurement is imminent.
+ */
+export const STALE_MEASUREMENT_MS = 24 * 60 * 60 * 1000;
+
+/** A machine touched within this window counts as "awake" for staleness — a real-work wake is refreshing its measurement. */
+export const RECENTLY_ACTIVE_MS = 5 * 60 * 1000;
+
+/** Pure: GB-months accrued by `measuredGB` of persistent storage over `elapsedMs`. Non-positive inputs accrue nothing. */
+export function computeElapsedGbMonths(input: { measuredGB: number; elapsedMs: number }): number {
+  if (input.measuredGB <= 0 || input.elapsedMs <= 0) return 0;
+  return (input.measuredGB * input.elapsedMs) / MS_PER_STORAGE_MONTH;
+}
+
+/**
+ * Pure: decide the GB to bill for this window from the last PERSISTED
+ * measurement, without ever waking the sprite.
+ *
+ * - Never measured (null) → 0 floor (NOT the provisioned cap — the old bug),
+ *   flagged stale.
+ * - Measured → bill the measured GB. `stale` is true only when the machine is
+ *   NOT awake and the measurement is older than {@link STALE_MEASUREMENT_MS}
+ *   (an awake machine's old timestamp is fine — a refresh is imminent).
+ */
+export function pickBillableGB(input: {
+  lastMeasuredGB: number | null;
+  lastMeasuredAt: Date | null;
+  awake: boolean;
+  now: Date;
+}): { gb: number; stale: boolean } {
+  const { lastMeasuredGB, lastMeasuredAt, awake, now } = input;
+  if (lastMeasuredGB === null || lastMeasuredAt === null) {
+    return { gb: 0, stale: true };
+  }
+  const ageMs = now.getTime() - lastMeasuredAt.getTime();
+  const stale = !awake && ageMs > STALE_MEASUREMENT_MS;
+  return { gb: Math.max(0, lastMeasuredGB), stale };
 }
 
 export interface TerminalStorageMachineRow {
   pageId: string;
   storageLastBilledAt: Date;
+  /** Last opportunistically-measured used bytes; null when never measured. */
+  measuredBytes: number | null;
+  /** When `measuredBytes` was captured; null when never measured. */
+  measuredAt: Date | null;
+  /** Last real-work activity — used to derive `awake` for the staleness signal. */
+  lastActiveAt: Date;
 }
 
 export interface ReconcileTerminalStorageDeps {
@@ -63,8 +135,6 @@ export interface ReconcileTerminalStorageDeps {
   /** Persists the new watermark so the next run only bills the following window. */
   advanceWatermark: (input: { pageId: string; billedThrough: Date }) => Promise<void>;
   now: () => Date;
-  /** Persistent storage provisioned per machine, in GB (the actual per-machine cap — not an estimate). */
-  storageGB: number;
 }
 
 export interface ReconcileTerminalStorageResult {
@@ -74,6 +144,15 @@ export interface ReconcileTerminalStorageResult {
   skipped: number;
   /** Rows where `chargeStorage`/`advanceWatermark` threw — isolated so one bad row doesn't abort the batch; see module doc on the residual double-bill risk this leaves for a future run to retry. */
   failed: number;
+  /**
+   * Rows billed from a MEASURED footprint whose measurement is older than
+   * {@link STALE_MEASUREMENT_MS} while the machine is not currently awake — the
+   * cron bills the last value regardless (it never wakes a sprite), so this is
+   * a health signal: a persistently-high count means measurements aren't being
+   * refreshed by real-work wakes. Excludes never-measured rows (see `skipped`
+   * is unrelated; never-measured simply bill 0).
+   */
+  staleMeasurements: number;
   totalCostDollars: number;
 }
 
@@ -86,17 +165,45 @@ export async function reconcileTerminalStorage(
   let charged = 0;
   let skipped = 0;
   let failed = 0;
+  let staleMeasurements = 0;
   let totalCostDollars = 0;
 
   for (const machine of machines) {
     try {
       const elapsedMs = now.getTime() - machine.storageLastBilledAt.getTime();
-      const gbMonths = computeElapsedGbMonths({ storageGB: deps.storageGB, elapsedMs });
+      const lastMeasuredGB = machine.measuredBytes === null ? null : bytesToGB(machine.measuredBytes);
+      const awake = now.getTime() - machine.lastActiveAt.getTime() < RECENTLY_ACTIVE_MS;
+      const { gb, stale } = pickBillableGB({ lastMeasuredGB, lastMeasuredAt: machine.measuredAt, awake, now });
+      // Health signal (measured-but-stale only; never-measured rows bill 0 and
+      // aren't "stale" in the refresh sense).
+      if (stale && lastMeasuredGB !== null) staleMeasurements += 1;
+      const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
       const costDollars = calculateTerminalStorageCostDollars(gbMonths);
 
-      // Nothing has accrued (zero/negative elapsed window) — no-op, watermark
-      // stays put since there is nothing to advance it past.
-      if (costDollars <= 0) continue;
+      // Nothing to charge this window (zero elapsed, a never-measured 0 floor,
+      // or a footprint so tiny its per-window cost rounds to $0). ALWAYS advance
+      // the watermark to now when real time elapsed — for measured and
+      // never-measured rows alike.
+      //
+      // Advancing unconditionally is deliberate: it caps this window's residual
+      // at the pricing rounding floor (a sub-cent, and only for footprints under
+      // ~2.4MB on an hourly cron, which genuinely cost ~$0), and — critically —
+      // it prevents a retroactive OVER-bill. If we instead froze the watermark
+      // on a tiny measured footprint, a machine that later grows to (say) 100GB
+      // and is re-measured would be billed 100GB across the entire frozen span,
+      // charging the payer for storage they did not hold. Losing a sub-cent
+      // residual is negligible; retroactively over-charging is not. The
+      // never-measured case is likewise advanced so the cutover from the old
+      // allocation-billing is clean (its first measured window bills AT MOST one
+      // reconcile interval of pre-measurement time — bounded and one-time).
+      //
+      // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
+      if (costDollars <= 0) {
+        if (elapsedMs > 0) {
+          await deps.advanceWatermark({ pageId: machine.pageId, billedThrough: now });
+        }
+        continue;
+      }
 
       const ownerId = await deps.lookupPageOwnerId(machine.pageId);
       if (!ownerId) {
@@ -125,5 +232,5 @@ export async function reconcileTerminalStorage(
     }
   }
 
-  return { processed: machines.length, charged, skipped, failed, totalCostDollars };
+  return { processed: machines.length, charged, skipped, failed, staleMeasurements, totalCostDollars };
 }
