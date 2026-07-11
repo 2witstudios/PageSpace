@@ -11,22 +11,17 @@ export default defineConfig({
     css: true,
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
-    // Use the worker_threads pool, not the default 'forks'. This suite executes
-    // ~1500 real modules (the auth-barrel elimination made ~285 test files load
-    // real modules instead of a wholesale barrel mock). Under the forks pool a
-    // worker retains each file's module graph and never releases it — an
-    // unbounded growth that fills any --max-old-space-size and OOMs the 16 GB CI
-    // runner during both the run and the v8 coverage remap. The threads pool
-    // tears down each file's context and GCs it, so peak memory stays ~2.5 GB.
-    // Run 8 worker threads (more than the runner's 4 cores; they time-share).
-    // Thread workers can't have their heap raised via config (worker_threads
-    // reject --max-old-space-size in execArgv and ignore the parent's
-    // NODE_OPTIONS), so instead spread the files thinner: at 4 threads a worker
-    // collects ~208 files' v8 coverage and one straggler exceeds its default
-    // heap at report time (ERR_WORKER_OUT_OF_MEMORY); at 8 threads that halves
-    // to ~104 files/worker, within the default.
+    // Use the worker_threads pool, not the default 'forks'. The auth-barrel
+    // elimination made ~285 test files load real modules instead of a wholesale
+    // barrel mock, so the suite executes ~1500 real modules. Under 'forks' a
+    // worker retains each file's module graph and never releases it — unbounded
+    // growth that fills any --max-old-space-size and OOMs the 16 GB CI runner.
+    // The threads pool tears down each file's context and GCs it, so the test
+    // run stays bounded (~2.5 GB) and every test passes. (Full v8 coverage of the
+    // whole suite still exceeds a single worker's default heap on the 4-core
+    // runner — threads can't raise or recycle that heap — so CI gates web on
+    // test correctness and measures web coverage separately; see ci.yml.)
     pool: 'threads',
-    poolOptions: { threads: { minThreads: 8, maxThreads: 8 } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
