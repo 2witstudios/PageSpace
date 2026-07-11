@@ -63,6 +63,24 @@ export interface MachineStreamSessionInfo {
  * is caller-side policy, not part of this seam: a caller reconnects by calling
  * `MachineHandle.stream` again with the prior `sessionId`.
  */
+/**
+ * `stream()` waited the full wall-clock cap without the machine reporting EITHER
+ * that the stream opened or that it failed.
+ *
+ * This is the "we genuinely do not know" outcome, and callers must treat it as
+ * such. It is distinct from a stream that FAILED to open (a dangling session id
+ * — the process is gone), because the two demand opposite responses: a failed
+ * open means there is nothing left to kill, while a timeout may mean the process
+ * is alive and merely unreachable, so tearing down its bookkeeping would orphan
+ * it.
+ */
+export class MachineStreamOpenTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(`Machine stream did not open within ${timeoutMs}ms`);
+    this.name = 'MachineStreamOpenTimeoutError';
+  }
+}
+
 export interface MachineStream {
   write(data: string | Buffer): void;
   resize(cols: number, rows: number): void;

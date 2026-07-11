@@ -16,11 +16,12 @@
  * this seam existed.
  */
 
-import type {
-  MachineHandle,
-  MachineHost,
-  MachineStream,
-  MachineStreamSessionInfo,
+import {
+  MachineStreamOpenTimeoutError,
+  type MachineHandle,
+  type MachineHost,
+  type MachineStream,
+  type MachineStreamSessionInfo,
 } from '../machine-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
 import { withWakeRetry, type SpriteCommandLike, type SpritesSdk } from './sprites';
@@ -30,25 +31,33 @@ function toBuffer(chunk: Buffer | string): Buffer {
 }
 
 /**
- * How long to wait for a freshly-opened stream to report that its WebSocket
- * actually opened, before handing it back anyway.
+ * Wall-clock cap on waiting for a stream to report that it opened.
+ *
+ * Deliberately LONGER than the SDK's own 10s `waitForSessionInfo` timeout
+ * (websocket.js), which is the real failure signal for an attach to a dangling
+ * session. A shorter cap here would fire first on every such attach and mask the
+ * SDK's specific error behind a generic timeout — and, since the two outcomes
+ * demand opposite responses from the kill path (drop the row vs keep it), that
+ * misclassification is not cosmetic.
  */
-const STREAM_OPEN_TIMEOUT_MS = 10_000;
+const STREAM_OPEN_TIMEOUT_MS = 20_000;
 
 /**
- * Resolve once the stream's WebSocket has genuinely OPENED; reject if it dropped
- * before opening.
+ * Resolve once the stream's WebSocket has genuinely OPENED; reject if it dropped,
+ * failed, or never reported either way.
  *
- * The SDK emits `spawn` only after `cmd.start()` resolves — i.e. after the socket
- * is up — and emits `error` (never `spawn`) on a failed attach, so the two events
- * are the authoritative open/fail signals. `exit` also settles: a command that has
- * already finished has nothing left to wait for.
+ * This wait is load-bearing, not a nicety. `SpriteCommand.kill()` sends a signal
+ * over the socket and SILENTLY NO-OPS when the socket is not open (websocket.js
+ * `signal()` early-returns unless `readyState === OPEN`). So handing back a
+ * stream whose socket never opened gives the caller a kill that goes nowhere
+ * while reporting success — for `killAgentTerminal` that means the row is
+ * dropped and a live, billable agent process is orphaned. We therefore never
+ * resolve optimistically: no confirmed open, no stream.
  *
- * The wait is CAPPED, and the cap resolves OPTIMISTICALLY rather than rejecting.
- * That keeps this strictly better than the previous behavior (which handed the
- * stream back immediately, without waiting for anything): a command that reports
- * neither outcome degrades to exactly what callers used to get, so this can never
- * hang a kill that used to succeed.
+ * The SDK emits `spawn` only after `start()` resolves (socket up, and for an
+ * attach, `session_info` received) and emits `error` — never `spawn` — on a
+ * failure, so those are the authoritative signals. `exit` also settles: a
+ * command that already finished has nothing left to wait for.
  */
 function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -59,11 +68,20 @@ function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise
       clearTimeout(timer);
       fn();
     };
-    const timer = setTimeout(() => settle(resolve), timeoutMs);
+    const timer = setTimeout(() => settle(() => reject(new MachineStreamOpenTimeoutError(timeoutMs))), timeoutMs);
     command.on('spawn', () => settle(resolve));
     command.on('exit', () => settle(resolve));
     command.on('error', (error) => settle(() => reject(error)));
   });
+}
+
+/** Tear down a stream attempt we are abandoning, so its socket does not leak. */
+function discardCommand(command: SpriteCommandLike): void {
+  try {
+    command.close?.();
+  } catch {
+    // Best-effort: an already-dead socket is exactly what we wanted.
+  }
 }
 
 function wrapSpriteStream(command: SpriteCommandLike): MachineStream {
@@ -118,7 +136,7 @@ function wrapSpriteHandle({ sdk, exec }: { sdk: SpritesSdk; exec: ExecutableSand
      * per attempt.
      */
     async stream(args) {
-      return withWakeRetry(async () => {
+      const open = async (): Promise<MachineStream> => {
         const sprite = await sdk.getSprite(exec.sandboxId);
         const command =
           args.sessionId !== undefined
@@ -130,12 +148,25 @@ function wrapSpriteHandle({ sdk, exec }: { sdk: SpritesSdk; exec: ExecutableSand
                 cols: args.cols,
                 rows: args.rows,
               });
-        // Don't hand back a stream whose socket never opened — a SIGKILL through
-        // it would go nowhere. A pre-open drop rejects here and withWakeRetry
-        // re-opens; anything else propagates on the first occurrence.
-        await awaitStreamOpen(command, STREAM_OPEN_TIMEOUT_MS);
+        try {
+          await awaitStreamOpen(command, STREAM_OPEN_TIMEOUT_MS);
+        } catch (error) {
+          discardCommand(command);
+          throw error;
+        }
         return wrapSpriteStream(command);
-      });
+      };
+
+      // Retry ONLY the attach. Re-opening an attach is idempotent — it targets a
+      // session that already exists — whereas `createSession` starts a DETACHABLE
+      // session that outlives the client, so re-running it after a drop we only
+      // observed client-side could mint a second orphaned PTY. A pre-open drop is
+      // provably a socket that never opened, but not provably a request the
+      // server never received, and that distinction only costs us on the
+      // side-effecting branch. (No caller opens a fresh session through this seam
+      // today; the realtime PTY drives `createSession` directly and does its own
+      // bounded reconnect.)
+      return args.sessionId !== undefined ? withWakeRetry(open) : open();
     },
 
     async listStreams(): Promise<MachineStreamSessionInfo[]> {

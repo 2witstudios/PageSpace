@@ -15,7 +15,7 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
-import type { MachineHost, MachineHandle } from '../../sandbox/machine-host';
+import { MachineStreamOpenTimeoutError, type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
 
@@ -954,6 +954,86 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: true });
     expect(rows.size).toBe(0);
+  });
+
+  // sprites 1-4: a stream that FAILS to open and a stream that never REPORTS are
+  // opposite situations, and conflating them breaks the kill in one direction or
+  // the other. `stream()` retries a cold-start drop internally (and that first
+  // attempt wakes the Sprite), so a failure that survives the retry is a woken
+  // Sprite saying "no such session".
+  it('given the session will not attach even on a woken Sprite (dangling streamSessionId), should drop the row — there is nothing left to kill', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-dangling',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              throw new Error('WebSocket closed before open: code=1006');
+            },
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // Exec sessions do not survive a Sprite pause, so a session id that will not
+    // attach names a process that is already gone. Keeping the row here would
+    // strand the terminal permanently unkillable.
+    expect(result).toEqual({ ok: true });
+    expect(rows.size).toBe(0);
+  });
+
+  it('given the stream never reports whether it opened (timeout), should KEEP the row rather than orphan a possibly-live PTY', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-abc',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              throw new MachineStreamOpenTimeoutError(20_000);
+            },
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // We learned NOTHING: the PTY may be alive and merely unreachable. Dropping
+    // the row would leave a running, billable process with no bookkeeping.
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
   });
 
   it('given the Sprite kill throws, should keep the row so a retry can find it again', async () => {

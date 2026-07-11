@@ -235,7 +235,14 @@ export function openPtyShell({
     // open is the authoritative signal the connection is healthy — reset the
     // bounded reconnect budget here so an idle shell that reattaches cleanly but
     // stays quiet (no stdout) doesn't slowly exhaust the budget and get killed.
-    cmd.on('spawn', () => { consecutiveFailures = 0; });
+    cmd.on('spawn', () => {
+      consecutiveFailures = 0;
+      // A confirmed open retires the previous failure's classification. Without
+      // this, a later reconnect entered WITHOUT a fresh error (listSessions
+      // unavailable, or the catch-all retry) would consult a stale verdict from
+      // whatever failed last.
+      lastErrorWasPreOpenDrop = false;
+    });
     cmd.on('exit', (code) => {
       // Ignore the stale exit that trails a keepalive 'error' on the same dead
       // command — only an exit WITHOUT a preceding error is a real shell exit.

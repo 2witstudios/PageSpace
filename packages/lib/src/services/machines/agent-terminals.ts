@@ -36,7 +36,7 @@
  * reconnected or resumed from hibernation.
  */
 
-import type { MachineHost } from '../sandbox/machine-host';
+import { MachineStreamOpenTimeoutError, type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
 import {
@@ -453,14 +453,34 @@ async function killAtLocation(
   deps: Pick<AgentTerminalsDeps, 'store' | 'host'>,
 ): Promise<KillAgentTerminalResult> {
   if (row.streamSessionId) {
+    let handle: MachineHandle | null;
     try {
-      const handle = await deps.host.attach({ machineId: location.sandboxId });
-      if (handle) {
+      handle = await deps.host.attach({ machineId: location.sandboxId });
+    } catch {
+      // The control plane itself is unreachable — we learned NOTHING about the
+      // process. Keep the row so a retry can find it again.
+      return { ok: false, reason: 'error' };
+    }
+
+    if (handle) {
+      try {
         const stream = await handle.stream({ sessionId: row.streamSessionId });
         stream.kill('SIGKILL');
+      } catch (error) {
+        // A TIMEOUT is the one outcome we must not act on: the stream never told
+        // us whether it opened, so the PTY may well be alive and merely
+        // unreachable. Dropping its row would orphan a running, billable process.
+        if (error instanceof MachineStreamOpenTimeoutError) {
+          return { ok: false, reason: 'error' };
+        }
+        // Any other failure means the session could not be attached even after
+        // the bounded cold-start retry — and that retry's first attempt WOKE the
+        // Sprite, so this is not a cold VM. Exec sessions do not survive a pause
+        // (docs.sprites.dev/concepts/lifecycle), so a `streamSessionId` that will
+        // not attach on a woken Sprite is dangling: the process is already gone.
+        // There is nothing left to kill, and keeping the row would strand the
+        // terminal permanently unkillable. Fall through and drop it.
       }
-    } catch {
-      return { ok: false, reason: 'error' };
     }
   }
 

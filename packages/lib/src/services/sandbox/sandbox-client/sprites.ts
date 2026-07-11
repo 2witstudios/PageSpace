@@ -112,6 +112,14 @@ export interface SpriteCommandLike {
   on(event: 'spawn', listener: () => void): unknown;
   kill(signal?: string): void;
   resize?(cols: number, rows: number): void;
+  /**
+   * Tear the underlying WebSocket down. Distinct from `kill`, which SIGNALS the
+   * remote process over an OPEN socket and is a silent no-op when the socket is
+   * not open (`@fly/sprites` websocket.js `signal()` early-returns unless
+   * `readyState === OPEN`). An attempt we abandon — a stream open that dropped or
+   * timed out — must be `close`d, or its socket leaks for the process lifetime.
+   */
+  close?(): void;
 }
 
 /** Options for spawning a command, including PTY support. */
