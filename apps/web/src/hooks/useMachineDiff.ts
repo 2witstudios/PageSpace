@@ -106,7 +106,7 @@ export function machineDiffPairKey(
  *
  * Scoped to the branch ON PURPOSE. A bare `/api/machines/diff?` prefix test would
  * also match OTHER machines' keys, and those are not hypothetical: Machine pages
- * are kept mounted across navigation in a bounded LRU (`TerminalKeepAliveHost`,
+ * are kept mounted across navigation in a bounded LRU (`MachineKeepAliveHost`,
  * CSS-hidden, not unmounted), so a hidden Machine page's Diff tab still holds live
  * SWR subscriptions. Refreshing machine B would then re-fire machine A's list, its
  * merge-base probe, and every pair it had open — real sandbox `git` execs, billed,

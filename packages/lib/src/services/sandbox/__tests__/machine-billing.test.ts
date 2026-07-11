@@ -19,7 +19,7 @@ const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
 
 import { defaultSandboxBillingDeps } from '../machine-billing';
-import { TERMINAL_MARKUP_BPS } from '../../../billing/credit-pricing';
+import { MACHINE_MARKUP_BPS } from '../../../billing/credit-pricing';
 
 function mockUserRow(tier: string | null) {
   mockDb.select.mockReturnValue({
@@ -153,11 +153,11 @@ describe('defaultSandboxBillingDeps.trackUsage', () => {
     expect(call.pageId).toBe('terminal-page-1');
   });
 
-  it("passes TERMINAL_MARKUP_BPS as markupBpsOverride so the settle path floors at terminal's own rate, not the shared AI MARKUP_BPS", async () => {
+  it("passes MACHINE_MARKUP_BPS as markupBpsOverride so the settle path floors at terminal's own rate, not the shared AI MARKUP_BPS", async () => {
     mockTrackUsage.mockResolvedValue(undefined);
     await defaultSandboxBillingDeps.trackUsage({ payerId: 'owner-1', holdId: 'hold-1', activeSeconds: 3600 });
     const call = mockTrackUsage.mock.calls[0][0];
-    expect(call.markupBpsOverride).toBe(TERMINAL_MARKUP_BPS);
+    expect(call.markupBpsOverride).toBe(MACHINE_MARKUP_BPS);
   });
 });
 

@@ -13,7 +13,7 @@
  *
  * `projectStore` resolves a project's clone path (shared by project- and
  * machine-scope targets); `machineSandbox` acquires the OWNING Machine's
- * persistent Sprite session — the SAME `acquireTerminalSandbox`-backed path a
+ * persistent Sprite session — the SAME `acquireMachineSession`-backed path a
  * Terminal page shell and Machine Projects (`machine-projects-runtime.ts`)
  * already reconnect to — re-authorizing the CURRENT actor (resume re-authz) on
  * every acquire, never trusting a permission check cached from an earlier
@@ -31,10 +31,10 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
 import {
-  acquireTerminalSandbox,
-  createDbTerminalSessionStore,
+  acquireMachineSession,
+  createDbMachineSessionStore,
   getSandboxSessionSecret,
-} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+} from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { checkMachineRuntimeGuardrail, recordMachineActivity } from '@pagespace/lib/services/sandbox/quota';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
@@ -81,10 +81,10 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
   return sandboxClientPromise;
 }
 
-let terminalSessionStorePromise: ReturnType<typeof createDbTerminalSessionStore> | null = null;
-function getTerminalSessionStore() {
-  terminalSessionStorePromise ??= createDbTerminalSessionStore();
-  return terminalSessionStorePromise;
+let machineSessionStorePromise: ReturnType<typeof createDbMachineSessionStore> | null = null;
+function getMachineSessionStore() {
+  machineSessionStorePromise ??= createDbMachineSessionStore();
+  return machineSessionStorePromise;
 }
 
 let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = null;
@@ -147,14 +147,14 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
         if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
       }
 
-      const result = await acquireTerminalSandbox({
+      const result = await acquireMachineSession({
         pageId: machineId,
         driveId: page.driveId,
         tenantId: drive.ownerId,
         userId: actorUserId,
         canRun,
         deps: {
-          store: await getTerminalSessionStore(),
+          store: await getMachineSessionStore(),
           client: await getSandboxClient(),
           now: () => new Date(),
           secret: getSandboxSessionSecret(),

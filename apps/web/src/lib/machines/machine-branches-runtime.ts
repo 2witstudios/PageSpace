@@ -6,7 +6,7 @@
  * onto the OWNING Machine's own persistent Sprite session), a branch-terminal
  * is its OWN, SEPARATE Sprite — provisioned directly through the `MachineHost`
  * seam (`createProductionMachineHost`, `apps/web/src/lib/sandbox/sprites-client.ts`),
- * never through `acquireTerminalSandbox`/`terminal_sessions`. Real isolation
+ * never through `acquireMachineSession`/`machine_sessions`. Real isolation
  * between two branches of one project comes from two distinct Sprites, which
  * requires never routing through the single page-keyed session Projects share.
  *
@@ -20,7 +20,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/terminal-session-manager';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
@@ -143,7 +143,7 @@ export function buildMachineBranchesDeps(): MachineBranchesDeps {
       kill: async (args) => (await getMachineHost()).kill(args),
     },
     substrate: { kind: 'sprite' },
-    options: resolveSandboxNetworkOptions({ surface: 'terminal', egressIpTag: getConfiguredEgressIpTag() }),
+    options: resolveSandboxNetworkOptions({ surface: 'machine', egressIpTag: getConfiguredEgressIpTag() }),
     secret: getSandboxSessionSecret(),
     checkFullEgressEnablement: async () =>
       decideFullEgressEnablement({

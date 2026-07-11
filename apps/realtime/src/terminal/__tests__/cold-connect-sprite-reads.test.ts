@@ -4,7 +4,7 @@
  * Composes the REAL production stack a terminal connect runs through —
  * `createSpriteHandleCache` -> `createSpritesSandboxClient` ->
  * `createSpriteMachineHost` -> `createExecClientFromMachineHost` ->
- * `acquireTerminalSandbox` -> `resolveTerminalSandbox` — with the DB stores
+ * `acquireMachineSession` -> `resolveMachineSandbox` — with the DB stores
  * faked, and counts what it does to the Sprites control plane.
  *
  * This is the only level the leaf's headline requirements are actually
@@ -27,12 +27,12 @@ import {
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import {
-  acquireTerminalSandbox,
-  deriveTerminalSessionKey,
-  type TerminalSessionRecord,
-  type TerminalSessionStore,
-} from '@pagespace/lib/services/sandbox/terminal-session-manager';
-import { resolveTerminalSandbox } from '../agent-terminal-access';
+  acquireMachineSession,
+  deriveMachineSessionKey,
+  type MachineSessionRecord,
+  type MachineSessionStore,
+} from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { resolveMachineSandbox } from '../agent-terminal-access';
 
 const SECRET = 'test-secret';
 const MACHINE_ID = 'machine-page-1';
@@ -46,7 +46,7 @@ const USER_ID = 'user-1';
  * under exactly that name — seeding an arbitrary id would silently exercise the
  * create path instead, and the resume assertions would prove nothing.
  */
-const SESSION_KEY = deriveTerminalSessionKey({
+const SESSION_KEY = deriveMachineSessionKey({
   tenantId: TENANT_ID,
   driveId: DRIVE_ID,
   pageId: MACHINE_ID,
@@ -118,7 +118,7 @@ function fakeSdk(calls: SpriteCalls, existing: Set<string>): SpritesSdk {
   } as unknown as SpritesSdk;
 }
 
-function fakeSessionStore(record: TerminalSessionRecord | null): TerminalSessionStore {
+function fakeSessionStore(record: MachineSessionRecord | null): MachineSessionStore {
   let current = record;
   return {
     findBySessionKey: async () => current,
@@ -133,7 +133,7 @@ function fakeSessionStore(record: TerminalSessionRecord | null): TerminalSession
     },
     touch: vi.fn(),
     remove: vi.fn(),
-  } as unknown as TerminalSessionStore;
+  } as unknown as MachineSessionStore;
 }
 
 /**
@@ -170,11 +170,11 @@ async function runColdConnect({
   const host = createSpriteMachineHost({ sdk, client: rawClient });
   const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
 
-  const sandbox = await resolveTerminalSandbox(
+  const sandbox = await resolveMachineSandbox(
     { machineId: MACHINE_ID, name: 'shell' },
     {
       resolveAgentTerminal: async () => {
-        const acquired = await acquireTerminalSandbox({
+        const acquired = await acquireMachineSession({
           pageId: MACHINE_ID,
           driveId: DRIVE_ID,
           tenantId: TENANT_ID,
@@ -246,7 +246,7 @@ describe('cold connect — Sprite control-plane budget', () => {
   });
 
   it('given a hibernated-IDLE sprite (the persistent noop path), should still read it only once and not wake it', async () => {
-    // Idle past the warm window: `planTerminalLifecycle` returns `noop` (persistent),
+    // Idle past the warm window: `planMachineLifecycle` returns `noop` (persistent),
     // which reconnects via getOrCreate. This is the path a tab-back onto a Sprite that
     // has been asleep for hours takes.
     const longAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);

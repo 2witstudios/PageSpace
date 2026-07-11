@@ -4,18 +4,18 @@ import {
   resolveMachinePageId,
   type AcquireMachineSandboxDeps,
 } from '../machine-session';
-import type { SandboxClient } from '../terminal-session-manager';
-import type { TerminalSessionStore, TerminalSessionRecord } from '../terminal-session-manager';
+import type { SandboxClient } from '../machine-session-manager';
+import type { MachineSessionStore, MachineSessionRecord } from '../machine-session-manager';
 import type { MachineRuntimeGuardrailDecision } from '../quota';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 const passGate = async (): Promise<{ ok: true }> => ({ ok: true });
 
-function makeStore(seed?: TerminalSessionRecord) {
-  const rows = new Map<string, TerminalSessionRecord>();
+function makeStore(seed?: MachineSessionRecord) {
+  const rows = new Map<string, MachineSessionRecord>();
   if (seed) rows.set(seed.sessionKey, seed);
   const calls = { save: 0, touch: 0, remove: 0 };
-  const store: TerminalSessionStore = {
+  const store: MachineSessionStore = {
     findBySessionKey: async (sessionKey) => rows.get(sessionKey) ?? null,
     save: async (input) => {
       calls.save += 1;

@@ -1,6 +1,6 @@
 /**
  * Adapts a `MachineHost` back into the `ExecSandboxClient` shape that
- * `terminal-session-manager.ts` / `machine-session.ts` / `tool-runners.ts`
+ * `machine-session-manager.ts` / `machine-session.ts` / `tool-runners.ts`
  * already consume (PR2/PR3) — so a real `MachineHost` (e.g.
  * `createSpriteMachineHost`) is the thing production actually calls, WITHOUT
  * touching any of that already-tested Epic 1 core or its fakes.

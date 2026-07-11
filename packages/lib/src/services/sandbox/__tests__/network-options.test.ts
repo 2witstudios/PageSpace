@@ -9,16 +9,16 @@ describe('resolveSandboxNetworkOptions', () => {
     expect(options.egressMode).toBe('open');
   });
 
-  it('given surface: terminal, should resolve OPEN egress identically (one source of truth)', () => {
+  it('given surface: machine, should resolve OPEN egress identically (one source of truth)', () => {
     const agent = resolveSandboxNetworkOptions({ surface: 'agent' });
-    const terminal = resolveSandboxNetworkOptions({ surface: 'terminal' });
-    expect(terminal.egressMode).toBe('open');
-    expect(terminal.egressMode).toBe(agent.egressMode);
+    const machine = resolveSandboxNetworkOptions({ surface: 'machine' });
+    expect(machine.egressMode).toBe('open');
+    expect(machine.egressMode).toBe(agent.egressMode);
   });
 
   it('given either surface, should carry the standard resource caps', () => {
     expect(resolveSandboxNetworkOptions({ surface: 'agent' }).caps).toEqual(SANDBOX_RESOURCE_CAPS);
-    expect(resolveSandboxNetworkOptions({ surface: 'terminal' }).caps).toEqual(SANDBOX_RESOURCE_CAPS);
+    expect(resolveSandboxNetworkOptions({ surface: 'machine' }).caps).toEqual(SANDBOX_RESOURCE_CAPS);
   });
 
   it('given a configured egress-IP tag, should carry it on the options (dedicated attribution)', () => {

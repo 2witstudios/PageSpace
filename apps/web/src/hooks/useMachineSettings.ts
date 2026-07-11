@@ -12,7 +12,7 @@ import type {
  * The Machine Settings state machine, behind `/api/machines/settings`.
  *
  * Deliberately NOT SWR (unlike its `useMachineProjects` / `useMachineBranches`
- * siblings): the Settings tab is specified to follow `TerminalAccessCard`'s
+ * siblings): the Settings tab is specified to follow `MachineAccessCard`'s
  * plain `useState`/`useEffect` + optimistic-`persist` shape. What SWR would have
  * given us for free — revalidation — is the reason most of the machinery below
  * exists, so it is spelled out explicitly here rather than left implicit in the

@@ -7,7 +7,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ArrowLeft, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
-import { TerminalUsageCard } from '@/components/billing/TerminalUsageCard';
+import { MachineUsageCard } from '@/components/billing/MachineUsageCard';
 import { AutomationsCard } from '@/components/billing/AutomationsCard';
 import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
 
@@ -64,7 +64,7 @@ export default function UsagePage() {
 
       <CreditBalanceCard />
       <UsageBreakdownCard />
-      <TerminalUsageCard />
+      <MachineUsageCard />
       <AutomationsCard />
       <StorageUsageCard />
     </div>

@@ -4,7 +4,7 @@
  * DB-backed CRUD for the `machine_projects` table — the durable record of
  * which git repos are cloned onto a Machine's persistent filesystem. A
  * Machine's identity is its backing page (`machineId`) — the same page whose
- * persistent Sprite session (`terminal_sessions`) a live Terminal shell or a
+ * persistent Sprite session (`machine_sessions`) a live Terminal shell or a
  * page-agent's "own machine" tool calls already reconnect to. Kept separate
  * from the clone/remove orchestration (machine-projects.ts) so that
  * orchestration logic is testable against an in-memory fake without a real
