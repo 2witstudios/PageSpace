@@ -64,15 +64,24 @@ export type AgentTerminalSandboxResult =
       commandOverride: string | null;
       /** The Sprite exec-session id this agent terminal was last known to run under, if any. */
       streamSessionId: string | null;
+      /**
+       * Releases the concurrency slot this resolution reserved for the PTY it is
+       * about to start. Present ONLY here, on the success result, because this
+       * is the only path that reserves one — a reattach starts no PTY, takes no
+       * slot, and so has nothing to release.
+       */
+      releaseSlot: () => void;
     }
   | { ok: false; reason: string };
 
 /**
  * The CHEAP half of a connect: a DB-only authorization verdict (leaf 1-2) plus
  * the session key, which derives from the (scope, name) target alone (leaf 1-1).
- * Nothing here has touched — let alone woken — a Sprite, which is what lets
- * `onConnect` look up a live in-memory session and reattach to it before any
- * sandbox work happens at all.
+ * Nothing here has touched — let alone woken — a Sprite, and nothing here has
+ * reserved a concurrency slot. That is what lets `onConnect` look up a live
+ * in-memory session and reattach to it before any sandbox work happens at all,
+ * and what lets the 60s re-auth tick re-check a LIVE session's authorization
+ * without competing with that very session for its own slot.
  */
 export type AgentTerminalCheckAuthResult =
   | {
@@ -80,13 +89,13 @@ export type AgentTerminalCheckAuthResult =
       sessionKey: string;
       /** The machine's resolved payer — metering attribution (Terminal Epic 3), present regardless of whether `billing` is wired. */
       payerId: string;
-      releaseSlot: () => void;
       /**
-       * Resolve the Sprite for a FRESH PTY — called ONLY on the create path.
-       * Owns the reserved concurrency slot's release on its OWN failure paths:
-       * a denial releases the slot (and logs) before returning `ok: false`, and
-       * a rejection releases it before propagating. On success the slot stays
-       * reserved and the caller owns it.
+       * Reserve the concurrency slot and resolve the Sprite for a FRESH PTY —
+       * called ONLY on the create path. Owns the slot's release on its OWN
+       * failure paths: a denial releases it (and logs) before returning
+       * `ok: false`, and a rejection releases it before propagating. On success
+       * the slot stays reserved and the caller owns it via the returned
+       * `releaseSlot`.
        */
       resolveSandbox: () => Promise<AgentTerminalSandboxResult>;
     }
@@ -100,8 +109,19 @@ export type AgentTerminalCheckAuthFn = (args: {
   name: string;
 }) => Promise<AgentTerminalCheckAuthResult>;
 
-/** The three ways a connect can go, once the access verdict and the live-session lookup are both in hand. */
-export type ConnectPlan = 'reattach' | 'create' | 'deny';
+/** An authorized connect — the `ok` arm of a check-auth result. */
+export type AgentTerminalAccessGranted = Extract<AgentTerminalCheckAuthResult, { ok: true }>;
+
+/**
+ * The three ways a connect can go, once the access verdict and the live-session
+ * lookup are both in hand. Each arm carries exactly the (already-narrowed) data
+ * its branch of the handler needs, so the shell executes the plan without
+ * re-deriving or re-checking any part of the decision.
+ */
+export type ConnectPlan =
+  | { kind: 'deny'; reason: string }
+  | { kind: 'reattach'; access: AgentTerminalAccessGranted; session: TerminalSession }
+  | { kind: 'create'; access: AgentTerminalAccessGranted };
 
 /**
  * Pure: decide the connect path from the (cheap, DB-only) access verdict and
@@ -110,19 +130,21 @@ export type ConnectPlan = 'reattach' | 'create' | 'deny';
  * A denied verdict ALWAYS denies — the presence of a live session must never
  * shortcut authorization, or a user who just lost access could tab back into a
  * PTY that outlived their permission. An allowed verdict reattaches to a live
- * session when there is one (the fast path: no sprite resolution, no wake exec,
- * no audit write — docs.sprites.dev/concepts/lifecycle puts even a warm wake at
- * 100-500ms, and this skips it entirely), and otherwise creates a fresh one.
+ * session when there is one (the fast path: no slot, no sprite resolution, no
+ * wake exec, no audit write — docs.sprites.dev/concepts/lifecycle puts even a
+ * warm wake at 100-500ms, and this skips it entirely), and otherwise creates a
+ * fresh one.
  */
 export function planConnect({
-  accessAllowed,
+  accessResult,
   existingSession,
 }: {
-  accessAllowed: boolean;
+  accessResult: AgentTerminalCheckAuthResult;
   existingSession: TerminalSession | undefined;
 }): ConnectPlan {
-  if (!accessAllowed) return 'deny';
-  return existingSession !== undefined ? 'reattach' : 'create';
+  if (!accessResult.ok) return { kind: 'deny', reason: accessResult.reason };
+  if (existingSession !== undefined) return { kind: 'reattach', access: accessResult, session: existingSession };
+  return { kind: 'create', access: accessResult };
 }
 
 export type OpenShellFn = (args: OpenPtyShellArgs) => PtyShell;
@@ -418,50 +440,50 @@ export function buildAgentTerminalHandlers({
 
       const userId = socket.data.user?.id ?? '';
 
-      // The access check is DB-only (leaf 1-2) and the session key derives from
-      // the (scope, name) target without the Sprite (leaf 1-1) — so the live
-      // in-memory session lookup happens HERE, before anything has resolved,
-      // woken or written policy to a Sprite. A tab-back inside the detached
-      // grace window is therefore decided on the strength of the access check
-      // alone: milliseconds, not the seconds a sandbox resolution costs.
-      const authResult = await checkAuth({ userId, machineId, projectName, branchName, name });
-      const existingSession = authResult.ok ? sessionMap.getByKey(authResult.sessionKey) : undefined;
-      const plan = planConnect({ accessAllowed: authResult.ok, existingSession });
+      // The access check is DB-only (leaf 1-2), reserves no concurrency slot, and
+      // the session key derives from the (scope, name) target without the Sprite
+      // (leaf 1-1) — so the live in-memory session lookup happens HERE, before
+      // anything has resolved, woken or written policy to a Sprite. A tab-back
+      // inside the detached grace window is therefore decided on the strength of
+      // the access check alone: milliseconds, not the seconds a sandbox
+      // resolution costs.
+      const accessResult = await checkAuth({ userId, machineId, projectName, branchName, name });
+      const existingSession = accessResult.ok ? sessionMap.getByKey(accessResult.sessionKey) : undefined;
+      const plan = planConnect({ accessResult, existingSession });
 
-      if (!authResult.ok) {
-        // plan === 'deny'. Note the lookup above never even ran for a denied
-        // user, so a live session can't be reattached to by someone who has
-        // lost access — auth gates the fast path.
-        socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${authResult.reason}`, connectionId });
+      if (plan.kind === 'deny') {
+        socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${plan.reason}`, connectionId });
         return;
       }
 
-      const { sessionKey } = authResult;
+      const { sessionKey } = plan.access;
 
-      if (plan === 'reattach' && existingSession !== undefined) {
-        if (existingSession.idleTimer !== undefined) {
-          clearTimeout(existingSession.idleTimer);
-          existingSession.idleTimer = undefined;
+      if (plan.kind === 'reattach') {
+        const { session: liveSession } = plan;
+        if (liveSession.idleTimer !== undefined) {
+          clearTimeout(liveSession.idleTimer);
+          liveSession.idleTimer = undefined;
         }
-        existingSession.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
-        existingSession.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
+        liveSession.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
+        liveSession.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
         sessionMap.reattach(sessionKey, connectionId);
         activeConnectionIds.add(connectionId);
-        // The live session already holds the slot it was created with; this
-        // connect's transient reservation is handed straight back.
-        authResult.releaseSlot();
-        socket.emit('agent-terminal:ready', { scrollback: existingSession.scrollback.join(''), connectionId });
+        // No slot to release: reattaching starts no PTY, so the access check
+        // reserved none. The live session still holds the one it was created
+        // with, and keeps it until it is torn down or reaped.
+        socket.emit('agent-terminal:ready', { scrollback: liveSession.scrollback.join(''), connectionId });
         return;
       }
 
-      // plan === 'create' — the cold path. ONLY now is the Sprite resolved: a
-      // reattach above returned without ever calling this.
-      const sandbox = await authResult.resolveSandbox();
+      // The cold path. ONLY now is a concurrency slot reserved and the Sprite
+      // resolved: a reattach above returned without ever calling this.
+      const sandbox = await plan.access.resolveSandbox();
       if (!sandbox.ok) {
-        // resolveSandbox released the reserved slot and logged the reason.
+        // resolveSandbox released the slot (if it had reserved one) and logged.
         socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${sandbox.reason}`, connectionId });
         return;
       }
+      const { releaseSlot } = sandbox;
 
       // Terminal Epic 3 metering: place a flat-estimate hold for this NEW
       // machine-active window BEFORE opening the shell (hibernated/idle time
@@ -471,9 +493,9 @@ export function buildAgentTerminalHandlers({
       // hold for the same still-open session.
       let holdId: string | undefined;
       if (billing) {
-        const gateResult = await billing.gate({ payerId: authResult.payerId });
+        const gateResult = await billing.gate({ payerId: plan.access.payerId });
         if (!gateResult.allowed) {
-          authResult.releaseSlot();
+          releaseSlot();
           socket.emit('agent-terminal:error', { message: 'Insufficient credits to open an agent terminal session.', connectionId });
           return;
         }
@@ -497,8 +519,8 @@ export function buildAgentTerminalHandlers({
         sandboxId,
         sessionKey,
         sessionId: sandbox.streamSessionId ?? undefined,
-        releaseSlot: authResult.releaseSlot,
-        payerId: authResult.payerId,
+        releaseSlot,
+        payerId: plan.access.payerId,
         holdId,
         connectedAt,
         pageId: machineId,
@@ -550,7 +572,7 @@ export function buildAgentTerminalHandlers({
           },
         });
       } catch {
-        authResult.releaseSlot();
+        releaseSlot();
         if (holdId) void billing?.releaseHold(holdId).catch(() => {});
         socket.emit('agent-terminal:error', { message: 'Failed to open agent terminal session', connectionId });
         return;
@@ -582,22 +604,27 @@ export function buildAgentTerminalHandlers({
 
       // Periodically re-check authorization while the session is alive.
       // Routes closed notification through closedFn so it reaches the current socket.
+      //
+      // This re-check reserves NOTHING: it never calls `resolveSandbox`, so it
+      // takes no concurrency slot and has none to hand back. That is load-bearing,
+      // not incidental — while the slot lived in the access check, this tick
+      // competed with the very session it was checking. A free-tier user (limit 1)
+      // whose one live session already held the only slot failed to acquire a
+      // second, the tick read that `concurrency_limit` as a REVOKED authorization,
+      // and tore the session down ~60s after it opened.
       const reAuthInterval = setInterval(async () => {
         const liveSession = sessionMap.getByKey(sessionKey);
         if (!liveSession) { clearInterval(reAuthInterval); return; }
         const result = await checkAuth({ userId, machineId, projectName, branchName, name });
         // Re-check liveness after the await: another actor (heartbeat insolvency,
         // PTY exit, idle reap) may have torn the session down while checkAuth ran —
-        // acting on the stale reference would double releaseSlot/kill/closedFn.
+        // acting on the stale reference would double kill/closedFn.
         if (sessionMap.getByKey(sessionKey) !== liveSession) {
-          if (result.ok) result.releaseSlot();
           clearInterval(reAuthInterval);
           return;
         }
         if (!result.ok) {
           teardownAgentTerminalSession(billing, sessionMap, liveSession, sessionKey, -2);
-        } else {
-          result.releaseSlot();
         }
       }, 60_000);
 

@@ -31,10 +31,11 @@ function makeSprite(sessions: Array<{ id: string; command: string; isActive: boo
 
 /**
  * A successful two-phase checkAuth result: the cheap DB-only access verdict,
- * plus the LAZY `resolveSandbox` thunk the cold path calls to resolve the
- * Sprite. `sprite` is re-surfaced at the top level purely so tests can spy on
- * it (it is the very same object the thunk hands back) — a reattach must leave
- * every one of its methods, and the thunk itself, untouched.
+ * plus the LAZY `resolveSandbox` thunk the cold path calls to reserve the
+ * concurrency slot and resolve the Sprite. `sprite` and `releaseSlot` are
+ * re-surfaced at the top level purely so tests can spy on them (they are the
+ * very same objects the thunk hands back) — a reattach must leave the sprite's
+ * methods, the slot, and the thunk itself untouched.
  */
 function makeAuthSuccess(over: Partial<{
   sessionKey: string;
@@ -47,6 +48,7 @@ function makeAuthSuccess(over: Partial<{
   payerId: string;
 }> = {}) {
   const sprite = makeSprite(over.sessions ?? []);
+  const releaseSlot = vi.fn();
   const sandbox = {
     ok: true as const,
     agentTerminalId: 'agent-terminal-1',
@@ -57,14 +59,15 @@ function makeAuthSuccess(over: Partial<{
     args: over.args ?? [],
     commandOverride: over.commandOverride ?? null,
     streamSessionId: over.streamSessionId ?? null,
+    releaseSlot,
   };
   return {
     ok: true as const,
     sessionKey: over.sessionKey ?? 'branch1:agent:cli',
     payerId: over.payerId ?? 'owner-1',
-    releaseSlot: vi.fn(),
     resolveSandbox: vi.fn(async () => sandbox),
     sprite,
+    releaseSlot,
   };
 }
 
@@ -123,32 +126,34 @@ describe('resolveAgentTerminalCommand', () => {
 });
 
 describe('planConnect', () => {
-  const liveSession = {} as TerminalSession;
+  const liveSession = { sessionKey: 'branch1:agent:cli' } as TerminalSession;
+  const granted = makeAuthSuccess();
+  const denied = { ok: false as const, reason: 'no_edit_access' };
 
   it('given access denied, should deny regardless of an existing session', () => {
     assert({
       given: 'a denied access verdict with a live in-memory session',
       should: 'deny (auth still gates the fast path — never reattach)',
-      actual: planConnect({ accessAllowed: false, existingSession: liveSession }),
-      expected: 'deny',
+      actual: planConnect({ accessResult: denied, existingSession: liveSession }),
+      expected: { kind: 'deny', reason: 'no_edit_access' },
     });
   });
 
-  it('given access denied and no session, should deny', () => {
+  it('given access denied and no session, should deny with the verdict reason', () => {
     assert({
       given: 'a denied access verdict and no live session',
-      should: 'deny',
-      actual: planConnect({ accessAllowed: false, existingSession: undefined }),
-      expected: 'deny',
+      should: 'deny, surfacing the verdict reason',
+      actual: planConnect({ accessResult: denied, existingSession: undefined }),
+      expected: { kind: 'deny', reason: 'no_edit_access' },
     });
   });
 
-  it('given access allowed and a live session, should reattach', () => {
+  it('given access allowed and a live session, should reattach carrying that session', () => {
     assert({
       given: 'an allowed access verdict and a live in-memory session',
-      should: 'reattach to the live session',
-      actual: planConnect({ accessAllowed: true, existingSession: liveSession }),
-      expected: 'reattach',
+      should: 'reattach, carrying the live session and the granted access',
+      actual: planConnect({ accessResult: granted, existingSession: liveSession }),
+      expected: { kind: 'reattach', access: granted, session: liveSession },
     });
   });
 
@@ -156,8 +161,8 @@ describe('planConnect', () => {
     assert({
       given: 'an allowed access verdict and no live session',
       should: 'create a fresh session (cold path)',
-      actual: planConnect({ accessAllowed: true, existingSession: undefined }),
-      expected: 'create',
+      actual: planConnect({ accessResult: granted, existingSession: undefined }),
+      expected: { kind: 'create', access: granted },
     });
   });
 });
@@ -449,7 +454,10 @@ describe('buildAgentTerminalHandlers', () => {
       expect(reattachAuth.sprite.attachSession).not.toHaveBeenCalled();
       expect(reattachAuth.sprite.updateNetworkPolicy).not.toHaveBeenCalled();
       expect(openShell).toHaveBeenCalledTimes(1);
-      expect(reattachAuth.releaseSlot).toHaveBeenCalledTimes(1);
+      // No slot was reserved for the reattach (resolveSandbox is what reserves
+      // one), so there is nothing to release — releasing here would decrement
+      // the LIVE session's own reservation.
+      expect(reattachAuth.releaseSlot).not.toHaveBeenCalled();
       expect(reconnectSocket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ scrollback: expect.any(String) }));
     });
 

@@ -204,19 +204,10 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
       return { ok: false, reason: readOnly.reason };
     }
 
-    // Decrypt the actor email BEFORE reserving the slot (a decrypt throw here
+    // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the fused checkAuth had).
     const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
-
-    // Read-only gates passed -> reserve the concurrency slot. Failing to reserve
-    // IS the concurrency_limit denial (the pure decision's final gate, exercised
-    // in its unit tests); nothing to release, since acquireSlot reserved nothing.
-    if (!deps.acquireSlot({ userId, tier })) {
-      deps.logDenied('concurrency_limit', { userId, machineId });
-      return { ok: false, reason: 'concurrency_limit' };
-    }
-    const releaseSlot = () => deps.releaseSlot(userId);
 
     return {
       ok: true,
@@ -225,23 +216,50 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
       // before deciding whether any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ terminalId: machineId, projectName, branchName, name }),
       payerId: readOnly.payerId,
-      releaseSlot,
 
       /**
        * Resolve/read the Sprite for a FRESH PTY — called by the cold path only.
        *
-       * Owns slot release on its own failure paths (as the fused checkAuth did):
-       * a deny releases and logs before returning; a REJECT (a DB error inside
-       * resolveAgentTerminal, a failed store/SDK lookup) releases before the
-       * rejection propagates, so a transient failure can never permanently
-       * consume the user's concurrency capacity. Re-throws so the socket surface
-       * is unchanged (the PTY bridge's onConnect .catch emits the generic error).
+       * RESERVES the concurrency slot, because the slot exists to bound how many
+       * PTYs a user has RUNNING — and only this path starts one. Reserving it in
+       * the access half instead (as the fused checkAuth did) made a slot a
+       * precondition for merely *asking* whether you may attach, which is wrong
+       * in two ways that both bite the common case:
        *
-       * The audit row is written HERE rather than in the access half, because
-       * it records a session actually being launched — a reattach to an already
+       *   - A free-tier user (limit 1) with one live session could never reattach
+       *     to it: their own session holds the only slot, so the tab-back's
+       *     access check failed to acquire a second one and was denied
+       *     `concurrency_limit`.
+       *   - The 60s re-auth tick calls checkAuth on a LIVE session. It too failed
+       *     to acquire a slot at the limit, read that as a lost authorization,
+       *     and tore the session down — killing a free-tier PTY ~60s after it
+       *     opened.
+       *
+       * Neither path starts a PTY, so neither needs a slot. Now they take none,
+       * and `releaseSlot` is surfaced on the SUCCESS result only — there is no
+       * slot to release unless this thunk actually reserved one.
+       *
+       * Owns slot release on its own failure paths: a deny releases and logs
+       * before returning; a REJECT (a DB error inside resolveAgentTerminal, a
+       * failed store/SDK lookup) releases before the rejection propagates, so a
+       * transient failure can never permanently consume the user's concurrency
+       * capacity. Re-throws so the socket surface is unchanged (the PTY bridge's
+       * onConnect .catch emits the generic error).
+       *
+       * The audit row is written HERE rather than in the access half, because it
+       * records a session actually being launched — a reattach to an already
        * running PTY launches nothing and must not write one.
        */
       resolveSandbox: async () => {
+        // The pure decision's final gate (`slotAcquired`), enforced at the only
+        // point a slot is genuinely needed. Nothing to release on failure —
+        // acquireSlot reserved nothing.
+        if (!deps.acquireSlot({ userId, tier })) {
+          deps.logDenied('concurrency_limit', { userId, machineId });
+          return { ok: false, reason: 'concurrency_limit' };
+        }
+        const releaseSlot = () => deps.releaseSlot(userId);
+
         let sandbox: ResolveTerminalSandboxResult;
         try {
           sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
@@ -276,6 +294,7 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
           args: sandbox.args,
           commandOverride: sandbox.commandOverride,
           streamSessionId: sandbox.streamSessionId,
+          releaseSlot,
         };
       },
     };
