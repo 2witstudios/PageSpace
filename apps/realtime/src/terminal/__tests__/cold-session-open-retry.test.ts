@@ -16,7 +16,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { openPtyShell } from '../sprites-shell';
-import { isPreOpenWakeError } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type {
   SpriteInstanceLike,
   SpriteCommandLike,
@@ -24,8 +23,16 @@ import type {
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { assert } from './riteway';
 
-/** The exact error @fly/sprites' WSCommand emits when the socket never opened. */
-const PRE_OPEN_DROP = new Error('WebSocket closed before open: code=1006');
+/**
+ * What a cold-VM drop ACTUALLY looks like. `@fly/sprites` has no `ws` dependency —
+ * it drives the global (undici) WebSocket and registers its 'error' listener
+ * BEFORE its 'close' one, so a failed handshake surfaces this opaque message
+ * first. Note it does NOT contain "closed before open": that string is only
+ * emitted afterwards, from the SDK's close handler. A retry keyed on that
+ * substring would miss this entirely — which is why the shell classifies
+ * structurally (no 'spawn' and no output => the socket never opened).
+ */
+const PRE_OPEN_DROP = new Error('WebSocket error: TypeError (url: wss://sprite/exec?stdin=true)');
 
 type FakeCommand = SpriteCommandLike & { _stdout: EventEmitter; _emitter: EventEmitter };
 
@@ -80,13 +87,6 @@ describe('cold session-open — the first real exec IS the wake', () => {
       rows: 24,
       onOutput: (data) => output.push(data),
       onExit: (code) => exits.push(code),
-    });
-
-    assert({
-      given: 'the SDK error emitted when a cold VM drops the wake connection',
-      should: 'be classified as a retryable pre-open drop',
-      actual: isPreOpenWakeError(PRE_OPEN_DROP),
-      expected: true,
     });
 
     // The cold VM drops the first session-open before it ever opened.

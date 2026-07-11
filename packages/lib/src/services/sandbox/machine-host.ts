@@ -76,29 +76,6 @@ export class MachineStreamOpenTimeoutError extends Error {
 }
 
 /**
- * POSITIVE evidence that the stream's target session no longer exists — the
- * machine answered, and its answer was "no such session" (a 404/410 on the exec
- * endpoint).
- *
- * This is the ONLY signal on which a caller may tear down a session's
- * bookkeeping. Every other failure — a control-plane blip, a 429, a 5xx during a
- * deploy, a socket hang-up, a timeout — is indistinguishable from "the process is
- * alive and we merely could not reach it", and acting on those would orphan a
- * running, billable PTY with nothing left pointing at it.
- *
- * The asymmetry is deliberate: keeping a row for a session that is already dead
- * is a visible, retryable annoyance; deleting the row for a session that is still
- * alive is a silent, unrecoverable leak. We bias to the former.
- */
-export class MachineStreamSessionGoneError extends Error {
-  /** `cause` is carried explicitly rather than via `new Error(msg, { cause })` — that overload needs an ES2022 lib, which not every consuming app targets. */
-  constructor(public readonly sessionId: string, public readonly cause?: unknown) {
-    super(`Machine stream session ${sessionId} no longer exists`);
-    this.name = 'MachineStreamSessionGoneError';
-  }
-}
-
-/**
  * A live interactive (PTY) stream on a machine. Deliberately minimal — bounded
  * reconnect/keepalive orchestration (see `apps/realtime/src/terminal/sprites-shell.ts`)
  * is caller-side policy, not part of this seam: a caller reconnects by calling

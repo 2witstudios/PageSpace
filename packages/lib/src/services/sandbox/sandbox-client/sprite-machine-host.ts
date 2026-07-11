@@ -18,14 +18,13 @@
 
 import {
   MachineStreamOpenTimeoutError,
-  MachineStreamSessionGoneError,
   type MachineHandle,
   type MachineHost,
   type MachineStream,
   type MachineStreamSessionInfo,
 } from '../machine-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
-import { withWakeRetry, isSpriteNotFoundError, type SpriteCommandLike, type SpritesSdk } from './sprites';
+import { withWakeRetry, asPreOpenDrop, type SpriteCommandLike, type SpritesSdk } from './sprites';
 
 function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
@@ -35,11 +34,10 @@ function toBuffer(chunk: Buffer | string): Buffer {
  * Wall-clock cap on waiting for a stream to report that it opened.
  *
  * Deliberately LONGER than the SDK's own 10s `waitForSessionInfo` timeout
- * (websocket.js), which is the real failure signal for an attach to a dangling
- * session. A shorter cap here would fire first on every such attach and mask the
- * SDK's specific error behind a generic timeout — and, since the two outcomes
- * demand opposite responses from the kill path (drop the row vs keep it), that
- * misclassification is not cosmetic.
+ * (websocket.js), so that when an attach to a dangling session fails, the SDK's
+ * own error arrives first and we reject with THAT rather than pre-empting it with
+ * a generic timeout of our own. The cap is the backstop for a transport that
+ * reports nothing at all, not the expected failure path.
  */
 const STREAM_OPEN_TIMEOUT_MS = 20_000;
 
@@ -57,8 +55,7 @@ const STREAM_OPEN_TIMEOUT_MS = 20_000;
  *
  * The SDK emits `spawn` only after `start()` resolves (socket up, and for an
  * attach, `session_info` received) and emits `error` — never `spawn` — on a
- * failure, so those are the authoritative signals. `exit` also settles: a
- * command that already finished has nothing left to wait for.
+ * failure, so `spawn` is the authoritative open signal.
  */
 function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -70,9 +67,21 @@ function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise
       fn();
     };
     const timer = setTimeout(() => settle(() => reject(new MachineStreamOpenTimeoutError(timeoutMs))), timeoutMs);
+
+    // 'spawn' is the ONLY confirmation of an open. Deliberately NOT 'exit': for an
+    // attach, the SDK SYNTHESIZES `exit` from the socket closing (websocket.js's
+    // handleClose maps a tty close to an exit code) — but a `detachable` tmux
+    // session OUTLIVES its client socket, so a synthesized exit is not evidence
+    // the process died. Accepting it as a successful open would hand the caller a
+    // dead stream whose SIGKILL silently no-ops, and `killAgentTerminal` would
+    // then drop the row of a PTY that is still running.
     command.on('spawn', () => settle(resolve));
-    command.on('exit', () => settle(resolve));
-    command.on('error', (error) => settle(() => reject(error)));
+
+    // We only listen during the pre-open window, so an error seen here is pre-open
+    // BY CONSTRUCTION — there is no need (and, given the opaque undici message, no
+    // way) to infer that from its text. Marking it is what lets the bounded wake
+    // retry fire.
+    command.on('error', (error) => settle(() => reject(asPreOpenDrop(error))));
   });
 }
 
@@ -157,21 +166,7 @@ function wrapSpriteHandle({
                 cols: args.cols,
                 rows: args.rows,
               });
-        try {
-          await awaitStreamOpen(command, streamOpenTimeoutMs);
-        } catch (error) {
-          // Translate the ONE failure that carries positive evidence — the exec
-          // endpoint answering 404/410 — into the typed "session is gone" signal.
-          // The SDK reports a rejected upgrade as `WebSocket error: Unexpected
-          // server response: <status>`, so the status is recoverable from the
-          // message. Everything else (a 429, a 5xx mid-deploy, a socket hang-up,
-          // a timeout) stays exactly as it is: an UNKNOWN, on which no caller may
-          // tear down a session's bookkeeping.
-          if (args.sessionId !== undefined && isSpriteNotFoundError(error)) {
-            throw new MachineStreamSessionGoneError(args.sessionId, error);
-          }
-          throw error;
-        }
+        await awaitStreamOpen(command, streamOpenTimeoutMs);
         return wrapSpriteStream(command);
       };
 

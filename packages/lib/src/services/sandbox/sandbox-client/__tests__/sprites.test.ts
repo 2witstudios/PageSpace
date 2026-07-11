@@ -30,6 +30,14 @@ interface FakeCommandSpec {
   exitCode?: number;
   error?: Error;
   hang?: boolean;
+  /**
+   * Whether the socket OPENED — i.e. whether the SDK emitted `spawn`
+   * (`cmd.start().then(() => cmd.emit('spawn'))`). This is the real boundary the
+   * wake retry keys on: an error before `spawn` never ran the command and is safe
+   * to re-run; one after it may have. Defaults to "opened" for a command that
+   * runs, and "never opened" for one that only errors (the cold-start drop).
+   */
+  opened?: boolean;
 }
 
 function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: string[] } {
@@ -38,7 +46,9 @@ function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: 
   const stderr = new EventEmitter();
   const killed: string[] = [];
 
+  const opened = spec.opened ?? spec.error === undefined;
   setTimeout(() => {
+    if (opened) events.emit('spawn');
     for (const chunk of spec.stdout ?? []) stdout.emit('data', chunk);
     for (const chunk of spec.stderr ?? []) stderr.emit('data', chunk);
     if (spec.error) {
@@ -273,12 +283,46 @@ describe('cold-start exec wake retry', () => {
     expect(attempts).toBe(2);
   });
 
+  // The regression that matters most: @fly/sprites has NO `ws` dependency — it
+  // drives the global (undici) WebSocket, and registers its `error` listener
+  // BEFORE its `close` listener. On a failed handshake undici fires `error` first,
+  // so the FIRST thing a consumer sees is an opaque `WebSocket error: …` — NOT the
+  // `WebSocket closed before open: …` string, which the SDK only emits afterwards
+  // from its `close` handler. A retry keyed on that substring would therefore MISS
+  // the real cold-start drop entirely. We classify structurally instead: no
+  // `spawn` yet => the socket never opened => safe to re-run.
+  it('given the REAL undici pre-open error shape (opaque message, no "closed before open"), should still retry', async () => {
+    let attempts = 0;
+    const sprite = fakeSprite({
+      spawn: () => {
+        attempts += 1;
+        return attempts === 1
+          ? fakeCommand({
+              opened: false,
+              error: new Error('WebSocket error: TypeError (url: wss://sprite/exec?stdin=true)'),
+            })
+          : fakeCommand({ stdout: ['ok'], exitCode: 0 });
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+
+    const result = await handle!.runCommand({ cmd: 'sh' });
+
+    expect(result.exitCode).toBe(0);
+    expect(attempts).toBe(2); // dropped pre-open, retried onto the woken VM
+  });
+
   it('does NOT retry a post-open / non-wake error (may have already run)', async () => {
     let attempts = 0;
     const sprite = fakeSprite({
       spawn: () => {
         attempts += 1;
-        return fakeCommand({ error: new Error('WebSocket keepalive timeout') });
+        // A keepalive timeout happens AFTER the socket opened — so the fake must
+        // emit `spawn` first, as the real SDK does. That is exactly what makes it
+        // a non-retryable, post-open failure.
+        return fakeCommand({ opened: true, error: new Error('WebSocket keepalive timeout') });
       },
     });
     const { sdk } = makeSdk({ getSprite: async () => sprite });

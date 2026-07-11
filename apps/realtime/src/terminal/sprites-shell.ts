@@ -1,4 +1,3 @@
-import { isPreOpenWakeError } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type {
   SpriteInstanceLike,
   SpriteCommandLike,
@@ -225,17 +224,26 @@ export function openPtyShell({
     // instant it errors so the trailing close/exit it produces can't tear the
     // session down while reconnect() is replacing it.
     let stale = false;
+    // Whether THIS command's socket ever opened. The SDK emits 'spawn' exactly
+    // when `start()` resolves, and any inbound byte proves the same thing. This is
+    // the structural boundary the reconnect keys on — see the 'error' handler.
+    let opened = false;
     cmd.stdout.on('data', (chunk) => {
       // Any inbound data proves the connection recovered; reset the failure budget.
+      opened = true;
       consecutiveFailures = 0;
       onOutput(toStr(chunk));
     });
-    cmd.stderr.on('data', (chunk) => onOutput(toStr(chunk)));
+    cmd.stderr.on('data', (chunk) => {
+      opened = true;
+      onOutput(toStr(chunk));
+    });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
     // open is the authoritative signal the connection is healthy — reset the
     // bounded reconnect budget here so an idle shell that reattaches cleanly but
     // stays quiet (no stdout) doesn't slowly exhaust the budget and get killed.
     cmd.on('spawn', () => {
+      opened = true;
       consecutiveFailures = 0;
       // A confirmed open retires the previous failure's classification. Without
       // this, a later reconnect entered WITHOUT a fresh error (listSessions
@@ -249,12 +257,19 @@ export function openPtyShell({
       if (stale) return;
       fatal(code ?? -1);
     });
-    cmd.on('error', (error) => {
+    cmd.on('error', () => {
       stale = true;
-      // Remember WHY this command died: a pre-open drop (the cold-VM wake
-      // handshake) is retryable even with no session to fall back to — see
-      // planReconnect's `preOpenDrop`.
-      lastErrorWasPreOpenDrop = isPreOpenWakeError(error);
+      // Remember WHY this command died, STRUCTURALLY: if it never reported an open
+      // (no 'spawn', no byte of output), its socket never came up, so the session
+      // was never started and re-creating it is safe — see planReconnect's
+      // `preOpenDrop`, which is what keeps a COLD Sprite openable.
+      //
+      // Deliberately not inferred from the error's text. `@fly/sprites` drives the
+      // global (undici) WebSocket and registers its 'error' listener before its
+      // 'close' one, so a failed handshake surfaces an opaque `WebSocket error: …`
+      // FIRST — the SDK's own `closed before open` string is only emitted
+      // afterwards, and a substring test would miss the real cold-start drop.
+      lastErrorWasPreOpenDrop = !opened;
       void reconnect();
     });
   }

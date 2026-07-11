@@ -15,12 +15,7 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
-import {
-  MachineStreamOpenTimeoutError,
-  MachineStreamSessionGoneError,
-  type MachineHost,
-  type MachineHandle,
-} from '../../sandbox/machine-host';
+import { MachineStreamOpenTimeoutError, type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
 
@@ -966,7 +961,7 @@ describe('killAgentTerminal', () => {
   // the other. `stream()` retries a cold-start drop internally (and that first
   // attempt wakes the Sprite), so a failure that survives the retry is a woken
   // Sprite saying "no such session".
-  it('given the machine reports the session is GONE (404), should drop the row — there is nothing left to kill', async () => {
+  it('given the machine does not LIST the session (positive evidence it is gone), should drop the row — there is nothing left to kill', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -989,9 +984,12 @@ describe('killAgentTerminal', () => {
         attach: async () =>
           makeHandle({
             stream: async () => {
-              // The machine ANSWERED for this session: 404. Positive evidence.
-              throw new MachineStreamSessionGoneError('sess-dangling');
+              throw new Error('WebSocket error: TypeError (url: wss://…/exec/sess-dangling)');
             },
+            // The machine ANSWERS, and this session is not among its live ones.
+            // That listing — a REST call with a real status — is the only positive
+            // evidence available; the WebSocket cannot surface an HTTP status.
+            listStreams: async () => [],
           }),
       }),
     });
@@ -1032,6 +1030,8 @@ describe('killAgentTerminal', () => {
               // about whether the PTY is alive.
               throw Object.assign(new Error('rate limited'), { status: 429 });
             },
+            // ...and the machine still lists the session as live.
+            listStreams: async () => [{ id: 'sess-abc', command: 'bash', isActive: true }],
           }),
       }),
     });
@@ -1040,6 +1040,45 @@ describe('killAgentTerminal', () => {
 
     // Dropping the row here would leave a running, billable agent process with
     // nothing pointing at it. An unknown is not a licence to delete.
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
+  });
+
+  it('given the session LISTING itself fails, should KEEP the row — we never obtained evidence either way', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-abc',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              throw new Error('WebSocket error: TypeError (url: wss://…/exec/sess-abc)');
+            },
+            listStreams: async () => {
+              throw new Error('sprite api down');
+            },
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // Absence of evidence is not evidence of absence.
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(rows.size).toBe(1);
   });
@@ -1069,6 +1108,7 @@ describe('killAgentTerminal', () => {
             stream: async () => {
               throw new MachineStreamOpenTimeoutError(20_000);
             },
+            listStreams: async () => [{ id: 'sess-abc', command: 'bash', isActive: true }],
           }),
       }),
     });

@@ -250,10 +250,23 @@ function runSpawned(
       return next;
     };
 
+    // The SDK emits 'spawn' exactly when `start()` resolves — i.e. the socket is
+    // open (and, for an attach, `session_info` has arrived). It is therefore the
+    // authoritative boundary between "this never ran" and "this may have run",
+    // which is the only question the retry needs answered. See `isPreOpenWakeError`
+    // for why the error's TEXT cannot answer it.
+    let opened = false;
+    command.on('spawn', () => {
+      opened = true;
+    });
+
     command.stdout.on('data', (chunk) => {
+      // Output proves the connection opened, even if the 'spawn' event was missed.
+      opened = true;
       stdoutLen = collect(stdoutChunks, chunk, stdoutLen);
     });
     command.stderr.on('data', (chunk) => {
+      opened = true;
       stderrLen = collect(stderrChunks, chunk, stderrLen);
     });
     command.on('exit', (code) => {
@@ -264,7 +277,10 @@ function runSpawned(
       });
     });
     command.on('error', (error) => {
-      fail(error);
+      // A failure BEFORE the socket opened never started the command, so it is
+      // safe to re-run. One that arrives after may already have run it, and must
+      // not be.
+      fail(opened ? error : markPreOpenDrop(error));
     });
 
     if (timeoutMs && timeoutMs > 0) {
@@ -296,15 +312,60 @@ export const MAX_EXEC_ATTEMPTS = 3;
 export const RETRY_BASE_DELAY_MS = 500;
 const FS_OP_TIMEOUT_MS = 30_000;
 
-/** Pure: is this failure the provably pre-open cold-start drop (and so safe to re-run)? */
+/**
+ * Marks an error that reached us BEFORE the command's socket opened.
+ *
+ * This is a STRUCTURAL fact, recorded by whoever was watching the connection, not
+ * a guess made afterwards from the error's text. The distinction matters because
+ * the text is not usable: `@fly/sprites` has no `ws` dependency — it drives the
+ * global (undici) WebSocket, whose own file header notes that "the standard
+ * WebSocket API does not expose HTTP error responses on connection failure". On a
+ * failed handshake undici fires `error` BEFORE `close`, and the SDK registers its
+ * `error` listener first (websocket.js), so the first thing a consumer sees is
+ * `WebSocket error: <opaque>` — NOT the `WebSocket closed before open: …` string
+ * that only gets emitted afterwards, from the `close` listener. Matching on that
+ * string alone therefore misses the very cold-start drop it was written for.
+ *
+ * Non-enumerable and symbol-keyed so marking never alters an error's identity,
+ * message, or JSON shape — callers still see exactly the error the SDK threw.
+ */
+const PRE_OPEN_DROP = Symbol.for('pagespace.sandbox.preOpenDrop');
+
+function markPreOpenDrop(error: unknown): unknown {
+  if (typeof error === 'object' && error !== null) {
+    Object.defineProperty(error, PRE_OPEN_DROP, { value: true, enumerable: false, configurable: true });
+  }
+  return error;
+}
+
+/**
+ * Pure: is this failure a drop that happened BEFORE the connection opened (and so
+ * provably never ran the command, making a re-run safe)?
+ *
+ * Answers structurally when it can — a failure observed while still waiting for
+ * the SDK's `spawn` event, which fires exactly when `start()` resolves. Falls back
+ * to the SDK's own `closed before open` text for the one case that produces it
+ * without a preceding `error` event: a socket that opened at the transport level
+ * and was then closed inside the pre-open window (an attach whose `session_info`
+ * never arrives).
+ *
+ * A timeout or an output overflow is never retryable: the command may already
+ * have run.
+ */
 export function isPreOpenWakeError(error: unknown): boolean {
   if (error instanceof SandboxCommandTimeoutError || error instanceof SandboxOutputLimitError) {
     return false;
   }
+  if (typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[PRE_OPEN_DROP] === true) {
+    return true;
+  }
   const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  // Emitted by the SDK's WSCommand before the socket ever opens — see
-  // @fly/sprites websocket.js ("WebSocket closed before open: …").
   return msg.includes('closed before open');
+}
+
+/** Record that `error` reached the caller before the connection ever opened. */
+export function asPreOpenDrop(error: unknown): unknown {
+  return markPreOpenDrop(error);
 }
 
 /** Pure: the linear backoff between wake attempts (attempt is 1-based). */

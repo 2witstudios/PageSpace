@@ -36,7 +36,7 @@
  * reconnected or resumed from hibernation.
  */
 
-import { MachineStreamSessionGoneError, type MachineHandle, type MachineHost } from '../sandbox/machine-host';
+import type { MachineHandle, MachineHost, MachineStreamSessionInfo } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
 import {
@@ -466,20 +466,27 @@ async function killAtLocation(
       try {
         const stream = await handle.stream({ sessionId: row.streamSessionId });
         stream.kill('SIGKILL');
-      } catch (error) {
-        // Drop this terminal's bookkeeping ONLY on positive evidence that its
-        // session is already gone (the machine answered 404/410 for it — see
-        // `MachineStreamSessionGoneError`). Then there is genuinely nothing left
-        // to kill, and keeping the row would strand the terminal unkillable.
+      } catch {
+        // The stream would not open. That alone says NOTHING about whether the PTY
+        // is alive: the WebSocket API cannot surface an HTTP status (see
+        // `isPreOpenWakeError`), so a vanished session, a 429, a 5xx mid-deploy and
+        // a socket hang-up are indistinguishable at this layer.
         //
-        // EVERY other failure is an unknown, and unknowns must not be acted on: a
-        // 429, a 5xx during a deploy, a socket hang-up, a control-plane blip
-        // resolving the machine, or an open that never reported either way are all
-        // indistinguishable from "the PTY is alive and we simply could not reach
-        // it". Deleting the row in those cases would leave a running, billable
-        // agent process with nothing pointing at it — silent and unrecoverable,
-        // where keeping the row is merely a retryable annoyance.
-        if (!(error instanceof MachineStreamSessionGoneError)) {
+        // So we ask the one API that CAN answer: the session LIST. If the machine
+        // tells us this session is not among its live ones, that is positive
+        // evidence it is gone — nothing left to kill, and keeping the row would
+        // strand the terminal permanently unkillable. Anything else (it IS still
+        // listed, or the listing itself failed) is an unknown, and unknowns must
+        // not be acted on: deleting the row of a PTY that is still running leaves a
+        // billable process with nothing pointing at it — silent and unrecoverable,
+        // where keeping the row is merely a visible, retryable annoyance.
+        let sessions: MachineStreamSessionInfo[];
+        try {
+          sessions = await handle.listStreams();
+        } catch {
+          return { ok: false, reason: 'error' };
+        }
+        if (sessions.some((session) => session.id === row.streamSessionId)) {
           return { ok: false, reason: 'error' };
         }
       }

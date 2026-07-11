@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
-import { MachineStreamOpenTimeoutError, MachineStreamSessionGoneError } from '../../machine-host';
+import { MachineStreamOpenTimeoutError } from '../../machine-host';
 import { createSpritesSandboxClient, type SpriteCommandLike, type SpriteInstanceLike, type SpritesSdk } from '../sprites';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
@@ -265,16 +265,18 @@ describe('createSpriteMachineHost', () => {
     expect(attempts).toBe(2); // first attach dropped pre-open, retried onto the woken VM
   });
 
-  it('given a stream attach that fails POST-open, should surface the error rather than retrying a session that may already be running', async () => {
+  it('given every attach attempt drops pre-open, should give up on the bounded schedule rather than retry forever', async () => {
     let attempts = 0;
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
           attachSession: () => {
             attempts += 1;
-            // Deliberately NOT a not-found: a transport failure that says nothing
-            // about whether the session exists.
-            return fakeCommand({ autoExit: false, autoSpawn: false, error: new Error('socket hang up') }).command;
+            return fakeCommand({
+              autoExit: false,
+              autoSpawn: false,
+              error: new Error('WebSocket error: TypeError (url: wss://sprite/exec/dead)'),
+            }).command;
           },
         }),
     });
@@ -282,7 +284,27 @@ describe('createSpriteMachineHost', () => {
     const host = createSpriteMachineHost({ sdk, client });
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
 
-    await expect(handle.stream({ sessionId: 'existing-session' })).rejects.toThrow('socket hang up');
+    await expect(handle.stream({ sessionId: 'dead' })).rejects.toThrow();
+    expect(attempts).toBe(3); // MAX_EXEC_ATTEMPTS — bounded, not infinite
+  });
+
+  it('given the socket OPENS, should hand back the stream — a later error belongs to the consumer, not the retry', async () => {
+    let attempts = 0;
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          attachSession: () => {
+            attempts += 1;
+            return fakeCommand({ autoExit: false }).command; // emits spawn
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    const stream = await handle.stream({ sessionId: 'live' });
+    stream.kill('SIGKILL');
     expect(attempts).toBe(1);
   });
 
@@ -306,32 +328,6 @@ describe('createSpriteMachineHost', () => {
     const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
 
     await expect(handle.stream({ sessionId: 'sess-limbo' })).rejects.toBeInstanceOf(MachineStreamOpenTimeoutError);
-  });
-
-  it('given the machine answers 404 for the session, should reject with MachineStreamSessionGoneError (positive evidence, not a wake drop)', async () => {
-    let attempts = 0;
-    const { sdk } = makeSdk({
-      getSprite: async () =>
-        fakeSprite({
-          attachSession: () => {
-            attempts += 1;
-            // How the SDK surfaces a rejected upgrade: websocket.js emits
-            // `WebSocket error: Unexpected server response: <status>`.
-            return fakeCommand({
-              autoExit: false,
-              autoSpawn: false,
-              error: new Error('WebSocket error: Unexpected server response: 404 (url: wss://…/exec/sess-gone)'),
-            }).command;
-          },
-        }),
-    });
-    const client = createSpritesSandboxClient({ sdk });
-    const host = createSpriteMachineHost({ sdk, client });
-    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
-
-    await expect(handle.stream({ sessionId: 'sess-gone' })).rejects.toBeInstanceOf(MachineStreamSessionGoneError);
-    // A 404 is an ANSWER, not a wake drop — retrying it would be pointless.
-    expect(attempts).toBe(1);
   });
 
   it('given listStreams, should surface only tty sessions from the underlying Sprite', async () => {
