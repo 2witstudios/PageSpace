@@ -77,18 +77,36 @@ export type ReconnectPlan =
  *   is dead; the shell overwrites the persisted streamSessionId).
  * - No known id but a live shell exists → `attach` it (fresh-create path whose
  *   background id-capture hasn't landed yet).
+ * - No known id, nothing live, and the drop was PRE-OPEN → `create` (see below).
  * - No known id and nothing live → `fatal` (the shell is genuinely gone).
+ *
+ * `preOpenDrop` is what keeps a COLD Sprite openable. A Sprite has no wake API —
+ * an incoming request wakes it (docs.sprites.dev/concepts/lifecycle) — so the
+ * first `createSession` against a hibernated VM IS its wake, and Fly's
+ * wake-on-request can drop that first connection before it ever opens (surfaced
+ * as an opaque WebSocket error — hence the caller classifies it structurally, by
+ * the absence of a 'spawn', not by its text). At that moment there is no known id
+ * (we were creating one) and
+ * nothing live (the VM is still booting): identical, on the surface, to a
+ * genuinely dead shell. Without this flag that state reads as `fatal` and the
+ * user gets `exit -1` instead of a prompt. A pre-open drop is provably a
+ * connection that never opened, so nothing was started and re-creating is safe;
+ * `consecutiveFailures` still bounds it, so a Sprite that truly never wakes
+ * exhausts the budget and surfaces the exit anyway.
  */
 export function planReconnect({
   knownId,
   liveSessionIds,
   consecutiveFailures,
   maxAttempts,
+  preOpenDrop = false,
 }: {
   knownId: string | undefined;
   liveSessionIds: string[];
   consecutiveFailures: number;
   maxAttempts: number;
+  /** The failure that triggered this reconnect was a cold-start pre-open drop. */
+  preOpenDrop?: boolean;
 }): ReconnectPlan {
   if (consecutiveFailures > maxAttempts) return { action: 'fatal' };
   if (knownId !== undefined) {
@@ -97,6 +115,7 @@ export function planReconnect({
       : { action: 'create' };
   }
   if (liveSessionIds.length > 0) return { action: 'attach', id: liveSessionIds[0] };
+  if (preOpenDrop) return { action: 'create' };
   return { action: 'fatal' };
 }
 
@@ -182,6 +201,9 @@ export function openPtyShell({
   let closed = false; // a real exit (or exhausted reconnects) — stop everything
   let reconnecting = false;
   let consecutiveFailures = 0;
+  // Whether the failure that triggered the pending reconnect was a cold-start
+  // pre-open drop (the Sprite wake handshake) rather than a post-open death.
+  let lastErrorWasPreOpenDrop = false;
   // Bumped on every session (re)establishment (attach or fresh-create). A
   // fresh session resolves its id via a fire-and-forget listSessions(); if a
   // LATER establishment supersedes it before that resolves, the stale resolver
@@ -204,24 +226,54 @@ export function openPtyShell({
     // instant it errors so the trailing close/exit it produces can't tear the
     // session down while reconnect() is replacing it.
     let stale = false;
+    // Whether THIS command's socket ever opened. The SDK emits 'spawn' exactly
+    // when `start()` resolves, and any inbound byte proves the same thing. This is
+    // the structural boundary the reconnect keys on — see the 'error' handler.
+    let opened = false;
     cmd.stdout.on('data', (chunk) => {
       // Any inbound data proves the connection recovered; reset the failure budget.
+      opened = true;
       consecutiveFailures = 0;
       onOutput(toStr(chunk));
     });
-    cmd.stderr.on('data', (chunk) => onOutput(toStr(chunk)));
+    cmd.stderr.on('data', (chunk) => {
+      opened = true;
+      onOutput(toStr(chunk));
+    });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
     // open is the authoritative signal the connection is healthy — reset the
     // bounded reconnect budget here so an idle shell that reattaches cleanly but
     // stays quiet (no stdout) doesn't slowly exhaust the budget and get killed.
-    cmd.on('spawn', () => { consecutiveFailures = 0; });
+    cmd.on('spawn', () => {
+      opened = true;
+      consecutiveFailures = 0;
+      // A confirmed open retires the previous failure's classification. Without
+      // this, a later reconnect entered WITHOUT a fresh error (listSessions
+      // unavailable, or the catch-all retry) would consult a stale verdict from
+      // whatever failed last.
+      lastErrorWasPreOpenDrop = false;
+    });
     cmd.on('exit', (code) => {
       // Ignore the stale exit that trails a keepalive 'error' on the same dead
       // command — only an exit WITHOUT a preceding error is a real shell exit.
       if (stale) return;
       fatal(code ?? -1);
     });
-    cmd.on('error', () => { stale = true; void reconnect(); });
+    cmd.on('error', () => {
+      stale = true;
+      // Remember WHY this command died, STRUCTURALLY: if it never reported an open
+      // (no 'spawn', no byte of output), its socket never came up, so the session
+      // was never started and re-creating it is safe — see planReconnect's
+      // `preOpenDrop`, which is what keeps a COLD Sprite openable.
+      //
+      // Deliberately not inferred from the error's text. `@fly/sprites` drives the
+      // global (undici) WebSocket and registers its 'error' listener before its
+      // 'close' one, so a failed handshake surfaces an opaque `WebSocket error: …`
+      // FIRST — the SDK's own `closed before open` string is only emitted
+      // afterwards, and a substring test would miss the real cold-start drop.
+      lastErrorWasPreOpenDrop = !opened;
+      void reconnect();
+    });
   }
 
   // Start a brand-new shell for the SAME command and resolve its session id in
@@ -316,6 +368,7 @@ export function openPtyShell({
         liveSessionIds: liveIds,
         consecutiveFailures,
         maxAttempts: MAX_RECONNECT_ATTEMPTS,
+        preOpenDrop: lastErrorWasPreOpenDrop,
       });
 
       if (plan.action === 'fatal') {

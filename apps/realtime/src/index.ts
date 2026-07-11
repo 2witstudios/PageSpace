@@ -24,7 +24,7 @@ import {
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
-import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
@@ -97,12 +97,23 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
 /**
  * Acquires the OWNING Machine's persistent Sprite for `AgentTerminalMachineSandbox`
  * (machine/project scope share this one Sprite — see `agent-terminals.ts`),
- * re-authorizing `actorUserId` (resume re-authz) on every call, waking a
- * resumed (possibly hibernated) Sprite before handing its id back so a fresh
- * PTY spawn never races a cold Sprite. Mirrors the acquisition the retired
- * human terminal's `makeTerminalCheckAuth` used to perform inline.
+ * re-authorizing `actorUserId` (resume re-authz) on every call. Mirrors the
+ * acquisition the retired human terminal's `makeTerminalCheckAuth` used to
+ * perform inline.
+ *
+ * Does NOT wake the Sprite, and does not read it a second time to try. A Sprite
+ * has no explicit wake API — an incoming request wakes it automatically
+ * (docs.sprites.dev/concepts/lifecycle) — so the PTY's own `createSession` /
+ * `attachSession` IS the wake, and it already carries the bounded pre-open retry
+ * that the cold-start drop needs (`withWakeRetry` / `openPtyShell`'s reconnect).
+ * The `sh -c :` this used to run first bought nothing but a SECOND cold start on
+ * the slowest path we have.
+ *
+ * `sdk` is threaded in (rather than resolved here) so the whole connect —
+ * acquire, auth, launch resolution — shares ONE `createSpriteHandleCache` and
+ * therefore ONE underlying `getSprite`.
  */
-function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
+function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTerminalMachineSandbox {
   // The caller (resolveProjectOrMachineLocation, agent-terminals.ts) collapses
   // every acquire failure to one generic 'machine_unavailable' reason — log the
   // SPECIFIC reason here so it's still visible in realtime logs for triage.
@@ -122,7 +133,7 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
       const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
       if (!guardrail.allowed) return deny(guardrail.reason, machineId);
 
-      const [store, sdk] = await Promise.all([dbMachineSessionStorePromise, getRealtimeSpritesSdk()]);
+      const store = await dbMachineSessionStorePromise;
       const rawClient = createSpritesSandboxClient({ sdk });
       const host = createSpriteMachineHost({ sdk, client: rawClient });
       const client = createExecClientFromMachineHost(host, { kind: 'sprite' });
@@ -148,15 +159,6 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
         },
       });
       if (!result.ok) return deny(result.reason, machineId);
-
-      if (result.resumed) {
-        try {
-          const sprite = await sdk.getSprite(result.sandboxId);
-          await ensureSpriteAwake(sprite);
-        } catch {
-          return deny('provision_failed', machineId);
-        }
-      }
 
       recordMachineActivity({ machineKey: machineId, now: nowMs });
 
@@ -206,12 +208,20 @@ function buildAgentTerminalSessionKey({
  * Resolve the Sprite a FRESH agent-terminal PTY will attach to (lazy sprite
  * resolution — leaf 1-2): resolve the (scope, name) target down to its Machine
  * Sprite via `resolveAgentTerminal` (machine/project scope may reconnect/resume
- * the Sprite through `buildMachineSandbox`), then read that Sprite exactly once.
- * Deliberately NOT part of the access decision — a Sprite is woken automatically
- * by any exec, so authorization never needs to touch it (see
- * `agent-terminal-access.ts`). Full getSprite collapse is leaf 1-4.
+ * the Sprite through `buildMachineSandbox`), then read that Sprite. Deliberately
+ * NOT part of the access decision — a Sprite is woken automatically by any exec,
+ * so authorization never needs to touch it (see `agent-terminal-access.ts`).
+ *
+ * ONE `createSpriteHandleCache` is built here, per connect, and threaded through
+ * BOTH halves — the machine acquire (whose `getOrCreate` probes the Sprite by
+ * name) and the launch resolution below (which needs the raw handle for the PTY).
+ * They read the same Sprite, so they now share one control-plane round-trip
+ * instead of paying for two. The cache is deliberately connect-scoped, never
+ * module-scoped: a Sprite handle is a live object, and a process-lifetime cache
+ * would keep serving one that has since been destroyed and re-created under the
+ * same name.
  */
-function resolveAgentTerminalSandbox({
+async function resolveAgentTerminalSandbox({
   userId,
   machineId,
   projectName,
@@ -224,6 +234,8 @@ function resolveAgentTerminalSandbox({
   branchName?: string;
   name: string;
 }) {
+  const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+
   return resolveMachineSandbox(
     { machineId, projectName, branchName, name },
     {
@@ -242,14 +254,14 @@ function resolveAgentTerminalSandbox({
             branchStore,
             store: agentTerminalStore,
             projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
-            machineSandbox: buildMachineSandbox(userId),
+            machineSandbox: buildMachineSandbox(userId, sdk),
           },
         });
       },
-      getSprite: async (sandboxId) => {
-        const sdk = await getRealtimeSpritesSdk();
-        return sdk.getSprite(sandboxId);
-      },
+      // Served from the cache the acquire above already populated (machine/project
+      // scope). A branch-scope target never acquires, so this is its one and only
+      // read.
+      getSprite: (sandboxId) => sdk.getSprite(sandboxId),
     },
   );
 }

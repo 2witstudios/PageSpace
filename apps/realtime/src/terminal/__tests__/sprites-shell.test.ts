@@ -352,13 +352,21 @@ describe('openPtyShell', () => {
       expect(onOutput).toHaveBeenCalledWith('back\r\n');
     });
 
-    it('given an error and NO live session, should call onExit(-1) without an error banner', async () => {
+    it('given a POST-open error and NO live session, should call onExit(-1) without an error banner', async () => {
       const cmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [] });
       const onOutput = vi.fn();
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      // The socket OPENED first — a keepalive timeout is by definition a
+      // post-open failure (the watchdog only fires after 45s of an established
+      // connection). The real SDK emits 'spawn' at that open, and the shell keys
+      // its retry decision on it: a post-open death with nothing live left to
+      // attach to is a genuinely dead shell, so it exits rather than re-creating.
+      // (Contrast the cold-start PRE-open drop, which never opened and IS retried
+      // — see cold-session-open-retry.test.ts.)
+      cmd._emitter.emit('spawn');
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 

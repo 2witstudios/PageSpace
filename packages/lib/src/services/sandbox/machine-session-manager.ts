@@ -28,9 +28,9 @@ export interface SandboxClient {
  * site.
  *
  * Read directly from `process.env`, NOT via `getValidatedEnv()`: this runs in the
- * realtime service too (machine session keys), whose lean env does not satisfy
+ * realtime service too (terminal session keys), whose lean env does not satisfy
  * the full web schema — `getValidatedEnv()` would throw there, blanking the
- * secret and denying every machine.
+ * secret and denying every terminal.
  */
 export function getSandboxSessionSecret(): string {
   const secret = process.env.SANDBOX_SESSION_SECRET ?? '';
@@ -158,7 +158,7 @@ export interface AcquireMachineSessionInput {
     secret: string;
     /**
      * REQUIRED full-egress enablement gate, consulted when provisioning a FRESH
-     * machine. The machine runs OPEN egress, so this gate is mandatory: if it
+     * terminal. The terminal runs OPEN egress, so this gate is mandatory: if it
      * refuses, no VM is created. Required (not optional) so a caller can never
      * silently bypass containment by forgetting to wire it.
      */
@@ -197,7 +197,7 @@ async function safeTouch(store: MachineSessionStore, sessionKey: string, now: Da
 
 // Resolved at provision time (not module load) so the configured dedicated
 // egress-IP tag (`SANDBOX_EGRESS_IP_TAG`) is picked up even when set after import.
-// Shared `resolveSandboxNetworkOptions` so agent + machine share one network
+// Shared `resolveSandboxNetworkOptions` so agent + terminal share one network
 // posture (open egress, same caps, same internal-surface deny). Applied on every
 // hand-back (fresh + reconnect) so the open egress policy is always current.
 function machineSandboxOptions(): SandboxCreateOptions {
@@ -217,7 +217,7 @@ async function provisionFreshMachine({
   const { deps, pageId, userId, driveId } = input;
 
   // Full-egress containment gate (fresh provisioning only) — MANDATORY. The
-  // machine runs OPEN egress; if the gate refuses, no VM is created.
+  // terminal runs OPEN egress; if the gate refuses, no VM is created.
   const enablement = await deps.checkFullEgressEnablement();
   if (!enablement.ok) {
     return { ok: false, reason: enablement.reason };
@@ -232,9 +232,9 @@ async function provisionFreshMachine({
   } catch (error) {
     const meta = { reason: 'provision_failed', userId, pageId, driveId };
     if (error instanceof Error) {
-      loggers.api.error('Machine sandbox acquisition failed', error, meta);
+      loggers.api.error('Terminal sandbox acquisition failed', error, meta);
     } else {
-      loggers.api.error('Machine sandbox acquisition failed', meta);
+      loggers.api.error('Terminal sandbox acquisition failed', meta);
     }
     return { ok: false, reason: 'provision_failed', cause: error };
   }
@@ -273,7 +273,7 @@ export async function acquireMachineSession(
         : null,
       now: deps.now(),
       intent: 'run',
-      // Sprites hibernate when idle and wake on demand, so an idle machine VM
+      // Sprites hibernate when idle and wake on demand, so an idle terminal VM
       // must be resumed, not destroyed — `persistent` makes the planner return
       // `noop` on idle (handled below as a reconnect) instead of `teardown`.
       persistent: true,
@@ -285,14 +285,16 @@ export async function acquireMachineSession(
     // destroyed (getOrCreate recreates it under the same name so the sandboxId
     // stays stable), (c) policy migration for sessions created before this change.
     // Shared by `resume` (within the warm window) and `noop` (persistent-idle:
-    // VM is hibernating). The VM is warmed before the PTY opens by the realtime
-    // path (ensureSpriteAwake), so a hibernated machine's `bash` spawn lands on
-    // an awake VM instead of racing a cold-start drop.
+    // VM is hibernating). A hibernating VM is NOT pre-warmed here: it has no
+    // explicit wake API (docs.sprites.dev/concepts/lifecycle) and wakes on any
+    // incoming request, so the caller's first real operation — the PTY's
+    // createSession/attachSession, or an exec — is itself the wake, and carries
+    // the bounded pre-open retry that a cold-start drop needs.
     const reconnectExisting = async (): Promise<AcquireMachineSessionResult> => {
       // Reconnect uses getOrCreate, which RE-PROVISIONS a vanished/reaped VM under
       // the same name — i.e. it can mint a FRESH open-egress VM. So the containment
       // gate must run here too, not only on the fresh-create path; otherwise a warm
-      // or hibernating machine would bypass containment after
+      // or hibernating terminal would bypass containment after
       // SANDBOX_CONTAINMENT_VERIFIED is turned off.
       const enablement = await deps.checkFullEgressEnablement();
       if (!enablement.ok) {
@@ -305,9 +307,9 @@ export async function acquireMachineSession(
       } catch (error) {
         const meta = { reason: 'provision_failed', userId, pageId, driveId };
         if (error instanceof Error) {
-          loggers.api.error('Machine sandbox reconnect failed', error, meta);
+          loggers.api.error('Terminal sandbox reconnect failed', error, meta);
         } else {
-          loggers.api.error('Machine sandbox reconnect failed', meta);
+          loggers.api.error('Terminal sandbox reconnect failed', meta);
         }
         return { ok: false, reason: 'provision_failed', cause: error };
       }

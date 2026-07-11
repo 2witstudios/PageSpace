@@ -15,7 +15,7 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
-import type { MachineHost, MachineHandle } from '../../sandbox/machine-host';
+import { MachineStreamOpenTimeoutError, type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
 
@@ -954,6 +954,176 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: true });
     expect(rows.size).toBe(0);
+  });
+
+  // sprites 1-4: a stream that FAILS to open and a stream that never REPORTS are
+  // opposite situations, and conflating them breaks the kill in one direction or
+  // the other. `stream()` retries a cold-start drop internally (and that first
+  // attempt wakes the Sprite), so a failure that survives the retry is a woken
+  // Sprite saying "no such session".
+  it('given the machine does not LIST the session (positive evidence it is gone), should drop the row — there is nothing left to kill', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-dangling',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              throw new Error('WebSocket error: TypeError (url: wss://…/exec/sess-dangling)');
+            },
+            // The machine ANSWERS, and this session is not among its live ones.
+            // That listing — a REST call with a real status — is the only positive
+            // evidence available; the WebSocket cannot surface an HTTP status.
+            listStreams: async () => [],
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // Exec sessions do not survive a Sprite pause, so a session id that will not
+    // attach names a process that is already gone. Keeping the row here would
+    // strand the terminal permanently unkillable.
+    expect(result).toEqual({ ok: true });
+    expect(rows.size).toBe(0);
+  });
+
+  it('given a TRANSIENT stream failure (429 / 5xx / hang-up — NOT positive evidence), should KEEP the row rather than orphan a live PTY', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-abc',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              // A control-plane blip resolving the machine, mid-kill. Says NOTHING
+              // about whether the PTY is alive.
+              throw Object.assign(new Error('rate limited'), { status: 429 });
+            },
+            // ...and the machine still lists the session as live.
+            listStreams: async () => [{ id: 'sess-abc', command: 'bash', isActive: true }],
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // Dropping the row here would leave a running, billable agent process with
+    // nothing pointing at it. An unknown is not a licence to delete.
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
+  });
+
+  it('given the session LISTING itself fails, should KEEP the row — we never obtained evidence either way', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-abc',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              throw new Error('WebSocket error: TypeError (url: wss://…/exec/sess-abc)');
+            },
+            listStreams: async () => {
+              throw new Error('sprite api down');
+            },
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // Absence of evidence is not evidence of absence.
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
+  });
+
+  it('given the stream never reports whether it opened (timeout), should KEEP the row EVEN IF the listing claims the session is gone — a silent machine has not earned trust in its own listing', async () => {
+    const { store, rows } = makeStore([
+      {
+        id: 'agent-terminal-1',
+        ownerId: 'user-1',
+        machineId: TERMINAL_ID,
+        scope: 'branch',
+        projectName: PROJECT_NAME,
+        machineBranchId: BRANCH_ID,
+        name: 'cli',
+        agentType: 'pagespace-cli',
+        command: null,
+        streamSessionId: 'sess-abc',
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const deps = makeDeps({
+      store,
+      host: makeHost({
+        attach: async () =>
+          makeHandle({
+            stream: async () => {
+              throw new MachineStreamOpenTimeoutError(20_000);
+            },
+            // Deliberately reports the session as GONE. For any OTHER failure this
+            // listing would be positive evidence and the row would be dropped — so
+            // this test only passes if the timeout genuinely short-circuits ahead
+            // of the listing, rather than passing for the same reason the
+            // transient-failure test above does.
+            listStreams: async () => [],
+          }),
+      }),
+    });
+
+    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    // We learned NOTHING: the PTY may be alive and merely unreachable. Dropping
+    // the row would leave a running, billable process with no bookkeeping.
+    expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(rows.size).toBe(1);
   });
 
   it('given the Sprite kill throws, should keep the row so a retry can find it again', async () => {
