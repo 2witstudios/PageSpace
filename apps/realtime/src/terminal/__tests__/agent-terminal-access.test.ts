@@ -253,7 +253,7 @@ function sandboxSpy(resolve: () => Promise<ResolveAgentTerminalResult>): Sandbox
   return spy;
 }
 
-type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number };
+type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number; resolveTerminalRow: number };
 
 /** Default deps whose read functions COUNT their own invocations, so a
  * short-circuit test can assert "this table was never queried" via `calls`
@@ -263,7 +263,7 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
   deps: AgentTerminalCheckAuthDeps;
   calls: DepCalls;
 } {
-  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0 };
+  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0, resolveTerminalRow: 0 };
   const base: AgentTerminalCheckAuthDeps = {
     getAccessLevel: async () => ({ canEdit: true }),
     getPageDriveId: async () => {
@@ -292,6 +292,10 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
       streamSessionId: null,
       sprite: fakeSprite,
     }),
+    resolveTerminalRow: async () => {
+      calls.resolveTerminalRow += 1;
+      return { ok: true };
+    },
     writeAudit: () => {},
     buildSessionKey: () => 'session-key-1',
     logDenied: () => {},
@@ -348,13 +352,43 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'ghost' });
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'ghost' });
+    const result = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
       given: 'a read-only sandbox resolution denial (not_found) after the slot was reserved',
       should: 'release the slot, log the denial, and return the reason',
       actual: { result, releases, denials },
       expected: { result: { ok: false, reason: 'not_found' }, releases: 1, denials: [{ reason: 'not_found' }] },
+    });
+  });
+
+  it('performs ZERO sandbox resolution and writes NO audit row when the caller never resolves the sandbox (the reattach path)', async () => {
+    const sandbox = sandboxSpy(async () => resolvedOk);
+    const audits: string[] = [];
+    const { deps } = buildDeps({
+      resolveSandbox: sandbox.fn,
+      writeAudit: ({ command }) => {
+        audits.push(command);
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    // Exactly what onConnect does when it finds a live in-memory session: it
+    // authorizes, takes the sessionKey, and never calls resolveSandbox.
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'an authorized connect whose caller reattaches instead of creating',
+      should: 'authorize with a session key while touching no Sprite and writing no audit row',
+      actual: {
+        ok: auth.ok,
+        sessionKey: auth.ok ? auth.sessionKey : null,
+        sandboxCalls: sandbox.calls,
+        spriteCalls: sandbox.getSpriteCalls.length,
+        audits,
+      },
+      expected: { ok: true, sessionKey: 'session-key-1', sandboxCalls: 0, spriteCalls: 0, audits: [] },
     });
   });
 
@@ -388,7 +422,7 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
   });
 
-  it('returns a fully-populated authorization on the happy path', async () => {
+  it('returns the access verdict (session key + payer) on the happy path', async () => {
     const { deps } = buildDeps();
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
@@ -396,34 +430,47 @@ describe('buildAgentTerminalCheckAuth', () => {
 
     assert({
       given: 'a fully-authorized connect',
-      should: 'return ok with the sandbox, session key and payer',
+      should: 'return ok with the session key and payer, plus a sandbox resolver to call lazily',
       actual: result.ok
-        ? {
-            ok: result.ok,
-            agentTerminalId: result.agentTerminalId,
-            sandboxId: result.sandboxId,
-            cwd: result.cwd,
-            sessionKey: result.sessionKey,
-            command: result.command,
-            args: result.args,
-            commandOverride: result.commandOverride,
-            streamSessionId: result.streamSessionId,
-            payerId: result.payerId,
-            sprite: result.sprite,
-          }
+        ? { ok: result.ok, sessionKey: result.sessionKey, payerId: result.payerId, resolver: typeof result.resolveSandbox }
         : result,
+      expected: { ok: true, sessionKey: 'session-key-1', payerId: 'payer-1', resolver: 'function' },
+    });
+  });
+
+  it('resolves the full sandbox (sprite + launch spec) when the cold path calls resolveSandbox', async () => {
+    const { deps } = buildDeps();
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    const sandbox = auth.ok ? await auth.resolveSandbox() : auth;
+
+    assert({
+      given: 'an authorized connect whose caller must create a fresh PTY',
+      should: 'resolve the agent terminal, sprite, cwd and launch spec',
+      actual: sandbox.ok
+        ? {
+            ok: sandbox.ok,
+            agentTerminalId: sandbox.agentTerminalId,
+            sandboxId: sandbox.sandboxId,
+            cwd: sandbox.cwd,
+            sprite: sandbox.sprite,
+            command: sandbox.command,
+            args: sandbox.args,
+            commandOverride: sandbox.commandOverride,
+            streamSessionId: sandbox.streamSessionId,
+          }
+        : sandbox,
       expected: {
         ok: true,
         agentTerminalId: 'at-1',
         sandboxId: 'sbx-1',
         cwd: '/home/machine',
-        sessionKey: 'session-key-1',
+        sprite: fakeSprite,
         command: 'shell',
         args: [],
         commandOverride: null,
         streamSessionId: null,
-        payerId: 'payer-1',
-        sprite: fakeSprite,
       },
     });
   });
@@ -445,6 +492,9 @@ describe('buildAgentTerminalCheckAuth', () => {
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
     const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    // The tier is only consulted where the slot is actually reserved — the
+    // create path — so drive the thunk to observe it.
+    if (result.ok) await result.resolveSandbox();
 
     assert({
       given: 'an authorized connect whose user row is missing',
@@ -454,18 +504,67 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
   });
 
-  it('denies with concurrency_limit and reads no Sprite when the slot is exhausted', async () => {
+  it('denies with concurrency_limit and reads no Sprite when the slot is exhausted on the CREATE path', async () => {
     const sandbox = sandboxSpy(async () => resolvedOk);
     const { deps } = buildDeps({ acquireSlot: () => false, resolveSandbox: sandbox.fn });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    const result = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
-      given: 'an exhausted concurrency slot',
+      given: 'an exhausted concurrency slot on a connect that must create a fresh PTY',
       should: 'deny with concurrency_limit without resolving a Sprite',
       actual: { result, spriteCalls: sandbox.getSpriteCalls.length },
       expected: { result: { ok: false, reason: 'concurrency_limit' }, spriteCalls: 0 },
+    });
+  });
+
+  it('AUTHORIZES a connect whose concurrency slots are all consumed, so long as the caller does not create a PTY', async () => {
+    // The regression this guards: the slot used to be reserved by the access
+    // check itself. A free-tier user (limit 1) whose ONE live session already
+    // held the only slot therefore could not (a) tab back to that session — the
+    // reattach's access check was denied `concurrency_limit` — nor (b) survive
+    // the 60s re-auth tick, which read the same denial as a REVOKED
+    // authorization and tore the live session down. Neither path starts a PTY,
+    // so neither may depend on a free slot.
+    let acquires = 0;
+    const { deps } = buildDeps({
+      acquireSlot: () => {
+        acquires += 1;
+        return false; // every slot is taken — by this user's own live session
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'a reattach/re-auth check by a user with no free concurrency slot',
+      should: 'still authorize, and never even attempt to reserve a slot',
+      actual: { ok: auth.ok, sessionKey: auth.ok ? auth.sessionKey : null, acquires },
+      expected: { ok: true, sessionKey: 'session-key-1', acquires: 0 },
+    });
+  });
+
+  it('surfaces releaseSlot on the RESOLVED sandbox (the only path that reserves one)', async () => {
+    let releases = 0;
+    const { deps } = buildDeps({
+      releaseSlot: () => {
+        releases += 1;
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    const sandbox = auth.ok ? await auth.resolveSandbox() : auth;
+    if (sandbox.ok) sandbox.releaseSlot();
+
+    assert({
+      given: 'a successfully resolved sandbox whose caller releases the slot it reserved',
+      should: 'expose releaseSlot on the sandbox result and release exactly the one slot taken',
+      actual: { hasRelease: sandbox.ok ? typeof sandbox.releaseSlot : null, releases },
+      expected: { hasRelease: 'function', releases: 1 },
     });
   });
 
@@ -487,7 +586,8 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+    const result = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
       given: 'a vanished-Sprite (provision_failed) sandbox result after the slot was reserved',
@@ -517,7 +617,8 @@ describe('buildAgentTerminalCheckAuth', () => {
 
     let thrown: unknown;
     try {
-      await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+      const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+      if (auth.ok) await auth.resolveSandbox();
     } catch (error) {
       thrown = error;
     }
@@ -527,6 +628,71 @@ describe('buildAgentTerminalCheckAuth', () => {
       should: 'release the slot and propagate the original error (unchanged socket surface)',
       actual: { releases, thrown },
       expected: { releases: 1, thrown: boom },
+    });
+  });
+
+  it('DENIES when the terminal\'s scope row is gone, WITHOUT resolving a Sprite (so the 60s re-auth tick still notices a deleted project)', async () => {
+    // The regression this guards: with the sandbox resolution made lazy, the only
+    // thing that ever noticed a deleted project/branch/agent-terminal row was the
+    // resolve the re-auth tick no longer performs. A project deleted out from
+    // under a LIVE terminal would leave its PTY running against a scope that no
+    // longer exists. The existence check is DB-only, so re-auth can afford it —
+    // and it must never be answered by waking a Sprite.
+    const sandbox = sandboxSpy(async () => resolvedOk);
+    const denials: string[] = [];
+    const { deps } = buildDeps({
+      resolveSandbox: sandbox.fn,
+      resolveTerminalRow: async () => ({ ok: false, reason: 'project_not_found' }),
+      logDenied: (reason) => {
+        denials.push(reason);
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', projectName: 'gone', name: 'shell' });
+
+    assert({
+      given: 'a live terminal whose project row has been deleted',
+      should: 'deny with project_not_found from the ACCESS half, touching no Sprite',
+      actual: { result, denials, sandboxCalls: sandbox.calls, spriteCalls: sandbox.getSpriteCalls.length },
+      expected: {
+        result: { ok: false, reason: 'project_not_found' },
+        denials: ['project_not_found'],
+        sandboxCalls: 0,
+        spriteCalls: 0,
+      },
+    });
+  });
+
+  it('DENIES when the agent-terminal row itself is gone, without resolving a Sprite', async () => {
+    const sandbox = sandboxSpy(async () => resolvedOk);
+    const { deps } = buildDeps({
+      resolveSandbox: sandbox.fn,
+      resolveTerminalRow: async () => ({ ok: false, reason: 'not_found' }),
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'ghost' });
+
+    assert({
+      given: 'an agent-terminal row that no longer exists',
+      should: 'deny with not_found from the access half, touching no Sprite',
+      actual: { result, spriteCalls: sandbox.getSpriteCalls.length },
+      expected: { result: { ok: false, reason: 'not_found' }, spriteCalls: 0 },
+    });
+  });
+
+  it('checks the target row existence only AFTER the read-only access gates (a stranger learns nothing about which terminals exist)', async () => {
+    const { deps, calls } = buildDeps({ getAccessLevel: async () => ({ canEdit: false }) });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'a user without edit access on the owning machine',
+      should: 'deny on access alone, without probing whether the named terminal exists',
+      actual: { result, rowLookups: calls.resolveTerminalRow },
+      expected: { result: { ok: false, reason: 'no_edit_access' }, rowLookups: 0 },
     });
   });
 
@@ -550,7 +716,8 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
-    await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'runner' });
+    const auth = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'runner' });
+    if (auth.ok) await auth.resolveSandbox();
 
     assert({
       given: 'a resolved terminal with a command override',

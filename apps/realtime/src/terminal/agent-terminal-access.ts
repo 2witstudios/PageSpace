@@ -156,6 +156,14 @@ export interface AgentTerminalCheckAuthDeps {
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (userId: string) => void;
   resolveSandbox: (target: ResolveTerminalSandboxTarget & { userId: string }) => Promise<ResolveTerminalSandboxResult>;
+  /**
+   * DB-only existence check for the (scope, name) target — resolves the branch/
+   * project scope rows and the agent-terminal row itself, touching NO Sprite.
+   * Part of the ACCESS half precisely because it is cheap: authorization must
+   * keep noticing that a terminal's project/branch/row was deleted, and the 60s
+   * re-auth tick (which never resolves a sandbox) is the only thing that will.
+   */
+  resolveTerminalRow: (target: ResolveTerminalSandboxTarget) => Promise<{ ok: true } | { ok: false; reason: string }>;
   writeAudit: (input: { userId: string; actorEmail: string; driveId: string; command: string }) => void;
   buildSessionKey: (args: { terminalId: string; projectName?: string; branchName?: string; name: string }) => string;
   logDenied: (reason: string, context: Record<string, unknown>) => void;
@@ -165,8 +173,15 @@ export interface AgentTerminalCheckAuthDeps {
 /**
  * Compose the two halves into the `AgentTerminalCheckAuthFn` the realtime PTY
  * bridge consumes. The access half (gather inputs -> `decideAgentTerminalAccess`)
- * runs first and touches no Sprite; only once it allows AND a concurrency slot
- * is reserved does `resolveSandbox` resolve/read the Sprite for the fresh PTY.
+ * runs first and touches no Sprite; the sprite half is handed back UNCALLED, as
+ * a `resolveSandbox` thunk.
+ *
+ * Returning the sprite half lazily (rather than awaiting it here) is what lets
+ * `onConnect` reattach a live in-memory session — a tab-back inside the 30-min
+ * detached grace — on the strength of the access verdict alone (leaf 1-3): it
+ * simply never calls the thunk, so no Sprite is resolved or woken and no audit
+ * row is written for a session that already exists. Only the cold, create path
+ * calls it.
  */
 export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): AgentTerminalCheckAuthFn {
   return async ({ userId, machineId, projectName, branchName, name }) => {
@@ -197,64 +212,116 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
       return { ok: false, reason: readOnly.reason };
     }
 
-    // Decrypt the actor email BEFORE reserving the slot (a decrypt throw here
+    // The TARGET must still exist, not just the machine page. A DB-only check —
+    // it resolves the branch/project scope rows and the agent-terminal row, and
+    // wakes no Sprite — so it belongs in the access half even though the fused
+    // checkAuth only ever learned this as a side effect of resolving the sandbox.
+    //
+    // Keeping it here is load-bearing: the 60s re-auth tick calls ONLY this half.
+    // If the existence check lived behind the lazy sandbox thunk, deleting a
+    // terminal's project (or branch, or the row itself) would stop being noticed
+    // by re-auth at all, and the orphaned PTY would keep running against a scope
+    // that no longer exists. The fused check caught that — at the cost of waking
+    // the Sprite every 60 seconds, which is exactly what this epic is removing.
+    const terminalRow = await deps.resolveTerminalRow({ machineId, projectName, branchName, name });
+    if (!terminalRow.ok) {
+      deps.logDenied(terminalRow.reason, { userId, machineId, projectName, branchName, name });
+      return { ok: false, reason: terminalRow.reason };
+    }
+
+    // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the fused checkAuth had).
     const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
 
-    // Read-only gates passed -> reserve the concurrency slot. Failing to reserve
-    // IS the concurrency_limit denial (the pure decision's final gate, exercised
-    // in its unit tests); nothing to release, since acquireSlot reserved nothing.
-    if (!deps.acquireSlot({ userId, tier })) {
-      deps.logDenied('concurrency_limit', { userId, machineId });
-      return { ok: false, reason: 'concurrency_limit' };
-    }
-    const releaseSlot = () => deps.releaseSlot(userId);
-
-    // Only NOW — a fresh PTY must be created — resolve/read the Sprite. If this
-    // REJECTS (a DB error inside resolveAgentTerminal, a failed store/SDK
-    // lookup) rather than returning a deny, the reserved slot must still be
-    // released before the rejection propagates — otherwise a transient failure
-    // permanently consumes the user's concurrency capacity. Re-throw so the
-    // socket surface is unchanged (the PTY bridge's onConnect .catch emits the
-    // generic error).
-    let sandbox: ResolveTerminalSandboxResult;
-    try {
-      sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
-    } catch (error) {
-      releaseSlot();
-      throw error;
-    }
-    if (!sandbox.ok) {
-      releaseSlot();
-      if (sandbox.reason === 'provision_failed') {
-        deps.logSandboxLookupFailed({ userId, sandboxId: sandbox.sandboxId });
-      } else {
-        deps.logDenied(sandbox.reason, { userId, machineId, projectName, branchName, name });
-      }
-      return { ok: false, reason: sandbox.reason };
-    }
-
-    deps.writeAudit({
-      userId,
-      actorEmail,
-      driveId: readOnly.driveId,
-      command: sandbox.commandOverride ?? sandbox.command,
-    });
-
     return {
       ok: true,
-      agentTerminalId: sandbox.agentTerminalId,
-      sandboxId: sandbox.sandboxId,
-      cwd: sandbox.cwd,
+      // Derived from the (scope, name) target alone — no Sprite needed (leaf
+      // 1-1), which is precisely what lets the caller look up a live session
+      // before deciding whether any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ terminalId: machineId, projectName, branchName, name }),
-      sprite: sandbox.sprite,
-      releaseSlot,
-      command: sandbox.command,
-      args: sandbox.args,
-      commandOverride: sandbox.commandOverride,
-      streamSessionId: sandbox.streamSessionId,
       payerId: readOnly.payerId,
+
+      /**
+       * Resolve/read the Sprite for a FRESH PTY — called by the cold path only.
+       *
+       * RESERVES the concurrency slot, because the slot exists to bound how many
+       * PTYs a user has RUNNING — and only this path starts one. Reserving it in
+       * the access half instead (as the fused checkAuth did) made a slot a
+       * precondition for merely *asking* whether you may attach, which is wrong
+       * in two ways that both bite the common case:
+       *
+       *   - A free-tier user (limit 1) with one live session could never reattach
+       *     to it: their own session holds the only slot, so the tab-back's
+       *     access check failed to acquire a second one and was denied
+       *     `concurrency_limit`.
+       *   - The 60s re-auth tick calls checkAuth on a LIVE session. It too failed
+       *     to acquire a slot at the limit, read that as a lost authorization,
+       *     and tore the session down — killing a free-tier PTY ~60s after it
+       *     opened.
+       *
+       * Neither path starts a PTY, so neither needs a slot. Now they take none,
+       * and `releaseSlot` is surfaced on the SUCCESS result only — there is no
+       * slot to release unless this thunk actually reserved one.
+       *
+       * Owns slot release on its own failure paths: a deny releases and logs
+       * before returning; a REJECT (a DB error inside resolveAgentTerminal, a
+       * failed store/SDK lookup) releases before the rejection propagates, so a
+       * transient failure can never permanently consume the user's concurrency
+       * capacity. Re-throws so the socket surface is unchanged (the PTY bridge's
+       * onConnect .catch emits the generic error).
+       *
+       * The audit row is written HERE rather than in the access half, because it
+       * records a session actually being launched — a reattach to an already
+       * running PTY launches nothing and must not write one.
+       */
+      resolveSandbox: async () => {
+        // The pure decision's final gate (`slotAcquired`), enforced at the only
+        // point a slot is genuinely needed. Nothing to release on failure —
+        // acquireSlot reserved nothing.
+        if (!deps.acquireSlot({ userId, tier })) {
+          deps.logDenied('concurrency_limit', { userId, machineId });
+          return { ok: false, reason: 'concurrency_limit' };
+        }
+        const releaseSlot = () => deps.releaseSlot(userId);
+
+        let sandbox: ResolveTerminalSandboxResult;
+        try {
+          sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
+        } catch (error) {
+          releaseSlot();
+          throw error;
+        }
+        if (!sandbox.ok) {
+          releaseSlot();
+          if (sandbox.reason === 'provision_failed') {
+            deps.logSandboxLookupFailed({ userId, sandboxId: sandbox.sandboxId });
+          } else {
+            deps.logDenied(sandbox.reason, { userId, machineId, projectName, branchName, name });
+          }
+          return { ok: false, reason: sandbox.reason };
+        }
+
+        deps.writeAudit({
+          userId,
+          actorEmail,
+          driveId: readOnly.driveId,
+          command: sandbox.commandOverride ?? sandbox.command,
+        });
+
+        return {
+          ok: true,
+          agentTerminalId: sandbox.agentTerminalId,
+          sandboxId: sandbox.sandboxId,
+          cwd: sandbox.cwd,
+          sprite: sandbox.sprite,
+          command: sandbox.command,
+          args: sandbox.args,
+          commandOverride: sandbox.commandOverride,
+          streamSessionId: sandbox.streamSessionId,
+          releaseSlot,
+        };
+      },
     };
   };
 }

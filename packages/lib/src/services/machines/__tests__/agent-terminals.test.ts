@@ -3,6 +3,7 @@ import {
   planSpawnAgentTerminal,
   spawnAgentTerminal,
   resolveAgentTerminal,
+  resolveAgentTerminalRow,
   resolveAgentTerminalById,
   killAgentTerminal,
   killAgentTerminalById,
@@ -432,6 +433,67 @@ describe('spawnAgentTerminal — machine scope', () => {
       deps,
     });
     expect(result).toMatchObject({ ok: true, resumed: false });
+  });
+});
+
+describe('resolveAgentTerminalRow', () => {
+  // The whole point of this resolver: it answers "does this target still exist?"
+  // with DB reads alone. Passing `machineSandbox: undefined` throughout is the
+  // proof — the function cannot wake, resume or reconnect a Sprite because it is
+  // never handed one. That is what lets the 60s re-auth tick and the reattach
+  // fast path run it without paying for a Sprite wake.
+  it('given a machine-scoped terminal, should resolve the row WITHOUT any machineSandbox', async () => {
+    const { store } = makeStore();
+    const deps = makeDeps({ store, machineSandbox: undefined });
+    await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'pagespace-cli', actor, deps });
+
+    const result = await resolveAgentTerminalRow({ machineId: TERMINAL_ID, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: true, agentTerminalId: expect.any(String), agentType: 'pagespace-cli' });
+  });
+
+  it('given a project-scoped terminal whose project row is GONE, should deny project_not_found without a Sprite', async () => {
+    const deps = makeDeps({ projectStore: makeProjectLookup(), machineSandbox: undefined });
+
+    const result = await resolveAgentTerminalRow({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'project_not_found' });
+  });
+
+  it('given a branch-scoped terminal whose branch row is GONE, should deny branch_not_found without a Sprite', async () => {
+    const deps = makeDeps({ branchStore: makeBranchLookup(), machineSandbox: undefined });
+
+    const result = await resolveAgentTerminalRow({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'cli',
+      deps,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'branch_not_found' });
+  });
+
+  it('given a name that was never spawned, should deny not_found without a Sprite', async () => {
+    const deps = makeDeps({ machineSandbox: undefined });
+
+    const result = await resolveAgentTerminalRow({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: BRANCH_NAME,
+      name: 'ghost',
+      deps,
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('given a branch name with no project, should reject the target as invalid without a Sprite', async () => {
+    const deps = makeDeps({ machineSandbox: undefined });
+
+    const result = await resolveAgentTerminalRow({ machineId: TERMINAL_ID, branchName: BRANCH_NAME, name: 'cli', deps });
+
+    expect(result).toEqual({ ok: false, reason: 'invalid_target' });
   });
 });
 

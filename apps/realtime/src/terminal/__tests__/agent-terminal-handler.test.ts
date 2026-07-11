@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand } from '../agent-terminal-handler';
+import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect } from '../agent-terminal-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
+import type { TerminalSession } from '../terminal-session-map';
 import type { PtyShell } from '../sprites-shell';
+import { assert } from './riteway';
 import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 
@@ -27,6 +29,14 @@ function makeSprite(sessions: Array<{ id: string; command: string; isActive: boo
   };
 }
 
+/**
+ * A successful two-phase checkAuth result: the cheap DB-only access verdict,
+ * plus the LAZY `resolveSandbox` thunk the cold path calls to reserve the
+ * concurrency slot and resolve the Sprite. `sprite` and `releaseSlot` are
+ * re-surfaced at the top level purely so tests can spy on them (they are the
+ * very same objects the thunk hands back) — a reattach must leave the sprite's
+ * methods, the slot, and the thunk itself untouched.
+ */
 function makeAuthSuccess(over: Partial<{
   sessionKey: string;
   streamSessionId: string | null;
@@ -37,19 +47,27 @@ function makeAuthSuccess(over: Partial<{
   cwd: string;
   payerId: string;
 }> = {}) {
-  return {
+  const sprite = makeSprite(over.sessions ?? []);
+  const releaseSlot = vi.fn();
+  const sandbox = {
     ok: true as const,
     agentTerminalId: 'agent-terminal-1',
     sandboxId: 'sbx1',
     cwd: over.cwd ?? BRANCH_REPO_PATH,
-    sessionKey: over.sessionKey ?? 'branch1:agent:cli',
-    sprite: makeSprite(over.sessions ?? []),
-    releaseSlot: vi.fn(),
+    sprite,
     command: over.command ?? 'pagespace-cli',
     args: over.args ?? [],
     commandOverride: over.commandOverride ?? null,
     streamSessionId: over.streamSessionId ?? null,
+    releaseSlot,
+  };
+  return {
+    ok: true as const,
+    sessionKey: over.sessionKey ?? 'branch1:agent:cli',
     payerId: over.payerId ?? 'owner-1',
+    resolveSandbox: vi.fn(async () => sandbox),
+    sprite,
+    releaseSlot,
   };
 }
 
@@ -103,6 +121,48 @@ describe('resolveAgentTerminalCommand', () => {
     expect(resolveAgentTerminalCommand({ command: 'pagespace-cli', args: [], commandOverride: 'htop' })).toEqual({
       command: '/bin/zsh',
       args: ['-c', 'htop'],
+    });
+  });
+});
+
+describe('planConnect', () => {
+  const liveSession = { sessionKey: 'branch1:agent:cli' } as TerminalSession;
+  const granted = makeAuthSuccess();
+  const denied = { ok: false as const, reason: 'no_edit_access' };
+
+  it('given access denied, should deny regardless of an existing session', () => {
+    assert({
+      given: 'a denied access verdict with a live in-memory session',
+      should: 'deny (auth still gates the fast path — never reattach)',
+      actual: planConnect({ accessResult: denied, existingSession: liveSession }),
+      expected: { kind: 'deny', reason: 'no_edit_access' },
+    });
+  });
+
+  it('given access denied and no session, should deny with the verdict reason', () => {
+    assert({
+      given: 'a denied access verdict and no live session',
+      should: 'deny, surfacing the verdict reason',
+      actual: planConnect({ accessResult: denied, existingSession: undefined }),
+      expected: { kind: 'deny', reason: 'no_edit_access' },
+    });
+  });
+
+  it('given access allowed and a live session, should reattach carrying that session', () => {
+    assert({
+      given: 'an allowed access verdict and a live in-memory session',
+      should: 'reattach, carrying the live session and the granted access',
+      actual: planConnect({ accessResult: granted, existingSession: liveSession }),
+      expected: { kind: 'reattach', access: granted, session: liveSession },
+    });
+  });
+
+  it('given access allowed and no session, should create', () => {
+    assert({
+      given: 'an allowed access verdict and no live session',
+      should: 'create a fresh session (cold path)',
+      actual: planConnect({ accessResult: granted, existingSession: undefined }),
+      expected: { kind: 'create', access: granted },
     });
   });
 });
@@ -374,6 +434,171 @@ describe('buildAgentTerminalHandlers', () => {
       expect(reconnectSocket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ scrollback: expect.any(String) }));
     });
 
+    it('given a live in-memory session, should reattach after the access check with ZERO sprite SDK calls and without resolving the sandbox', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The reconnect gets a fresh auth result whose sprite is a dedicated spy —
+      // the tab-back fast path must not touch it, nor its resolveSandbox thunk.
+      const reattachAuth = makeAuthSuccess();
+      checkAuth.mockResolvedValueOnce(reattachAuth);
+      const reconnectSocket = makeSocket('sock2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+
+      expect(reattachAuth.resolveSandbox).not.toHaveBeenCalled();
+      expect(reattachAuth.sprite.listSessions).not.toHaveBeenCalled();
+      expect(reattachAuth.sprite.spawn).not.toHaveBeenCalled();
+      expect(reattachAuth.sprite.createSession).not.toHaveBeenCalled();
+      expect(reattachAuth.sprite.attachSession).not.toHaveBeenCalled();
+      expect(reattachAuth.sprite.updateNetworkPolicy).not.toHaveBeenCalled();
+      expect(openShell).toHaveBeenCalledTimes(1);
+      // No slot was reserved for the reattach (resolveSandbox is what reserves
+      // one), so there is nothing to release — releasing here would decrement
+      // the LIVE session's own reservation.
+      expect(reattachAuth.releaseSlot).not.toHaveBeenCalled();
+      expect(reconnectSocket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ scrollback: expect.any(String) }));
+    });
+
+    it('given no live session, should follow the cold path and resolve the sandbox', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(auth.resolveSandbox).toHaveBeenCalledTimes(1);
+      expect(openShell).toHaveBeenCalledTimes(1);
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1' });
+    });
+
+    it('given a denied user with a live session, should refuse and NOT reattach (auth gates the fast path)', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // A different, now-unauthorized user tabs back to the same (scope, name).
+      checkAuth.mockResolvedValueOnce({ ok: false, reason: 'permission_revoked' });
+      const attackerSocket = makeSocket('attacker-sock', 'user2');
+      const attacker = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: attackerSocket, persistStreamSessionId });
+      await attacker.onConnect(validPayload);
+
+      expect(attackerSocket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
+      expect(attackerSocket.emit).not.toHaveBeenCalledWith('agent-terminal:ready', expect.anything());
+      // The victim's live session is untouched and still owned by the original socket.
+      expect(sessionMap.getBySocket('sock1')).toBeDefined();
+      expect(sessionMap.getBySocket('attacker-sock')).toBeUndefined();
+    });
+
+    it('given two CONCURRENT cold connects for the same key, should open exactly ONE PTY — the second joins the first', async () => {
+      // The genuinely racy double-mount: connect #2 arrives while connect #1 is
+      // still seconds deep in its cold resolveSandbox. Opening a second PTY here
+      // is not merely wasteful — when both attach to the SAME persisted Sprite exec
+      // session, discarding one would SIGKILL the process the other is attached to.
+      // So the key is claimed before the first await and #2 joins #1 instead.
+      const authA = makeAuthSuccess();
+      const authB = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      // Exactly one PTY — the loser never opened one, so there is none to kill.
+      expect(openShell).toHaveBeenCalledTimes(1);
+      // The loser never even resolved a sandbox, so it reserved no slot and no hold.
+      expect(authB.resolveSandbox).not.toHaveBeenCalled();
+      expect(authB.releaseSlot).not.toHaveBeenCalled();
+      expect(authA.releaseSlot).not.toHaveBeenCalled();
+
+      // Both panes end up on the one live session.
+      const session = sessionMap.getByKey('branch1:agent:cli');
+      expect(session).toBeDefined();
+      expect(sessionMap.getBySocket('pane-b')).toBe(session);
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ connectionId: 'pane-b', scrollback: expect.any(String) }));
+    });
+
+    it('given a CONCURRENT connect while a cold create is attaching to a PERSISTED Sprite session, should never kill that session', async () => {
+      // The destructive case: both connects resolve the SAME streamSessionId, so
+      // openPtyShell would attachSession() to one shared server-side exec session.
+      // A "discard the duplicate" strategy would SIGKILL the very process the
+      // survivor is attached to. Serializing means the second never opens one.
+      checkAuth = vi
+        .fn()
+        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared' }))
+        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      expect(openShell).toHaveBeenCalledTimes(1);
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-shared' }));
+      // Nothing was killed — the shared Sprite session survives for the live viewer.
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')?.command).toBe(shell);
+    });
+
+    it('given an in-flight cold create that FAILS, should let a queued connect create the session itself (no wedged key)', async () => {
+      const failing = makeAuthSuccess();
+      failing.resolveSandbox = vi.fn(async () => ({ ok: false as const, reason: 'provision_failed' }));
+      const succeeding = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(succeeding) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      // The failed create released its claim, so the queued connect went on to
+      // create the session rather than joining a session that never existed.
+      expect(succeeding.resolveSandbox).toHaveBeenCalledTimes(1);
+      expect(openShell).toHaveBeenCalledTimes(1);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given a fresh session where a SIBLING terminal opened a tty in the same window, should persist nothing rather than the sibling\'s id', async () => {
+      // One Sprite hosts every agent terminal on the machine. Two new tty sessions
+      // in the diff is ambiguous — guessing would point THIS terminal's next cold
+      // connect at another terminal's PTY.
+      const auth = makeAuthSuccess({ streamSessionId: null });
+      auth.sprite.listSessions = vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: 'sess-ours', command: 'pagespace-cli', isActive: true, tty: true },
+          { id: 'sess-sibling', command: 'claude', isActive: true, tty: true },
+        ]);
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(persistStreamSessionId).not.toHaveBeenCalled();
+    });
+
+    it('given two connects for the same key (double-mount remount), should not double-create — the second reattaches via getByKey', async () => {
+      // A StrictMode/HMR double-mount fires connect twice for the same
+      // (scope, name). Once the first has established the session (setNew), the
+      // second must find it via getByKey and reattach rather than open a second
+      // PTY — the existing setNew/getByKey identity is what prevents a duplicate.
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await onConnect({ ...validPayload, connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, connectionId: 'pane-b' });
+
+      expect(openShell).toHaveBeenCalledTimes(1);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      // The second connect reattached the shared session onto pane-b.
+      expect(sessionMap.getBySocket('pane-b')).toMatchObject({ sessionKey: 'branch1:agent:cli' });
+    });
+
     it('given a successful connect, should set up a re-auth interval on the session', async () => {
       const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
@@ -413,6 +638,47 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).not.toHaveBeenCalled(); // natural exit — the stale re-auth must not kill
       expect(auth.releaseSlot).toHaveBeenCalledTimes(1); // slot not double-released
+    });
+
+    it('given a session reattached by a DIFFERENT user, should re-auth the CURRENT viewer, not the creator', async () => {
+      // A session outlives its creator's connection. If re-auth kept checking the
+      // creator — who of course remains authorized — a viewer who reattached and
+      // then had their access revoked would keep receiving PTY output, and could
+      // keep typing, indefinitely.
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload); // user1 creates
+
+      // user2 reattaches on their own socket.
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ viewerUserId: 'user2' });
+
+      checkAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // The tick must ask about user2 — the one actually driving the PTY.
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
+      expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+    });
+
+    it('given the reattached viewer loses access, should tear the session down at the next re-auth tick', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload); // user1 creates
+
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload); // user2 takes over the PTY
+
+      // user2's access is revoked; user1 would still pass.
+      checkAuth.mockImplementation(async ({ userId }: { userId: string }) =>
+        userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock2' });
     });
 
     it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit agent-terminal:closed with exitCode -2', async () => {
@@ -609,6 +875,20 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
       expect(shell.kill).not.toHaveBeenCalled();
+    });
+
+    it('given the idle timeout elapses, should HAND BACK the concurrency slot as well as killing the shell', async () => {
+      // The reaped session held a slot for its whole detached grace; the reap must
+      // return it, or a user's tier capacity bleeds away one abandoned tab at a time.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+      expect(shell.kill).toHaveBeenCalled();
     });
 
     it('given the idle timeout elapses, should kill the shell and drop the session', async () => {
@@ -831,6 +1111,86 @@ describe('buildAgentTerminalHandlers', () => {
         expect(call.holdId).toBeUndefined();
         expect(call.activeSeconds).toBeCloseTo(5, 0);
       });
+
+      it('given a settle that rejects with a NON-Error value, wraps it and keeps the session alive (fail-open)', async () => {
+        const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue('db string blip') });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // The non-Error rejection is coerced (never thrown), so the PTY survives.
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-1' });
+      });
+
+      it('given the re-hold gate rejects with a NON-Error value at a heartbeat, keeps the session alive (fail-open)', async () => {
+        const billing = makeBilling({
+          gate: vi.fn().mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' }).mockRejectedValue('gate string blip'),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // Settle succeeded; only the re-hold failed (and with a non-Error) — session stays alive.
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      });
+
+      it('given the session was already removed when a heartbeat fires, clears its interval without settling', async () => {
+        const billing = makeBilling();
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        // Session vanished (e.g. reaped elsewhere) before the heartbeat tick.
+        sessionMap.deleteByKey('branch1:agent:cli');
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // No settle attempted for a gone session, and the interval stopped firing.
+        expect(billing.trackUsage).not.toHaveBeenCalled();
+      });
+
+      it('given a settle still in flight when the next heartbeat fires, skips the overlapping run', async () => {
+        let resolveSettle: () => void = () => {};
+        const billing = makeBilling({
+          trackUsage: vi
+            .fn()
+            .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSettle = () => resolve(undefined); }))
+            .mockResolvedValue(undefined),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // first heartbeat: settle hangs
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // second heartbeat: still settling → skipped
+
+        // Only the first settle is in flight; the overlapping tick did not start a second.
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+
+        resolveSettle();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      });
+    });
+
+    it('given two teardown paths fire for one session, hands the concurrency slot back exactly ONCE (idempotent release)', async () => {
+      // The slot is a bare counter — a second release would hand back capacity the
+      // connect never held, letting the user exceed their tier. A re-auth teardown
+      // releases it; a late onExit for the same (now killed) PTY must be a no-op.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing: makeBilling() });
+      await onConnect(validPayload);
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000); // re-auth teardown → release #1
+      onExitArg(0); // the killed PTY's exit lands later → release #2 attempt, must no-op
+
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
     });
 
     it('given the shell exits naturally WHILE disconnected (idle reap still pending), should cancel the pending reap so it never double-settles', async () => {
@@ -876,6 +1236,42 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).toHaveBeenCalledTimes(1);
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+    });
+
+    it('given two CONCURRENT cold connects, places exactly ONE hold — the joiner never gates', async () => {
+      // Serializing the key means the second connect never resolves a sandbox, so
+      // it never gates and never places a hold there is nobody left to settle.
+      const billing = makeBilling();
+      const authA = makeAuthSuccess();
+      const authB = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      expect(billing.gate).toHaveBeenCalledTimes(1);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+      expect(billing.trackUsage).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-1' });
+    });
+
+    it('given the billing gate THROWS after the slot was reserved, releases the slot rather than leaking it forever', async () => {
+      // `activeByUser` is a process-lifetime counter. A gate that throws with the
+      // slot still held would lock a free-tier user (limit 1) out of agent terminals
+      // on this replica until the process restarts.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const billing = makeBilling({ gate: vi.fn().mockRejectedValue(new Error('billing db blip')) });
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+
+      await expect(onConnect(validPayload)).rejects.toThrow('billing db blip');
+
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+      expect(openShell).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
 
     it('reattaching to a live session does NOT place a second hold', async () => {
