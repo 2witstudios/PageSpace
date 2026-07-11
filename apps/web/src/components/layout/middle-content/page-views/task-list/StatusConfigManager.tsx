@@ -234,7 +234,8 @@ export function StatusConfigManager({
                     ) : (
                       <>
                         <Badge className={cn('text-xs', config.color)}>{config.name}</Badge>
-                        <span className="text-xs text-muted-foreground ml-auto opacity-0 group-hover:opacity-100">
+                        {/* Metadata hint, not a control — keep it hover-only. */}
+                        <span data-hover-only="" className="text-xs text-muted-foreground ml-auto opacity-0 group-hover:opacity-100">
                           {config.slug}
                         </span>
                         <DropdownMenu>

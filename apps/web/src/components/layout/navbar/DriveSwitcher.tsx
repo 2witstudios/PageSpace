@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CustomScrollArea } from "@/components/ui/custom-scroll-area";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { useFavorites, useFavoritesSync } from "@/hooks/useFavorites";
+import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { cn } from "@/lib/utils";
@@ -287,6 +288,7 @@ function DriveMenuItem({
   onToggleFavorite,
 }: DriveMenuItemProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const isTouchDevice = useTouchDevice();
 
   return (
     <DropdownMenuItem
@@ -304,7 +306,7 @@ function DriveMenuItem({
         onClick={onToggleFavorite}
         className={cn(
           "h-6 w-6 flex items-center justify-center rounded-sm transition-opacity",
-          isHovered || isFavorite ? "opacity-100" : "opacity-0",
+          isTouchDevice || isHovered || isFavorite ? "opacity-100" : "opacity-0",
           "hover:bg-accent"
         )}
       >
