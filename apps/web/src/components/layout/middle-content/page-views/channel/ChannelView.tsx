@@ -702,12 +702,12 @@ function ChannelView({ page }: ChannelViewProps) {
                               </Avatar>
                             ) : (
                               <div className="size-8 shrink-0 relative" aria-hidden>
-                                <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
+                                <span data-hover-only="" className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
                                   {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </span>
                               </div>
                             )}
-                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "[@media(hover:none)]:pr-28")}>
+                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "touch:pr-28")}>
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>

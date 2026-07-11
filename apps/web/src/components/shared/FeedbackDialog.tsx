@@ -316,6 +316,9 @@ export function FeedbackDialog({ isOpen, onClose }: FeedbackDialogProps) {
                   <button
                     type="button"
                     onClick={() => removeFile(af.id)}
+                    // A full-bleed black scrim — pinning it visible on touch would
+                    // permanently black out the screenshot preview.
+                    data-hover-only=""
                     className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
                   >
                     <X className="w-4 h-4 text-white" />

@@ -416,7 +416,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
               <div
                 className={cn(
                   "flex items-center ml-2 transition-opacity duration-200",
-                  isHovered ? "opacity-100" : "opacity-0"
+                  isTouchDevice || isHovered ? "opacity-100" : "opacity-0"
                 )}
               >
                 <button

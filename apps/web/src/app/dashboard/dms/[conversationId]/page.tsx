@@ -621,13 +621,13 @@ export default function InboxDMPage() {
                     </Avatar>
                   ) : (
                     <div className="h-10 w-10 flex-shrink-0 relative" aria-hidden>
-                      <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
+                      <span data-hover-only="" className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
                         {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                   )}
 
-                  <div className={cn("flex-1 min-w-0", !isFirst && "[@media(hover:none)]:pr-28")}>
+                  <div className={cn("flex-1 min-w-0", !isFirst && "touch:pr-28")}>
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>

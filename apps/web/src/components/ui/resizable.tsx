@@ -50,6 +50,8 @@ function ResizableHandle({
           handles both orientations — a fixed absolute/translate line was
           hardcoded vertical and broke for orientation="vertical" groups. */}
       <div
+        // Decoration, not an affordance — the seam must not be pinned visible on touch.
+        data-hover-only=""
         className={cn(
           "h-full w-px bg-sidebar-border transition-opacity duration-150",
           "group-aria-[orientation=horizontal]:h-px group-aria-[orientation=horizontal]:w-full",

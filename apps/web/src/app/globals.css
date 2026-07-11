@@ -7,8 +7,58 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Touch devices are stamped with data-pointer="coarse" on <html> pre-paint by
+   the inline script in layout.tsx (see lib/pointer-capability.ts). Use `touch:`
+   for any new code that needs a touch-only rule. */
+@custom-variant touch (&:where([data-pointer='coarse'] *));
+
 svg.lucide {
   stroke-width: 1.5;
+}
+
+/* ---------------------------------------------------------------------------
+   Hover-revealed controls on touch devices.
+
+   There is no hover on a touchscreen, so every `opacity-0 group-hover:opacity-100`
+   affordance (message retry/edit/copy, page-tree row actions, tab close buttons,
+   version-history and activity actions, …) is unreachable. Worse, the `sm:`/`md:`
+   -prefixed variants consult no pointer signal at all, so they break in iPad
+   Safari too — an iPad is wide enough to match `sm:`, but never hovers.
+
+   These rules are UNLAYERED (Tailwind utilities live in `@layer utilities`), so
+   they win without `!important` — same trick as `svg.lucide` above.
+
+   Attribute-substring matching is required: a plain `.group-hover\:opacity-100`
+   selector would miss both the named-group variants (`group-hover/msg:`,
+   `group-hover/pane:`, `group-hover/item:`, `group-hover/menu-item:`) and the
+   `sm:`/`md:`-prefixed forms.
+
+   `data-hover-only` opts an element out — for decoration (scrims, drag seams,
+   timestamps) as opposed to affordances.
+   --------------------------------------------------------------------------- */
+
+/* Reveal pair: a resting `opacity-0` that a group-hover restores to full.
+   `pointer-events: auto` is required — MessageHoverToolbar and prompt-input pair
+   their `opacity-0` with `pointer-events-none`, so opacity alone would leave the
+   buttons visible but dead. */
+:where([data-pointer='coarse'])
+  [class*='opacity-0'][class*='group-hover'][class*=':opacity-100']:not([data-hover-only]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* The other half of a reveal pair: an element that fades OUT on hover to expose
+   the control underneath (the attachment thumbnail under its remove button).
+   Pin it to the hover state too, rather than letting the rule above invert it. */
+:where([data-pointer='coarse'])
+  [class*='group-hover:opacity-0']:not([class*=':opacity-100']):not([data-hover-only]) {
+  opacity: 0;
+}
+
+/* Display-based reveal (`hidden group-hover:inline`), not opacity-based. */
+:where([data-pointer='coarse'])
+  [class*='group-hover:inline']:not([data-hover-only]) {
+  display: inline;
 }
 
 @theme inline {
