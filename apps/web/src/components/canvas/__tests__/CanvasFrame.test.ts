@@ -1,4 +1,5 @@
 import React from 'react';
+import { flushSync } from 'react-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
@@ -15,12 +16,15 @@ vi.mock('next-themes', () => ({
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
 
 // React 19.2.6 production build in this sandbox doesn't export `act`;
-// @testing-library/react 16.x requires it. Polyfill with a synchronous
-// wrapper. In CI (development React build) React.act exists and this is
-// never reached. NOTE: does not batch updates like the real act, but is
-// sufficient for these assertion-only tests.
+// @testing-library/react 16.x requires it. Polyfill with flushSync so React
+// updates are committed synchronously. In CI (development React build) React.act
+// exists and this is never reached.
 if (typeof (React as Record<string, unknown>).act !== 'function') {
-  (React as Record<string, unknown>).act = (cb: () => unknown) => cb();
+  (React as Record<string, unknown>).act = (cb: () => unknown) => {
+    let result: unknown;
+    flushSync(() => { result = cb(); });
+    return result;
+  };
 }
 
 /**
