@@ -65,10 +65,17 @@ export default function TabSidebar({ title, children, pane }: TabSidebarProps) {
   const sheetApi = useMemo<TabSidebarApi>(() => ({ close: closeSheet }), [closeSheet]);
 
   // The pane stays the SECOND child of the same outer div in both layouts, so
-  // crossing the breakpoint reconciles it in place rather than remounting it —
-  // a rotation mid-session must not tear down a live xterm or a mounted Monaco.
-  // Only the first child changes type (aside <-> header bar), and rebuilding a
-  // tree sidebar is cheap.
+  // crossing the breakpoint reconciles the pane in place instead of remounting it
+  // — a rotation must not make the Code tab throw away a mounted Monaco and refetch
+  // the open file. Only the first child changes type (aside <-> header bar), and
+  // rebuilding a tree sidebar is cheap.
+  //
+  // This preserves the pane CONTAINER, not necessarily everything inside it: the
+  // Terminal tab's workspace picks a different structure per breakpoint of its own
+  // accord (a resizable grid vs. stacked panes), so its terminals do remount on a
+  // rotation. That is safe rather than lossy — a remount reconnects, and the
+  // realtime handler keeps the PTY alive through the detached grace window and
+  // replays the buffered scrollback on reattach.
   return (
     <div className={isMobile ? 'flex h-full min-h-0 flex-col' : 'flex h-full min-h-0'}>
       {isMobile ? (
