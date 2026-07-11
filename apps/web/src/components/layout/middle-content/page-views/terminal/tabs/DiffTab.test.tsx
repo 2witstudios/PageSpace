@@ -66,6 +66,7 @@ let truncatedEmptyList = false;
 let probeErrors = false;
 let listErrors = false;
 let pairErrors = false;
+let samePathAcrossScopes = false;
 
 // The scope toggle's behaviour is driven entirely by what the files hook returns
 // for each (branch, scope) — so the mock keys off branchName + scope: 'main'
@@ -85,7 +86,12 @@ const filesFor = (branchName: string, scope: string): MachineDiffFilesResponse =
   return {
     notApplicable: false,
     scope: scope as MachineDiffScope,
-    files: [{ path: `src/${scope}.ts`, status: 'modified' }],
+    // Normally each scope names its file after itself so tests can tell them
+    // apart. When a path exists in BOTH scopes (the realistic case — committed and
+    // branch are both merge-base-derived and overlap heavily), a card's React key
+    // no longer changes across a scope switch, which is what makes the per-scope
+    // TabsContent keying observable.
+    files: [{ path: samePathAcrossScopes ? 'src/shared.ts' : `src/${scope}.ts`, status: 'modified' }],
     truncated: false,
   };
 };
@@ -206,6 +212,7 @@ describe('DiffTab', () => {
     probeErrors = false;
     listErrors = false;
     pairErrors = false;
+    samePathAcrossScopes = false;
   });
 
   test('shows the empty placeholder until a branch is selected', () => {
@@ -321,6 +328,51 @@ describe('DiffTab', () => {
         uncommittedGone: screen.queryByText('src/uncommitted.ts') === null,
       },
       expected: { committed: true, uncommittedGone: true },
+    });
+  });
+
+  test("every scope trigger's aria-controls resolves to a real tabpanel", async () => {
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await waitFor(() => screen.getByText('Committed'));
+
+    // Radix hands TabsContent's children to Presence AS A FUNCTION, which
+    // force-mounts — so an INACTIVE panel's <div> is still in the DOM (only its
+    // children are gated). Rendering one panel instead of one-per-scope therefore
+    // leaves the two inactive triggers pointing at ids that exist nowhere: a
+    // dangling IDREF, which is exactly what the Tabs wrapper exists to prevent.
+    const dangling = screen
+      .getAllByRole('tab')
+      .map((tab) => tab.getAttribute('aria-controls'))
+      .filter((id) => id === null || document.getElementById(id) === null);
+
+    assert({
+      given: 'the three scope triggers',
+      should: 'each control a tabpanel that actually exists in the DOM',
+      actual: { tabs: screen.getAllByRole('tab').length, dangling: dangling.length },
+      expected: { tabs: 3, dangling: 0 },
+    });
+  });
+
+  test('switching scope collapses an open card even when the same file exists in both scopes', async () => {
+    // The per-scope TabsContent `key` gives each scope its own subtree, so a scope
+    // switch UNMOUNTS the old panel. Without it, a card whose path appears in both
+    // lists keeps its React key, stays expanded, and immediately refetches its pair
+    // under the new scope — an extra sandbox git exec per open card, every switch.
+    samePathAcrossScopes = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await userEvent.click(await waitFor(() => screen.getByText('src/shared.ts')));
+    await waitFor(() => screen.getByTestId('monaco-diff'));
+
+    await userEvent.click(screen.getByText('Committed'));
+    await waitFor(() => screen.getByText('src/shared.ts'));
+
+    assert({
+      given: 'an expanded card for a file present in both the uncommitted and committed scopes',
+      should: 'collapse it on the scope switch — not carry it open into the new scope and refetch',
+      actual: screen.queryByTestId('monaco-diff') !== null,
+      expected: false,
     });
   });
 

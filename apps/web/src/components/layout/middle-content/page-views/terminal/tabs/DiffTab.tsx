@@ -212,23 +212,38 @@ function BranchDiffPane({
       {!probeResolved ? (
         <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>
       ) : (
-        // ONE panel, for the active scope. Radix unmounts inactive TabsContent, so
-        // rendering one per scope produced identical DOM. It exists to give the
-        // active trigger a real tabpanel to control — the whole reason Tabs wraps
-        // the list rather than just the triggers.
-        <TabsContent value={active} className="min-h-0 flex-1">
-          <ScrollArea className="h-full">
-            <DiffFileList
-              machineId={machineId}
-              projectName={projectName}
-              branchName={branchName}
-              scope={active}
-              scopesApplicable={scopesApplicable}
-              data={list.data}
-              error={list.error}
-            />
-          </ScrollArea>
-        </TabsContent>
+        // ONE PANEL PER SCOPE, and this is NOT redundant — a simplification pass
+        // collapsed it to a single `<TabsContent value={active}>` on the premise
+        // that Radix unmounts inactive panels. It does not: Tabs hands `children`
+        // to Presence AS A FUNCTION, which force-mounts, so the panel <div> always
+        // renders (only its children are gated). Two things depend on that:
+        //
+        //  1. every trigger's `aria-controls` resolves to a real element. With one
+        //     panel, the two inactive triggers point at ids present nowhere in the
+        //     DOM — the exact dangling-IDREF violation the Tabs wrapper above
+        //     exists to avoid.
+        //  2. `key={option}` gives each scope its own subtree, so switching scope
+        //     UNMOUNTS the old panel. Without it an expanded card whose path exists
+        //     in both scopes stays open across the switch and immediately refetches
+        //     its pair — an extra sandbox git exec per open card, every switch.
+        //
+        // Radix renders only the ACTIVE panel's children, so this is still one
+        // rendered list, not three.
+        availableScopes.map((option) => (
+          <TabsContent key={option} value={option} className="min-h-0 flex-1">
+            <ScrollArea className="h-full">
+              <DiffFileList
+                machineId={machineId}
+                projectName={projectName}
+                branchName={branchName}
+                scope={active}
+                scopesApplicable={scopesApplicable}
+                data={list.data}
+                error={list.error}
+              />
+            </ScrollArea>
+          </TabsContent>
+        ))
       )}
     </Tabs>
   );
