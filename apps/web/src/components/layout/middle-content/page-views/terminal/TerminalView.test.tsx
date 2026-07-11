@@ -9,7 +9,7 @@ import { assert } from '@/stores/__tests__/riteway';
 const lifecycle: string[] = [];
 
 function tabDouble(name: string) {
-  return ({ machineId }: { machineId: string }) => {
+  const Double = ({ machineId }: { machineId: string }) => {
     useEffect(() => {
       lifecycle.push(`mount:${name}`);
       return () => {
@@ -18,6 +18,8 @@ function tabDouble(name: string) {
     }, []);
     return <div data-testid={`${name}-body`}>{name}:{machineId}</div>;
   };
+  Double.displayName = `TabDouble(${name})`;
+  return Double;
 }
 
 vi.mock('./tabs/TerminalTab', () => ({ default: tabDouble('terminal') }));
