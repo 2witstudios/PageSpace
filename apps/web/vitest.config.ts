@@ -18,10 +18,15 @@ export default defineConfig({
     // unbounded growth that fills any --max-old-space-size and OOMs the 16 GB CI
     // runner during both the run and the v8 coverage remap. The threads pool
     // tears down each file's context and GCs it, so peak memory stays ~2.5 GB.
-    // (Thread workers inherit the parent's --max-old-space-size, which the
-    // `test:coverage` script raises to 8 GB so a worker running heavier files
-    // doesn't hit the low default limit — ERR_WORKER_OUT_OF_MEMORY.)
+    // Run 8 worker threads (more than the runner's 4 cores; they time-share).
+    // Thread workers can't have their heap raised via config (worker_threads
+    // reject --max-old-space-size in execArgv and ignore the parent's
+    // NODE_OPTIONS), so instead spread the files thinner: at 4 threads a worker
+    // collects ~208 files' v8 coverage and one straggler exceeds its default
+    // heap at report time (ERR_WORKER_OUT_OF_MEMORY); at 8 threads that halves
+    // to ~104 files/worker, within the default.
     pool: 'threads',
+    poolOptions: { threads: { minThreads: 8, maxThreads: 8 } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
