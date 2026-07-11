@@ -145,7 +145,15 @@ export interface SpriteSessionInfo {
   id: string;
   command: string;
   isActive: boolean;
-  tty: boolean;
+  /**
+   * OPTIONAL, and not to be trusted for identity. The raw API does return
+   * `tty` for a TTY session, but the SDK only sometimes surfaces it: the pinned
+   * rc37 maps it, while the published 0.0.1 build dropped `tty` (and `workdir`)
+   * from its `listSessions()` mapping entirely. Code that FILTERS on it silently
+   * matches nothing after an SDK bump, so treat its absence as "unknown", never
+   * as "not a shell", and identify sessions by id (see {@link readSessionInfoId}).
+   */
+  tty?: boolean;
 }
 
 /**

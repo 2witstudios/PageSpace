@@ -7,19 +7,29 @@ import { readSessionInfoId } from '@pagespace/lib/services/sandbox/sandbox-clien
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 
 /**
- * The ids of the Sprite's live shell (tty) sessions. This is a MEMBERSHIP SET,
- * not a ranking: its only job is to answer "is the id I already hold still
- * live?" for `planReconnect`. Nothing picks a session out of it, so the order is
- * irrelevant and `isActive` — whose API semantics (process-alive vs
- * client-attached) the docs never specify — is not consulted at all.
+ * The ids of the Sprite's live exec sessions. This is a MEMBERSHIP SET, not a
+ * ranking: its only job is to answer "is the id I already hold still live?" for
+ * `planReconnect`. Nothing is picked out of it, so the order is irrelevant.
  *
- * A session's id is never DISCOVERED here; it is announced on that session's own
- * socket (`readSessionInfoId`). That is what makes a Sprite hosting several
- * concurrent terminals safe: we verify our own id rather than guessing which of
- * N live shells is ours.
+ * Deliberately reads NOTHING but `id`. The id we are checking came from our own
+ * create socket (`readSessionInfoId`), so it is by construction our session, and
+ * a tty one — re-deriving either fact from the listing's own fields would be
+ * both redundant and fragile:
+ *
+ * - `isActive` maps the API's `is_active`, whose meaning (process-alive vs
+ *   client-attached) the docs never specify.
+ * - `tty` is not even reported consistently: the pinned `@fly/sprites` rc37 maps
+ *   it, but the published 0.0.1 build DROPPED `tty` (and `workdir`) from its
+ *   `listSessions()` mapping, though the raw API still returns it. Filtering on
+ *   it would therefore match ZERO sessions after a routine SDK bump — no
+ *   persisted id would ever verify, every reconnect would create a fresh shell,
+ *   and the shell it replaced would be orphaned but still running (and billed).
+ *   Verified against the live API on both builds; see the PR.
+ *
+ * Matching on the id alone is immune to all of that.
  */
-export function liveShellSessionIds(sessions: SpriteSessionInfo[]): string[] {
-  return sessions.filter((s) => s.tty).map((s) => s.id);
+export function liveSessionIds(sessions: SpriteSessionInfo[]): string[] {
+  return sessions.map((s) => s.id);
 }
 
 export type ReconnectPlan =
@@ -269,7 +279,7 @@ export function openPtyShell({
       }
       const plan = planReconnect({
         knownId: currentSessionId,
-        liveSessionIds: liveShellSessionIds(liveSessions),
+        liveSessionIds: liveSessionIds(liveSessions),
       });
 
       if (plan.action === 'create') {

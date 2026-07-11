@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { openPtyShell, planReconnect, liveShellSessionIds } from '../sprites-shell';
+import { openPtyShell, planReconnect, liveSessionIds } from '../sprites-shell';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -127,25 +127,32 @@ describe('planReconnect (pure)', () => {
   });
 });
 
-describe('liveShellSessionIds (pure)', () => {
+describe('liveSessionIds (pure)', () => {
   assert({
-    given: 'a mix of tty and non-tty sessions',
-    should: 'return only the tty (shell) session ids',
-    actual: liveShellSessionIds([
+    given: 'the Sprite\'s live sessions',
+    should: 'return every id — a membership set for verifying an id we already hold',
+    actual: liveSessionIds([
       { id: 'shell-1', command: 'bash', isActive: true, tty: true },
-      { id: 'exec-1', command: 'ls', isActive: true, tty: false },
+      { id: 'shell-2', command: 'bash', isActive: false, tty: true },
     ]),
-    expected: ['shell-1'],
+    expected: ['shell-1', 'shell-2'],
   });
 
   assert({
-    given: 'an inactive and an active shell session',
-    should: 'return both ids in list order — this is a membership set for verifying a KNOWN id, not a ranking to pick from',
-    actual: liveShellSessionIds([
-      { id: 'shell-inactive', command: 'bash', isActive: false, tty: true },
-      { id: 'shell-active', command: 'bash', isActive: true, tty: true },
+    given: 'sessions whose `tty` the SDK did not report (the published 0.0.1 build drops the field)',
+    should: 'STILL return their ids — filtering on tty would verify nothing and orphan every live shell',
+    actual: liveSessionIds([
+      { id: 'shell-1', command: '/usr/bin/bash', isActive: true },
+      { id: 'shell-2', command: '/usr/bin/bash', isActive: true },
     ]),
-    expected: ['shell-inactive', 'shell-active'],
+    expected: ['shell-1', 'shell-2'],
+  });
+
+  assert({
+    given: 'no live sessions',
+    should: 'return an empty set',
+    actual: liveSessionIds([]),
+    expected: [],
   });
 });
 
