@@ -5,6 +5,8 @@ import {
   filterToolsForWebSearch,
   filterToolsForMcpScope,
   isWebSearchTool,
+  isImageGenTool,
+  filterToolsForImageGen,
   isWriteTool,
   isAccountLevelOnlyTool,
   hasSandboxGitTools,
@@ -138,6 +140,20 @@ describe('isAccountLevelOnlyTool', () => {
   });
 });
 
+describe('filterToolsForImageGen', () => {
+  const tools = { read_page: 'r', generate_image: 'g', web_search: 'w' };
+
+  it('keeps generate_image when enabled', () => {
+    expect(Object.keys(filterToolsForImageGen(tools, true)).sort()).toEqual(
+      ['generate_image', 'read_page', 'web_search']
+    );
+  });
+
+  it('drops only generate_image when disabled', () => {
+    expect(Object.keys(filterToolsForImageGen(tools, false)).sort()).toEqual(['read_page', 'web_search']);
+  });
+});
+
 describe('isWriteTool / isWebSearchTool predicates', () => {
   it('classifies write tools correctly', () => {
     expect(isWriteTool('create_page')).toBe(true);
@@ -158,6 +174,8 @@ describe('isWriteTool / isWebSearchTool predicates', () => {
     expect(isWebSearchTool('web_search')).toBe(true);
     expect(isWebSearchTool('read_page')).toBe(false);
     expect(isWebSearchTool('create_page')).toBe(false);
+    expect(isImageGenTool('generate_image')).toBe(true);
+    expect(isImageGenTool('web_search')).toBe(false);
   });
 
   it('classifies insert_content as a write tool', () => {

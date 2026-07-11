@@ -110,6 +110,7 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn((tools: unknown) => tools),
   filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
+  filterToolsForImageGen: vi.fn((tools: unknown) => tools),
 }));
 
 vi.mock('@/lib/ai/core/model-capabilities', () => ({

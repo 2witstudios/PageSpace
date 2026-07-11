@@ -9,6 +9,7 @@ import { AttachButton } from './AttachButton';
 import { AttachmentPreviewStrip } from './AttachmentPreviewStrip';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { isImageGenerationAllowed } from '@/lib/ai/core/image-gen-access';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import type { ImageAttachment } from '@/lib/ai/shared/hooks/useImageAttachments';
@@ -139,9 +140,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
     // Get settings from centralized store
     const webSearchEnabled = useAssistantSettingsStore((s) => s.webSearchEnabled);
+    const imageGenEnabled = useAssistantSettingsStore((s) => s.imageGenEnabled);
+    const isAdmin = useAssistantSettingsStore((s) => s.isAdmin);
     const writeMode = useAssistantSettingsStore((s) => s.writeMode);
     const showPageTree = useAssistantSettingsStore((s) => s.showPageTree);
     const toggleWebSearch = useAssistantSettingsStore((s) => s.toggleWebSearch);
+    const toggleImageGen = useAssistantSettingsStore((s) => s.toggleImageGen);
     const toggleWriteMode = useAssistantSettingsStore((s) => s.toggleWriteMode);
     const toggleShowPageTree = useAssistantSettingsStore((s) => s.toggleShowPageTree);
     const storeProvider = useAssistantSettingsStore((s) => s.currentProvider);
@@ -154,12 +158,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const currentModel = propModel ?? storeModel;
     const handleProviderModelChange = onProviderModelChange ?? setProviderSettings;
 
-    // Load settings on mount (only needed when not using props)
+    // Load settings on mount. Even when provider/model come from props (page-AI
+    // chat), we still need the store's isAdmin flag so the admin-gated Image toggle
+    // reflects the user's access. loadSettings is idempotent (guarded by
+    // isInitialized) and page-AI keeps using its own provider props for the selector.
     useEffect(() => {
-      if (propProvider === undefined) {
-        loadSettings();
-      }
-    }, [loadSettings, propProvider]);
+      loadSettings();
+    }, [loadSettings]);
 
     // Speech recognition
     const { isListening, isSupported, error: speechError, toggleListening, clearError: clearSpeechError } = useSpeechRecognition({
@@ -278,6 +283,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
         <InputFooter
           webSearchEnabled={webSearchEnabled}
           onWebSearchToggle={toggleWebSearch}
+          imageGenEnabled={imageGenEnabled}
+          onImageGenToggle={toggleImageGen}
+          canUseImageGen={isImageGenerationAllowed(isAdmin)}
           writeMode={writeMode}
           onWriteModeToggle={toggleWriteMode}
           showPageTree={showPageTree}

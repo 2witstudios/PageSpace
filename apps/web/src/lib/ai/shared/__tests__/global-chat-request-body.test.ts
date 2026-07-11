@@ -5,6 +5,7 @@ const baseParams = {
   conversationId: 'conv-123',
   isReadOnly: false,
   webSearchEnabled: true,
+  imageGenEnabled: false,
   showPageTree: false,
   selectedProvider: 'openai',
   selectedModel: 'openai/gpt-5.3-chat',
@@ -14,6 +15,11 @@ describe('buildGlobalChatRequestBody', () => {
   it('given a conversationId, should include it in the returned body', () => {
     const body = buildGlobalChatRequestBody(baseParams);
     expect(body.conversationId).toBe('conv-123');
+  });
+
+  it('passes imageGenEnabled through to the body', () => {
+    expect(buildGlobalChatRequestBody({ ...baseParams, imageGenEnabled: true }).imageGenEnabled).toBe(true);
+    expect(buildGlobalChatRequestBody(baseParams).imageGenEnabled).toBe(false);
   });
 
   it('given null conversationId, should pass null through rather than omitting the field', () => {

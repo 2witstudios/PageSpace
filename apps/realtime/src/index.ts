@@ -28,14 +28,13 @@ import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/se
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import {
   buildAgentTerminalHandlers,
-  type AgentTerminalCheckAuthResult,
   type SocketLike,
 } from './terminal/agent-terminal-handler';
 import { handleTerminalActivityRequest } from './terminal/terminal-activity';
 import { deriveAgentTerminalSessionKey, agentTerminalScopeFromNames } from './terminal/agent-terminal-session-key';
+import { buildAgentTerminalCheckAuth, resolveTerminalSandbox } from './terminal/agent-terminal-access';
 import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
@@ -44,10 +43,10 @@ import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machi
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import {
   resolveAgentTerminal,
+  resolveAgentTerminalRow,
   type AgentTerminalMachineSandbox,
   type AgentTerminalMachineSandboxResult,
 } from '@pagespace/lib/services/machines/agent-terminals';
-import { resolveAgentLaunchSpec } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   validatePageId,
   validateDriveId,
@@ -204,16 +203,15 @@ function buildAgentTerminalSessionKey({
 }
 
 /**
- * Auth for a named, pluggable-agent-typed terminal at one of the three
- * universal Terminal scopes (`agent-terminals.ts`) — access is governed by
- * the OWNING Machine's Terminal page (`machineId`), same edit-level bar the
- * retired human terminal used, then resolved down to the specific
- * machine/project/branch target + agent-terminal row. Does not provision an
- * agent-terminal row itself: an unreserved (scope, name) is `not_found`
- * (spawn it first via the Runtime API), and a vanished Sprite fails at the
- * `getSprite` step below.
+ * Resolve the Sprite a FRESH agent-terminal PTY will attach to (lazy sprite
+ * resolution — leaf 1-2): resolve the (scope, name) target down to its Machine
+ * Sprite via `resolveAgentTerminal` (machine/project scope may reconnect/resume
+ * the Sprite through `buildMachineSandbox`), then read that Sprite exactly once.
+ * Deliberately NOT part of the access decision — a Sprite is woken automatically
+ * by any exec, so authorization never needs to touch it (see
+ * `agent-terminal-access.ts`). Full getSprite collapse is leaf 1-4.
  */
-async function makeAgentTerminalCheckAuth({
+function resolveAgentTerminalSandbox({
   userId,
   machineId,
   projectName,
@@ -225,111 +223,113 @@ async function makeAgentTerminalCheckAuth({
   projectName?: string;
   branchName?: string;
   name: string;
-}): Promise<AgentTerminalCheckAuthResult> {
-  const access = await getUserAccessLevel(userId, machineId);
-  if (!access?.canEdit) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'no_edit_access', userId, machineId });
-    return { ok: false, reason: 'no_edit_access' };
-  }
-
-  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
-  if (!pageRow) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'page_not_found', userId, machineId });
-    return { ok: false, reason: 'page_not_found' };
-  }
-
-  const codeAuth = await canRunCode({ userId, driveId: pageRow.driveId, requestOrigin: 'user' });
-  if (!codeAuth.ok) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: codeAuth.reason, userId, machineId });
-    return { ok: false, reason: codeAuth.reason };
-  }
-
-  const [driveRow, userRow] = await Promise.all([
-    db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1).then((r) => r[0]),
-    db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
-  ]);
-  if (!driveRow) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'drive_not_found', userId, machineId });
-    return { ok: false, reason: 'drive_not_found' };
-  }
-  const payerId = driveRow.ownerId;
-  const tier = (userRow?.subscriptionTier ?? 'free') as SubscriptionTier;
-  const actorEmail = await resolveActorEmail(userRow?.email);
-
-  const slotAcquired = acquireCodeExecutionSlot({ userId, tier });
-  if (!slotAcquired) {
-    loggers.realtime.warn('Agent terminal auth denied', { reason: 'concurrency_limit', userId, machineId });
-    return { ok: false, reason: 'concurrency_limit' };
-  }
-  const releaseSlot = () => releaseCodeExecutionSlot({ userId });
-
-  const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
-    dbMachineBranchStorePromise,
-    dbMachineAgentTerminalStorePromise,
-    dbMachineProjectStorePromise,
-  ]);
-  const resolved = await resolveAgentTerminal({
-    machineId,
-    projectName,
-    branchName,
-    name,
-    deps: {
-      branchStore,
-      store: agentTerminalStore,
-      projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
-      machineSandbox: buildMachineSandbox(userId),
+}) {
+  return resolveTerminalSandbox(
+    { machineId, projectName, branchName, name },
+    {
+      resolveAgentTerminal: async (target) => {
+        const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
+          dbMachineBranchStorePromise,
+          dbMachineAgentTerminalStorePromise,
+          dbMachineProjectStorePromise,
+        ]);
+        return resolveAgentTerminal({
+          machineId: target.machineId,
+          projectName: target.projectName,
+          branchName: target.branchName,
+          name: target.name,
+          deps: {
+            branchStore,
+            store: agentTerminalStore,
+            projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
+            machineSandbox: buildMachineSandbox(userId),
+          },
+        });
+      },
+      getSprite: async (sandboxId) => {
+        const sdk = await getRealtimeSpritesSdk();
+        return sdk.getSprite(sandboxId);
+      },
     },
-  });
-  if (!resolved.ok) {
-    releaseSlot();
-    loggers.realtime.warn('Agent terminal auth denied', { reason: resolved.reason, userId, machineId, projectName, branchName, name });
-    return { ok: false, reason: resolved.reason };
-  }
-
-  const spec = resolveAgentLaunchSpec(resolved.agentType);
-
-  const sdk = await getRealtimeSpritesSdk();
-  let sprite;
-  try {
-    sprite = await sdk.getSprite(resolved.sandboxId);
-  } catch {
-    releaseSlot();
-    loggers.realtime.warn('Agent terminal sandbox lookup failed', { reason: 'provision_failed', userId, sandboxId: resolved.sandboxId });
-    return { ok: false, reason: 'provision_failed' };
-  }
-
-  // Write code execution audit record (agent terminal PTY session open) —
-  // this launches an arbitrary pluggable agent binary (spec.command, or a
-  // per-terminal command override) inside the Sprite.
-  writeCodeExecutionAudit({
-    input: {
-      userId,
-      actorEmail,
-      driveId: pageRow.driveId,
-      requestOrigin: 'user',
-      profile: 'pty',
-      code: `[Agent terminal session opened: ${resolved.command ?? spec.command}]`,
-      exitCode: null,
-      durationMs: 0,
-      timestamp: new Date(),
-    },
-  }).catch(() => {});
-
-  return {
-    ok: true,
-    agentTerminalId: resolved.agentTerminalId,
-    sandboxId: resolved.sandboxId,
-    cwd: resolved.cwd,
-    sessionKey: buildAgentTerminalSessionKey({ terminalId: machineId, projectName, branchName, name }),
-    sprite,
-    releaseSlot,
-    command: spec.command,
-    args: spec.args,
-    commandOverride: resolved.command,
-    streamSessionId: resolved.streamSessionId,
-    payerId,
-  };
+  );
 }
+
+/**
+ * Auth for a named, pluggable-agent-typed terminal at one of the three
+ * universal Terminal scopes (`agent-terminals.ts`) — access is governed by
+ * the OWNING Machine's Terminal page (`machineId`), same edit-level bar the
+ * retired human terminal used, then resolved down to the specific
+ * machine/project/branch target + agent-terminal row. Does not provision an
+ * agent-terminal row itself: an unreserved (scope, name) is `not_found`
+ * (spawn it first via the Runtime API), and a vanished Sprite fails at the
+ * `getSprite` step. The pure access decision (`decideAgentTerminalAccess`) and
+ * the lazy sprite resolution (`resolveAgentTerminalSandbox`) are split (leaf
+ * 1-2) so the re-auth interval can re-check access alone — this composition
+ * just wires the real IO dependencies into both halves.
+ */
+const makeAgentTerminalCheckAuth = buildAgentTerminalCheckAuth({
+  getAccessLevel: (userId, machineId) => getUserAccessLevel(userId, machineId),
+  getPageDriveId: async (machineId) => {
+    const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
+    return pageRow;
+  },
+  canRunCode: ({ userId, driveId, requestOrigin }) => canRunCode({ userId, driveId, requestOrigin }),
+  getDriveAndUser: async ({ driveId, userId }) => {
+    const [driveRow, userRow] = await Promise.all([
+      db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1).then((r) => r[0]),
+      db.select({ subscriptionTier: users.subscriptionTier, email: users.email }).from(users).where(eq(users.id, userId)).limit(1).then((r) => r[0]),
+    ]);
+    return { driveRow, userRow };
+  },
+  resolveActorEmail,
+  acquireSlot: ({ userId, tier }) => acquireCodeExecutionSlot({ userId, tier }),
+  releaseSlot: (userId) => releaseCodeExecutionSlot({ userId }),
+  resolveSandbox: (target) => resolveAgentTerminalSandbox(target),
+  // DB-only existence check for the (scope, name) target — no Sprite is resolved
+  // or woken, so the reattach fast path and the 60s re-auth tick can both afford
+  // to run it. It is what keeps a deleted project/branch/agent-terminal row from
+  // going unnoticed now that the sandbox resolution is lazy.
+  resolveTerminalRow: async ({ machineId, projectName, branchName, name }) => {
+    const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
+      dbMachineBranchStorePromise,
+      dbMachineAgentTerminalStorePromise,
+      dbMachineProjectStorePromise,
+    ]);
+    return resolveAgentTerminalRow({
+      machineId,
+      projectName,
+      branchName,
+      name,
+      deps: {
+        branchStore,
+        store: agentTerminalStore,
+        projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
+      },
+    });
+  },
+  // Write code execution audit record (agent terminal PTY session open) — this
+  // launches an arbitrary pluggable agent binary (the resolved command, or a
+  // per-terminal command override) inside the Sprite.
+  writeAudit: ({ userId, actorEmail, driveId, command }) => {
+    writeCodeExecutionAudit({
+      input: {
+        userId,
+        actorEmail,
+        driveId,
+        requestOrigin: 'user',
+        profile: 'pty',
+        code: `[Agent terminal session opened: ${command}]`,
+        exitCode: null,
+        durationMs: 0,
+        timestamp: new Date(),
+      },
+    }).catch(() => {});
+  },
+  buildSessionKey: ({ terminalId, projectName, branchName, name }) =>
+    buildAgentTerminalSessionKey({ terminalId, projectName, branchName, name }),
+  logDenied: (reason, context) => loggers.realtime.warn('Agent terminal auth denied', { reason, ...context }),
+  logSandboxLookupFailed: (context) => loggers.realtime.warn('Agent terminal sandbox lookup failed', { reason: 'provision_failed', ...context }),
+});
 
 /**
  * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)

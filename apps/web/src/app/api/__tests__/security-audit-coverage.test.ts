@@ -90,6 +90,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- Model discovery (no user data, no external calls) ---
   ['ai/models', 'Public model-catalog discovery, unauthenticated, no user data or resource access'],
+  ['ai/image-models', 'Public image-model discovery, unauthenticated, no user data or resource access'],
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 

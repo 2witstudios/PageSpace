@@ -685,7 +685,7 @@ describe('usePageAgentDashboardStore', () => {
     it('should accept valid SidebarTab values', () => {
       const { result } = renderHook(() => usePageAgentDashboardStore());
 
-      const validTabs: SidebarTab[] = ['chat', 'history', 'activity', 'terminal'];
+      const validTabs: SidebarTab[] = ['chat', 'history', 'activity'];
 
       validTabs.forEach((tab) => {
         act(() => {

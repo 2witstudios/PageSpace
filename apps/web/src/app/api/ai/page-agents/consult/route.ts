@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForMcpScope, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -393,7 +393,12 @@ export async function POST(request: Request) {
     };
 
     // Hide account-level-only tools (e.g. create_drive) from a drive-scoped MCP token's tool list.
-    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth));
+    // Image generation is in an ADMIN-ONLY rollout and is exposed solely through the
+    // chat/global routes' explicit toggle — never through agent-to-agent consult.
+    const scopedPageSpaceTools = filterToolsForImageGen(
+      filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)),
+      false,
+    );
 
     // Filter tools based on agent's enabled tools
     const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0

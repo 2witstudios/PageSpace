@@ -148,10 +148,10 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
           useEditingStore.getState().endEditing(sessionId);
         };
 
-        // The tracking row for this scope must already exist — the Navigator's
-        // add-terminal dialog reserves it (spawnAgentTerminal) before it's ever
-        // offered as something to open, so connecting here only ever attaches
-        // to (or resumes) an already-known session.
+        // The tracking row for this scope must already exist — the Terminal
+        // tab's add-terminal dialog reserves it (spawnAgentTerminal) before it's
+        // ever offered as something to open, so connecting here only ever
+        // attaches to (or resumes) an already-known session.
         socket.emit('agent-terminal:connect', { ...connectPayload, connectionId, cols: terminal.cols, rows: terminal.rows });
 
         resize.observer = new ResizeObserver(() => {

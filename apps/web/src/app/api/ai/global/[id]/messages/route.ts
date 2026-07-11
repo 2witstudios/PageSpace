@@ -41,9 +41,10 @@ import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { buildSystemPrompt, buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from '@/lib/ai/core/system-prompt';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
-import { filterToolsForReadOnly, filterToolsForWebSearch } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForWebSearch, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
-import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
+import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
@@ -311,6 +312,7 @@ export async function POST(
       locationContext,
       isReadOnly,
       webSearchEnabled,
+      imageGenEnabled,
       showPageTree,
       mcpTools
     } = requestBody;
@@ -354,16 +356,19 @@ export async function POST(
     // the page-chat route). Safe in billing-disabled deployments (returns unlimited) and
     // lazy-inits balances.
     let userSubscriptionTier: string | undefined;
+    let userImageGenerationModel: string | null = null;
     {
       const [gateUser] = await db
         .select({
           subscriptionTier: users.subscriptionTier,
           currentAiProvider: users.currentAiProvider,
           currentAiModel: users.currentAiModel,
+          imageGenerationModel: users.imageGenerationModel,
         })
         .from(users)
         .where(eq(users.id, userId));
       userSubscriptionTier = gateUser?.subscriptionTier ?? undefined;
+      userImageGenerationModel = gateUser?.imageGenerationModel ?? null;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —
       // and never debit at settle (see isMeteringExempt in trackAIUsage). Key the skip
@@ -802,9 +807,16 @@ MENTION PROCESSING:
 
     // Full filtered tool set. NOT sent to model directly; used as dispatch map for
     // execute_tool and as tool_search catalog.
-    const filteredAllTools = filterToolsForWebSearch(
-      filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
-      webSearchMode
+    const filteredAllTools = filterToolsForImageGen(
+      filterToolsForWebSearch(
+        filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+        webSearchMode
+      ),
+      shouldExposeImageGen({
+        imageGenEnabled: imageGenEnabled === true,
+        isAdmin: auth.role === 'admin',
+        hasToolDef: true,
+      })
     ) as ToolSet;
 
     // Core tools go to the model with full schemas
@@ -1149,6 +1161,9 @@ MENTION PROCESSING:
               conversationId,
               locationContext,
               modelCapabilities: modelCapabilitiesForTools,
+              isAdmin: auth.role === 'admin',
+              subscriptionTier: userSubscriptionTier,
+              imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
               chatSource: { type: 'global' as const },
             },
             maxRetries: 20,

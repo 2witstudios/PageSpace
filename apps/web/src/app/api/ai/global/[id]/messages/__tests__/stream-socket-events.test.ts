@@ -200,6 +200,7 @@ vi.mock('@/lib/ai/core/agent-awareness', () => ({
 vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
+  filterToolsForImageGen: vi.fn((t) => t),
 }));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn().mockResolvedValue(''),
@@ -300,6 +301,7 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image-preview',
 }));
 
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({

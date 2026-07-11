@@ -12,7 +12,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { sanitizeMessagesForModel, saveMessageToDatabase, extractMessageContent, convertDbMessageToUIMessage, extractToolResults } from '@/lib/ai/core/message-utils';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
-import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
 import { getModelCapabilities, hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 import { applyToolExposureMode } from '@/lib/ai/tools/tool-exposure';
@@ -270,7 +270,12 @@ export async function POST(request: Request): Promise<Response> {
 
     if (inServerOnlyMode) {
       // server-only: existing pipeline unchanged
-      const baseTools = filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest);
+      // Image generation is in an ADMIN-ONLY rollout and is exposed solely through the
+      // chat/global routes' explicit toggle — never through the OpenAI-compatible API.
+      const baseTools = filterToolsForImageGen(
+        filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest),
+        false,
+      );
       let filteredTools: ToolSet =
         agentEnabledTools != null
           ? (Object.fromEntries(
@@ -286,7 +291,12 @@ export async function POST(request: Request): Promise<Response> {
       finalTools = clientToolSet;
     } else {
       // both: server tools + client tools; client wins on name collision
-      const baseTools = filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest);
+      // Image generation is in an ADMIN-ONLY rollout and is exposed solely through the
+      // chat/global routes' explicit toggle — never through the OpenAI-compatible API.
+      const baseTools = filterToolsForImageGen(
+        filterToolsForMcpScope(filterToolsForReadOnly(pageSpaceTools, false), isMcpScopedRequest),
+        false,
+      );
       let filteredTools: ToolSet =
         agentEnabledTools != null
           ? (Object.fromEntries(

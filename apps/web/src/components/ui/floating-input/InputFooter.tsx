@@ -21,6 +21,12 @@ export interface InputFooterProps {
   webSearchEnabled?: boolean;
   /** Callback when web search is toggled */
   onWebSearchToggle?: (enabled: boolean) => void;
+  /** Whether image generation is enabled */
+  imageGenEnabled?: boolean;
+  /** Callback when image generation is toggled */
+  onImageGenToggle?: (enabled: boolean) => void;
+  /** Whether the user may use image generation (app admins only during rollout) */
+  canUseImageGen?: boolean;
   /** Whether write mode is active (true = write, false = read only) */
   writeMode?: boolean;
   /** Callback when write mode is toggled */
@@ -84,6 +90,9 @@ export interface InputFooterProps {
 export function InputFooter({
   webSearchEnabled = false,
   onWebSearchToggle,
+  imageGenEnabled = false,
+  onImageGenToggle,
+  canUseImageGen = false,
   writeMode = true,
   onWriteModeToggle,
   showPageTree = false,
@@ -126,6 +135,9 @@ export function InputFooter({
         <ToolsPopover
           webSearchEnabled={webSearchEnabled}
           onWebSearchToggle={onWebSearchToggle}
+          imageGenEnabled={imageGenEnabled}
+          onImageGenToggle={onImageGenToggle}
+          canUseImageGen={canUseImageGen}
           writeMode={writeMode}
           onWriteModeToggle={onWriteModeToggle}
           showPageTree={showPageTree}

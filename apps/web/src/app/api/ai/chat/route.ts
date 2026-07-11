@@ -59,6 +59,8 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
+import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
 import { getModelCapabilities } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -74,7 +76,10 @@ import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/contex
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 // Runtime-toggled tools that must stay directly callable even in search mode.
-const ALWAYS_UPFRONT_TOOLS = new Set(['web_search']);
+// Runtime-override tools: added independently of the agent's saved allowlist, so they
+// must stay directly callable in 'search' exposure mode — routing them through
+// execute_tool would hit that tool's allowlist check and be rejected.
+const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -184,6 +189,7 @@ export async function POST(request: Request) {
       mcpTools, // MCP tool schemas from desktop client (optional)
       isReadOnly, // Optional read-only mode toggle
       webSearchEnabled, // Optional web search toggle (defaults to false)
+      imageGenEnabled, // Optional image-generation toggle (defaults to false)
     }: {
       messages: UIMessage[],
       chatId?: string,
@@ -193,6 +199,7 @@ export async function POST(request: Request) {
       mcpTools?: MCPTool[], // MCP tool schemas from desktop (client-side execution)
       isReadOnly?: boolean, // Optional read-only mode toggle
       webSearchEnabled?: boolean, // Optional web search toggle (defaults to false)
+      imageGenEnabled?: boolean, // Optional image-generation toggle (defaults to false)
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -686,9 +693,13 @@ export async function POST(request: Request) {
       isScopedMCPAuth(authResult)
     );
 
-    // Step 2: Extract web_search so it can be handled as a runtime-toggle override
-    // independently of the per-agent allowlist.
-    const { web_search: webSearchToolDef, ...baseToolsWithoutWebSearch } = baseTools as Record<string, ToolSet[string]>;
+    // Step 2: Extract web_search + generate_image so they can be handled as
+    // runtime-toggle overrides independently of the per-agent allowlist.
+    const {
+      web_search: webSearchToolDef,
+      generate_image: imageGenToolDef,
+      ...baseToolsWithoutOverrides
+    } = baseTools as Record<string, ToolSet[string]>;
 
     // Step 3: Apply per-agent PageSpace tool allowlist.
     // null/undefined = unconfigured page — no restriction (backwards compat).
@@ -698,16 +709,29 @@ export async function POST(request: Request) {
     let filteredTools: ToolSet;
     if (agentEnabledTools != null) {
       filteredTools = Object.fromEntries(
-        Object.entries(baseToolsWithoutWebSearch).filter(([name]) => agentEnabledTools.includes(name))
+        Object.entries(baseToolsWithoutOverrides).filter(([name]) => agentEnabledTools.includes(name))
       ) as ToolSet;
     } else {
-      filteredTools = baseToolsWithoutWebSearch as ToolSet;
+      filteredTools = baseToolsWithoutOverrides as ToolSet;
     }
 
     // Step 4: webSearchEnabled is a runtime input toggle that overrides the allowlist.
     // If the user toggled web search on in the composer, they get web_search regardless of enabledTools.
     if (webSearchMode && webSearchToolDef) {
       filteredTools = { ...filteredTools, web_search: webSearchToolDef };
+    }
+
+    // Step 4b: image generation is an ADMIN-ONLY runtime toggle (same override pattern as
+    // web_search). Only exposed when the composer toggle is on AND the user is an app admin.
+    if (
+      shouldExposeImageGen({
+        imageGenEnabled: imageGenEnabled === true,
+        isAdmin: isAdminUser,
+        hasToolDef: !!imageGenToolDef,
+      }) &&
+      imageGenToolDef
+    ) {
+      filteredTools = { ...filteredTools, generate_image: imageGenToolDef };
     }
 
     // Step 5: Tool exposure mode. 'upfront' (default) sends every allowed tool
@@ -1200,6 +1224,9 @@ export async function POST(request: Request) {
                   breadcrumbs: pageContext.breadcrumbs,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
+                isAdmin: isAdminUser,
+                subscriptionTier: user?.subscriptionTier,
+                imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 chatSource: {
                   type: 'page' as const,
                   agentPageId: chatId,

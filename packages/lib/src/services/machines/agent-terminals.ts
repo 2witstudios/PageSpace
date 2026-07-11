@@ -336,6 +336,46 @@ function toResolveResult(row: MachineAgentTerminalRecord, location: { sandboxId:
   };
 }
 
+export type ResolveAgentTerminalRowResult =
+  | { ok: true; agentTerminalId: string; agentType: AgentRuntimeType }
+  | { ok: false; reason: AgentTerminalScopeDenialReason | 'not_found' };
+
+export type ResolveAgentTerminalRowDeps = Pick<AgentTerminalsDeps, 'branchStore' | 'projectStore' | 'store'>;
+
+/**
+ * Does this (scope, name) target still EXIST? A purely relational existence
+ * check — `resolveScopeKey` (branch/project row lookups) plus the agent-terminal
+ * row itself — that resolves NO Sprite and wakes nothing.
+ *
+ * Split out of `resolveAgentTerminal` because that function fuses two very
+ * differently-priced questions: "does this row exist" (a couple of indexed
+ * reads) and "where does its Sprite live" (which, for machine/project scope,
+ * goes through `machineSandbox.acquire` and can RECONNECT OR RESUME a
+ * hibernated Sprite). Callers that only need to re-validate a target — the
+ * realtime bridge's 60s re-auth tick, and its reattach path — must ask the
+ * cheap question alone: asking the expensive one on a timer is what kept idle
+ * Sprites awake, and asking it on a tab-back is what made tab-backs slow.
+ *
+ * `agentType` is validated here (an unrecognized one reads as `not_found`,
+ * matching `toResolveResult`) so a corrupt row is caught by the existence check
+ * rather than surviving to the launch path.
+ */
+export async function resolveAgentTerminalRow({
+  machineId,
+  projectName,
+  branchName,
+  name,
+  deps,
+}: AgentTerminalTarget & { deps: ResolveAgentTerminalRowDeps }): Promise<ResolveAgentTerminalRowResult> {
+  const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
+  if (!scope.ok) return scope;
+
+  const row = await deps.store.findByName(scope.scopeKey, name);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (!isAgentRuntimeType(row.agentType)) return { ok: false, reason: 'not_found' };
+  return { ok: true, agentTerminalId: row.id, agentType: row.agentType };
+}
+
 /**
  * Resolve a named agent terminal down to what the realtime PTY bridge needs
  * to open (or reattach) its stream: which Sprite (`sandboxId`), which working

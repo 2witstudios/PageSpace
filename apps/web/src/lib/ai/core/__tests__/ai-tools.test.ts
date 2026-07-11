@@ -157,6 +157,12 @@ vi.mock('../../tools/form-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/image-generation-tools', () => ({
+  imageGenerationTools: {
+    generate_image: { name: 'generate_image', description: 'Generate an image' },
+  },
+}));
+
 // Stub the sandbox tools so the builder can be exercised without loading the DB
 // module graph or the real Fly Sprites driver.
 vi.mock('../../tools/sandbox-tools-runtime', () => ({
@@ -188,6 +194,7 @@ import { triggerTools } from '../../tools/trigger-tools';
 import { modelTools } from '../../tools/model-tools';
 import { commandTools } from '../../tools/command-tools';
 import { formTools } from '../../tools/form-tools';
+import { imageGenerationTools } from '../../tools/image-generation-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -216,6 +223,7 @@ describe('ai-tools', () => {
         ...modelTools,
         ...commandTools,
         ...formTools,
+        ...imageGenerationTools,
       });
     });
 
@@ -240,6 +248,7 @@ describe('ai-tools', () => {
         Object.keys(modelTools),
         Object.keys(commandTools),
         Object.keys(formTools),
+        Object.keys(imageGenerationTools),
       ];
 
       const allKeys = moduleKeysets.flat();

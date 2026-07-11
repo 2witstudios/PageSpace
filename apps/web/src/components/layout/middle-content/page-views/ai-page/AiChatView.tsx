@@ -345,8 +345,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setAllServersEnabled,
   } = useMCPTools({ conversationId: currentConversationId });
 
-  // Get web search setting from global assistant settings store
+  // Get web search + image-generation settings from the global assistant settings store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
 
   const {
     conversations,
@@ -776,6 +777,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       selectedModel,
       isReadOnly,
       webSearchEnabled,
+      imageGenEnabled,
       mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
       pageContext,
     };
@@ -787,6 +789,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     selectedModel,
     isReadOnly,
     webSearchEnabled,
+    imageGenEnabled,
     mcpToolSchemas,
   ]);
 
@@ -828,6 +831,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             selectedModel,
             isReadOnly,
             webSearchEnabled,
+            imageGenEnabled,
             mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
             pageContext,
           },
@@ -849,6 +853,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     selectedProvider,
     selectedModel,
     webSearchEnabled,
+    imageGenEnabled,
     mcpToolSchemas,
     wrapSend,
   ]);
@@ -875,6 +880,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             selectedModel,
             isReadOnly,
             webSearchEnabled,
+            imageGenEnabled,
             mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
             pageContext,
           },
@@ -891,6 +897,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     selectedProvider,
     selectedModel,
     webSearchEnabled,
+    imageGenEnabled,
     mcpToolSchemas,
     wrapSend,
   ]);
