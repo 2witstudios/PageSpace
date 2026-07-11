@@ -48,18 +48,26 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
 
   const [settings, setSettings] = useState<MachineSettings | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   // In-flight save COUNT, not a flag: a text field's blur-commit and a switch
   // click can be airborne at once, and a boolean would report "done" as soon as
-  // the first of them settled.
+  // the first of them settled. Mirrored into a ref because `persist`'s `finally`
+  // has to read the CURRENT count, not the one closed over when it started.
   const [pendingSaves, setPendingSaves] = useState(0);
+  const pendingSavesRef = useRef(0);
+  const resyncWhenIdle = useRef(false);
 
   // Local drafts for the text fields — inputs stay editable per-keystroke and
-  // only persist on blur (the toggles persist immediately). Seeded from the
-  // server whenever settings (re)load.
+  // only persist on blur (the toggles persist immediately).
   const [nameDraft, setNameDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
+
+  // Last known SERVER value, used to tell a clean draft from a dirty one so a
+  // refetch can adopt server truth for fields the user isn't editing without
+  // stomping the one they are.
+  const serverSettings = useRef<MachineSettings | null>(null);
 
   // Which machine's settings we currently hold. A `reloadToken` refetch of the
   // SAME machine (retry after a load error, resync after a failed save)
@@ -76,8 +84,16 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
       // otherwise a FAILED load would fall through to rendering the old machine's
       // name/toggles under the new machine's identity.
       setSettings(null);
-      setLoading(true);
+      serverSettings.current = null;
     }
+    // Spinner whenever we have nothing to show for THIS machine — a different
+    // machine, or a retry after the error state. Keying on `settings` (not just
+    // the machine) also stops a return-trip to a machine whose load failed from
+    // rendering the error state while its GET is still in flight.
+    setSettings((current) => {
+      if (loadedFor.current !== machineId || current === null) setLoading(true);
+      return current;
+    });
     (async () => {
       try {
         const response = await fetchWithAuth(
@@ -85,12 +101,21 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
         );
         if (!response.ok) throw new Error('Failed to load machine settings');
         const json = (await response.json()) as { settings: MachineSettings };
-        if (!cancelled) {
-          loadedFor.current = machineId;
-          setSettings(json.settings);
-          setNameDraft(json.settings.name);
-          setDescriptionDraft(json.settings.description ?? '');
-        }
+        if (cancelled) return;
+        const next = json.settings;
+        const previousServer = serverSettings.current;
+        loadedFor.current = machineId;
+        serverSettings.current = next;
+        setSettings(next);
+        // Adopt the server value only for drafts the user has NOT touched since
+        // we last saw the server. A resync fires while the tab is open, so blindly
+        // reseeding would delete text mid-keystroke.
+        setNameDraft((draft) => (previousServer === null || draft === previousServer.name ? next.name : draft));
+        setDescriptionDraft((draft) =>
+          previousServer === null || draft === (previousServer.description ?? '')
+            ? next.description ?? ''
+            : draft,
+        );
       } catch (error) {
         console.error('Failed to load machine settings:', error);
         // A failed RESYNC keeps the form (and its already-good settings) on screen
@@ -115,28 +140,41 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
    * normalizes it (name trimmed; blank description → null), so on success the
    * optimistic value already equals the persisted one.
    *
-   * On failure the local snapshot is only a GUESS at server truth — the request
-   * may have committed and then timed out, and two saves in flight can land out
-   * of order. So we revert optimistically (instant, no flicker) and then refetch,
-   * which is authoritative and settles both cases. Without that refetch a
-   * commit-then-timeout would strand the tab showing the old value forever, with
-   * nothing to revalidate it (no SWR, no socket subscription here).
+   * Two rules make the failure path safe under CONCURRENT saves (a field's
+   * blur-commit and a switch click can be in flight together):
+   *
+   *  1. Revert ONLY the keys this save owned. Reverting a whole snapshot would
+   *     roll back an unrelated edit that landed while this one was in flight.
+   *  2. Defer the resync until every save has drained. The local snapshot is only
+   *     a GUESS at server truth (the request may have committed and then timed
+   *     out), so a refetch is the authority — but a GET fired while another PATCH
+   *     is still airborne reads pre-PATCH state and is then overwritten by it,
+   *     stranding the very staleness the resync exists to fix.
    */
   async function persist(patch: MachineSettingsPatch) {
     if (!settings) return;
-    const previous = settings;
+    const keys = Object.keys(patch) as (keyof MachineSettingsPatch)[];
+    const revert: MachineSettingsPatch = {};
+    for (const key of keys) Object.assign(revert, { [key]: settings[key] });
+
     setSettings((current) => (current ? { ...current, ...patch } : current));
-    setPendingSaves((n) => n + 1);
+    pendingSavesRef.current += 1;
+    setPendingSaves(pendingSavesRef.current);
     try {
       await apiPatch('/api/machines/settings', { machineId, ...patch });
     } catch (error) {
-      setSettings(previous);
-      setNameDraft(previous.name);
-      setDescriptionDraft(previous.description ?? '');
-      setReloadToken((t) => t + 1);
+      setSettings((current) => (current ? { ...current, ...revert } : current));
+      if (revert.name !== undefined) setNameDraft(revert.name);
+      if (revert.description !== undefined) setDescriptionDraft(revert.description ?? '');
+      resyncWhenIdle.current = true;
       toast.error(error instanceof Error ? error.message : 'Failed to update machine settings');
     } finally {
-      setPendingSaves((n) => n - 1);
+      pendingSavesRef.current -= 1;
+      setPendingSaves(pendingSavesRef.current);
+      if (pendingSavesRef.current === 0 && resyncWhenIdle.current) {
+        resyncWhenIdle.current = false;
+        setReloadToken((t) => t + 1);
+      }
     }
   }
 
@@ -168,11 +206,25 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
     try {
       await apiDelete(`/api/machines/settings?machineId=${encodeURIComponent(machineId)}`);
       toast.success('Machine deleted');
+      setConfirmOpen(false);
       router.push(driveId ? `/dashboard/${driveId}` : '/dashboard');
     } catch (error) {
+      // Leave the dialog OPEN on failure so the user can simply retry.
       toast.error(error instanceof Error ? error.message : 'Failed to delete machine');
+    } finally {
       setDeleting(false);
     }
+  }
+
+  /**
+   * Closing the confirm dialog always clears the in-progress state. The DELETE is
+   * held open behind `preventDefault` (see below), so without this an Escape
+   * during a hung request would strand `deleting: true` — reopening would then
+   * show a permanently disabled "Deleting…" button with no way back.
+   */
+  function onConfirmOpenChange(open: boolean) {
+    setConfirmOpen(open);
+    if (!open) setDeleting(false);
   }
 
   if (loading) {
@@ -287,7 +339,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
             </div>
           </CardHeader>
           <CardContent>
-            <AlertDialog>
+            <AlertDialog open={confirmOpen} onOpenChange={onConfirmOpenChange}>
               <AlertDialogTrigger asChild>
                 <Button type="button" variant="destructive">
                   <Trash2 className="h-4 w-4" />

@@ -36,7 +36,10 @@ function mockLoad(settings: MachineSettings = baseSettings) {
 }
 
 describe('SettingsTab', () => {
-  beforeEach(() => vi.clearAllMocks());
+  // resetAllMocks, NOT clearAllMocks: clear only wipes call history, leaving any
+  // unconsumed `mockResolvedValueOnce` queued for the NEXT test. That order-couples
+  // the suite and turns one real failure into a misleading cascade.
+  beforeEach(() => vi.resetAllMocks());
 
   test('loads the machine settings into the form', async () => {
     mockLoad();
@@ -199,6 +202,118 @@ describe('SettingsTab', () => {
       should: 'refetch and converge on the true server state, not the guessed rollback',
       actual: { fetches: fetchWithAuth.mock.calls.length, checked: toggle.getAttribute('aria-checked') },
       expected: { fetches: 2, checked: 'true' },
+    }));
+  });
+
+  test('a failed save does not revert an unrelated edit that landed while it was in flight', async () => {
+    mockLoad();
+    // The toggle's PATCH hangs and then fails; the name's PATCH succeeds meanwhile.
+    // Reverting a whole snapshot (rather than just the failed save's own keys)
+    // would roll the successful rename back out of the UI.
+    let failToggle: (e: Error) => void = () => {};
+    apiPatch.mockImplementation((_url: string, body: Record<string, unknown>) => {
+      if ('visibleToGlobalAssistant' in body) {
+        return new Promise((_resolve, reject) => { failToggle = reject; });
+      }
+      return Promise.resolve({ settings: baseSettings });
+    });
+    render(<SettingsTab machineId="m1" />);
+
+    await userEvent.click(await screen.findByRole('switch', { name: /visible to global assistant/i }));
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed');
+    await userEvent.tab();
+    await waitFor(() => assert({
+      given: 'the rename PATCH sent while the toggle PATCH is still in flight',
+      should: 'have sent both',
+      actual: apiPatch.mock.calls.length,
+      expected: 2,
+    }));
+
+    failToggle(new Error('toggle failed'));
+
+    await waitFor(() => assert({
+      given: 'the toggle save failing after an unrelated rename succeeded',
+      should: 'revert only the toggle, leaving the successful rename intact',
+      actual: {
+        toggle: screen.getByRole('switch', { name: /visible to global assistant/i }).getAttribute('aria-checked'),
+        name: (screen.getByLabelText('Name') as HTMLInputElement).value,
+      },
+      expected: { toggle: 'false', name: 'Renamed' },
+    }));
+  });
+
+  test('the resync GET waits for every in-flight save to drain', async () => {
+    mockLoad();
+    let failToggle: (e: Error) => void = () => {};
+    let resolveName: (v: unknown) => void = () => {};
+    apiPatch.mockImplementation((_url: string, body: Record<string, unknown>) => {
+      if ('visibleToGlobalAssistant' in body) {
+        return new Promise((_resolve, reject) => { failToggle = reject; });
+      }
+      return new Promise((resolve) => { resolveName = resolve; });
+    });
+    render(<SettingsTab machineId="m1" />);
+
+    await userEvent.click(await screen.findByRole('switch', { name: /visible to global assistant/i }));
+    const name = await screen.findByLabelText('Name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed');
+    await userEvent.tab();
+    await waitFor(() => assert({ given: 'two saves', should: 'both be sent', actual: apiPatch.mock.calls.length, expected: 2 }));
+
+    // The toggle fails while the rename is STILL in flight. A GET fired now would
+    // read pre-rename state and then be overwritten by the rename that lands after
+    // it — stranding exactly the staleness the resync exists to fix.
+    failToggle(new Error('toggle failed'));
+
+    // Gate on the error toast, which proves the catch block ran and its effects
+    // flushed. Asserting the fetch count under a bare waitFor would be vacuous:
+    // waitFor polls until the assertion PASSES, so "still 1" would succeed on the
+    // first poll — before an eager refetch had a chance to fire.
+    await waitFor(() => assert({
+      given: 'the toggle save rejecting',
+      should: 'have surfaced the failure (its catch block has run)',
+      actual: (toast.error as ReturnType<typeof vi.fn>).mock.calls.length,
+      expected: 1,
+    }));
+    assert({
+      given: 'a save that failed while another save is still airborne',
+      should: 'NOT refetch yet — only the initial GET has been made',
+      actual: fetchWithAuth.mock.calls.length,
+      expected: 1,
+    });
+
+    resolveName({ settings: baseSettings });
+
+    await waitFor(() => assert({
+      given: 'the last in-flight save draining',
+      should: 'now fire the deferred resync GET',
+      actual: fetchWithAuth.mock.calls.length,
+      expected: 2,
+    }));
+  });
+
+  test('a failed delete keeps the dialog open and re-enables the confirm button', async () => {
+    mockLoad();
+    apiDelete.mockRejectedValue(new Error('sprite teardown exploded'));
+    render(<SettingsTab machineId="m1" />);
+
+    await screen.findByLabelText('Name');
+    await userEvent.click(screen.getByRole('button', { name: /delete machine/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: /delete machine/i }));
+
+    await waitFor(() => assert({
+      given: 'a DELETE that failed',
+      should: 'keep the dialog open with a re-enabled confirm button, and not navigate',
+      actual: {
+        open: screen.queryByRole('alertdialog') !== null,
+        disabled: (within(screen.getByRole('alertdialog')).getByRole('button', { name: /delete machine/i }) as HTMLButtonElement).disabled,
+        navigated: push.mock.calls.length,
+      },
+      expected: { open: true, disabled: false, navigated: 0 },
     }));
   });
 
