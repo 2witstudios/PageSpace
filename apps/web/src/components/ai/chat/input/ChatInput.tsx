@@ -158,12 +158,13 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     const currentModel = propModel ?? storeModel;
     const handleProviderModelChange = onProviderModelChange ?? setProviderSettings;
 
-    // Load settings on mount (only needed when not using props)
+    // Load settings on mount. Even when provider/model come from props (page-AI
+    // chat), we still need the store's subscriptionTier so the Pro+-gated Image
+    // toggle reflects the user's plan. loadSettings is idempotent (guarded by
+    // isInitialized) and page-AI keeps using its own provider props for the selector.
     useEffect(() => {
-      if (propProvider === undefined) {
-        loadSettings();
-      }
-    }, [loadSettings, propProvider]);
+      loadSettings();
+    }, [loadSettings]);
 
     // Speech recognition
     const { isListening, isSupported, error: speechError, toggleListening, clearError: clearSpeechError } = useSpeechRecognition({

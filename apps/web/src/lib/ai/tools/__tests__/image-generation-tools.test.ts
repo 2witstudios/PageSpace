@@ -16,7 +16,10 @@ vi.mock('../../core/image-generation', async (orig) => ({
   ...(await orig<typeof import('../../core/image-generation')>()),
   generateImageBytes: (...a: unknown[]) => generateImageBytes(...a),
 }));
-vi.mock('@/lib/upload/create-file-page', () => ({ createImageFilePage: (...a: unknown[]) => createImageFilePage(...a) }));
+vi.mock('@/lib/upload/create-file-page', () => ({
+  createImageFilePage: (...a: unknown[]) => createImageFilePage(...a),
+  ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
+}));
 
 import { imageGenerationTools } from '../image-generation-tools';
 import { isImageGenerationAllowedForTier } from '@/lib/ai/core/image-gen-access';

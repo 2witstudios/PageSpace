@@ -5,6 +5,7 @@ import {
   buildImageFilePageValues,
   createImageFilePage,
   GENERATED_IMAGES_FOLDER,
+  ImageStorageQuotaError,
   type FilePageWrite,
 } from '../create-file-page';
 
@@ -46,16 +47,19 @@ describe('buildImageFilePageValues (pure)', () => {
 });
 
 describe('createImageFilePage (shell, all seams injected)', () => {
-  it('defaults to the Home-drive gallery and persists file+page+junction', async () => {
+  const okQuota = vi.fn(async (_u: string, _b: number) => ({ allowed: true }));
+
+  it('checks quota, defaults to the Home gallery, persists, and charges storage on first store', async () => {
     const putObject = vi.fn(async (_key: string, _body: Buffer, _ct: string) => undefined);
     const resolveGalleryParent = vi.fn(async () => ({ driveId: 'home1', parentId: 'gallery1' }));
     const getNextPosition = vi.fn(async () => 5);
     let written: FilePageWrite | undefined;
-    const persist = vi.fn(async (w: FilePageWrite) => { written = w; });
+    const persist = vi.fn(async (w: FilePageWrite) => { written = w; return { fileWasInserted: true }; });
+    const chargeStorage = vi.fn(async () => {});
 
     const out = await createImageFilePage(
       { userId: 'user1', buffer: buf, mimeType: 'image/jpeg', title: 'red panda', prompt: 'p' },
-      { putObject, resolveGalleryParent, getNextPosition, persist },
+      { putObject, resolveGalleryParent, getNextPosition, persist, checkQuota: okQuota, chargeStorage },
     );
 
     assert({
@@ -76,13 +80,59 @@ describe('createImageFilePage (shell, all seams injected)', () => {
       actual: { fileId: written?.fileRow.id, linkSource: written?.junction.linkSource, pageParent: written?.pageValues.parentId },
       expected: { fileId: HASH, linkSource: 'image-generation', pageParent: 'gallery1' },
     });
+    assert({
+      given: 'a newly stored blob',
+      should: 'charge storage for its byte count',
+      actual: chargeStorage.mock.calls[0]?.slice(0, 2),
+      expected: ['user1', buf.length],
+    });
+  });
+
+  it('does NOT charge storage on a dedup store (fileWasInserted false)', async () => {
+    const chargeStorage = vi.fn(async () => {});
+    await createImageFilePage(
+      { userId: 'u', buffer: buf, mimeType: 'image/png', title: 't' },
+      {
+        putObject: async () => undefined,
+        resolveGalleryParent: async () => ({ driveId: 'd', parentId: 'p' }),
+        getNextPosition: async () => 1,
+        persist: async () => ({ fileWasInserted: false }),
+        checkQuota: okQuota,
+        chargeStorage,
+      },
+    );
+    expect(chargeStorage).not.toHaveBeenCalled();
+  });
+
+  it('throws ImageStorageQuotaError (and does not upload) when over quota', async () => {
+    const putObject = vi.fn(async () => undefined);
+    await expect(
+      createImageFilePage(
+        { userId: 'u', buffer: buf, mimeType: 'image/png', title: 't' },
+        {
+          putObject,
+          checkQuota: async () => ({ allowed: false, reason: 'Insufficient storage' }),
+          resolveGalleryParent: async () => ({ driveId: 'd', parentId: 'p' }),
+          getNextPosition: async () => 1,
+          persist: async () => ({ fileWasInserted: true }),
+        },
+      ),
+    ).rejects.toBeInstanceOf(ImageStorageQuotaError);
+    expect(putObject).not.toHaveBeenCalled();
   });
 
   it('files into an explicit target location when provided (no gallery lookup)', async () => {
     const resolveGalleryParent = vi.fn(async () => ({ driveId: 'home1', parentId: 'gallery1' }));
     const out = await createImageFilePage(
       { userId: 'u', buffer: buf, mimeType: 'image/png', title: 't', targetDriveId: 'driveX', targetParentId: 'pageY' },
-      { putObject: async () => undefined, resolveGalleryParent, getNextPosition: async () => 1, persist: async () => undefined },
+      {
+        putObject: async () => undefined,
+        resolveGalleryParent,
+        getNextPosition: async () => 1,
+        persist: async () => ({ fileWasInserted: true }),
+        checkQuota: okQuota,
+        chargeStorage: async () => {},
+      },
     );
     assert({
       given: 'a target drive + parent',

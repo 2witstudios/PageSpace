@@ -22,10 +22,19 @@ import { getHomeDrive } from '@pagespace/lib/services/drive-service';
 import { getDefaultContent } from '@pagespace/lib/content/page-types.config';
 import { buildS3Key } from '@pagespace/lib/services/upload-validation';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
+import { checkStorageQuota, updateStorageUsage, shouldChargeForStore } from '@pagespace/lib/services/storage-limits';
 import { putObject } from './s3-effects';
 
 /** Folder (at the Home-drive root) that collects auto-filed generated images. */
 export const GENERATED_IMAGES_FOLDER = 'Generated Images';
+
+/** Thrown when persisting a generated image would exceed the user's storage quota. */
+export class ImageStorageQuotaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ImageStorageQuotaError';
+  }
+}
 
 export interface CreateImageFilePageInput {
   userId: string;
@@ -34,7 +43,13 @@ export interface CreateImageFilePageInput {
   title: string;
   /** Optional prompt to stamp into fileMetadata for provenance. */
   prompt?: string;
-  /** When set, file the image here instead of the Home-drive gallery. */
+  /**
+   * Optional target location instead of the Home-drive gallery. SECURITY: the caller
+   * MUST verify the user can edit `targetDriveId`/`targetParentId` before passing them
+   * (this helper does not check drive/parent edit permissions). The generate_image tool
+   * deliberately does NOT expose these to the model — it always uses the owner's Home
+   * gallery — so untrusted, model-supplied drive ids can't reach here.
+   */
   targetDriveId?: string;
   targetParentId?: string;
 }
@@ -50,7 +65,16 @@ export interface CreateImageFilePageDeps {
   putObject?: (key: string, body: Buffer, contentType: string) => Promise<void>;
   resolveGalleryParent?: (userId: string) => Promise<{ driveId: string; parentId: string }>;
   getNextPosition?: (driveId: string, parentId: string | null) => Promise<number>;
-  persist?: (write: FilePageWrite) => Promise<void>;
+  /** Returns whether the content-addressed `files` row was newly inserted (charge once). */
+  persist?: (write: FilePageWrite) => Promise<{ fileWasInserted: boolean }>;
+  /** Storage quota pre-check; throws-free, returns { allowed, reason? }. */
+  checkQuota?: (userId: string, bytes: number) => Promise<{ allowed: boolean; reason?: string }>;
+  /** Charge storage usage for a newly stored blob. */
+  chargeStorage?: (
+    userId: string,
+    bytes: number,
+    ctx: { pageId: string; driveId: string; eventType: 'upload' },
+  ) => Promise<void>;
 }
 
 /** Pure: content-address bytes with SHA-256 (lowercase 64-hex), matching upload storage. */
@@ -134,23 +158,41 @@ async function defaultResolveGalleryParent(userId: string): Promise<{ driveId: s
 }
 
 /** Shell: the three-insert transaction (files → pages(FILE) → filePages junction). */
-async function defaultPersist(write: FilePageWrite): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx.insert(files).values(write.fileRow).onConflictDoNothing();
+async function defaultPersist(write: FilePageWrite): Promise<{ fileWasInserted: boolean }> {
+  return db.transaction(async (tx) => {
+    // Content-addressed store: only the FIRST insert of a given hash adds bytes, so
+    // storage is charged once (symmetric with the unlink credit) — dedup stores don't.
+    const insertedFiles = await tx
+      .insert(files)
+      .values(write.fileRow)
+      .onConflictDoNothing()
+      .returning({ id: files.id });
     await tx.insert(pages).values(write.pageValues);
     await tx.insert(filePages).values(write.junction).onConflictDoNothing();
+    return { fileWasInserted: insertedFiles.length > 0 };
   });
 }
 
 /**
  * Persist `buffer` as a FILE page. Defaults to the user's Home-drive "Generated Images"
- * gallery; pass `targetDriveId`/`targetParentId` to file it elsewhere. Returns the new
- * page id (viewable at `/api/files/${pageId}/view`).
+ * gallery; `targetDriveId`/`targetParentId` file it elsewhere (caller MUST have verified
+ * edit permission — see the input type). Enforces the storage quota before writing and
+ * charges storage on first store. Returns the new page id (viewable at
+ * `/api/files/${pageId}/view`).
  */
 export async function createImageFilePage(
   input: CreateImageFilePageInput,
   deps: CreateImageFilePageDeps = {},
 ): Promise<{ pageId: string; driveId: string; parentId: string | null }> {
+  const fileSize = input.buffer.length;
+
+  // Enforce the storage quota BEFORE writing any bytes, mirroring the upload flow, so
+  // generated images can't let a user exceed their plan storage.
+  const quota = await (deps.checkQuota ?? checkStorageQuota)(input.userId, fileSize);
+  if (!quota.allowed) {
+    throw new ImageStorageQuotaError(quota.reason ?? 'Saving this image would exceed your storage quota.');
+  }
+
   const hash = (deps.hash ?? sha256Hex)(input.buffer);
   await (deps.putObject ?? putObject)(buildS3Key(hash), input.buffer, input.mimeType);
 
@@ -167,7 +209,6 @@ export async function createImageFilePage(
 
   const position = await (deps.getNextPosition ?? pageRepository.getNextPosition)(driveId, parentId);
   const pageId = createId();
-  const fileSize = input.buffer.length;
 
   const write: FilePageWrite = {
     fileRow: {
@@ -193,6 +234,15 @@ export async function createImageFilePage(
     junction: { fileId: hash, pageId, linkedBy: input.userId, linkSource: 'image-generation' },
   };
 
-  await (deps.persist ?? defaultPersist)(write);
+  const { fileWasInserted } = await (deps.persist ?? defaultPersist)(write);
+
+  // Charge storage once, only on the first physical store of the blob (symmetric with
+  // the credit issued at unlink) — dedup stores add no bytes. Best-effort: a bookkeeping
+  // failure must not fail an already-committed page.
+  if (shouldChargeForStore(fileWasInserted)) {
+    const charge = deps.chargeStorage ?? ((u, b, ctx) => updateStorageUsage(u, b, ctx));
+    await charge(input.userId, fileSize, { pageId, driveId, eventType: 'upload' }).catch(() => {});
+  }
+
   return { pageId, driveId, parentId };
 }

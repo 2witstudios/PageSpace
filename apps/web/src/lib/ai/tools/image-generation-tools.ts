@@ -14,7 +14,7 @@ import type { ToolExecutionContext } from '../core/types';
 import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
 import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
 import { isImageGenerationAllowedForTier } from '../core/image-gen-access';
-import { createImageFilePage } from '@/lib/upload/create-file-page';
+import { createImageFilePage, ImageStorageQuotaError } from '@/lib/upload/create-file-page';
 
 const imageLogger = loggers.ai.child({ module: 'image-generation-tools' });
 
@@ -49,17 +49,9 @@ illustrate an image, logo, diagram, or picture. Requires a Pro subscription.`,
         .enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
         .optional()
         .describe('Optional aspect ratio hint (default square). Some models may ignore it.'),
-      targetDriveId: z
-        .string()
-        .optional()
-        .describe('Optional: file the image into this drive instead of the Home-drive gallery.'),
-      targetParentId: z
-        .string()
-        .optional()
-        .describe('Optional: file the image under this parent page (requires targetDriveId).'),
     }),
     execute: async (
-      { prompt, aspectRatio, targetDriveId, targetParentId },
+      { prompt, aspectRatio },
       { experimental_context: rawContext },
     ) => {
       const context = rawContext as ToolExecutionContext | undefined;
@@ -121,15 +113,17 @@ illustrate an image, logo, diagram, or picture. Requires a Pro subscription.`,
           mimeType: image.mediaType,
           title,
           prompt,
-          targetDriveId,
-          targetParentId,
         });
       } catch (error) {
         if (holdId) await releaseHold(holdId).catch(() => {});
         imageLogger.error('Failed to save generated image', error as Error, {
           userId: maskIdentifier(userId),
         });
-        return { success: false, error: 'The image was generated but could not be saved to your drive.' };
+        const message =
+          error instanceof ImageStorageQuotaError
+            ? error.message
+            : 'The image was generated but could not be saved to your drive.';
+        return { success: false, error: message };
       }
 
       // Settle the hold at the real cost (or the flat estimate when OpenRouter omits it).
