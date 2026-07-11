@@ -11,6 +11,8 @@ import { useMachineDiffFiles, machineDiffKeyFilter, type MachineDiffFilesRespons
 import { isMachineDiffScope, type MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import DiffFileCard from './DiffFileCard';
+import TabSidebar from './TabSidebar';
+import { PaneLoading, PaneNotice, Spinner } from './tab-states';
 
 const SCOPE_LABELS: Record<MachineDiffScope, string> = {
   uncommitted: 'Uncommitted',
@@ -73,30 +75,15 @@ export default function DiffTab({ machineId }: { machineId: string }) {
   }, []);
 
   return (
-    <div className="flex h-full min-h-0">
-      <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Branches</span>
-        </div>
-        <ScrollArea className="flex-1">
-          <MachineTree
-            machineId={machineId}
-            onSelectNode={onSelectNode}
-            isNodeSelectable={isNodeSelectable}
-            // Without this the tree gives no sign of which branch is being
-            // diffed — the only clue would be the path in the pane header.
-            selectedNode={
-              selected ? { level: 'branch', projectName: selected.projectName, branchName: selected.branchName } : null
-            }
+    <TabSidebar
+      title="Branches"
+      pane={
+        selected === null ? (
+          <PaneNotice
+            icon={<GitCompare className="size-6 text-muted-foreground" />}
+            title="No branch selected"
+            description="Select a branch to view its diff."
           />
-        </ScrollArea>
-      </aside>
-      <div className="min-w-0 flex-1">
-        {selected === null ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">
-            <GitCompare className="size-5" />
-            <span>Select a branch to view its diff.</span>
-          </div>
         ) : (
           <BranchDiffPane
             // Remounting per branch resets the scope selection and expanded
@@ -108,9 +95,28 @@ export default function DiffTab({ machineId }: { machineId: string }) {
             projectName={selected.projectName}
             branchName={selected.branchName}
           />
-        )}
-      </div>
-    </div>
+        )
+      }
+    >
+      {({ close }) => (
+        <MachineTree
+          machineId={machineId}
+          onSelectNode={(node) => {
+            onSelectNode(node);
+            // Only branch rows select (see isNodeSelectable), and selecting one IS
+            // the navigation here — on a narrow viewport the diff it opens is
+            // behind the sheet the tree is in.
+            if (node.level === 'branch') close();
+          }}
+          isNodeSelectable={isNodeSelectable}
+          // Without this the tree gives no sign of which branch is being
+          // diffed — the only clue would be the path in the pane header.
+          selectedNode={
+            selected ? { level: 'branch', projectName: selected.projectName, branchName: selected.branchName } : null
+          }
+        />
+      )}
+    </TabSidebar>
   );
 }
 
@@ -172,28 +178,41 @@ function BranchDiffPane({
       }}
       className="flex h-full min-h-0 flex-col gap-0"
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+      {/* Stacks on a narrow viewport: the path, a 3-way toggle and the refresh
+          button do not fit one phone-width row, and squeezing them produces a
+          toggle whose labels are all ellipsis. */}
+      <div className="flex flex-col gap-2 border-b border-border px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-xs text-muted-foreground">
             {projectName}/{branchName}
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {!probeResolved ? (
-            <span className="text-xs text-muted-foreground">Loading scopes…</span>
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Spinner className="size-3" />
+              Loading scopes…
+            </span>
           ) : (
-            <TabsList>
-              {availableScopes.map((option) => (
-                <TabsTrigger key={option} value={option}>
-                  {SCOPE_LABELS[option]}
-                </TabsTrigger>
-              ))}
-            </TabsList>
+            // The three scope labels overflow a phone-width row, so the toggle
+            // scrolls sideways rather than compressing its triggers to nothing.
+            <div className="min-w-0 overflow-x-auto">
+              <TabsList>
+                {availableScopes.map((option) => (
+                  <TabsTrigger key={option} value={option}>
+                    {SCOPE_LABELS[option]}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
           )}
           <Button
             variant="ghost"
             size="icon"
-            className="size-8"
+            // shrink-0: its sibling is a scrolling toggle in a min-w-0 row, so
+            // without this the flex layout would squeeze the button instead of
+            // letting the toggle scroll.
+            className="size-8 shrink-0"
             onClick={refresh}
             disabled={refreshing}
             title="Refresh diff"
@@ -210,7 +229,7 @@ function BranchDiffPane({
           generic "No uncommitted changes" that then flips to the main-branch
           copy once applicability is known. */}
       {!probeResolved ? (
-        <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>
+        <PaneLoading message="Loading changed files…" />
       ) : (
         // ONE PANEL PER SCOPE, and this is NOT redundant — a simplification pass
         // collapsed it to a single `<TabsContent value={active}>` on the premise
@@ -241,6 +260,7 @@ function BranchDiffPane({
                 scopesApplicable={scopesApplicable}
                 data={list.data}
                 error={list.error}
+                onRetry={refresh}
               />
             </ScrollArea>
           </TabsContent>
@@ -258,6 +278,7 @@ function DiffFileList({
   scopesApplicable,
   data,
   error,
+  onRetry,
 }: {
   machineId: string;
   projectName: string;
@@ -266,9 +287,19 @@ function DiffFileList({
   scopesApplicable: boolean;
   data: MachineDiffFilesResponse | undefined;
   error: Error | undefined;
+  /** Revalidates this branch's diff — the same action the header's refresh runs. */
+  onRetry: () => void;
 }) {
   if (error) {
-    return <div className="p-4 text-sm text-destructive">Failed to load diff: {error.message}</div>;
+    return (
+      <PaneNotice
+        tone="destructive"
+        title="Failed to load diff"
+        description={error.message}
+        actionLabel="Retry"
+        onAction={onRetry}
+      />
+    );
   }
   // Error FIRST, then no-data-yet. SWR reads data/error from the CURRENT key's
   // cache entry, so on a scope switch `data` is immediately undefined and the
@@ -280,7 +311,7 @@ function DiffFileList({
   // Loading <-> Failed if isLoading were checked first. Holding the error steady and
   // signalling the retry through the spinning Refresh icon is the honest reading.
   if (!data) {
-    return <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>;
+    return <PaneLoading message="Loading changed files…" />;
   }
   if (data.notApplicable) {
     // The toggle normally prevents this (a not-applicable scope isn't offered),
@@ -288,10 +319,10 @@ function DiffFileList({
     // failed probe can leave the full toggle up on a main branch, and an empty
     // white pane would read as "no changes", which is a different claim.
     return (
-      <div className="p-4 text-sm text-muted-foreground">
-        This scope doesn&apos;t apply on <span className="font-mono">{branchName}</span> — it is the repository&apos;s
-        default branch, so there is nothing to compare it against.
-      </div>
+      <PaneNotice
+        title={`This scope doesn't apply on ${branchName}`}
+        description="It is the repository's default branch, so there is nothing to compare it against."
+      />
     );
   }
   // `truncated` is checked BEFORE the empty state: a list cut at the output cap
@@ -299,7 +330,12 @@ function DiffFileList({
   // and reporting that as "no changes" would be the one place this pane claims a
   // clean tree on partial data.
   if (data.files.length === 0 && !data.truncated) {
-    return <div className="p-4 text-sm text-muted-foreground">{emptyMessage(scope, branchName, scopesApplicable)}</div>;
+    return (
+      <PaneNotice
+        icon={<GitCompare className="size-6 text-muted-foreground" />}
+        title={emptyMessage(scope, branchName, scopesApplicable)}
+      />
+    );
   }
 
   return (

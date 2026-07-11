@@ -43,7 +43,7 @@ import { useProviders } from '@/hooks/useIntegrations';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton from './RemoveButton';
-import EmptyState from './EmptyState';
+import { SidebarLoading, SidebarNotice } from '../tabs/tab-states';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
 export type MachineTreeNode =
@@ -220,14 +220,14 @@ function MachineNode({ machineId, onSelectNode, isNodeSelectable, selectedNode, 
             <span className="text-xs text-muted-foreground">Projects</span>
             <AddProjectDialog onAdd={addProject} />
           </div>
-          {projectsLoading && <div className="px-2 py-1 text-xs text-muted-foreground">Loading projects…</div>}
+          {projectsLoading && <SidebarLoading message="Loading projects…" />}
           {!projectsLoading && projects.length === 0 && (
-            <EmptyState
+            <SidebarNotice
               title="No projects yet"
               description="Add a git repo to this machine to start a branch-terminal."
             >
               <AddProjectDialog onAdd={addProject} triggerLabel="Add your first project" />
-            </EmptyState>
+            </SidebarNotice>
           )}
           {projects.map((project) => (
             <ProjectNode
@@ -292,9 +292,12 @@ function ProjectNode({
             <span className="text-xs text-muted-foreground">Branches</span>
             <AddBranchDialog onAdd={addBranch} />
           </div>
-          {branchesLoading && <div className="px-2 py-1 text-xs text-muted-foreground">Loading branches…</div>}
+          {branchesLoading && <SidebarLoading message="Loading branches…" />}
           {!branchesLoading && branches.length === 0 && (
-            <div className="px-2 py-1 text-xs text-muted-foreground">No branches yet</div>
+            <SidebarNotice
+              title="No branches yet"
+              description="Add a branch-terminal to check this repo out in its own Sprite."
+            />
           )}
           {branches.map((branch) => (
             <BranchNode
