@@ -17,7 +17,18 @@ const config: CapacitorConfig = {
     // to another path (e.g. the signin redirect) fails it, gets handed to system
     // Safari, and is cancelled in the WebView — leaving no document at all. The
     // host check runs first, so listing our hosts here short-circuits that trap.
-    // Google/Apple are here because the web-OAuth fallback navigates to them.
+    //
+    // The apex must be listed separately: doesHost() compares dot-component counts, so
+    // '*.pagespace.ai' (3) does not match 'pagespace.ai' (2).
+    //
+    // Google/Apple are deliberate but imperfect. iOS signs in through the NATIVE plugin
+    // (@capgo/capacitor-social-login), so the web fallback at useOAuthSignIn.ts should
+    // never fire here. If it does, allowlisting keeps it in the WebView, where Google
+    // answers `disallowed_useragent` — a visible, diagnosable failure. Omitting them
+    // instead hands the consent screen to Safari, where a successful sign-in drops the
+    // cookie in the WRONG cookie jar and the app stays silently logged out. Neither is
+    // correct; the real fix is to route the fallback through ASWebAuthenticationSession,
+    // which is a separate change.
     allowNavigation: ['pagespace.ai', '*.pagespace.ai', 'accounts.google.com', 'appleid.apple.com'],
     // Bundled retry screen (apps/ios/public/index.html) so a failed load renders
     // something actionable instead of an empty view.

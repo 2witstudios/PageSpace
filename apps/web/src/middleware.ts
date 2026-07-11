@@ -55,13 +55,20 @@ const REWRITE_SIGNIN_ROOT = '/dashboard';
 const isShellEntryPath = (pathname: string): boolean =>
   pathname === REWRITE_SIGNIN_ROOT || pathname.startsWith(`${REWRITE_SIGNIN_ROOT}/`);
 
+// Query params that must never survive into `next=`. `next` itself, because the
+// destination is always the path actually requested — honouring a caller-supplied
+// `next` instead would let a query param override the real destination, and leaving a
+// rejected one embedded would fail validation for the whole reconstructed path and cost
+// the user the rest of their query string with it. `_rsc` because a soft navigation that
+// finds an expired session carries Next's RSC cache-buster, which is meaningless (and
+// stale) by the time the user is landed back on the page after signing in.
+const NON_FORWARDABLE_PARAMS = ['next', '_rsc'];
+
 /**
- * Signin URL carrying the deep link the user was denied, so signin can return them
- * there. Honours an explicit `next=` already on the request (a hard nav to
- * `/dashboard?next=…` from a non-/dashboard surface is how the app funnels expiry
- * through the shell-safe path) and otherwise reconstructs it from the request. Only
- * targets the signin surface actually accepts survive — anything else is dropped
- * rather than passed along to be rejected there.
+ * Signin URL carrying the deep link the user was denied, so signin can return them there.
+ * The deep link is always reconstructed from the request itself; only destinations the
+ * signin surface actually accepts survive, and anything else is dropped rather than
+ * passed along to be rejected there.
  */
 const buildSigninUrl = (req: NextRequest): URL => {
   // Resolved against req.url, so the origin is always this request's own — a rewrite
@@ -69,20 +76,11 @@ const buildSigninUrl = (req: NextRequest): URL => {
   // client-side hop, but that is unreachable here by construction, however the Host
   // header is set. Same idiom as the WELL_KNOWN_REWRITES rewrite below.
   const url = new URL(SIGNIN_PATH, req.url);
-  const explicitNext = req.nextUrl.searchParams.get('next');
 
-  let candidate: string;
-  if (explicitNext && isSafeNextPath({ path: explicitNext, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
-    candidate = explicitNext;
-  } else {
-    // Reconstruct from the request, minus any `next` we just rejected — leaving a
-    // tainted one in the query string would make the rebuilt path fail validation
-    // too and cost the user the rest of their query params along with it.
-    const search = new URLSearchParams(req.nextUrl.search);
-    search.delete('next');
-    const query = search.toString();
-    candidate = query ? `${req.nextUrl.pathname}?${query}` : req.nextUrl.pathname;
-  }
+  const search = new URLSearchParams(req.nextUrl.search);
+  for (const param of NON_FORWARDABLE_PARAMS) search.delete(param);
+  const query = search.toString();
+  const candidate = query ? `${req.nextUrl.pathname}?${query}` : req.nextUrl.pathname;
 
   if (isSafeNextPath({ path: candidate, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
     url.searchParams.set('next', candidate);

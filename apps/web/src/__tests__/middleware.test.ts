@@ -257,13 +257,14 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
     expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc?tab=chat');
   });
 
-  it('honours an explicit next= already on the request rather than reconstructing it', async () => {
-    // How a non-/dashboard surface funnels an expired session through the one
-    // path the iOS shell will accept without losing the user's destination.
-    const response = await middleware(buildRequest('/dashboard?next=%2Fdashboard%2Fdrv_abc%2Fpg_xyz'));
+  // next= is always the path actually requested. A caller-supplied `next` is dropped
+  // rather than honoured — otherwise a query param could override the real destination
+  // (and no code in this app ever navigates to /dashboard?next=… in the first place).
+  it('ignores a caller-supplied next= and preserves the actually-requested path', async () => {
+    const response = await middleware(buildRequest('/dashboard/drv_abc?next=%2Fdashboard%2Felsewhere'));
 
     const url = new URL(rewriteTarget(response) as string);
-    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc/pg_xyz');
+    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc');
   });
 
   it('drops an off-origin next= instead of passing it through', async () => {
@@ -272,6 +273,15 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
     const url = new URL(rewriteTarget(response) as string);
     // Falls back to the requested path; the attacker-supplied value never survives.
     expect(url.searchParams.get('next')).toBe('/dashboard');
+  });
+
+  // A soft nav that hits an expired session carries Next's RSC cache-buster. Landing the
+  // user back on `/dashboard/x?_rsc=abc` after signin would be stale and meaningless.
+  it('strips Next\'s _rsc cache-buster from the preserved deep link', async () => {
+    const response = await middleware(buildRequest('/dashboard/drv_abc?tab=chat&_rsc=1a2b3c'));
+
+    const url = new URL(rewriteTarget(response) as string);
+    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc?tab=chat');
   });
 
   it('still REDIRECTS an unauthenticated page request outside /dashboard, with next= preserved', async () => {

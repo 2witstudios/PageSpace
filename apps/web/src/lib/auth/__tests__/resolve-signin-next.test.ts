@@ -67,6 +67,26 @@ describe('resolveSigninNext', () => {
     });
   });
 
+  // useSearchParams does NOT agree with itself across the hydration boundary under a
+  // rewrite: the server renders at the rewrite destination (/auth/signin?next=…, so it
+  // sees the param) while the browser is at /dashboard/… (so it does not). nextPath is
+  // rendered into the signup link's href, so a disagreement is a real hydration mismatch.
+  // Both sources are therefore gated on browserPath, a browser-only value.
+  describe('hydration safety', () => {
+    it('resolves to undefined with NO browserPath even when paramNext is present and valid', () => {
+      // This is the server render / first client render. Both must agree on undefined.
+      expect(
+        resolveSigninNext({ paramNext: '/dashboard/drv_abc', browserPath: null }),
+      ).toBeUndefined();
+    });
+
+    it('yields the value only once browserPath is known (the render after mount)', () => {
+      expect(
+        resolveSigninNext({ paramNext: '/dashboard/drv_abc', browserPath: '/auth/signin?next=/dashboard/drv_abc' }),
+      ).toBe('/dashboard/drv_abc');
+    });
+  });
+
   describe('open-redirect safety', () => {
     it.each([
       ['absolute off-origin URL', 'https://evil.example/x'],
@@ -75,7 +95,9 @@ describe('resolveSigninNext', () => {
       ['path outside the allowlist', '/settings/billing'],
       ['traversal escaping the allowlist', '/dashboard/../settings/billing'],
     ])('drops a %s supplied via next=', (_label, path) => {
-      expect(resolveSigninNext({ paramNext: path, browserPath: null })).toBeUndefined();
+      // browserPath is a real signin URL here, so the gate is open and it is genuinely
+      // the allowlist — not the hydration guard — doing the rejecting.
+      expect(resolveSigninNext({ paramNext: path, browserPath: '/auth/signin' })).toBeUndefined();
     });
 
     it('drops an unsafe browser path just as readily as an unsafe next=', () => {

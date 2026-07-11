@@ -7,7 +7,7 @@ let routerNavigate: Navigate | null = null;
  * Registers Next's client router so non-React modules can navigate through it.
  * Called once from useAuth().
  */
-export function setAppNavigator(navigate: Navigate | null): void {
+export function setAppNavigator(navigate: Navigate): void {
   routerNavigate = navigate;
 }
 
