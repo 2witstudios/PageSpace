@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_ANCHOR_BYTES,
   MAX_PENDING_BYTES,
+  MAX_SEEN_BYTES,
   flushReplay,
   freshReplayState,
   planReplayEmission,
@@ -22,7 +22,7 @@ const buf = (s: string) => Buffer.from(s, 'utf8');
 /** What a caller actually cares about: the text emitted, and whether dedupe is done. */
 const plan = (args: { anchor: string; chunk: string; pending?: string; resolved?: boolean }) => {
   const result = planReplayEmission({
-    anchor: buf(args.anchor),
+    seen: buf(args.anchor),
     chunk: buf(args.chunk),
     state: { pending: buf(args.pending ?? ''), resolved: args.resolved ?? false },
   });
@@ -88,7 +88,7 @@ describe('planReplayEmission (pure)', () => {
   it('given more buffered bytes than the scan bound, should give up and emit them (duplication is survivable; losing output is not)', () => {
     const anchor = buf(BANNER);
     const chunk = Buffer.alloc(MAX_PENDING_BYTES + 1, 0x61); // no anchor anywhere in it
-    const { emit, state } = planReplayEmission({ anchor, chunk, state: freshReplayState() });
+    const { emit, state } = planReplayEmission({ seen: anchor, chunk, state: freshReplayState() });
 
     expect(emit.length).toBe(chunk.length);
     expect(state.resolved).toBe(true);
@@ -100,12 +100,57 @@ describe('planReplayEmission (pure)', () => {
   it('given a multi-byte UTF-8 anchor, should cut the tail on the byte boundary (not the string-length one)', () => {
     const anchor = buf('✓ done → '); // 9 chars, 13 bytes
     const chunk = buf('✓ done → 🚀 next');
-    const { emit } = planReplayEmission({ anchor, chunk, state: freshReplayState() });
+    const { emit } = planReplayEmission({ seen: anchor, chunk, state: freshReplayState() });
 
     expect(emit.toString('utf8')).toBe('🚀 next');
     // Byte-exact: the emitted tail is the chunk's bytes past the anchor's BYTE length.
     expect(emit.equals(chunk.subarray(anchor.length))).toBe(true);
     expect(anchor.length).not.toBe('✓ done → '.length); // the trap this guards
+  });
+});
+
+/**
+ * A match is only the replay's boundary if what sits IN FRONT of it is the
+ * stream's own history. These cases are the difference between "we suppress bytes
+ * the client has" and "we suppress bytes that merely look like them".
+ */
+describe('planReplayEmission corroboration (pure)', () => {
+  const lines = (prefix: string, n: number) =>
+    Buffer.from(Array.from({ length: n }, (_, i) => `${prefix} ${i}\r\n`).join(''), 'utf8');
+
+  // A session with far more history than the 8 KiB anchor — the only shape in
+  // which a replay can be unalignable at all, and so the only one in which a
+  // false match is reachable.
+  const history = lines('history', 3000);
+  const recent = lines('recent', 800);
+  const seen = trackForwarded(Buffer.alloc(0), Buffer.concat([history, recent]));
+
+  it('given a genuine replay (history, then the anchor, then new output), should emit only the new output', () => {
+    const replay = Buffer.concat([seen.subarray(1000), buf('brand new line\r\n')]);
+
+    const { emit, state } = planReplayEmission({ seen, chunk: replay, state: freshReplayState() });
+
+    expect(emit.toString('utf8')).toBe('brand new line\r\n');
+    expect(state.resolved).toBe(true);
+  });
+
+  it('given an UNALIGNABLE replay in which the anchor later RECURS in live output, should suppress nothing', () => {
+    // The loss path: a repainting TUI reproduces the anchor's bytes verbatim. An
+    // unanchored search matches there — PAST the true boundary — and everything
+    // before it, including output the client has never seen, is dropped. The
+    // bytes in front of the recurrence are the gap output, not the history that
+    // precedes the anchor in the real stream, so the match must be rejected.
+    const anchor = seen.subarray(seen.length - 8 * 1024);
+    const neverSeen = lines('output the client never saw', 40);
+    const replay = Buffer.concat([neverSeen, anchor, buf('after repaint\r\n')]);
+
+    const { emit, state } = planReplayEmission({ seen, chunk: replay, state: freshReplayState() });
+
+    // Nothing emitted YET (the boundary is genuinely unknown) — but nothing thrown
+    // away either: it is all still pending, and flushReplay will release it.
+    expect(emit.length).toBe(0);
+    expect(state.resolved).toBe(false);
+    expect(state.pending.includes(neverSeen)).toBe(true);
   });
 });
 
@@ -136,12 +181,12 @@ describe('flushReplay (pure)', () => {
   // suffix of the anchor, and the client already has every byte of it.
   it('given a replay window that opens part-way INTO the anchor (a scrollback shorter than 8 KiB), should still trim the part the client has', () => {
     const forwarded = Buffer.concat([Buffer.alloc(200, 0x61), buf('\r\nsandbox:~$ ')]); // ...aaa\r\nsandbox:~$
-    const anchor = trackForwarded(Buffer.alloc(0), forwarded);
+    const seen = trackForwarded(Buffer.alloc(0), forwarded);
     // The server only kept the last 100 bytes of what we forwarded, then the shell
     // printed something new.
     const replay = Buffer.concat([forwarded.subarray(forwarded.length - 100), buf('date\r\n')]);
 
-    const { emit, state } = flushReplay(anchor, { pending: replay, resolved: false });
+    const { emit, state } = flushReplay(seen, { pending: replay, resolved: false });
 
     expect(emit.toString('utf8')).toBe('date\r\n');
     expect(state.resolved).toBe(true);
@@ -169,10 +214,10 @@ describe('trackForwarded (pure)', () => {
     expected: 'new shell\r\n',
   });
 
-  it('given more forwarded bytes than the anchor bound, should keep only the most recent ones (bounded memory)', () => {
-    const tail = trackForwarded(Buffer.alloc(MAX_ANCHOR_BYTES, 0x61), buf('END'));
+  it('given more forwarded bytes than the retention bound, should keep only the most recent ones (bounded memory)', () => {
+    const tail = trackForwarded(Buffer.alloc(MAX_SEEN_BYTES, 0x61), buf('END'));
 
-    expect(tail.length).toBe(MAX_ANCHOR_BYTES);
+    expect(tail.length).toBe(MAX_SEEN_BYTES);
     expect(tail.subarray(tail.length - 3).toString('utf8')).toBe('END');
   });
 });

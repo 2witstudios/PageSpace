@@ -164,14 +164,29 @@ const RECONNECT_BASE_DELAY_MS = 200;
 const MAX_UNNAMED_ABANDONS = 1;
 
 /**
- * How long a replay may stay quiet before we give up on aligning it and emit what
+ * How long a replay may stay QUIET before we give up on aligning it and emit what
  * we buffered (see `replay-dedupe`). The scrollback is sent "immediately" on
  * attach and arrives as one burst, so a gap this long means the replay is over
  * and its bytes never matched what we had forwarded. Generous enough that a slow
- * multi-frame replay is not cut in half, short enough that the worst case is a
- * redraw the user barely notices.
+ * multi-frame replay is not cut in half.
  */
 const REPLAY_SETTLE_MS = 500;
+
+/**
+ * The hard bound on the replay burst, measured from its first byte — the quiet
+ * gap alone is not one. A shell that is CHATTY across the reconnect (a running
+ * build, a repainting TUI) never goes quiet, so a gap timer would be re-armed by
+ * every chunk and the buffered bytes would be withheld until MAX_PENDING_BYTES:
+ * a quarter-megabyte of dead terminal.
+ *
+ * This deadline is also what keeps the suppression SAFE. The dedupe may only
+ * search bytes that are actually the replay; searching live output risks matching
+ * the anchor past the true boundary and dropping output the client never saw (see
+ * `replay-dedupe`'s module doc). Closing the window on a deadline bounds how much
+ * live output can ever enter the search region, and after it closes nothing is
+ * searched at all.
+ */
+const REPLAY_WINDOW_MS = 1000;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -266,27 +281,34 @@ export function openPtyShell({
     let opened = false;
 
     // Every attach REPLAYS the session's scrollback (sprites.dev/api). Frozen at
-    // wire time so the anchor can't shift underneath a replay that is still being
+    // wire time so the history can't shift underneath a replay that is still being
     // classified, and per-command so each (re)establishment gets a clean slate.
-    const anchor = forwardedTail;
+    const seen = forwardedTail;
     let replay: ReplayState = freshReplayState();
+    // The replay window is closed by whichever of these fires first: a quiet gap
+    // (`settleTimer`, re-armed per chunk) or the hard deadline (`windowTimer`,
+    // armed once at the burst's first byte and never extended) — see the two
+    // constants. MAX_PENDING_BYTES closes it from the byte side.
     let settleTimer: ReturnType<typeof setTimeout> | undefined;
-    const cancelSettle = () => {
+    let windowTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancelTimers = () => {
       if (settleTimer !== undefined) clearTimeout(settleTimer);
+      if (windowTimer !== undefined) clearTimeout(windowTimer);
       settleTimer = undefined;
+      windowTimer = undefined;
     };
-    cancelActiveSettle = cancelSettle;
+    cancelActiveSettle = cancelTimers;
     const deliver = (bytes: Buffer) => {
       if (bytes.length === 0) return;
       // Bytes the client HAS are the bytes the next reconnect must not repeat.
       forwardedTail = trackForwarded(forwardedTail, bytes);
       onOutput(bytes.toString('utf8'));
     };
-    /** Release replay bytes we never managed to align — see REPLAY_SETTLE_MS. */
+    /** Close the replay window: emit what we buffered, minus any of it the client provably has. */
     const settleReplay = () => {
-      cancelSettle();
-      if (stale || closed) return;
-      const { emit, state } = flushReplay(anchor, replay);
+      cancelTimers();
+      if (closed) return;
+      const { emit, state } = flushReplay(seen, replay);
       replay = state;
       deliver(emit);
     };
@@ -300,12 +322,19 @@ export function openPtyShell({
       // Any inbound data proves the connection recovered; reset the failure budget.
       opened = true;
       consecutiveFailures = 0;
-      cancelSettle();
-      const { emit, state } = planReplayEmission({ anchor, chunk: toBuf(chunk), state: replay });
+      if (replay.resolved) { deliver(toBuf(chunk)); return; }
+
+      if (settleTimer !== undefined) clearTimeout(settleTimer);
+      settleTimer = undefined;
+      const { emit, state } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
       deliver(emit);
-      // Still looking for the boundary: hold the bytes, but never indefinitely.
-      if (!replay.resolved) settleTimer = setTimeout(settleReplay, REPLAY_SETTLE_MS);
+      if (replay.resolved) { cancelTimers(); return; }
+      // Boundary still unknown. Hold these bytes — but bound the hold twice over:
+      // on the next quiet gap, and on a deadline that a chatty shell cannot push
+      // out by talking.
+      settleTimer = setTimeout(settleReplay, REPLAY_SETTLE_MS);
+      if (windowTimer === undefined) windowTimer = setTimeout(settleReplay, REPLAY_WINDOW_MS);
     });
     cmd.stderr.on('data', (chunk) => {
       opened = true;
@@ -347,13 +376,16 @@ export function openPtyShell({
     // the trailing 'exit'.
     cmd.on('error', () => {
       if (stale) return;
+      // Hand over anything this socket was still holding unclassified, BEFORE
+      // marking it stale. Discarding it would be safe only if a reattach were
+      // guaranteed to replay it — and it isn't: when `planReconnect` says `create`
+      // (the session died with the Sprite), those bytes, typically the dying
+      // shell's last words, are gone from the client and from the app-side
+      // scrollback for good. Emitting them cannot lose anything, and cannot
+      // duplicate anything either: they join the anchor, so if a reattach DOES
+      // replay them, that replay dedupes against them.
+      settleReplay();
       stale = true;
-      // Drop anything this dead socket was still holding unclassified. Nothing is
-      // lost: those bytes are in the session's scrollback, so the reattach replays
-      // them — and against an anchor that (having emitted none of them) still ends
-      // where the client's screen ends, so they come back as the missing tail.
-      cancelSettle();
-      replay = freshReplayState();
       // Remember WHY this command died, STRUCTURALLY: if it never reported an open
       // (no 'spawn', no byte of output), its socket never came up, so the session
       // was never started — re-creating it is safe (that is the cold Sprite wake)

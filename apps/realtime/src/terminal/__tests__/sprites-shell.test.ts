@@ -1035,6 +1035,143 @@ describe('openPtyShell', () => {
       expect(session.scrollbackBytes).toBe(Buffer.byteLength(BANNER, 'utf8'));
     });
 
+    it('given a CHATTY shell across the reconnect, emits within the replay window instead of stalling to the byte cap', async () => {
+      // The quiet-gap timer alone is not a bound: a build or a repainting TUI
+      // never goes quiet, so every chunk would re-arm it and the terminal would
+      // sit dead until MAX_PENDING_BYTES (256 KiB). The hard window is what makes
+      // the worst case a redraw rather than a quarter-megabyte stall.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      // An unalignable replay (the server buffer trimmed past our anchor) followed
+      // by a stream that never pauses long enough to trip the quiet timer.
+      for (let i = 0; i < 20; i += 1) {
+        attachCmd._stdout.emit('data', `build step ${i}\r\n`);
+        await vi.advanceTimersByTimeAsync(100); // < REPLAY_SETTLE_MS every time
+      }
+
+      // The window closed on its deadline and the output flowed.
+      const seen = outputs(onOutput).join('');
+      expect(seen).toContain('build step 0\r\n');
+      expect(seen).toContain('build step 19\r\n');
+    });
+
+    it('given an unalignable replay whose anchor RECURS in live output moments later, swallows nothing', async () => {
+      // The loss path, at the shell level and INSIDE the replay window (a repaint
+      // arriving after the window closes can't reach the search at all). A long
+      // session, a replay the ring has trimmed past, and a TUI that repaints the
+      // exact bytes the client last saw. An unanchored match lands past the true
+      // boundary and drops the output in front of it — output nobody has ever seen.
+      const line = (p: string, n: number) =>
+        Array.from({ length: n }, (_, i) => `${p} ${i}\r\n`).join('');
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      // A session with far more history than the 8 KiB anchor — the only shape in
+      // which a replay can be unalignable at all.
+      const history = line('history', 3000);
+      const tail = line('recent', 800);
+      cmd._stdout.emit('data', history + tail);
+      const delivered = outputs(onOutput).join('');
+      const repaint = delivered.slice(-8 * 1024); // exactly the bytes the anchor holds
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      // The replay the client has never seen (the ring trimmed past our anchor)...
+      attachCmd._stdout.emit('data', 'work the client never saw\r\n');
+      await vi.advanceTimersByTimeAsync(50); // still well inside the replay window
+      // ...immediately followed by a repaint of the anchor's exact bytes.
+      attachCmd._stdout.emit('data', `${repaint}after repaint\r\n`);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const shown = outputs(onOutput).join('');
+      expect(shown).toContain('work the client never saw\r\n'); // NOT swallowed
+      expect(shown).toContain('after repaint\r\n');
+    });
+
+    it('given the socket dies while replay bytes are buffered and the reconnect CREATES a fresh session, still delivers them', async () => {
+      // Those bytes exist nowhere else: a fresh session has no scrollback to replay
+      // them from, and nothing appended them to the app-side buffer. Dropping them
+      // loses the dying shell's last words for good.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'segfault: dumping core\r\n'); // buffered, unaligned
+      // The session dies with the Sprite before the window closes.
+      sprite.listSessions.mockResolvedValue([]);
+      attachCmd._emitter.emit('spawn');
+      attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(outputs(onOutput).join('')).toContain('segfault: dumping core\r\n');
+    });
+
+    it('given stdout arrives as Buffers (the production shape), dedupes on bytes just the same', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', Buffer.from(BANNER, 'utf8'));
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', Buffer.from(`${BANNER}ls\r\n`, 'utf8'));
+
+      expect(outputs(onOutput)).toEqual([BANNER, 'ls\r\n']);
+    });
+
+    it('given a cold attach followed by a watchdog reconnect, dedupes the second replay against the first', async () => {
+      // The realistic production sequence: a fresh viewer cold-attaches to a
+      // persisted session (full scrollback), and 45s later the watchdog reattaches.
+      // The anchor built from the FIRST replay is what must silence the second.
+      const attach1 = buildFakeCommand();
+      const attach2 = buildFakeCommand();
+      const sprite = buildFakeSprite(buildFakeCommand(), { sessions: [liveSession] });
+      sprite.attachSession.mockReturnValueOnce(attach1).mockReturnValueOnce(attach2);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-1', onOutput, onExit: vi.fn() });
+      attach1._emitter.emit('spawn');
+      attach1._stdout.emit('data', BANNER); // cold attach: full scrollback, once
+
+      attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach2._stdout.emit('data', BANNER); // watchdog attach: same bytes, silent
+
+      expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
     it('given the terminal is killed while replay bytes are buffered, emits nothing after the kill', async () => {
       // The viewer is gone; a settle timer left armed against a dead shell would
       // fire output at a socket nobody is listening on.
