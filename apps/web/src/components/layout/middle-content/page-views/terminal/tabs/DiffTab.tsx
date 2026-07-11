@@ -45,10 +45,14 @@ function emptyMessage(scope: MachineDiffScope, branchName: string, scopesApplica
 
 /**
  * The Machine page's Diff tab: the shared {@link MachineTree} in BARE mode as an
- * inner sidebar (no session leaves — the Project/Branch rows themselves are the
- * diff target), beside a 3-way scope toggle over the selected branch's changed
- * files. Each file expands into its own `MonacoDiffEditor`, so a 200-file branch
- * renders 200 cheap header rows and zero editors until one is opened.
+ * inner sidebar (no session leaves), beside a 3-way scope toggle over the
+ * selected branch's changed files. Each file expands into its own
+ * `MonacoDiffEditor`, so a 200-file branch renders 200 cheap header rows and zero
+ * editors until one is opened.
+ *
+ * BRANCH rows are the diff target — a Machine or Project spans many checkouts and
+ * has no single working tree to compare, so those rows stay pure navigation
+ * (see `isNodeSelectable`).
  */
 export default function DiffTab({ machineId }: { machineId: string }) {
   const [selected, setSelected] = useState<SelectedBranch | null>(null);
