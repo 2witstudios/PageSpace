@@ -13,12 +13,18 @@
  * larger file mid-way; we surface that as a banner so a partial view is never
  * mistaken for the whole file. Language is detected from the filename so Monaco
  * highlights correctly without the server having to classify it.
+ *
+ * A real checkout is full of binaries (images, fonts, archives, lockfile blobs),
+ * and the route decodes whatever it reads as UTF-8 — so a binary would render as
+ * mojibake in Monaco. Those are recognised from the filename and shown as an
+ * explicit "no preview" state WITHOUT fetching: there is nothing useful to
+ * display, so reading up to 2 MiB off the Sprite would be pure waste.
  */
 
 import { useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AlertTriangle } from 'lucide-react';
-import { detectLanguageFromFilename } from '@pagespace/lib/utils/language-detection';
+import { AlertTriangle, FileQuestion } from 'lucide-react';
+import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/language-detection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Button } from '@/components/ui/button';
 
@@ -42,6 +48,7 @@ interface LoadedFile {
 type FileState =
   | { status: 'loading' }
   | { status: 'loaded'; file: LoadedFile }
+  | { status: 'binary' }
   | { status: 'error'; message: string };
 
 const basename = (path: string): string => path.split('/').pop() ?? path;
@@ -58,10 +65,18 @@ export default function CodeFilePane({ machineId, projectName, branchName, path 
   const [state, setState] = useState<FileState>({ status: 'loading' });
   // Bumped by Retry to re-run the fetch without changing the selected file.
   const [attempt, setAttempt] = useState(0);
+  const fileName = basename(path);
 
   useEffect(() => {
-    // A new selection (or retry) makes an in-flight read stale — the cleanup
-    // flag keeps a late resolver from clobbering the current file's state.
+    // Nothing useful to render for a binary, so don't spend a read on one.
+    if (isBinaryFile(fileName)) {
+      setState({ status: 'binary' });
+      return;
+    }
+
+    // A new selection (or retry) makes an in-flight read stale — this flag,
+    // flipped by the cleanup, keeps a late resolver from clobbering the state
+    // of the file that replaced it.
     let cancelled = false;
     setState({ status: 'loading' });
 
@@ -88,7 +103,7 @@ export default function CodeFilePane({ machineId, projectName, branchName, path 
     return () => {
       cancelled = true;
     };
-  }, [machineId, projectName, branchName, path, attempt]);
+  }, [machineId, projectName, branchName, path, fileName, attempt]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -107,6 +122,17 @@ export default function CodeFilePane({ machineId, projectName, branchName, path 
         {state.status === 'loading' && (
           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Loading file…</div>
         )}
+        {state.status === 'binary' && (
+          <div
+            className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center"
+            data-testid="binary-file"
+          >
+            <FileQuestion className="size-6 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              {fileName} is a binary file — no preview available.
+            </p>
+          </div>
+        )}
         {state.status === 'error' && (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
             <p className="max-w-md text-sm text-destructive">{state.message}</p>
@@ -119,7 +145,7 @@ export default function CodeFilePane({ machineId, projectName, branchName, path 
           <MonacoEditor
             value={state.file.content}
             readOnly
-            language={detectLanguageFromFilename(basename(path))}
+            language={detectLanguageFromFilename(fileName)}
             className="h-full"
           />
         )}
