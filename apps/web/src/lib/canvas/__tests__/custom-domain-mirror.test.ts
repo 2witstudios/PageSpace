@@ -486,6 +486,11 @@ describe('mirrorDriveToCustomHost', () => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
     vi.mocked(publishedArtifactExists).mockResolvedValue(false);
+    // vi.clearAllMocks() resets call history but NOT a previous test's
+    // mockResolvedValue — reset this to the "no domain-level override" default
+    // every test so one test's override configuration can never leak into the
+    // next (mockResolvedValue, unlike mockClear, persists across clearAllMocks).
+    vi.mocked(db.query.customDomains.findFirst).mockResolvedValue(undefined);
   });
 
   it('copies every published page + 404.html + robots.txt + sitemap.xml to the host', async () => {
@@ -564,6 +569,53 @@ describe('mirrorDriveToCustomHost', () => {
     const calls = vi.mocked(copyPublishedArtifact).mock.calls.map(([, to]) => to);
     expect(calls).not.toContain('published/www.example.com/index.html');
     expect(copyPublishedSiteFileArtifact).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears a stale root object when no root copy resolves (e.g. an override was reset)', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'acme',
+      homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'about' },
+    ]));
+
+    await mirrorDriveToCustomHost('drive-1', 'www.example.com');
+
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/www.example.com/index.html');
+  });
+
+  it('clears a stale root object when an override is set but its target page is not yet published', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'acme',
+      homePageId: null,
+    }));
+    vi.mocked(db.query.customDomains.findFirst).mockResolvedValue({
+      publishLandingPageId: 'p-not-published-yet',
+      publishNotFoundPageId: null,
+    } as never);
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'about' },
+    ]));
+
+    await mirrorDriveToCustomHost('drive-1', 'www.example.com');
+
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/www.example.com/index.html');
+  });
+
+  it('does NOT clear the root object when a root copy successfully resolves', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'acme',
+      homePageId: 'p1',
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([
+      { pageId: 'p1', path: 'home' },
+    ]));
+    vi.mocked(publishedArtifactExists).mockResolvedValue(true);
+
+    await mirrorDriveToCustomHost('drive-1', 'www.example.com');
+
+    expect(deletePublishedArtifact).not.toHaveBeenCalledWith('published/www.example.com/index.html');
   });
 
   it('copies only site files (404.html + robots.txt + sitemap.xml) when the drive has no published pages', async () => {

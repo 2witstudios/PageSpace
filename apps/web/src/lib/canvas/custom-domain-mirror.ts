@@ -448,6 +448,23 @@ export async function mirrorDriveToCustomHost(
       });
     }),
   );
+
+  // No valid root content resolved for this host (no override page published,
+  // and no drive-wide home root either) — clear any stale root object rather
+  // than silently continuing to serve a prior override or prior home-page
+  // mirror. Idempotent (a missing key is a no-op), so safe to call
+  // unconditionally on every no-root-copy backfill, not just transitions.
+  if (!rootCopy) {
+    try {
+      await deletePublishedArtifact(buildPublishedKey(host, ''));
+    } catch (err) {
+      loggers.api.warn('Failed to clear stale root artifact during drive mirror to custom host', {
+        driveId,
+        host,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 /**
