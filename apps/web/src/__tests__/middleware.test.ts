@@ -233,8 +233,8 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
   const rewriteTarget = (response: NextResponse): string | null =>
     response.headers.get('x-middleware-rewrite');
 
-  it.each([['/dashboard'], ['/dashboard/drv_abc/pg_xyz']])(
-    'rewrites %s to /auth/signin, carrying the requested path as next=',
+  it.each([['/dashboard'], ['/dashboard/drv_abc/pg_xyz'], ['/dashboard/drv_abc?tab=chat']])(
+    'rewrites %s to a BARE /auth/signin',
     async (pathname) => {
       const response = await middleware(buildRequest(pathname));
 
@@ -242,47 +242,18 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
       expect(target).not.toBeNull();
       const url = new URL(target as string);
       expect(url.pathname).toBe('/auth/signin');
-      expect(url.searchParams.get('next')).toBe(pathname);
+
+      // No next= on the rewrite, deliberately. A rewrite leaves the browser URL alone, so
+      // the browser is still ON the deep link and the client reads it off the path. Putting
+      // it here too would have the server render a value the client cannot see — and it
+      // reaches the DOM (the signup link's href), i.e. a hydration mismatch.
+      expect(url.searchParams.get('next')).toBeNull();
 
       // A rewrite is emphatically not a redirect — a 307 here is the bug.
       expect(response.status).not.toBe(307);
       expect(response.headers.get('location')).toBeNull();
     },
   );
-
-  it('preserves the query string of the requested /dashboard deep link in next=', async () => {
-    const response = await middleware(buildRequest('/dashboard/drv_abc?tab=chat'));
-
-    const url = new URL(rewriteTarget(response) as string);
-    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc?tab=chat');
-  });
-
-  // next= is always the path actually requested. A caller-supplied `next` is dropped
-  // rather than honoured — otherwise a query param could override the real destination
-  // (and no code in this app ever navigates to /dashboard?next=… in the first place).
-  it('ignores a caller-supplied next= and preserves the actually-requested path', async () => {
-    const response = await middleware(buildRequest('/dashboard/drv_abc?next=%2Fdashboard%2Felsewhere'));
-
-    const url = new URL(rewriteTarget(response) as string);
-    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc');
-  });
-
-  it('drops an off-origin next= instead of passing it through', async () => {
-    const response = await middleware(buildRequest('/dashboard?next=https%3A%2F%2Fevil.example%2Fx'));
-
-    const url = new URL(rewriteTarget(response) as string);
-    // Falls back to the requested path; the attacker-supplied value never survives.
-    expect(url.searchParams.get('next')).toBe('/dashboard');
-  });
-
-  // A soft nav that hits an expired session carries Next's RSC cache-buster. Landing the
-  // user back on `/dashboard/x?_rsc=abc` after signin would be stale and meaningless.
-  it('strips Next\'s _rsc cache-buster from the preserved deep link', async () => {
-    const response = await middleware(buildRequest('/dashboard/drv_abc?tab=chat&_rsc=1a2b3c'));
-
-    const url = new URL(rewriteTarget(response) as string);
-    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc?tab=chat');
-  });
 
   it('still REDIRECTS an unauthenticated page request outside /dashboard, with next= preserved', async () => {
     const response = await middleware(buildRequest('/activate?user_code=ABCD-EFGH'));
@@ -293,6 +264,47 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
     const location = new URL(response.headers.get('location') as string);
     expect(location.pathname).toBe('/auth/signin');
     expect(location.searchParams.get('next')).toBe('/activate?user_code=ABCD-EFGH');
+  });
+
+  // The redirect path is the only one that carries next=, so it is where the
+  // reconstruction rules have to be pinned down.
+  describe('next= on the redirect', () => {
+    const location = (response: NextResponse): URL =>
+      new URL(response.headers.get('location') as string);
+
+    // Drives the isSafeNextPath guard in buildSigninUrl to FALSE. Without a
+    // non-allowlisted path in this suite the guard is dead weight: every other case
+    // reconstructs a candidate under /dashboard or /activate, which always passes, so
+    // deleting the check entirely would not fail a single other test here.
+    it('omits next= entirely for a page outside SIGNIN_NEXT_ALLOWED_PREFIXES', async () => {
+      const response = await middleware(buildRequest('/settings/plan'));
+
+      expect(response.status).toBe(307);
+      expect(location(response).searchParams.get('next')).toBeNull();
+    });
+
+    // next= is always the path actually requested. A caller-supplied one is dropped rather
+    // than honoured — otherwise a query param could override the real destination.
+    it('ignores a caller-supplied next= and preserves the actually-requested path', async () => {
+      const response = await middleware(buildRequest('/activate?next=%2Fdashboard%2Felsewhere'));
+
+      expect(location(response).searchParams.get('next')).toBe('/activate');
+    });
+
+    it('drops an off-origin next= instead of passing it through', async () => {
+      const response = await middleware(buildRequest('/activate?next=https%3A%2F%2Fevil.example%2Fx'));
+
+      // Falls back to the requested path; the attacker-supplied value never survives.
+      expect(location(response).searchParams.get('next')).toBe('/activate');
+    });
+
+    // A soft nav that hits an expired session carries Next's RSC cache-buster. Landing the
+    // user back on `/activate?_rsc=abc` after signin would be stale and meaningless.
+    it("strips Next's _rsc cache-buster from the preserved deep link", async () => {
+      const response = await middleware(buildRequest('/activate?user_code=ABCD&_rsc=1a2b3c'));
+
+      expect(location(response).searchParams.get('next')).toBe('/activate?user_code=ABCD');
+    });
   });
 
   it('does not rewrite for an unauthenticated API request under /api — that still 401s', async () => {

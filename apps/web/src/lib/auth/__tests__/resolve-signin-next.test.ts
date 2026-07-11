@@ -67,23 +67,24 @@ describe('resolveSigninNext', () => {
     });
   });
 
-  // useSearchParams does NOT agree with itself across the hydration boundary under a
-  // rewrite: the server renders at the rewrite destination (/auth/signin?next=…, so it
-  // sees the param) while the browser is at /dashboard/… (so it does not). nextPath is
-  // rendered into the signup link's href, so a disagreement is a real hydration mismatch.
-  // Both sources are therefore gated on browserPath, a browser-only value.
-  describe('hydration safety', () => {
-    it('resolves to undefined with NO browserPath even when paramNext is present and valid', () => {
-      // This is the server render / first client render. Both must agree on undefined.
+  // nextPath is rendered into the signup link's href, so server and client must agree on
+  // the FIRST render. browserPath is null during SSR and on the first client render (it is
+  // set in an effect), so agreement rests entirely on paramNext matching across the
+  // boundary — which is exactly why middleware puts next= on the redirect but NOT on the
+  // rewrite. These two cases are that guarantee, pinned.
+  describe('hydration safety (first render, browserPath not yet known)', () => {
+    it('redirect flow: server and client both see next=, and both resolve it', () => {
+      // Server renders /auth/signin?next=X; the browser is on that same URL. Agreement —
+      // and the SSR href is already correct, so a pre-hydration click keeps the deep link.
       expect(
         resolveSigninNext({ paramNext: '/dashboard/drv_abc', browserPath: null }),
-      ).toBeUndefined();
+      ).toBe('/dashboard/drv_abc');
     });
 
-    it('yields the value only once browserPath is known (the render after mount)', () => {
-      expect(
-        resolveSigninNext({ paramNext: '/dashboard/drv_abc', browserPath: '/auth/signin?next=/dashboard/drv_abc' }),
-      ).toBe('/dashboard/drv_abc');
+    it('rewrite flow: neither server nor client sees a next=, and both resolve undefined', () => {
+      // The rewrite destination is a bare /auth/signin, and the browser sits on
+      // /dashboard/… which has no next= either. The deep link arrives post-mount instead.
+      expect(resolveSigninNext({ paramNext: null, browserPath: null })).toBeUndefined();
     });
   });
 

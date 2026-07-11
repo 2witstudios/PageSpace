@@ -65,10 +65,17 @@ const isShellEntryPath = (pathname: string): boolean =>
 const NON_FORWARDABLE_PARAMS = ['next', '_rsc'];
 
 /**
- * Signin URL carrying the deep link the user was denied, so signin can return them there.
- * The deep link is always reconstructed from the request itself; only destinations the
- * signin surface actually accepts survive, and anything else is dropped rather than
- * passed along to be rejected there.
+ * Signin URL for the REDIRECT path, carrying the deep link the user was denied so signin
+ * can return them there. The deep link is always reconstructed from the request itself;
+ * only destinations the signin surface actually accepts survive, and anything else is
+ * dropped rather than passed along to be rejected there.
+ *
+ * Deliberately NOT used for the rewrite. A rewrite leaves the browser URL alone, so under
+ * one the browser is still sitting on the deep link and the client reads it straight off
+ * the path (resolve-signin-next.ts). Putting `next=` on the rewrite destination as well
+ * would have the server render a value the client cannot see — and `nextPath` reaches the
+ * DOM (the signup link's href), so that is a hydration mismatch. Omitting it keeps server
+ * and client in agreement on every reachable flow.
  */
 const buildSigninUrl = (req: NextRequest): URL => {
   // Resolved against req.url, so the origin is always this request's own — a rewrite
@@ -325,17 +332,25 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
         return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
       }
 
-      const signinUrl = buildSigninUrl(req);
-
       if (isShellEntryPath(pathname)) {
-        // disableCOEP mirrors what the /auth/* branch above would have applied: the
-        // signin page's OAuth popups and Google One Tap iframe need it, and the
-        // rewrite means shouldDisableCOEP() only ever sees the /dashboard pathname.
-        const { response } = createSecureRewrite(signinUrl, isProduction, req, { disableCOEP: true });
+        // Bare /auth/signin, with no `next=` — see buildSigninUrl. The browser URL is
+        // untouched by a rewrite, so it IS still the deep link and the client recovers it
+        // from there; carrying it here as well would desync the server render from the
+        // client's.
+        //
+        // disableCOEP mirrors what the /auth/* branch above would have applied: the signin
+        // page's OAuth popups and Google One Tap iframe need it, and under the rewrite
+        // shouldDisableCOEP() only ever sees the /dashboard pathname.
+        const { response } = createSecureRewrite(
+          new URL(SIGNIN_PATH, req.url),
+          isProduction,
+          req,
+          { disableCOEP: true },
+        );
         return response;
       }
 
-      return NextResponse.redirect(signinUrl);
+      return NextResponse.redirect(buildSigninUrl(req));
     }
 
     // Session cookie exists - let request through

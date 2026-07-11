@@ -42,15 +42,16 @@ function stripNextParam(path: string): string {
  * also what makes the fallback inert on a real /auth/signin URL: '/auth/signin' is not an
  * allowed next target, so the normal web flow is unchanged.
  *
- * HYDRATION: resolves to `undefined` until `browserPath` is known — i.e. until mount —
- * INCLUDING when `paramNext` is present and valid. That is deliberate. `useSearchParams`
- * does not agree with itself across the hydration boundary under a rewrite: the server
- * renders this page at the rewrite *destination* (`/auth/signin?next=…`, so it sees the
- * param) while the browser is at `/dashboard/…` (so it does not). `nextPath` reaches the
- * DOM — it is rendered into the signup link's href — so a disagreement there is a real
- * hydration mismatch. Gating on a browser-only value forces SSR and the first client
- * render to agree on `undefined`; the true value arrives on the render after mount, from
- * whichever source applies.
+ * HYDRATION. `nextPath` reaches the DOM (it is rendered into the signup link's href), so
+ * server and client must agree on the first render. They do, because middleware puts
+ * `next=` on the *redirect* only, never on the rewrite:
+ *
+ * - Redirect flow — server renders `/auth/signin?next=X` and the browser is on that same
+ *   URL, so `paramNext` is X in both. Agreement, and the SSR href is already correct.
+ * - Rewrite flow — the rewrite destination carries no query, so the server sees no param;
+ *   the browser is on `/dashboard/…`, which has none either. Both render `undefined`. The
+ *   deep link then arrives from `browserPath` on the render after mount, which is why
+ *   `browserPath` is the only input that may not be read during SSR.
  */
 export function resolveSigninNext(input: {
   paramNext: string | null | undefined;
@@ -58,8 +59,8 @@ export function resolveSigninNext(input: {
 }): string | undefined {
   const { paramNext, browserPath } = input;
 
-  if (!browserPath) return undefined;
   if (paramNext && isAllowed(paramNext)) return paramNext;
+  if (!browserPath) return undefined;
 
   const fallback = stripNextParam(browserPath);
 
