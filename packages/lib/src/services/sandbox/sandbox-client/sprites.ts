@@ -557,8 +557,37 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
- * Force a hibernated VM awake via a cheap no-op exec, with the same bounded
- * cold-start retry as a real command.
+ * Pure: the directory a Sprite path lives in.
+ *
+ * Deliberately NOT `node:path.dirname`: these are paths inside the Sprite's
+ * Linux VM, and on a Windows host `path.dirname` would apply Win32 semantics
+ * (backslash separators, drive letters) to them. POSIX by construction, so the
+ * answer never depends on where the server happens to run. A path with no `/`,
+ * or one directly under the root, yields `/`.
+ */
+export function parentDir(filePath: string): string {
+  const cut = filePath.lastIndexOf('/');
+  return cut <= 0 ? '/' : filePath.slice(0, cut);
+}
+
+/**
+ * Pure: the recovery exec run between a failed filesystem op and its retry.
+ *
+ * With no directories it is a bare no-op (`sh -c :`) whose only job is to WAKE
+ * the VM; with directories it also `mkdir -p`s them, so the one exec does double
+ * duty — see {@link recoverFsViaExec}. The directories are positional DATA args
+ * (`"$@"`), never interpolated into the script, so a path full of shell
+ * metacharacters cannot escape into the command.
+ */
+export function fsRecoveryExec(ensureDirs: readonly string[] = []): [string, string[]] {
+  return ensureDirs.length === 0
+    ? ['sh', ['-c', ':']]
+    : ['sh', ['-c', 'mkdir -p "$@" 2>/dev/null || :', 'sh', ...ensureDirs]];
+}
+
+/**
+ * Recover a failed filesystem op with a single exec: wake the VM, and recreate
+ * any directories the op needs.
  *
  * THE FILESYSTEM PATH IS THE ONLY LEGITIMATE CALLER, and deliberately not
  * exported. Every OTHER operation already wakes the VM by itself: a Sprite has
@@ -567,15 +596,23 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * `attachSession` IS the wake, and prefixing one with a `sh -c :` just pays for
  * two cold starts instead of one.
  *
- * The Sprite filesystem HTTP API is the exception, and the reason this still
- * exists: it is a bare `fetch()` with no AbortSignal that does NOT wake a
- * hibernated VM — it simply hangs (52–90s observed) until Fly's proxy closes the
- * connection. So an fs op against a cold Sprite has no way to wake the VM it is
- * waiting on. This exec does it for it.
+ * The Sprite filesystem HTTP API is the exception, and the reason this exists:
+ * it is a bare `fetch()` with no AbortSignal that does NOT wake a hibernated VM
+ * — it simply hangs (52–90s observed) until Fly's proxy closes the connection.
+ * So an fs op against a cold Sprite has no way to wake the VM it is waiting on.
+ * This exec does it for it.
+ *
+ * A write ALSO fails when its parent directory is gone — the fs API does not
+ * create parents, and SANDBOX_ROOT is persistent but not immutable (a sandbox
+ * command can `rm -rf /workspace`). That used to be papered over by the egress
+ * lockdown's `mkdir` running on every hand-back; now that the lockdown is
+ * fresh-create-only (`../egress-lockdown.ts`), the write self-heals here instead
+ * — folded into the wake exec it was already paying for, so the happy path costs
+ * nothing extra.
  */
-async function wakeSpriteViaExec(sprite: SpriteInstanceLike): Promise<void> {
+async function recoverFsViaExec(sprite: SpriteInstanceLike, ensureDirs: readonly string[] = []): Promise<void> {
   await runSpawnedWithWakeRetry(
-    () => sprite.spawn('sh', ['-c', ':']),
+    () => sprite.spawn(...fsRecoveryExec(ensureDirs)),
     DEFAULT_MAX_OUTPUT_BYTES,
     FS_OP_TIMEOUT_MS,
   );
@@ -583,18 +620,19 @@ async function wakeSpriteViaExec(sprite: SpriteInstanceLike): Promise<void> {
 
 /**
  * Run a filesystem op bounded by a timeout; on the first failure (cold-start
- * hang/race) wake the VM via the exec path and retry once — see
- * `wakeSpriteViaExec` for why the fs API cannot wake the VM itself.
+ * hang/race, or a missing parent directory) recover via the exec path and retry
+ * once — see `recoverFsViaExec` for why the fs API can do neither itself.
  */
 async function fsWithWakeRetry<T>(
   sprite: SpriteInstanceLike,
   label: string,
   op: () => Promise<T>,
+  ensureDirs: readonly string[] = [],
 ): Promise<T> {
   try {
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   } catch {
-    await wakeSpriteViaExec(sprite);
+    await recoverFsViaExec(sprite, ensureDirs);
     return await withTimeout(op(), FS_OP_TIMEOUT_MS, label);
   }
 }
@@ -621,9 +659,15 @@ function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
       const fs = sprite.filesystem('/');
       for (const file of files) {
         const data = typeof file.content === 'string' ? file.content : Buffer.from(file.content);
-        // Bounded + wake-on-cold: the fs API hangs on a hibernated VM otherwise.
-        await fsWithWakeRetry(sprite, 'write', () =>
-          fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
+        // Bounded + recover-on-failure: the fs API hangs on a hibernated VM, and
+        // it does not create parent directories — so the retry's exec both wakes
+        // the VM and recreates this file's parent (self-healing SANDBOX_ROOT,
+        // which a sandbox command can delete). One exec, either way.
+        await fsWithWakeRetry(
+          sprite,
+          'write',
+          () => fs.writeFile(file.path, data, file.mode === undefined ? undefined : { mode: file.mode }),
+          [parentDir(file.path)],
         );
       }
     },

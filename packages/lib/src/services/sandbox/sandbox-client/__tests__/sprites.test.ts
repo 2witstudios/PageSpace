@@ -16,6 +16,7 @@ import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 import { hashSandboxEgressPolicy } from '../../egress-lockdown';
 import { SANDBOX_ROOT } from '../../sandbox-paths';
+import { parentDir, fsRecoveryExec, spawnWithSelfHealingCwd } from '../sprites';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
@@ -149,6 +150,78 @@ describe('isSpriteNotFoundError', () => {
     expect(isSpriteNotFoundError(new Error('connection reset'))).toBe(false);
     expect(isSpriteNotFoundError(null)).toBe(false);
     expect(isSpriteNotFoundError('not found')).toBe(false);
+  });
+});
+
+describe('parentDir (pure)', () => {
+  assert({
+    given: 'a nested path',
+    should: 'return its directory',
+    actual: parentDir('/workspace/notes/a.txt'),
+    expected: '/workspace/notes',
+  });
+
+  assert({
+    given: 'a path directly under the root',
+    should: 'return the root',
+    actual: parentDir('/a.txt'),
+    expected: '/',
+  });
+
+  assert({
+    given: 'a bare filename with no separator',
+    should: 'return the root rather than an empty directory',
+    actual: parentDir('a.txt'),
+    expected: '/',
+  });
+
+  assert({
+    given: 'a Windows-style separator (this is a path INSIDE the Linux VM)',
+    should: 'treat it as an ordinary filename character — POSIX semantics regardless of host OS',
+    actual: parentDir('C:\\workspace\\a.txt'),
+    expected: '/',
+  });
+});
+
+describe('fsRecoveryExec (pure)', () => {
+  assert({
+    given: 'no directories to ensure',
+    should: 'be a bare no-op exec whose only job is to wake the VM',
+    actual: fsRecoveryExec(),
+    expected: ['sh', ['-c', ':']],
+  });
+
+  assert({
+    given: 'directories to ensure',
+    should: 'wake the VM AND mkdir -p them in the same exec',
+    actual: fsRecoveryExec(['/workspace/a', '/workspace/b']),
+    expected: ['sh', ['-c', 'mkdir -p "$@" 2>/dev/null || :', 'sh', '/workspace/a', '/workspace/b']],
+  });
+
+  assert({
+    given: 'a directory containing shell metacharacters',
+    should: 'keep it a positional arg, so it can never be evaluated as script',
+    actual: fsRecoveryExec(['/workspace/$(touch pwned)'])[1],
+    expected: ['-c', 'mkdir -p "$@" 2>/dev/null || :', 'sh', '/workspace/$(touch pwned)'],
+  });
+});
+
+describe('spawnWithSelfHealingCwd (pure)', () => {
+  assert({
+    given: 'a command, its args, and a cwd',
+    should: 'wrap them in an sh that recreates + enters the cwd, then execs the command',
+    actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: SANDBOX_ROOT }),
+    expected: [
+      'sh',
+      ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', SANDBOX_ROOT, 'bash'],
+    ],
+  });
+
+  assert({
+    given: 'a cwd containing shell metacharacters',
+    should: 'keep it a positional arg (the arg-array no-injection invariant holds)',
+    actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace; rm -rf /' })[1].slice(2),
+    expected: ['sh', '/workspace; rm -rf /', 'bash'],
   });
 });
 
@@ -417,6 +490,39 @@ describe('filesystem cold-start wake retry', () => {
     await handle!.writeFiles([{ path: '/x', content: 'hi' }]);
     expect(writes).toBe(2); // failed once, retried after wake
     expect(spawned).toBe(1); // woke the VM via the exec path between attempts
+  });
+
+  it('recreates the parent directory when a write fails because SANDBOX_ROOT was deleted', async () => {
+    // The fs API does not create parents, and a sandbox command can `rm -rf
+    // /workspace`. The egress lockdown's mkdir used to paper over that on every
+    // hand-back; now it is fresh-create-only, so the write must self-heal — and
+    // it does so inside the exec it was already paying for to wake the VM.
+    const dirs = new Set<string>(['/']);
+    const spawned: string[][] = [];
+    const fs = fakeFs({
+      writeFile: async (path) => {
+        if (!dirs.has(parentDir(path))) throw new Error('ENOENT: no such file or directory');
+      },
+    });
+    const sprite = fakeSprite({
+      fs,
+      spawn: (file, args = []) => {
+        spawned.push([file, ...args]);
+        // The recovery exec IS the mkdir -p: replay it against the fake fs.
+        for (const dir of args.slice(3)) dirs.add(dir);
+        return fakeCommand({ exitCode: 0 });
+      },
+    });
+    const { sdk } = makeSdk({ getSprite: async () => sprite });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+
+    await handle!.writeFiles([{ path: `${SANDBOX_ROOT}/notes/a.txt`, content: 'hi' }]);
+
+    expect(spawned).toEqual([
+      ['sh', '-c', 'mkdir -p "$@" 2>/dev/null || :', 'sh', `${SANDBOX_ROOT}/notes`],
+    ]);
+    expect(dirs.has(`${SANDBOX_ROOT}/notes`)).toBe(true);
   });
 
   it('readFile recovers on the wake retry', async () => {

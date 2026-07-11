@@ -160,7 +160,6 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 const TERMINAL_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
 
-
 export function openPtyShell({
   sprite,
   cols,
