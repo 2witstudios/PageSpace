@@ -55,17 +55,44 @@ interface MachineTreeProps {
   machineId: string;
   /** Called when a Machine/Project/Branch row is clicked. Omit if the tree itself isn't selectable (e.g. selection lives on injected leaf content instead). */
   onSelectNode?: (node: MachineTreeNode) => void;
+  /**
+   * Which nodes `onSelectNode` actually applies to. Default: all of them.
+   *
+   * A row with a select handler uses it INSTEAD of expand-on-label-click (the
+   * two are deliberately decoupled — selecting a row must never flip its
+   * disclosure state). So a caller that only means one level — the Diff tab
+   * selects branches, nothing else — would otherwise turn every Machine/Project
+   * label into a dead button. Returning false here leaves that row with the
+   * normal expand-on-label-click affordance.
+   */
+  isNodeSelectable?: (node: MachineTreeNode) => boolean;
   /** Renders caller-owned content under a node when it's expanded (e.g. session-terminal rows). Branch nodes are only expandable when this is provided — otherwise they render as a flat, non-expandable row. */
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
 }
 
 /** Presentation-only Machine → Project → Branch tree, reusable across any tab that needs this navigation shape (Terminal, Diff, …). Has no opinion on what a row click does — callers own that via `onSelectNode`. */
-export default function MachineTree({ machineId, onSelectNode, renderNodeChildren }: MachineTreeProps) {
+export default function MachineTree({ machineId, onSelectNode, isNodeSelectable, renderNodeChildren }: MachineTreeProps) {
   return (
     <div className="p-1 text-sm">
-      <MachineNode machineId={machineId} onSelectNode={onSelectNode} renderNodeChildren={renderNodeChildren} />
+      <MachineNode
+        machineId={machineId}
+        onSelectNode={onSelectNode}
+        isNodeSelectable={isNodeSelectable}
+        renderNodeChildren={renderNodeChildren}
+      />
     </div>
   );
+}
+
+/** The row's select handler, or undefined when this node isn't selectable — in which case its label falls back to expand/collapse. */
+function selectHandlerFor(
+  node: MachineTreeNode,
+  onSelectNode?: (node: MachineTreeNode) => void,
+  isNodeSelectable?: (node: MachineTreeNode) => boolean,
+): (() => void) | undefined {
+  if (!onSelectNode) return undefined;
+  if (isNodeSelectable && !isNodeSelectable(node)) return undefined;
+  return () => onSelectNode(node);
 }
 
 function TreeRow({
@@ -123,10 +150,11 @@ function TreeRow({
 
 interface TreeLevelProps {
   onSelectNode?: (node: MachineTreeNode) => void;
+  isNodeSelectable?: (node: MachineTreeNode) => boolean;
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
 }
 
-function MachineNode({ machineId, onSelectNode, renderNodeChildren }: TreeLevelProps & { machineId: string }) {
+function MachineNode({ machineId, onSelectNode, isNodeSelectable, renderNodeChildren }: TreeLevelProps & { machineId: string }) {
   const [expanded, setExpanded] = useState(true);
   const node: MachineTreeNode = { level: 'machine' };
   const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(expanded ? machineId : null);
@@ -136,7 +164,7 @@ function MachineNode({ machineId, onSelectNode, renderNodeChildren }: TreeLevelP
       <TreeRow
         expanded={expanded}
         onToggleExpand={() => setExpanded((e) => !e)}
-        onSelect={onSelectNode ? () => onSelectNode(node) : undefined}
+        onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         icon={<Cpu className="size-3.5 shrink-0" />}
         label="Machine"
         labelClassName="font-medium"
@@ -163,6 +191,7 @@ function MachineNode({ machineId, onSelectNode, renderNodeChildren }: TreeLevelP
               machineId={machineId}
               projectName={project.name}
               onSelectNode={onSelectNode}
+              isNodeSelectable={isNodeSelectable}
               renderNodeChildren={renderNodeChildren}
               onRemoveProject={() => removeProject(project.name)}
             />
@@ -177,6 +206,7 @@ function ProjectNode({
   machineId,
   projectName,
   onSelectNode,
+  isNodeSelectable,
   renderNodeChildren,
   onRemoveProject,
 }: TreeLevelProps & {
@@ -194,7 +224,7 @@ function ProjectNode({
       <TreeRow
         expanded={expanded}
         onToggleExpand={() => setExpanded((e) => !e)}
-        onSelect={onSelectNode ? () => onSelectNode(node) : undefined}
+        onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         icon={<FolderGit2 className="size-3.5 shrink-0" />}
         label={projectName}
         labelClassName="font-medium"
@@ -225,6 +255,7 @@ function ProjectNode({
               projectName={projectName}
               branchName={branch.branchName}
               onSelectNode={onSelectNode}
+              isNodeSelectable={isNodeSelectable}
               renderNodeChildren={renderNodeChildren}
               onRemoveBranch={() => removeBranch(branch.branchName)}
             />
@@ -239,6 +270,7 @@ function BranchNode({
   projectName,
   branchName,
   onSelectNode,
+  isNodeSelectable,
   renderNodeChildren,
   onRemoveBranch,
 }: TreeLevelProps & {
@@ -256,7 +288,7 @@ function BranchNode({
       <TreeRow
         expanded={expandable ? expanded : undefined}
         onToggleExpand={expandable ? () => setExpanded((e) => !e) : undefined}
-        onSelect={onSelectNode ? () => onSelectNode(node) : undefined}
+        onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         icon={<GitBranch className="size-3.5 shrink-0" />}
         label={branchName}
         onRemove={() => setConfirmingRemove(true)}

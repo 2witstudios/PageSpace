@@ -46,9 +46,13 @@ function emptyMessage(scope: MachineDiffScope, branchName: string, scopesApplica
 export default function DiffTab({ machineId }: { machineId: string }) {
   const [selected, setSelected] = useState<SelectedBranch | null>(null);
 
+  // Only a branch identifies a checkout to diff. Machine/Project rows are
+  // navigation-only, so they must NOT be marked selectable — a row with a select
+  // handler uses it INSTEAD of expand-on-label-click, which would leave those
+  // labels as dead buttons that swallow the click and do nothing.
+  const isNodeSelectable = useCallback((node: MachineTreeNode) => node.level === 'branch', []);
+
   const onSelectNode = useCallback((node: MachineTreeNode) => {
-    // Only a branch identifies a checkout to diff; Machine/Project rows are
-    // navigation-only here (clicking them still expands via TreeRow).
     if (node.level !== 'branch') return;
     setSelected({ projectName: node.projectName, branchName: node.branchName });
   }, []);
@@ -60,7 +64,7 @@ export default function DiffTab({ machineId }: { machineId: string }) {
           <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Branches</span>
         </div>
         <ScrollArea className="flex-1">
-          <MachineTree machineId={machineId} onSelectNode={onSelectNode} />
+          <MachineTree machineId={machineId} onSelectNode={onSelectNode} isNodeSelectable={isNodeSelectable} />
         </ScrollArea>
       </aside>
       <div className="min-w-0 flex-1">
@@ -218,14 +222,18 @@ function DiffFileList({
       </div>
     );
   }
-  if (data.files.length === 0) {
+  // `truncated` is checked BEFORE the empty state: a list cut at the output cap
+  // before its first complete entry comes back as `{ files: [], truncated: true }`,
+  // and reporting that as "no changes" would be the one place this pane claims a
+  // clean tree on partial data.
+  if (data.files.length === 0 && !data.truncated) {
     return <div className="p-4 text-sm text-muted-foreground">{emptyMessage(scope, branchName, scopesApplicable)}</div>;
   }
 
   return (
     <div className="flex flex-col gap-2 p-3">
       {data.truncated && (
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        <div className="rounded-md border border-border bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
           This diff is too large to list in full — some changed files are not shown.
         </div>
       )}

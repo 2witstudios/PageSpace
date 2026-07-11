@@ -3,6 +3,7 @@
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { MachineDiffFile, MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
+import type { MachineDiffSideContent } from '@pagespace/lib/services/sandbox/machine-diff';
 
 /**
  * The Diff tab's changed-file list for one branch + scope, or the explicit
@@ -23,18 +24,22 @@ export type MachineDiffFilesResponse =
     };
 
 /**
- * One SIDE of a file's diff. NOT a bare string: the route ships the content
- * together with its own `truncated` flag, because each side has its own cap — a
- * git-blob side is cut at `runGitInSandbox`'s 256 KB stdout limit, a
- * working-tree side at 2 MB (see `machine-diff.ts`). A truncated side matters to
- * the UI: diffing a cut-off original against a whole modified paints the file's
- * entire tail as removed lines that were never removed, so the flag has to reach
- * the renderer rather than be dropped here.
+ * One SIDE of a file's diff — `{ content, truncated }`, NOT a bare string.
+ *
+ * This ALIASES the server's own return type rather than re-declaring the shape,
+ * on purpose: the first cut of this hook hand-copied a `string | null` side, the
+ * fetcher's `as Promise<T>` cast laundered it past the compiler, and every file
+ * expansion handed Monaco an object. Aliasing the source of truth means a future
+ * server-side change to a side's shape breaks THIS file at typecheck instead of
+ * silently at runtime. (`import type` is erased at build — no server code or
+ * node dependency reaches the client bundle.)
+ *
+ * The `truncated` flag has to survive to the renderer: a git-blob side is cut at
+ * `runGitInSandbox`'s 256 KB stdout cap and a working-tree side at 2 MB, and
+ * diffing a cut-off side against a whole one paints the file's untouched tail as
+ * removed/added lines.
  */
-export interface MachineDiffSide {
-  content: string;
-  truncated: boolean;
-}
+export type MachineDiffSide = MachineDiffSideContent;
 
 /**
  * One file's original/modified pair for a scope. A side is `null` when the file

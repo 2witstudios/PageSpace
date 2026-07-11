@@ -62,8 +62,9 @@ const pairFor = (enabled: boolean) => ({
         notApplicable: false as const,
         scope: 'uncommitted' as const,
         path: 'src/uncommitted.ts',
-        original: { content: 'a', truncated: false },
-        modified: { content: 'b', truncated: truncatedPair },
+        // A binary file's decoded content carries NUL bytes — that's how the card sniffs it.
+        original: { content: binaryPair ? 'PNG\u0000\u0000' : 'a', truncated: false },
+        modified: { content: binaryPair ? 'PNG\u0000' : 'b', truncated: truncatedPair },
       }
     : undefined,
   error: undefined,
@@ -71,6 +72,14 @@ const pairFor = (enabled: boolean) => ({
 });
 
 let truncatedPair = false;
+let binaryPair = false;
+
+// SWR's global mutate — the refresh path calls it with a key predicate.
+const swrMutate = vi.fn();
+vi.mock('swr', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('swr')>();
+  return { ...actual, useSWRConfig: () => ({ mutate: swrMutate }) };
+});
 
 vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks/useMachineDiff')>();
@@ -106,6 +115,7 @@ describe('DiffTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     truncatedPair = false;
+    binaryPair = false;
   });
 
   test('shows the empty placeholder until a branch is selected', () => {
@@ -187,6 +197,48 @@ describe('DiffTab', () => {
       should: "mount MonacoDiffEditor with each side's CONTENT string, not the raw { content, truncated } side object",
       actual: screen.getByTestId('monaco-diff').textContent,
       expected: 'a→b',
+    });
+  });
+
+  test('Refresh revalidates the expanded cards\' pair keys, not just the file lists', async () => {
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await waitFor(() => screen.getByText('src/uncommitted.ts'));
+
+    await userEvent.click(screen.getByTitle('Refresh diff'));
+
+    // The pane owns only the two LIST keys; every expanded card holds its own
+    // pair key. Refreshing via the keyed predicate is what stops an open Monaco
+    // diff from serving pre-edit content forever (both hooks are
+    // revalidateOnFocus: false) — so assert the predicate reaches a pair key.
+    const predicate = swrMutate.mock.calls[0]?.[0] as ((key: unknown) => boolean) | undefined;
+    assert({
+      given: 'the Refresh button clicked',
+      should: "call SWR's global mutate with a predicate matching BOTH list and per-file pair keys",
+      actual: {
+        called: swrMutate.mock.calls.length,
+        matchesList: predicate?.('/api/machines/diff?machineId=m1&scope=uncommitted'),
+        matchesPair: predicate?.('/api/machines/diff?machineId=m1&scope=uncommitted&path=src%2Fa.ts'),
+        matchesUnrelated: predicate?.('/api/machines/files?machineId=m1'),
+      },
+      expected: { called: 1, matchesList: true, matchesPair: true, matchesUnrelated: false },
+    });
+  });
+
+  test('a binary file is named as such instead of rendering decoded mojibake', async () => {
+    binaryPair = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await userEvent.click(await waitFor(() => screen.getByText('src/uncommitted.ts')));
+
+    assert({
+      given: 'a changed binary file (its decoded content carries NUL bytes)',
+      should: 'say it is binary and mount no diff editor — a text diff of decoded bytes is garbage',
+      actual: {
+        note: screen.queryByText(/binary file/i) !== null,
+        editor: screen.queryByTestId('monaco-diff') !== null,
+      },
+      expected: { note: true, editor: false },
     });
   });
 

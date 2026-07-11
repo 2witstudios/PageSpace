@@ -4,11 +4,23 @@ import { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useMachineDiffPair } from '@/hooks/useMachineDiff';
+import { useMachineDiffPair, type MachineDiffPairResponse } from '@/hooks/useMachineDiff';
 import type { MachineDiffFile, MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 
 // Monaco owns `window`/`document` at import time — never SSR it.
 const MonacoDiffEditor = dynamic(() => import('@/components/editors/MonacoDiffEditor'), { ssr: false });
+
+/**
+ * Git's own binary heuristic: a NUL byte inside the leading chunk. The backend
+ * UTF-8-decodes every side, so a changed `.png` would otherwise arrive as decoded
+ * mojibake and render as a side-by-side text diff of garbage. Bounded to the
+ * first 8000 chars (as git does) so this stays O(1)-ish on large files.
+ */
+const BINARY_SNIFF_CHARS = 8000;
+
+function looksBinary(side: { content: string } | null): boolean {
+  return side !== null && side.content.slice(0, BINARY_SNIFF_CHARS).includes('\u0000');
+}
 
 const STATUS_STYLES: Record<MachineDiffFile['status'], string> = {
   added: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
@@ -70,34 +82,61 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
 
       {expanded && (
         <div className="border-t border-border">
-          {isLoading && <div className="px-3 py-4 text-xs text-muted-foreground">Loading diff…</div>}
-          {error && <div className="px-3 py-4 text-xs text-destructive">Failed to load diff: {error.message}</div>}
-          {!isLoading && !error && data && !data.notApplicable && (
-            <>
-              {(data.original?.truncated || data.modified?.truncated) && (
-                // Diffing a CUT-OFF side against a whole one paints the file's
-                // entire tail as removed/added lines that never changed — so a
-                // truncated side has to be called out, never rendered as if it
-                // were the complete file.
-                <div className="border-b border-border bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-                  This file is too large to load in full — it is cut off below, so changes near the end may be
-                  missing or shown incorrectly.
-                </div>
-              )}
-              <div className="h-[420px]">
-                <MonacoDiffEditor
-                  // A null side means the file doesn't exist there (added → no
-                  // original, deleted → no modified). Each side carries its own
-                  // content + truncated flag; Monaco needs the string.
-                  original={data.original?.content ?? ''}
-                  modified={data.modified?.content ?? ''}
-                  filename={file.path}
-                />
-              </div>
-            </>
-          )}
+          <DiffBody path={file.path} data={data} error={error} isLoading={isLoading} />
         </div>
       )}
     </div>
+  );
+}
+
+const NOTE_CLASS = 'px-3 py-4 text-xs text-muted-foreground';
+
+/** The expanded card's body — every state the pair can be in, and nothing silently blank. */
+function DiffBody({
+  path,
+  data,
+  error,
+  isLoading,
+}: {
+  path: string;
+  data: MachineDiffPairResponse | undefined;
+  error: Error | undefined;
+  isLoading: boolean;
+}) {
+  if (isLoading) return <div className={NOTE_CLASS}>Loading diff…</div>;
+  if (error) return <div className="px-3 py-4 text-xs text-destructive">Failed to load diff: {error.message}</div>;
+  if (!data) return <div className={NOTE_CLASS}>Loading diff…</div>;
+  if (data.notApplicable) {
+    // Near-unreachable (the toggle doesn't offer a not-applicable scope), but an
+    // expanded card with a blank body would be worse than saying so.
+    return <div className={NOTE_CLASS}>This scope doesn&apos;t apply on this branch.</div>;
+  }
+  if (looksBinary(data.original) || looksBinary(data.modified)) {
+    return <div className={NOTE_CLASS}>Binary file — no text diff to show.</div>;
+  }
+
+  const truncated = data.original?.truncated || data.modified?.truncated;
+  return (
+    <>
+      {truncated && (
+        // Diffing a CUT-OFF side against a whole one paints the file's entire
+        // tail as removed/added lines that never changed — so a truncated side
+        // has to be called out, never rendered as if it were the complete file.
+        <div className="border-b border-border bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          This file is too large to load in full — it is cut off below, so changes near the end may be missing or
+          shown incorrectly.
+        </div>
+      )}
+      <div className="h-[420px]">
+        <MonacoDiffEditor
+          // A null side means the file doesn't exist there (added → no original,
+          // deleted → no modified). Each side carries its own content +
+          // truncated flag; Monaco needs the string.
+          original={data.original?.content ?? ''}
+          modified={data.modified?.content ?? ''}
+          filename={path}
+        />
+      </div>
+    </>
   );
 }

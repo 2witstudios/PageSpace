@@ -113,6 +113,42 @@ describe('MachineTree', () => {
     });
   });
 
+  test('a node excluded by isNodeSelectable keeps expand-on-label-click instead of becoming a dead button', async () => {
+    // The Diff tab selects BRANCHES only. Without this opt-in, passing
+    // onSelectNode would attach a select handler to every row — and since a
+    // select handler is used INSTEAD of expand-on-label-click, the Machine and
+    // Project labels would swallow the click and do nothing at all.
+    const onSelectNode = vi.fn();
+    renderTree({ onSelectNode, isNodeSelectable: (node: MachineTreeNode) => node.level === 'branch' });
+
+    const projectRow = await waitFor(() => screen.getByText('my-repo'));
+    await userEvent.click(projectRow);
+
+    const branchRow = await waitFor(() => screen.getByText('main'));
+    assert({
+      given: 'onSelectNode with only branch nodes marked selectable, and a project label clicked',
+      should: 'expand the project (not select it) — the label must stay live',
+      actual: { expanded: branchRow.textContent, selected: onSelectNode.mock.calls.length },
+      expected: { expanded: 'main', selected: 0 },
+    });
+  });
+
+  test('a node included by isNodeSelectable still selects (and does not expand)', async () => {
+    const onSelectNode = vi.fn();
+    renderTree({ onSelectNode, isNodeSelectable: (node: MachineTreeNode) => node.level === 'branch' });
+
+    await expandRowFor('my-repo');
+    const branchRow = await waitFor(() => screen.getByText('main'));
+    await userEvent.click(branchRow);
+
+    assert({
+      given: 'a selectable branch row clicked',
+      should: 'report the branch node to onSelectNode',
+      actual: onSelectNode.mock.calls[0]?.[0],
+      expected: { level: 'branch', projectName: 'my-repo', branchName: 'main' },
+    });
+  });
+
   test('with no onSelectNode, clicking a node label toggles its expansion (row-click affordance)', async () => {
     // The Terminal tab renders MachineTree without onSelectNode; the label must
     // still expand the row on click (like the old Navigator), not be a dead button.
