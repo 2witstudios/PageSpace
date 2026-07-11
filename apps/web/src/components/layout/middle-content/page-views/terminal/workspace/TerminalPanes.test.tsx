@@ -28,6 +28,12 @@ const SPLIT_WORKSPACE: WorkspaceState = {
   activePaneId: 'pane-2',
 };
 
+/** One pane, nothing to split into and nothing to close — the phone default. */
+const SOLO_WORKSPACE: WorkspaceState = {
+  columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'solo' } }] }],
+  activePaneId: 'pane-1',
+};
+
 let workspace: WorkspaceState = SPLIT_WORKSPACE;
 
 vi.mock('@/stores/terminal-workspace/useTerminalWorkspaceStore', () => ({
@@ -143,7 +149,7 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
 
   test('a single-pane workspace renders no pane strip on a narrow viewport', async () => {
     onMobile();
-    workspace = { columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'solo' } }] }], activePaneId: 'pane-1' };
+    workspace = SOLO_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     await screen.findByTestId('xterm');
@@ -153,6 +159,25 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
       should: 'render no pane strip — it exists only to reach panes the collapse hid',
       actual: screen.queryByRole('button', { name: 'solo' }) !== null,
       expected: false,
+    });
+  });
+
+  test('a lone pane on a phone renders no control chip at all', async () => {
+    onMobile();
+    workspace = SOLO_WORKSPACE;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    assert({
+      given: 'the only pane on a narrow viewport, where it can neither split nor close',
+      should:
+        'render no control chip — the chip is opacity-100 on touch, so an empty bordered box would sit in the corner permanently',
+      actual: {
+        split: screen.queryByTitle('Split right') !== null,
+        close: screen.queryByTitle('Close pane') !== null,
+        chip: document.querySelector('.backdrop-blur-sm') !== null,
+      },
+      expected: { split: false, close: false, chip: false },
     });
   });
 });

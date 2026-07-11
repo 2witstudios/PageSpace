@@ -201,12 +201,17 @@ function TerminalPane({
   onClose(): void;
 }) {
   const sessionId = pane.scope ? paneSessionId(machineId, pane.scope) : null;
+  // With neither a split nor a close to offer (a lone pane on a phone), the
+  // control chip has nothing in it — and since it is opacity-100 on touch, an
+  // empty bordered box would just sit in the corner forever.
+  const hasControls = canSplit || canClose;
 
   return (
     <div className="group/pane relative flex h-full flex-col" onClick={onSelect}>
       <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${isActive ? 'bg-primary' : 'bg-transparent'}`} />
       {/* Hover-revealed on a mouse; a touch device has no hover, so the controls
           stay visible there rather than being unreachable. */}
+      {hasControls && (
       <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-border bg-card/90 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover/pane:opacity-100">
         {canSplit && (
           <>
@@ -251,6 +256,7 @@ function TerminalPane({
           </Button>
         )}
       </div>
+      )}
       <div className="relative min-h-0 flex-1">
         {!pane.scope || !sessionId ? (
           <PaneNotice
