@@ -490,6 +490,71 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getBySocket('attacker-sock')).toBeUndefined();
     });
 
+    it('given two CONCURRENT cold connects for the same key, should keep ONE PTY — killing the loser and returning its slot', async () => {
+      // The genuinely racy double-mount: connect #2 arrives while connect #1 is
+      // still seconds deep in its cold resolveSandbox, so BOTH see an empty
+      // sessionMap and both open a PTY. Without a guard, setNew silently
+      // overwrites — orphaning the winner's PTY (nothing can reach it to kill it)
+      // and stranding its concurrency slot for the life of the process.
+      const authA = makeAuthSuccess();
+      const authB = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      // Both genuinely raced down the cold path...
+      expect(openShell).toHaveBeenCalledTimes(2);
+      // ...but exactly one session survives under the shared key.
+      const survivor = sessionMap.getByKey('branch1:agent:cli');
+      expect(survivor).toBeDefined();
+      expect(survivor?.command).toBe(shellA);
+
+      // The loser's PTY is killed and its slot handed straight back — no orphan,
+      // no permanently-leaked concurrency capacity.
+      expect(shellB.kill).toHaveBeenCalled();
+      expect(authB.releaseSlot).toHaveBeenCalledTimes(1);
+
+      // The winner is untouched and still holds the one slot it reserved.
+      expect(shellA.kill).not.toHaveBeenCalled();
+      expect(authA.releaseSlot).not.toHaveBeenCalled();
+
+      // The loser's pane still gets a working terminal — it joined the winner.
+      expect(sessionMap.getBySocket('pane-b')).toBe(survivor);
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ connectionId: 'pane-b', scrollback: expect.any(String) }));
+    });
+
+    it('given a lost cold-race whose orphaned PTY exits later, should NOT evict the winner from the session map', async () => {
+      const authA = makeAuthSuccess();
+      const authB = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      // The discarded PTY's kill lands asynchronously: its onExit fires AFTER the
+      // winner already owns the key. A blind deleteByKey here would evict the
+      // live winner and strand a running PTY.
+      const loserOnExit = openShell.mock.calls[1][0].onExit as (exitCode: number) => void;
+      loserOnExit(0);
+
+      expect(sessionMap.getByKey('branch1:agent:cli')?.command).toBe(shellA);
+      // ...and the loser's slot is still only returned once, not twice.
+      expect(authB.releaseSlot).toHaveBeenCalledTimes(1);
+    });
+
     it('given two connects for the same key (double-mount remount), should not double-create — the second reattaches via getByKey', async () => {
       // A StrictMode/HMR double-mount fires connect twice for the same
       // (scope, name). Once the first has established the session (setNew), the

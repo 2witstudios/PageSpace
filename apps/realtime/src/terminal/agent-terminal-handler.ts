@@ -241,7 +241,13 @@ function endAgentTerminalSession(
   session: TerminalSession,
   sessionKey: string,
 ): void {
-  sessionMap.deleteByKey(sessionKey);
+  // Only evict the key if THIS session is still the one under it. A session that
+  // never made it into the map (a cold-path racer that lost — see onConnect), or
+  // one already replaced, must not delete the live session that now holds its
+  // key: that would orphan a running PTY nothing can reach.
+  if (sessionMap.getByKey(sessionKey) === session) {
+    sessionMap.deleteByKey(sessionKey);
+  }
   // This is the one funnel every teardown path goes through, so it owns clearing
   // ALL of the session's timers — a caller that forgets one can't leak a firing
   // interval against a dead session.
@@ -427,6 +433,28 @@ export function buildAgentTerminalHandlers({
     }, DETACHED_IDLE_MS);
   }
 
+  /**
+   * Bind an ALREADY-RUNNING session to this connection and hand the viewer its
+   * buffered scrollback: cancel any pending idle reap, re-point the session's
+   * output/closed callbacks at this socket+pane, and take over its socket
+   * mapping. Reserves nothing and touches no Sprite.
+   *
+   * Two paths land here: the tab-back fast path (`planConnect` -> 'reattach'),
+   * and a cold-path racer that lost a double-mount (see `onConnect`) — both are
+   * "someone else's PTY is already live under this key; join it".
+   */
+  function attachToLiveSession(session: TerminalSession, sessionKey: string, connectionId: string) {
+    if (session.idleTimer !== undefined) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = undefined;
+    }
+    session.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
+    session.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
+    sessionMap.reattach(sessionKey, connectionId);
+    activeConnectionIds.add(connectionId);
+    socket.emit('agent-terminal:ready', { scrollback: session.scrollback.join(''), connectionId });
+  }
+
   return {
     async onConnect(payload: unknown) {
       const validation = validateAgentTerminalConnectPayload(payload);
@@ -459,19 +487,10 @@ export function buildAgentTerminalHandlers({
       const { sessionKey } = plan.access;
 
       if (plan.kind === 'reattach') {
-        const { session: liveSession } = plan;
-        if (liveSession.idleTimer !== undefined) {
-          clearTimeout(liveSession.idleTimer);
-          liveSession.idleTimer = undefined;
-        }
-        liveSession.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
-        liveSession.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
-        sessionMap.reattach(sessionKey, connectionId);
-        activeConnectionIds.add(connectionId);
         // No slot to release: reattaching starts no PTY, so the access check
         // reserved none. The live session still holds the one it was created
         // with, and keeps it until it is torn down or reaped.
-        socket.emit('agent-terminal:ready', { scrollback: liveSession.scrollback.join(''), connectionId });
+        attachToLiveSession(plan.session, sessionKey, connectionId);
         return;
       }
 
@@ -483,7 +502,17 @@ export function buildAgentTerminalHandlers({
         socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${sandbox.reason}`, connectionId });
         return;
       }
-      const { releaseSlot } = sandbox;
+      // Every teardown path below can race another (a PTY exit landing while the
+      // idle reap is pending, a lost double-mount whose onExit fires later), and
+      // the slot is a bare counter — releasing it twice silently hands back
+      // capacity this connect never held, letting the user exceed their tier.
+      // Collapse them: the slot goes back exactly once, whoever gets there first.
+      let slotReleased = false;
+      const releaseSlot = () => {
+        if (slotReleased) return;
+        slotReleased = true;
+        sandbox.releaseSlot();
+      };
 
       // Terminal Epic 3 metering: place a flat-estimate hold for this NEW
       // machine-active window BEFORE opening the shell (hibernated/idle time
@@ -579,6 +608,28 @@ export function buildAgentTerminalHandlers({
       }
 
       session.command = shell;
+
+      // Did we LOSE a double-mount race? Another cold connect for this same key
+      // (a StrictMode/HMR remount firing while we were seconds deep in
+      // resolveSandbox — the window is widest on exactly this slow path) may have
+      // finished and claimed the key while we were awaiting. `setNew` would
+      // silently overwrite it, orphaning the winner's PTY where nothing can ever
+      // reach it to kill it and permanently stranding its concurrency slot.
+      //
+      // Discard OUR duplicate and join the winner instead — from the client's
+      // side this is indistinguishable from an ordinary reattach.
+      const winner = sessionMap.getByKey(sessionKey);
+      if (winner !== undefined) {
+        session.outputFn = () => {};
+        session.closedFn = () => {};
+        shell.kill();
+        releaseSlot();
+        if (holdId) void billing?.releaseHold(holdId).catch(() => {});
+        loggers.realtime.info('Agent terminal duplicate cold connect discarded (lost double-mount race)', { sessionKey, sandboxId });
+        attachToLiveSession(winner, sessionKey, connectionId);
+        return;
+      }
+
       sessionMap.setNew(sessionKey, connectionId, session);
       activeConnectionIds.add(connectionId);
 
