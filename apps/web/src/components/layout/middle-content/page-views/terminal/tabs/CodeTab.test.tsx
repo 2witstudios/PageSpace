@@ -97,7 +97,7 @@ describe('CodeTab', () => {
     });
   });
 
-  test('picking a ready branch probes its checkout and mounts the file tree', async () => {
+  test('picking a ready branch probes its checkout ONCE and mounts the file tree', async () => {
     cannedFetch({ main: async () => jsonResponse({ entries: [] }) });
     render(<CodeTab machineId="machine-1" />);
 
@@ -106,12 +106,55 @@ describe('CodeTab', () => {
 
     assert({
       given: 'a branch whose checkout probe returns 200',
-      should: 'render the file tree for that branch and prompt to pick a file',
+      should: 'render the file tree for that branch, having probed exactly once',
       actual: {
         tree: tree.textContent,
+        probes: vi.mocked(fetchWithAuth).mock.calls.length,
         filePrompt: screen.queryByText('Select a file to view its contents.') !== null,
       },
-      expected: { tree: 'tree:main', filePrompt: true },
+      expected: { tree: 'tree:main', probes: 1, filePrompt: true },
+    });
+  });
+
+  test('switching branches probes the new branch once — no wasted listing from a stale ready state', async () => {
+    cannedFetch({
+      main: async () => jsonResponse({ entries: [] }),
+      dev: async () => jsonResponse({ entries: [] }),
+    });
+    render(<CodeTab machineId="machine-1" />);
+
+    await userEvent.click(screen.getByText('pick-main'));
+    await waitFor(() => screen.getByText('tree:main'));
+    await userEvent.click(screen.getByText('pick-dev'));
+    await waitFor(() => screen.getByText('tree:dev'));
+
+    const branchesProbed = vi
+      .mocked(fetchWithAuth)
+      .mock.calls.map((call) => new URL(String(call[0]), 'http://test').searchParams.get('branchName'));
+
+    assert({
+      given: 'a branch switch after the first branch was already ready',
+      should: 'probe each branch exactly once — BranchFiles is keyed, so it never renders the old ready state at the new branch',
+      actual: branchesProbed,
+      expected: ['main', 'dev'],
+    });
+  });
+
+  test('re-picking the branch already open keeps the open file', async () => {
+    cannedFetch({ main: async () => jsonResponse({ entries: [] }) });
+    render(<CodeTab machineId="machine-1" />);
+
+    await userEvent.click(screen.getByText('pick-main'));
+    await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));
+    await waitFor(() => screen.getByTestId('file-pane'));
+
+    await userEvent.click(screen.getByText('pick-main')); // same branch again
+
+    assert({
+      given: 'the branch that is already selected picked a second time',
+      should: 'leave the open file alone (only a DIFFERENT branch invalidates the path)',
+      actual: screen.queryByTestId('file-pane')?.textContent ?? null,
+      expected: 'pane:main:src/index.ts',
     });
   });
 

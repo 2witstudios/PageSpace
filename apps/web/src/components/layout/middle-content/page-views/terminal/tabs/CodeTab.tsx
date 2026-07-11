@@ -17,7 +17,14 @@
  * (no tracking row, or the repo dir isn't there) or `reason: 'vanished'` (the row
  * is there but its Sprite is gone). {@link BranchFiles} probes the checkout root
  * once per branch and turns both into an explicit empty state rather than letting
- * MachineFileTree render them as a raw error row.
+ * MachineFileTree render them as a raw error row. An `exec_failed` is NOT folded
+ * in: a broken exec is a real error and stays one.
+ *
+ * Selection (branch + open file) is ONE piece of state, and both children are
+ * keyed by it. A path only means something inside the checkout it came from, so
+ * a branch switch drops the open file in the same update — and the key makes the
+ * switch a remount, which is what stops a stale `ready` from flashing the file
+ * tree at the new branch and firing a listing that gets thrown away.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -28,38 +35,54 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import MachineFileTree from '../workspace/MachineFileTree';
 import CodeFilePane from './CodeFilePane';
+import {
+  CHECKOUT_ABSENT_COPY,
+  asAbsentReason,
+  readErrorBody,
+  type CheckoutAbsentReason,
+} from './checkout-states';
 
 interface CodeTabProps {
   /** The Machine page's own id (= pageId). */
   machineId: string;
 }
 
-/** The branch whose checkout the tab is currently browsing. */
-interface SelectedBranch {
-  projectName: string;
-  branchName: string;
+/** The branch whose checkout the tab is browsing, and the file open from it. */
+interface Selection {
+  branch: { projectName: string; branchName: string } | null;
+  /** Checkout-relative path, only ever meaningful within `branch`. */
+  path: string | null;
 }
 
+/**
+ * Identity of a branch's checkout — also the React key that scopes per-branch
+ * state. JSON-encoded rather than joined on a separator so that no project /
+ * branch name pair can collide (a branch name may legally contain `/`).
+ */
+const branchKey = (branch: NonNullable<Selection['branch']>): string =>
+  JSON.stringify([branch.projectName, branch.branchName]);
+
 export default function CodeTab({ machineId }: CodeTabProps) {
-  const [branch, setBranch] = useState<SelectedBranch | null>(null);
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // Branch and path move as ONE value: a path only means something inside the
+  // checkout it came from, so switching branches must drop the open file in the
+  // same update — never as a second, separately-scheduled setState.
+  const [{ branch, path }, setSelection] = useState<Selection>({ branch: null, path: null });
 
   const onSelectNode = useCallback((node: MachineTreeNode) => {
     // Only a branch has a checkout to browse. Machine/Project rows stay
     // expand-only (their chevron still works) — selecting one would have no
     // file tree to show.
     if (node.level !== 'branch') return;
-    setBranch((current) =>
-      current?.projectName === node.projectName && current.branchName === node.branchName
-        ? current
-        : { projectName: node.projectName, branchName: node.branchName },
+    setSelection((current) =>
+      current.branch?.projectName === node.projectName && current.branch.branchName === node.branchName
+        ? current // re-picking the open branch keeps the open file
+        : { branch: { projectName: node.projectName, branchName: node.branchName }, path: null },
     );
-    // A path is only meaningful within one checkout, so switching branches
-    // drops the open file rather than trying to resolve it in the new tree.
-    setSelectedPath((current) =>
-      branchEquals(node, branch) ? current : null,
-    );
-  }, [branch]);
+  }, []);
+
+  const onSelectFile = useCallback((next: string) => {
+    setSelection((current) => ({ ...current, path: next }));
+  }, []);
 
   return (
     <div className="flex h-full min-h-0">
@@ -76,24 +99,34 @@ export default function CodeTab({ machineId }: CodeTabProps) {
                   {branch.projectName} / {branch.branchName}
                 </span>
               </div>
+              {/* Keyed on the branch so a switch REMOUNTS the probe. Without it,
+                  BranchFiles would render one frame still holding the previous
+                  branch's `ready` state, mounting the file tree against the new
+                  branch — a whole root listing fetched and thrown away before
+                  the probe effect resets it. */}
               <BranchFiles
+                key={branchKey(branch)}
                 machineId={machineId}
                 projectName={branch.projectName}
                 branchName={branch.branchName}
-                onSelectFile={setSelectedPath}
-                selectedPath={selectedPath}
+                onSelectFile={onSelectFile}
+                selectedPath={path}
               />
             </div>
           )}
         </ScrollArea>
       </aside>
       <div className="min-w-0 flex-1">
-        {branch && selectedPath ? (
+        {branch && path ? (
+          // Keyed on the file for the same reason: a fresh pane per file, so it
+          // can never paint the previous file's content under the new file's
+          // name, and Monaco starts clean rather than inheriting scroll/undo.
           <CodeFilePane
+            key={`${branchKey(branch)}:${path}`}
             machineId={machineId}
             projectName={branch.projectName}
             branchName={branch.branchName}
-            path={selectedPath}
+            path={path}
           />
         ) : (
           <CodeTabPlaceholder hasBranch={branch !== null} />
@@ -102,9 +135,6 @@ export default function CodeTab({ machineId }: CodeTabProps) {
     </div>
   );
 }
-
-const branchEquals = (node: Extract<MachineTreeNode, { level: 'branch' }>, branch: SelectedBranch | null): boolean =>
-  branch !== null && branch.projectName === node.projectName && branch.branchName === node.branchName;
 
 function CodeTabPlaceholder({ hasBranch }: { hasBranch: boolean }) {
   return (
@@ -121,34 +151,18 @@ function CodeTabPlaceholder({ hasBranch }: { hasBranch: boolean }) {
 type CheckoutState =
   | { status: 'loading' }
   | { status: 'ready' }
-  | { status: 'absent'; reason: 'not_found' | 'vanished' }
+  | { status: 'absent'; reason: CheckoutAbsentReason }
   | { status: 'error'; message: string };
-
-const ABSENT_COPY: Record<'not_found' | 'vanished', { title: string; description: string }> = {
-  not_found: {
-    title: "This branch hasn't been checked out yet",
-    description: 'Open a terminal on this branch to clone it, then refresh.',
-  },
-  vanished: {
-    title: 'This branch checkout is gone',
-    description: 'Its sandbox was reclaimed. Open a terminal on the branch to check it out again.',
-  },
-};
-
-const readBody = (body: unknown): { reason?: string; error?: string } => {
-  if (body === null || typeof body !== 'object') return {};
-  const record = body as Record<string, unknown>;
-  return {
-    reason: typeof record.reason === 'string' ? record.reason : undefined,
-    error: typeof record.error === 'string' ? record.error : undefined,
-  };
-};
 
 /**
  * Probes the checkout root once per branch and, only once it answers `ready`,
  * mounts the file tree. The probe is exactly the listing MachineFileTree would
- * make for the root anyway — paying it here is what lets a missing checkout be
- * an empty state instead of an error row inside the tree.
+ * make for the root anyway — so a ready branch costs two root listings, one
+ * here and one in the tree. That is the price of turning "no checkout" into an
+ * empty state instead of an error row buried inside the tree, without changing
+ * the props of a component that TerminalTab and the Diff tab also mount. The
+ * duplicate is bounded: it happens once per branch selection, never per
+ * directory, and CodeTab keys us by branch so it cannot fire on re-render.
  */
 function BranchFiles({
   machineId,
@@ -168,8 +182,10 @@ function BranchFiles({
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    // A branch switch (or retry) makes an in-flight probe's answer stale — this
-    // flag, flipped by the cleanup, is what keeps it from landing on the new one.
+    // Retry makes an in-flight probe's answer stale — this flag, flipped by the
+    // cleanup, keeps it from landing on the newer one. (A branch switch can't
+    // race us at all: CodeTab keys this component by branch, so a switch is a
+    // remount, not a re-render.)
     let cancelled = false;
     setState({ status: 'loading' });
 
@@ -182,10 +198,15 @@ function BranchFiles({
           setState({ status: 'ready' });
           return;
         }
-        const { reason, error } = readBody(await res.json().catch(() => null));
+        const { error, reason } = readErrorBody(await res.json().catch(() => null));
         if (cancelled) return;
-        if (reason === 'not_found' || reason === 'vanished') {
-          setState({ status: 'absent', reason });
+        // `not_found`/`vanished` mean the checkout isn't there — a state of the
+        // world, not a failure. Anything else (403, `exec_failed`, …) IS a
+        // failure and must stay visible as one rather than be dressed up as an
+        // empty state.
+        const absent = asAbsentReason(reason);
+        if (absent !== null) {
+          setState({ status: 'absent', reason: absent });
           return;
         }
         setState({ status: 'error', message: error ?? `Failed to open checkout (${res.status})` });
@@ -206,7 +227,7 @@ function BranchFiles({
   }
 
   if (state.status === 'absent') {
-    const copy = ABSENT_COPY[state.reason];
+    const copy = CHECKOUT_ABSENT_COPY[state.reason];
     return (
       <div className="flex flex-col items-start gap-1 px-3 py-2" data-testid="checkout-absent">
         <p className="text-xs font-medium">{copy.title}</p>
