@@ -11,6 +11,15 @@ export default mergeConfig(
   base,
   defineConfig({
     test: {
+      // Raise the forked coverage workers' V8 heap ceiling. This config is
+      // excluded from tsc/next-build (see tsconfig exclude), so the vitest-only
+      // poolOptions typing never reaches the app build. NODE_OPTIONS does not
+      // propagate to vitest's fork workers, so execArgv is the reliable path.
+      poolOptions: {
+        forks: {
+          execArgv: ['--max-old-space-size=8192'],
+        },
+      },
       coverage: {
         thresholds: {
           lines: 0,
