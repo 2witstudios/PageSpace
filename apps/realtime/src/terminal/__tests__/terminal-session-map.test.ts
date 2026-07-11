@@ -136,6 +136,68 @@ describe('createTerminalSessionMap', () => {
   });
 });
 
+describe('cold-create serialization (trackCreate / pendingCreate)', () => {
+  it('given no create in flight, pendingCreate should report nothing', () => {
+    const map = createTerminalSessionMap();
+    expect(map.pendingCreate('k1')).toBeUndefined();
+  });
+
+  it('given a tracked create, pendingCreate should hand it back so a concurrent connect can join it', () => {
+    const map = createTerminalSessionMap();
+    const create = new Promise<void>(() => {}); // never settles during this test
+    map.trackCreate('k1', create);
+
+    expect(map.pendingCreate('k1')).toBe(create);
+    // Claims are per-key — an unrelated terminal is never blocked by this one.
+    expect(map.pendingCreate('k2')).toBeUndefined();
+  });
+
+  it('given the tracked create RESOLVES, should drop the claim so the key is connectable again', async () => {
+    const map = createTerminalSessionMap();
+    let finish!: () => void;
+    map.trackCreate('k1', new Promise<void>((resolve) => { finish = resolve; }));
+    expect(map.pendingCreate('k1')).toBeDefined();
+
+    finish();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(map.pendingCreate('k1')).toBeUndefined();
+  });
+
+  it('given the tracked create REJECTS, should still drop the claim (a failed create must not wedge the key forever)', async () => {
+    const map = createTerminalSessionMap();
+    let fail!: (e: Error) => void;
+    map.trackCreate('k1', new Promise<void>((_, reject) => { fail = reject; }));
+
+    fail(new Error('provision failed'));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(map.pendingCreate('k1')).toBeUndefined();
+  });
+
+  it('given a SECOND create claims the key while the first is still settling, should not let the first revoke the second\'s claim', async () => {
+    const map = createTerminalSessionMap();
+    let finishFirst!: () => void;
+    const first = new Promise<void>((resolve) => { finishFirst = resolve; });
+    map.trackCreate('k1', first);
+
+    // A later create takes the key over (the first failed and its retry queued).
+    const second = new Promise<void>(() => {});
+    map.trackCreate('k1', second);
+
+    finishFirst();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The stale first create's settle must not clear the SECOND's claim, or a
+    // third connect would race the create that is genuinely still in flight.
+    expect(map.pendingCreate('k1')).toBe(second);
+  });
+});
+
 describe('appendScrollback', () => {
   it('given small chunks, should accumulate them in order', () => {
     const session = { scrollback: [] as string[], scrollbackBytes: 0 };
