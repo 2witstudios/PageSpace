@@ -13,14 +13,10 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
 import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
 import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
+import { isImageGenerationAllowedForTier } from '../core/image-gen-access';
 import { createImageFilePage } from '@/lib/upload/create-file-page';
 
 const imageLogger = loggers.ai.child({ module: 'image-generation-tools' });
-
-/** Pure: image generation requires a paid (Pro+) tier — free/unknown is denied. */
-export function isImageGenerationAllowedForTier(tier: string | undefined | null): boolean {
-  return tier === 'pro' || tier === 'founder' || tier === 'business';
-}
 
 /** Load the user's subscription tier (defensive fallback when not threaded via context). */
 async function loadSubscriptionTier(userId: string): Promise<SubscriptionTier> {

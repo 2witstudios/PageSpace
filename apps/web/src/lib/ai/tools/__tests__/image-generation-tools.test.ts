@@ -18,7 +18,8 @@ vi.mock('../../core/image-generation', async (orig) => ({
 }));
 vi.mock('@/lib/upload/create-file-page', () => ({ createImageFilePage: (...a: unknown[]) => createImageFilePage(...a) }));
 
-import { imageGenerationTools, isImageGenerationAllowedForTier } from '../image-generation-tools';
+import { imageGenerationTools } from '../image-generation-tools';
+import { isImageGenerationAllowedForTier } from '@/lib/ai/core/image-gen-access';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
 

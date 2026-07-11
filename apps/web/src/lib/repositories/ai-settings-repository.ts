@@ -15,6 +15,7 @@ export interface UserAISettings {
   currentAiProvider: string | null;
   currentAiModel: string | null;
   subscriptionTier: string | null;
+  imageGenerationModel: string | null;
 }
 
 export interface UpdateProviderSettingsInput {
@@ -37,11 +38,19 @@ export const aiSettingsRepository = {
         currentAiProvider: users.currentAiProvider,
         currentAiModel: users.currentAiModel,
         subscriptionTier: users.subscriptionTier,
+        imageGenerationModel: users.imageGenerationModel,
       })
       .from(users)
       .where(eq(users.id, userId));
 
     return user || null;
+  },
+
+  /**
+   * Update (or clear, with null) the user's chosen image-generation model.
+   */
+  async updateImageGenerationModel(userId: string, model: string | null): Promise<void> {
+    await db.update(users).set({ imageGenerationModel: model }).where(eq(users.id, userId));
   },
 
   /**

@@ -48,6 +48,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       currentProvider: user?.currentAiProvider || DEFAULT_PROVIDER,
       currentModel: user?.currentAiModel || DEFAULT_MODEL,
+      imageGenerationModel: user?.imageGenerationModel ?? null,
       userSubscriptionTier: user?.subscriptionTier || 'free',
       isAdmin: auth.role === 'admin',
       providers,
