@@ -118,12 +118,12 @@ export default function CodeTab({ machineId }: CodeTabProps) {
       </aside>
       <div className="min-w-0 flex-1">
         {branch && path ? (
-          // NOT keyed by path: Monaco is expensive to tear down and recreate on
-          // every file click, and the pane already refuses to render a state
-          // belonging to a different file. Keyed by BRANCH, so a branch switch
-          // still starts the pane clean.
+          // Deliberately UNKEYED. Keying by path would tear down and recreate
+          // Monaco on every file click; the pane doesn't need it, because it
+          // refuses to render a state belonging to a different file. Keying by
+          // branch would be dead code: a branch switch clears `path` in the same
+          // update, so the pane unmounts anyway.
           <CodeFilePane
-            key={branchKey(branch)}
             machineId={machineId}
             projectName={branch.projectName}
             branchName={branch.branchName}
@@ -157,13 +157,21 @@ type CheckoutState =
 
 /**
  * Probes the checkout root once per branch and, only once it answers `ready`,
- * mounts the file tree. The probe is exactly the listing MachineFileTree would
- * make for the root anyway — so a ready branch costs two root listings, one
- * here and one in the tree. That is the price of turning "no checkout" into an
- * empty state instead of an error row buried inside the tree, without changing
- * the props of a component that TerminalTab and the Diff tab also mount. The
- * duplicate is bounded: it happens once per branch selection, never per
- * directory, and CodeTab keys us by branch so it cannot fire on re-render.
+ * mounts the file tree.
+ *
+ * COST, stated plainly: the probe is exactly the listing MachineFileTree makes
+ * for the root anyway, so a ready branch pays for two root listings — one here,
+ * one in the tree. That buys the distinction the tab exists to make: "this
+ * branch was never cloned" is a state of the world and belongs in the sidebar as
+ * an empty state, not as a red error row buried inside a file tree. The
+ * duplicate is bounded — once per branch selection, never per directory, and
+ * CodeTab keys us by branch so it cannot fire on a re-render.
+ *
+ * It is not free, and it is not the only design: MachineFileTree is mounted here
+ * and nowhere else, so it could instead report a root-level absence back to us
+ * (an `onRootUnavailable(reason)` prop) and the probe would disappear entirely.
+ * That is the better end state and a small refactor; it is deliberately not being
+ * done in the same PR that changes this route's contract.
  */
 function BranchFiles({
   machineId,

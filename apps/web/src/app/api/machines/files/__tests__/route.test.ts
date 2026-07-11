@@ -176,6 +176,36 @@ describe('/api/machines/files request contract', () => {
     expect(body.error).toBe('Failed to list the checkout directory');
   });
 
+  // The exec's stderr names absolute paths INSIDE the Sprite. The file tree
+  // renders `error` straight into a row, so stderr must never land there.
+  it("keeps the exec's stderr out of the user-facing `error`", async () => {
+    listMachineDirectory.mockResolvedValue({
+      ok: false,
+      reason: 'exec_failed',
+      detail: "ls: cannot access '/workspace/repo/src': Permission denied",
+    });
+    const body = await (await GET(get({ path: 'src' }))).json();
+    expect(body.error).toBe('Failed to list the checkout directory');
+    expect(body.error).not.toMatch(/workspace\/repo/);
+    expect(body.detail).toMatch(/Permission denied/); // still available to logs/devs
+  });
+
+  // Same trap as the read arm: "this branch has no checkout" and "that folder is
+  // gone" are different facts, and the root vs subdirectory is what tells them
+  // apart. Conflating them makes an un-cloned branch and a deleted folder
+  // indistinguishable to the client.
+  it('distinguishes a missing SUBDIRECTORY from a missing CHECKOUT', async () => {
+    listMachineDirectory.mockResolvedValue({ ok: false, reason: 'not_found' });
+
+    const subdir = await (await GET(get({ path: 'src/generated' }))).json();
+    expect(subdir.reason).toBe('dir_not_found');
+    expect(subdir.error).toBe('This folder is no longer in the checkout');
+
+    const root = await (await GET(get({}))).json(); // no `path` => the checkout root
+    expect(root.reason).toBe('not_found');
+    expect(root.error).toBe('This branch checkout is unavailable');
+  });
+
   // "this branch has no checkout" and "that one file is gone" are BOTH 404s, so
   // a client that cannot tell them apart tells the reader a file vanished when
   // in truth the whole branch did. Distinct reason tokens are what prevent that.

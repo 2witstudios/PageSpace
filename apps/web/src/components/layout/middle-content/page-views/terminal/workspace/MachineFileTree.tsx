@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { readErrorBody } from '../tabs/checkout-states';
 
 export interface MachineFileTreeProps {
   machineId: string;
@@ -68,13 +69,12 @@ const sortEntries = (entries: MachineDirectoryEntry[]): MachineDirectoryEntry[] 
     a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1,
   );
 
-const readErrorMessage = (body: unknown): string | null => {
-  if (body !== null && typeof body === 'object' && 'error' in body) {
-    const message = (body as { error: unknown }).error;
-    if (typeof message === 'string' && message.length > 0) return message;
-  }
-  return null;
-};
+/**
+ * The route's failure body. `error` is written to be shown to a person (the
+ * route keeps its own stderr and internal tokens out of it and in `detail`), so
+ * it can go straight into the row — see the contract in the files route.
+ */
+const readErrorMessage = (body: unknown): string | null => readErrorBody(body).error;
 
 export default function MachineFileTree(props: MachineFileTreeProps) {
   // Remount on identity change so the per-path cache and all expansion state
