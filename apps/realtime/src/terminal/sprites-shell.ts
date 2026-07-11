@@ -24,8 +24,7 @@ export function liveShellSessionIds(sessions: SpriteSessionInfo[]): string[] {
 
 export type ReconnectPlan =
   | { action: 'attach'; id: string }
-  | { action: 'create' }
-  | { action: 'fatal' };
+  | { action: 'create' };
 
 /**
  * Decide how a dropped shell should reconnect. Exec sessions do NOT survive a
@@ -34,7 +33,6 @@ export type ReconnectPlan =
  * MUST be verified against the sessions the Sprite currently reports live before
  * any retry. Pure by construction so every branch is unit-testable:
  *
- * - Over the retry budget → `fatal` (bounded — never an infinite loop).
  * - Known id still live → `attach` it (reattach + replay scrollback).
  * - Known id absent from the live list → `create` a fresh session (the stale id
  *   is dead; the shell overwrites the persisted streamSessionId).
@@ -44,19 +42,19 @@ export type ReconnectPlan =
  *   PTY. We only ever attach to an id we obtained authoritatively (the create
  *   socket's `session_info` frame), never to one we inferred; an unidentified
  *   session is abandoned in favour of a fresh, identifiable one.
+ *
+ * There is deliberately no `fatal` verdict: giving up is a property of the retry
+ * BUDGET, not of the session state, and the budget is enforced by the caller
+ * before it ever gets here (see `reconnect`). Every reachable state now has a
+ * recovery — with an id we verify it, without one we create.
  */
 export function planReconnect({
   knownId,
   liveSessionIds,
-  consecutiveFailures,
-  maxAttempts,
 }: {
   knownId: string | undefined;
   liveSessionIds: string[];
-  consecutiveFailures: number;
-  maxAttempts: number;
 }): ReconnectPlan {
-  if (consecutiveFailures > maxAttempts) return { action: 'fatal' };
   if (knownId === undefined) return { action: 'create' };
   return liveSessionIds.includes(knownId)
     ? { action: 'attach', id: knownId }
@@ -272,16 +270,8 @@ export function openPtyShell({
       const plan = planReconnect({
         knownId: currentSessionId,
         liveSessionIds: liveShellSessionIds(liveSessions),
-        consecutiveFailures,
-        maxAttempts: MAX_RECONNECT_ATTEMPTS,
       });
 
-      if (plan.action === 'fatal') {
-        // The bounded retry budget is exhausted — stop rather than loop forever.
-        reconnecting = false;
-        fatal(-1);
-        return;
-      }
       if (plan.action === 'create') {
         // Either the known id is dead (Sprite paused then cold-woke) or we never
         // learned one. Start a fresh shell transparently; its own session_info

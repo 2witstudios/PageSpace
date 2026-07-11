@@ -84,55 +84,46 @@ const liveSession: SpriteSessionInfo = { id: 'sess-1', command: 'bash', isActive
 const announces = (id: string) => ({ type: 'session_info', session_id: id, command: 'bash', tty: true });
 
 describe('planReconnect (pure)', () => {
-  const MAX = 5;
-
   assert({
     given: 'a known persisted id still present in the live sessions',
     should: 'attach to it (reattach + replay scrollback)',
-    actual: planReconnect({ knownId: 'sess-1', liveSessionIds: ['sess-1'], consecutiveFailures: 1, maxAttempts: MAX }),
+    actual: planReconnect({ knownId: 'sess-1', liveSessionIds: ['sess-1'] }),
     expected: { action: 'attach', id: 'sess-1' } as const,
   });
 
   assert({
     given: 'a known persisted id absent from the live sessions (dangling after a pause)',
     should: 'create a fresh session',
-    actual: planReconnect({ knownId: 'sess-dead', liveSessionIds: ['sess-9'], consecutiveFailures: 1, maxAttempts: MAX }),
+    actual: planReconnect({ knownId: 'sess-dead', liveSessionIds: ['sess-9'] }),
     expected: { action: 'create' } as const,
   });
 
   assert({
     given: 'a known persisted id and an empty live-session list',
     should: 'create a fresh session (the persisted id is gone)',
-    actual: planReconnect({ knownId: 'sess-dead', liveSessionIds: [], consecutiveFailures: 1, maxAttempts: MAX }),
+    actual: planReconnect({ knownId: 'sess-dead', liveSessionIds: [] }),
     expected: { action: 'create' } as const,
   });
 
   assert({
-    given: 'no known id but a live shell session exists (possibly a SIBLING terminal\'s)',
+    given: "no known id but a live shell session exists (possibly a SIBLING terminal's)",
     should: 'create a fresh session — never guess which live shell is ours',
-    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1'], consecutiveFailures: 1, maxAttempts: MAX }),
+    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1'] }),
     expected: { action: 'create' } as const,
   });
 
   assert({
     given: 'no known id and several live shells on the Sprite',
     should: 'still create — an id is only ever obtained authoritatively, never picked',
-    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1', 'sess-2'], consecutiveFailures: 1, maxAttempts: MAX }),
+    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1', 'sess-2'] }),
     expected: { action: 'create' } as const,
   });
 
   assert({
     given: 'no known id and no live sessions',
     should: 'create a fresh session',
-    actual: planReconnect({ knownId: undefined, liveSessionIds: [], consecutiveFailures: 1, maxAttempts: MAX }),
+    actual: planReconnect({ knownId: undefined, liveSessionIds: [] }),
     expected: { action: 'create' } as const,
-  });
-
-  assert({
-    given: 'the consecutive failures exceed the bounded budget, even with a live known id',
-    should: 'be fatal (never an infinite loop)',
-    actual: planReconnect({ knownId: 'sess-1', liveSessionIds: ['sess-1'], consecutiveFailures: MAX + 1, maxAttempts: MAX }),
-    expected: { action: 'fatal' } as const,
   });
 });
 
@@ -501,6 +492,28 @@ describe('openPtyShell', () => {
 
       expect(onExit).not.toHaveBeenCalled();
       expect(sprite.attachSession.mock.calls.length).toBeGreaterThan(5);
+    });
+
+    it('given the Sprite SDK throws while (re)opening a session, retries within the budget and recovers', async () => {
+      // sprite.createSession/attachSession can throw synchronously (e.g. the SDK
+      // fails to construct the WebSocket). That must be a bounded retry, not an
+      // unhandled rejection that strands the terminal.
+      const initial = buildFakeCommand();
+      const recovered = buildFakeCommand();
+      const sprite = buildFakeSprite(initial, { sessions: [] });
+      sprite.createSession
+        .mockReturnValueOnce(initial)
+        .mockImplementationOnce(() => { throw new Error('failed to open WebSocket'); })
+        .mockReturnValueOnce(recovered);
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      initial._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(2000); // throwing attempt, then the retry
+
+      expect(sprite.createSession).toHaveBeenCalledTimes(3); // initial + throw + recovery
+      expect(onExit).not.toHaveBeenCalled();
+      recovered._stdout.emit('data', 'back\r\n'); // the recovered session is the live one
     });
 
     it('given the shell was killed, a trailing exit does not double-fire onExit', () => {
