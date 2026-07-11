@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  EMPTY_SEEN,
   MAX_PENDING_BYTES,
   MAX_SEEN_BYTES,
   flushReplay,
   freshReplayState,
+  materializeSeen,
   planReplayEmission,
-  trackForwarded,
+  rememberDelivered,
 } from '../replay-dedupe';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
@@ -118,12 +120,12 @@ describe('planReplayEmission corroboration (pure)', () => {
   const lines = (prefix: string, n: number) =>
     Buffer.from(Array.from({ length: n }, (_, i) => `${prefix} ${i}\r\n`).join(''), 'utf8');
 
-  // A session with far more history than the 8 KiB anchor — the only shape in
-  // which a replay can be unalignable at all, and so the only one in which a
-  // false match is reachable.
+  const deliver = (...parts: Buffer[]) =>
+    materializeSeen(parts.reduce((tail, part) => rememberDelivered(tail, part), EMPTY_SEEN));
+
   const history = lines('history', 3000);
   const recent = lines('recent', 800);
-  const seen = trackForwarded(Buffer.alloc(0), Buffer.concat([history, recent]));
+  const seen = deliver(history, recent);
 
   it('given a genuine replay (history, then the anchor, then new output), should emit only the new output', () => {
     const replay = Buffer.concat([seen.subarray(1000), buf('brand new line\r\n')]);
@@ -134,12 +136,12 @@ describe('planReplayEmission corroboration (pure)', () => {
     expect(state.resolved).toBe(true);
   });
 
-  it('given an UNALIGNABLE replay in which the anchor later RECURS in live output, should suppress nothing', () => {
+  it('given an UNALIGNABLE replay in which the anchor RECURS in live output, should suppress nothing', () => {
     // The loss path: a repainting TUI reproduces the anchor's bytes verbatim. An
-    // unanchored search matches there — PAST the true boundary — and everything
-    // before it, including output the client has never seen, is dropped. The
-    // bytes in front of the recurrence are the gap output, not the history that
-    // precedes the anchor in the real stream, so the match must be rejected.
+    // unanchored search matches there — PAST the true boundary — and everything in
+    // front of it, including output the client has never seen, is dropped. What
+    // sits in front of the recurrence is the gap output, not the history that
+    // precedes the anchor in the real stream, so the match must be refused.
     const anchor = seen.subarray(seen.length - 8 * 1024);
     const neverSeen = lines('output the client never saw', 40);
     const replay = Buffer.concat([neverSeen, anchor, buf('after repaint\r\n')]);
@@ -152,14 +154,61 @@ describe('planReplayEmission corroboration (pure)', () => {
     expect(state.resolved).toBe(false);
     expect(state.pending.includes(neverSeen)).toBe(true);
   });
+
+  it('given a SHORT history (smaller than the anchor bound) and a recurring match, should still suppress nothing', () => {
+    // The same loss, in the shape where there is no history to corroborate WITH:
+    // when `seen` is smaller than the anchor bound, the anchor IS the whole of
+    // `seen`. A depth-zero "corroboration" would wave every match through — so an
+    // unprovable match must be refused, not trusted by default.
+    const shortSeen = deliver(buf('$ npm run build\r\nBuilding...\r\n'));
+    const neverSeen = buf('ERROR: out of memory\r\n');
+    const replay = Buffer.concat([neverSeen, shortSeen, buf('after repaint\r\n')]);
+
+    const { emit, state } = planReplayEmission({ seen: shortSeen, chunk: replay, state: freshReplayState() });
+
+    expect(emit.length).toBe(0);
+    expect(state.resolved).toBe(false);
+    expect(state.pending.includes(neverSeen)).toBe(true);
+  });
+
+  it('given a short history and a replay that STARTS with it, should still dedupe (the common idle case)', () => {
+    // The flip side of the case above: a match at offset 0 suppresses nothing but
+    // the anchor itself, which matched — so it needs no corroboration, and refusing
+    // it would reprint the banner on every watchdog cycle. This is the bug the PR
+    // exists to fix, and it must survive the guard that fixes the loss path.
+    const shortSeen = deliver(buf('$ npm run build\r\nBuilding...\r\n'));
+    const replay = Buffer.concat([shortSeen, buf('done in 3s\r\n')]);
+
+    const { emit, state } = planReplayEmission({ seen: shortSeen, chunk: replay, state: freshReplayState() });
+
+    expect(emit.toString('utf8')).toBe('done in 3s\r\n');
+    expect(state.resolved).toBe(true);
+  });
+
+  it('given self-similar output that puts the anchor at thousands of offsets, should give up rather than scan them all', () => {
+    // The sandbox chooses these bytes and this runs on the shared realtime event
+    // loop, so an unbounded candidate scan — each candidate costing a multi-KiB
+    // compare — is a DoS surface. Every match here is uncorroborated (the padding
+    // is not preceded by our history), so the search must bail, not grind.
+    const padded = deliver(lines('history', 1000), Buffer.alloc(16 * 1024, 0x20));
+    const chunk = Buffer.concat([buf('unseen output\r\n'), Buffer.alloc(200 * 1024, 0x20)]);
+
+    const start = process.hrtime.bigint();
+    const { emit, state } = planReplayEmission({ seen: padded, chunk, state: freshReplayState() });
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+    expect(emit.length).toBe(0);
+    expect(state.resolved).toBe(false); // unprovable → held, then flushed verbatim
+    expect(elapsedMs).toBeLessThan(250);
+  });
 });
 
 describe('flushReplay (pure)', () => {
   assert({
-    given: 'buffered bytes that overlap the anchor nowhere (a replay of output we never forwarded)',
+    given: 'buffered bytes the search could never align',
     should: 'emit them all — never hold real output hostage',
     actual: (() => {
-      const { emit, state } = flushReplay(buf(BANNER), { pending: buf('unaligned output\r\n'), resolved: false });
+      const { emit, state } = flushReplay({ pending: buf('unaligned output\r\n'), resolved: false });
       return { emit: emit.toString('utf8'), resolved: state.resolved };
     })(),
     expected: { emit: 'unaligned output\r\n', resolved: true },
@@ -169,55 +218,57 @@ describe('flushReplay (pure)', () => {
     given: 'an already-resolved state',
     should: 'emit nothing',
     actual: (() => {
-      const { emit } = flushReplay(buf(BANNER), { pending: Buffer.alloc(0), resolved: true });
+      const { emit } = flushReplay({ pending: Buffer.alloc(0), resolved: true });
       return emit.toString('utf8');
     })(),
     expected: '',
   });
 
-  // The server's scrollback is a buffer of unspecified size. If it reaches back
-  // LESS far than our anchor, the anchor never appears whole in the replay and
-  // `planReplayEmission` cannot align it — but the replay's head is still a
-  // suffix of the anchor, and the client already has every byte of it.
-  it('given a replay window that opens part-way INTO the anchor (a scrollback shorter than 8 KiB), should still trim the part the client has', () => {
-    const forwarded = Buffer.concat([Buffer.alloc(200, 0x61), buf('\r\nsandbox:~$ ')]); // ...aaa\r\nsandbox:~$
-    const seen = trackForwarded(Buffer.alloc(0), forwarded);
-    // The server only kept the last 100 bytes of what we forwarded, then the shell
-    // printed something new.
-    const replay = Buffer.concat([forwarded.subarray(forwarded.length - 100), buf('date\r\n')]);
+  it('given output that REPEATS what the client last saw, should emit it rather than mistake it for a replay', () => {
+    // A heartbeat line, a progress bar, a `watch` loop: the new bytes are identical
+    // to the tail of what we forwarded. Trimming a matching head off the flush
+    // would delete a line the client never saw — indistinguishable, from content
+    // alone, from the replay it looks like. Duplication is survivable; this is not.
+    const heartbeat = '########## build heartbeat ##########\r\n';
+    const { emit } = flushReplay({ pending: buf(heartbeat), resolved: false });
 
-    const { emit, state } = flushReplay(seen, { pending: replay, resolved: false });
-
-    expect(emit.toString('utf8')).toBe('date\r\n');
-    expect(state.resolved).toBe(true);
-  });
-
-  it('given only a trivially short coincidental overlap, should NOT trim it (a bare newline matches almost anything)', () => {
-    const { emit } = flushReplay(buf('...done\r\n'), { pending: buf('\r\nfresh output\r\n'), resolved: false });
-
-    expect(emit.toString('utf8')).toBe('\r\nfresh output\r\n');
+    expect(emit.toString('utf8')).toBe(heartbeat);
   });
 });
 
-describe('trackForwarded (pure)', () => {
+describe('rememberDelivered (pure)', () => {
   assert({
     given: 'bytes delivered to the client',
-    should: 'append them to the anchor tail',
-    actual: trackForwarded(buf('abc'), buf('def')).toString('utf8'),
+    should: 'append them to the retained history',
+    actual: materializeSeen(rememberDelivered(rememberDelivered(EMPTY_SEEN, buf('abc')), buf('def'))).toString('utf8'),
     expected: 'abcdef',
   });
 
   assert({
-    given: 'a fresh session (the anchor is reset to empty)',
-    should: 'start the tail from the new output',
-    actual: trackForwarded(Buffer.alloc(0), buf('new shell\r\n')).toString('utf8'),
+    given: 'a fresh session (the history is reset to empty)',
+    should: 'start the history from the new output',
+    actual: materializeSeen(rememberDelivered(EMPTY_SEEN, buf('new shell\r\n'))).toString('utf8'),
     expected: 'new shell\r\n',
   });
 
   it('given more forwarded bytes than the retention bound, should keep only the most recent ones (bounded memory)', () => {
-    const tail = trackForwarded(Buffer.alloc(MAX_SEEN_BYTES, 0x61), buf('END'));
+    let tail = rememberDelivered(EMPTY_SEEN, Buffer.alloc(MAX_SEEN_BYTES, 0x61));
+    tail = rememberDelivered(tail, buf('END'));
+    const seen = materializeSeen(tail);
 
-    expect(tail.length).toBe(MAX_SEEN_BYTES);
-    expect(tail.subarray(tail.length - 3).toString('utf8')).toBe('END');
+    expect(tail.bytes).toBeLessThanOrEqual(MAX_SEEN_BYTES + 3);
+    expect(seen.subarray(seen.length - 3).toString('utf8')).toBe('END');
+  });
+
+  it('given many small chunks, should not re-copy the whole history for each one', () => {
+    // A 64 KiB memcpy per delivered chunk is a real cost for a shell that writes in
+    // small bursts: the history is kept as chunks and joined once per attach.
+    let tail = EMPTY_SEEN;
+    const start = process.hrtime.bigint();
+    for (let i = 0; i < 20_000; i += 1) tail = rememberDelivered(tail, buf('x'.repeat(100)));
+    const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
+
+    expect(tail.bytes).toBeLessThanOrEqual(MAX_SEEN_BYTES + 100);
+    expect(elapsedMs).toBeLessThan(500);
   });
 });

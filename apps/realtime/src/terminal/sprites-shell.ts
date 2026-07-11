@@ -6,11 +6,14 @@ import type {
 import { readSessionInfoId } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import {
+  EMPTY_SEEN,
   flushReplay,
   freshReplayState,
+  materializeSeen,
   planReplayEmission,
-  trackForwarded,
+  rememberDelivered,
   type ReplayState,
+  type SeenTail,
 } from './replay-dedupe';
 
 /**
@@ -243,16 +246,16 @@ export function openPtyShell({
   // counter, an id we never learn produces a fresh orphan on every keepalive
   // cycle, forever.
   let abandonedUnnamedSessions = 0;
-  // The tail of what this client has actually been shown — the anchor each attach
-  // matches its replayed scrollback against, so a transparent reconnect delivers
-  // only the part the client is missing (see `replay-dedupe`). Empty means
-  // "nothing to dedupe against": a fresh viewer, or a brand-new shell — either
-  // way every replayed byte is new to this xterm and passes straight through,
-  // which is what keeps the cold-attach scrollback UX intact.
-  let forwardedTail: Buffer = Buffer.alloc(0);
-  // Cancels the replay-settle timer of whichever command is currently wired, so a
+  // The tail of what this client has actually been shown — what each attach matches
+  // its replayed scrollback against, so a transparent reconnect delivers only the
+  // part the client is missing (see `replay-dedupe`). Empty means "nothing to dedupe
+  // against": a fresh viewer, or a brand-new shell — either way every replayed byte
+  // is new to this xterm and passes straight through, which is what keeps the
+  // cold-attach scrollback UX intact.
+  let seenTail: SeenTail = EMPTY_SEEN;
+  // Cancels the replay-window timers of whichever command is currently wired, so a
   // teardown doesn't leave one armed against a shell nobody is watching any more.
-  let cancelActiveSettle: () => void = () => {};
+  let cancelReplayTimers: () => void = () => {};
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -280,15 +283,15 @@ export function openPtyShell({
     // the structural boundary the reconnect keys on — see the 'error' handler.
     let opened = false;
 
-    // Every attach REPLAYS the session's scrollback (sprites.dev/api). Frozen at
-    // wire time so the history can't shift underneath a replay that is still being
-    // classified, and per-command so each (re)establishment gets a clean slate.
-    const seen = forwardedTail;
+    // Every attach REPLAYS the session's scrollback (sprites.dev/api). Materialized
+    // once, here, so the history can't shift underneath a replay that is still being
+    // classified — and per-command, so each (re)establishment gets a clean slate.
+    const seen = materializeSeen(seenTail);
     let replay: ReplayState = freshReplayState();
-    // The replay window is closed by whichever of these fires first: a quiet gap
-    // (`settleTimer`, re-armed per chunk) or the hard deadline (`windowTimer`,
-    // armed once at the burst's first byte and never extended) — see the two
-    // constants. MAX_PENDING_BYTES closes it from the byte side.
+    // The replay window closes on whichever comes first: a quiet gap (`settleTimer`,
+    // re-armed per chunk) or the hard deadline (`windowTimer`, armed at the first
+    // chunk we have to hold and never extended) — see the two constants.
+    // MAX_PENDING_BYTES closes it from the byte side.
     let settleTimer: ReturnType<typeof setTimeout> | undefined;
     let windowTimer: ReturnType<typeof setTimeout> | undefined;
     const cancelTimers = () => {
@@ -297,49 +300,50 @@ export function openPtyShell({
       settleTimer = undefined;
       windowTimer = undefined;
     };
-    cancelActiveSettle = cancelTimers;
+    cancelReplayTimers = cancelTimers;
     const deliver = (bytes: Buffer) => {
       if (bytes.length === 0) return;
       // Bytes the client HAS are the bytes the next reconnect must not repeat.
-      forwardedTail = trackForwarded(forwardedTail, bytes);
+      seenTail = rememberDelivered(seenTail, bytes);
       onOutput(bytes.toString('utf8'));
     };
-    /** Close the replay window: emit what we buffered, minus any of it the client provably has. */
-    const settleReplay = () => {
+    /** Close the replay window: hand over whatever we were still holding. */
+    const closeReplayWindow = () => {
       cancelTimers();
       if (closed) return;
-      const { emit, state } = flushReplay(seen, replay);
+      const { emit, state } = flushReplay(replay);
       replay = state;
       deliver(emit);
     };
 
     cmd.stdout.on('data', (chunk) => {
-      // A dead command can still drain chunks its stream had buffered when the
-      // socket errored. They are already in the session's scrollback, so the
-      // reattach replays them — forwarding them here would print them twice AND
-      // move the anchor out from under the attach that is about to match it.
-      if (stale) return;
+      // A dead socket can still drain chunks its stream had buffered. Forward them:
+      // the window is already closed (the 'error' handler closes it), so they pass
+      // straight through, and dropping them would lose the dying shell's last words
+      // whenever the reconnect creates a fresh session instead of reattaching.
+      if (stale) { deliver(toBuf(chunk)); return; }
       // Any inbound data proves the connection recovered; reset the failure budget.
       opened = true;
       consecutiveFailures = 0;
-      if (replay.resolved) { deliver(toBuf(chunk)); return; }
 
-      if (settleTimer !== undefined) clearTimeout(settleTimer);
-      settleTimer = undefined;
       const { emit, state } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
       deliver(emit);
       if (replay.resolved) { cancelTimers(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over:
-      // on the next quiet gap, and on a deadline that a chatty shell cannot push
-      // out by talking.
-      settleTimer = setTimeout(settleReplay, REPLAY_SETTLE_MS);
-      if (windowTimer === undefined) windowTimer = setTimeout(settleReplay, REPLAY_WINDOW_MS);
+      // on the next quiet gap, and on a deadline a chatty shell cannot push out by
+      // talking.
+      if (settleTimer !== undefined) clearTimeout(settleTimer);
+      settleTimer = setTimeout(closeReplayWindow, REPLAY_SETTLE_MS);
+      if (windowTimer === undefined) windowTimer = setTimeout(closeReplayWindow, REPLAY_WINDOW_MS);
     });
     cmd.stderr.on('data', (chunk) => {
       opened = true;
-      // Not deduped, and deliberately not part of the anchor: the replay is a
-      // stdout stream, and on a tty the shell's stderr is folded into it anyway.
+      // Never deduped — the replay is a stdout stream — but it must not JUMP the
+      // stdout we are still holding: close the window first so ordering on the wire
+      // is preserved. On a tty the shell's stderr is folded into stdout anyway, so
+      // this listener is defensive rather than hot.
+      closeReplayWindow();
       onOutput(toStr(chunk));
     });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
@@ -361,7 +365,7 @@ export function openPtyShell({
       if (stale) return;
       // The shell's last words may still be sitting in the replay buffer: there is
       // no reconnect coming to re-deliver them, so hand them over before the exit.
-      settleReplay();
+      closeReplayWindow();
       fatal(code ?? -1);
     });
     // A single failed open emits 'error' more than once on the SAME command — the
@@ -382,9 +386,9 @@ export function openPtyShell({
       // (the session died with the Sprite), those bytes, typically the dying
       // shell's last words, are gone from the client and from the app-side
       // scrollback for good. Emitting them cannot lose anything, and cannot
-      // duplicate anything either: they join the anchor, so if a reattach DOES
-      // replay them, that replay dedupes against them.
-      settleReplay();
+      // duplicate anything either: they join `seen`, so if a reattach DOES replay
+      // them, that replay dedupes against them.
+      closeReplayWindow();
       stale = true;
       // Remember WHY this command died, STRUCTURALLY: if it never reported an open
       // (no 'spawn', no byte of output), its socket never came up, so the session
@@ -414,10 +418,10 @@ export function openPtyShell({
   function launchFreshSession(): void {
     currentSessionId = undefined;
     // A brand-new shell shares no history with the one the client was watching, so
-    // there is nothing of ITS output on the client's screen: clear the anchor, or
+    // there is nothing of ITS output on the client's screen: clear the history, or
     // the replacement's opening banner would be mistaken for a replay of the dead
     // session's and suppressed.
-    forwardedTail = Buffer.alloc(0);
+    seenTail = EMPTY_SEEN;
     const gen = (sessionGeneration += 1);
     current = sprite.createSession(command, args, {
       tty: true,
@@ -553,6 +557,6 @@ export function openPtyShell({
   return {
     write: (data) => { if (!closed) current.stdin?.write(data); },
     resize: (c, r) => { lastCols = c; lastRows = r; if (!closed) current.resize?.(c, r); },
-    kill: () => { closed = true; cancelActiveSettle(); current.kill('SIGKILL'); },
+    kill: () => { closed = true; cancelReplayTimers(); current.kill('SIGKILL'); },
   };
 }
