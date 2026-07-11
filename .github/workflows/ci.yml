@@ -66,20 +66,7 @@ jobs:
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bunx turbo run test:coverage --filter='!@pagespace/processor' --filter='!web'
-
-      # apps/web runs its full suite for correctness but WITHOUT v8 coverage.
-      # The auth-barrel elimination made 285 test files load real modules (the
-      # run executes ~1500), and while the threads pool (apps/web/vitest.config)
-      # bounds the test run so every test passes, full v8 coverage of that graph
-      # still exceeds a single worker's default heap on the 4-core/16 GB runner —
-      # and worker_threads expose no way to raise or recycle that heap. So web is
-      # gated on test correctness here (every web test runs and must pass);
-      # web coverage-% is measured locally (`bun run --filter web test:coverage`).
-      - name: Run web tests (Node 24, no coverage — see note above)
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bunx turbo run test --filter='web'
+        run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
       # onnxruntime native bindings fail to initialize on Node 24, so test the
