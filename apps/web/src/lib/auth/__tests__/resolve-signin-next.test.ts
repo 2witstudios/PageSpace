@@ -143,4 +143,18 @@ describe('buildSigninRoute', () => {
   ])('degrades to a bare /auth/signin for %s', (_label, path) => {
     expect(buildSigninRoute(path)).toBe('/auth/signin');
   });
+
+  // iOS dispatches auth:expired on EVERY foreground-after-5min (auth-fetch.ts, unguarded),
+  // so a user already parked on /auth/signin?next=X will hit this again. Stripping the
+  // next= out from under them on the second pass would lose the place the first pass saved
+  // — which is the iOS path, i.e. exactly the one this PR exists for.
+  it('is idempotent: a repeat expiry on the signin page keeps the next= already captured', () => {
+    const first = buildSigninRoute('/dashboard/drv_abc?tab=chat');
+    expect(first).toBe('/auth/signin?next=%2Fdashboard%2Fdrv_abc%3Ftab%3Dchat');
+
+    // Second auth:expired, now sitting on the URL the first one produced.
+    expect(buildSigninRoute(first)).toBe(first);
+    // And a third, to be sure it is a fixed point rather than merely surviving once.
+    expect(buildSigninRoute(buildSigninRoute(first))).toBe(first);
+  });
 });

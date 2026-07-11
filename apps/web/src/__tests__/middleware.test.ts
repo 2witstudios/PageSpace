@@ -255,6 +255,26 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
     },
   );
 
+  // The last hydration hole: a `next=` on a /dashboard URL is visible to the client (which
+  // reads the browser URL) but not to the server (which renders the bare rewrite
+  // destination), and nextPath reaches the DOM. Nothing in the app produces such a URL, but
+  // a crafted one must not be able to desync the two renders — so it is redirected away
+  // first. Safe under the iOS shell: still under /dashboard, so it passes the prefix test.
+  it('redirects a /dashboard URL carrying a crafted next= to the same URL without it, rather than rewriting', async () => {
+    const response = await middleware(buildRequest('/dashboard/drv_abc?tab=chat&next=%2Fdashboard%2Fother'));
+
+    expect(response.status).toBe(307);
+    expect(rewriteTarget(response)).toBeNull();
+
+    const location = new URL(response.headers.get('location') as string);
+    // Redirected back to /dashboard (NOT to signin) — so it still prefix-matches
+    // server.url and the iOS shell will not punt it to Safari. And no `next` is left, so
+    // the follow-up request rewrites cleanly and cannot loop.
+    expect(location.pathname).toBe('/dashboard/drv_abc');
+    expect(location.searchParams.get('next')).toBeNull();
+    expect(location.searchParams.get('tab')).toBe('chat');
+  });
+
   it('still REDIRECTS an unauthenticated page request outside /dashboard, with next= preserved', async () => {
     const response = await middleware(buildRequest('/activate?user_code=ABCD-EFGH'));
 

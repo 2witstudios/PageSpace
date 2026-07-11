@@ -333,6 +333,19 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       }
 
       if (isShellEntryPath(pathname)) {
+        // A `next=` on a /dashboard URL is visible to the client (which reads the browser
+        // URL) but NOT to the server (which renders the bare rewrite destination), and
+        // nextPath reaches the DOM — so such a URL would desync the two renders. Nothing
+        // in the app produces one, but a hand-crafted one must not be able to provoke a
+        // hydration mismatch, so strip it with a redirect and let the clean URL rewrite.
+        // Safe under the iOS shell: the target is still under /dashboard, so it passes
+        // Capacitor's prefix test. No loop — the redirected URL has no `next` left.
+        if (req.nextUrl.searchParams.has('next')) {
+          const clean = new URL(req.url);
+          clean.searchParams.delete('next');
+          return NextResponse.redirect(clean);
+        }
+
         // Bare /auth/signin, with no `next=` — see buildSigninUrl. The browser URL is
         // untouched by a rewrite, so it IS still the deep link and the client recovers it
         // from there; carrying it here as well would desync the server render from the

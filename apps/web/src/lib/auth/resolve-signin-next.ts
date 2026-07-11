@@ -67,6 +67,19 @@ export function resolveSigninNext(input: {
   return isAllowed(fallback) ? fallback : undefined;
 }
 
+const SIGNIN_PATH = '/auth/signin';
+
+/** The `next` already on a path, if it is same-origin. */
+function nextParamOf(path: string): string | null {
+  try {
+    const url = new URL(path, 'https://pagespace.invalid');
+    if (url.hostname !== 'pagespace.invalid') return null;
+    return url.searchParams.get('next');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The signin route to send a user to when their session dies under them, preserving where
  * they were so signin can put them back.
@@ -76,13 +89,20 @@ export function resolveSigninNext(input: {
  * nothing else gets the chance to attach `next=`. Without this the user is dropped on the
  * default dashboard afterwards, having lost their place.
  *
- * The destination is validated against the same allowlist as every other `next=`, so an
- * unusable one degrades to a bare signin rather than travelling on to be rejected there.
+ * Runs the current path back through `resolveSigninNext`, which makes it idempotent: iOS
+ * dispatches `auth:expired` on every foreground-after-5min (auth-fetch.ts, unguarded), so
+ * a user already parked on `/auth/signin?next=X` will hit this again — and must keep X
+ * rather than have it stripped out from under them. The destination is validated against
+ * the same allowlist as every other `next=`, so an unusable one (or signin itself, which
+ * would be a self-referential loop) degrades to a bare signin.
  */
 export function buildSigninRoute(currentPath: string | null | undefined): string {
-  const next = currentPath ? stripNextParam(currentPath) : undefined;
+  if (!currentPath) return SIGNIN_PATH;
 
-  return isAllowed(next)
-    ? `/auth/signin?next=${encodeURIComponent(next as string)}`
-    : '/auth/signin';
+  const next = resolveSigninNext({
+    paramNext: nextParamOf(currentPath),
+    browserPath: currentPath,
+  });
+
+  return next ? `${SIGNIN_PATH}?next=${encodeURIComponent(next)}` : SIGNIN_PATH;
 }
