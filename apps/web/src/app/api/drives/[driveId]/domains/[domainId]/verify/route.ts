@@ -13,6 +13,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
+import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -68,7 +69,7 @@ export async function POST(
     // content stops being served. Both best-effort and fire-and-forget: a
     // storage failure must never fail the verify response.
     if (nextStatus === 'verified') {
-      mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
+      mirrorDriveToCustomHost(driveId, domain.hostname, renderDomainNotFoundOverride).catch((err) => {
         loggers.api.warn('Failed to mirror drive to custom host on verify', {
           driveId,
           hostname: domain.hostname,

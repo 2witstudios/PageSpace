@@ -276,7 +276,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     // Remove the page artifact (and root mirror) from every active custom-domain
     // host prefix before deleting the DB row. Best-effort: failures are logged
     // internally and do not block the unpublish.
-    await deletePageFromCustomHosts({ driveId: row.driveId, path: row.path, isHomePage });
+    await deletePageFromCustomHosts({ driveId: row.driveId, pageId, path: row.path, isHomePage });
     await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
 
     // Rebuild the drive's sitemap so it no longer advertises the route we just

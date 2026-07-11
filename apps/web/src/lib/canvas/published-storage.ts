@@ -168,10 +168,11 @@ export async function putPublishedArtifact(params: {
 }
 
 /**
- * Site-level files served at the root of every published drive. Unlike page
- * artifacts (`.../<path>/index.html`) these live at a fixed, literal key directly
- * under the subdomain prefix because the edge serves them by exact name, bypassing
- * the `<path>/index.html` rewrite (see the deploy-repo Caddy snippet).
+ * Site-level files served at the root of every published drive OR custom-domain
+ * host. Unlike page artifacts (`.../<path>/index.html`) these live at a fixed,
+ * literal key directly under the prefix because the edge serves them by exact
+ * name, bypassing the `<path>/index.html` rewrite (see the deploy-repo Caddy
+ * snippet).
  */
 const SITE_FILE_CONTENT_TYPES = {
   'robots.txt': 'text/plain; charset=utf-8',
@@ -181,23 +182,29 @@ const SITE_FILE_CONTENT_TYPES = {
 
 export type PublishedSiteFile = keyof typeof SITE_FILE_CONTENT_TYPES;
 
-/** Build the S3 object key for a drive's site-level file (`published/<sub>/<file>`). */
-export function buildSiteFileKey(subdomain: string, file: PublishedSiteFile): string {
-  return `published/${subdomain}/${file}`;
+/**
+ * Build the S3 object key for a site-level file (`published/<prefix>/<file>`).
+ * `prefix` is either a drive's subdomain or a custom-domain hostname — both
+ * are just directory prefixes under `published/` from the storage layer's
+ * point of view.
+ */
+export function buildSiteFileKey(prefix: string, file: PublishedSiteFile): string {
+  return `published/${prefix}/${file}`;
 }
 
 /**
- * Upload a site-level file (robots.txt / sitemap.xml / 404.html) for a drive to
- * the public publish bucket, with the correct content type for its kind. Kept
- * separate from `putPublishedArtifact` so page-artifact accounting (key layout,
- * call counts) is unaffected by site-file writes.
+ * Upload a site-level file (robots.txt / sitemap.xml / 404.html) to the public
+ * publish bucket under the given prefix (drive subdomain or custom-domain
+ * host), with the correct content type for its kind. Kept separate from
+ * `putPublishedArtifact` so page-artifact accounting (key layout, call counts)
+ * is unaffected by site-file writes.
  */
 export async function putPublishedSiteFile(params: {
-  subdomain: string;
+  prefix: string;
   file: PublishedSiteFile;
   body: string;
 }): Promise<{ key: string }> {
-  const key = buildSiteFileKey(params.subdomain, params.file);
+  const key = buildSiteFileKey(params.prefix, params.file);
 
   await getPublishClient().send(
     new PutObjectCommand({
