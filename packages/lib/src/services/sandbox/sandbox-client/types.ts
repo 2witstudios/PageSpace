@@ -10,8 +10,7 @@
  * layer.
  */
 
-import type { SandboxClient, SandboxHandle } from '../machine-session-manager';
-import type { SandboxCreateOptions } from '../sandbox-options';
+import type { SandboxClient, SandboxHandle, SandboxGetOrCreateArgs } from '../machine-session-manager';
 
 /** Result of a single command run inside the sandbox. */
 export interface SandboxRunResult {
@@ -57,6 +56,6 @@ export interface ExecutableSandbox extends SandboxHandle {
 
 /** Extends the PR2 lifecycle seam so one client serves both layers. */
 export interface ExecSandboxClient extends SandboxClient {
-  getOrCreate(args: { name: string; options: SandboxCreateOptions }): Promise<ExecutableSandbox>;
+  getOrCreate(args: SandboxGetOrCreateArgs): Promise<ExecutableSandbox>;
   get(args: { sandboxId: string }): Promise<ExecutableSandbox | null>;
 }

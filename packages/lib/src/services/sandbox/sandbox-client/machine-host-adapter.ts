@@ -31,6 +31,7 @@ import type { ExecSandboxClient, ExecutableSandbox } from './types';
 export function adaptMachineHandleToExecutableSandbox(handle: MachineHandle): ExecutableSandbox {
   return {
     sandboxId: handle.machineId,
+    egressPolicyToken: handle.egressPolicyToken,
     runCommand: (args) => handle.exec(args),
     writeFiles: (files) => handle.writeFiles(files),
     readFileToBuffer: (args) => handle.readFile(args),
@@ -47,8 +48,10 @@ export function createExecClientFromMachineHost(
   substrate: MachineSubstrateSpec,
 ): ExecSandboxClient {
   return {
-    async getOrCreate({ name, options }) {
-      return adaptMachineHandleToExecutableSandbox(await host.provision({ name, substrate, options }));
+    async getOrCreate({ name, options, appliedEgressToken }) {
+      return adaptMachineHandleToExecutableSandbox(
+        await host.provision({ name, substrate, options, appliedEgressToken }),
+      );
     },
     async get({ sandboxId }) {
       const handle = await host.attach({ machineId: sandboxId });

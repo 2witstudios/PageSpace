@@ -32,9 +32,18 @@ import {
   type MachineSessionRecord,
   type MachineSessionStore,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { egressLockdownToken, hashSandboxEgressPolicy } from '@pagespace/lib/services/sandbox/egress-lockdown';
+import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { resolveMachineSandbox } from '../agent-terminal-access';
 
 const SECRET = 'test-secret';
+/** The Sprite instance id the fake control plane reports for a resumed VM. */
+const SPRITE_INSTANCE_ID = 'sprite-instance-1';
+/** The lockdown token the driver proves for that VM under the machine's own (open-egress) policy. */
+const MACHINE_POLICY_TOKEN = egressLockdownToken({
+  spriteId: SPRITE_INSTANCE_ID,
+  policyHash: hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'machine' })),
+});
 const MACHINE_ID = 'machine-page-1';
 const DRIVE_ID = 'drive-1';
 const TENANT_ID = 'tenant-1';
@@ -60,6 +69,8 @@ interface SpriteCalls {
   createSprite: string[];
   /** Every exec spawned, as `[file, ...args]` — a `sh -c :` here is a no-op wake exec. */
   spawned: string[][];
+  /** Every egress-policy push. A warm resume under an unchanged policy must issue none. */
+  policies: string[];
 }
 
 /**
@@ -86,6 +97,9 @@ function noopCommand(): SpriteCommandLike {
 function fakeSprite(name: string, calls: SpriteCalls): SpriteInstanceLike {
   return {
     name,
+    // The platform's instance id — what the egress record is keyed on, so a
+    // replacement VM under the same name never inherits the old proof.
+    id: SPRITE_INSTANCE_ID,
     spawn: (file: string, args: string[]) => {
       calls.spawned.push([file, ...args]);
       return noopCommand();
@@ -97,7 +111,9 @@ function fakeSprite(name: string, calls: SpriteCalls): SpriteInstanceLike {
     attachSession: vi.fn(),
     listSessions: vi.fn(),
     filesystem: vi.fn(),
-    updateNetworkPolicy: vi.fn(),
+    updateNetworkPolicy: async () => {
+      calls.policies.push(name);
+    },
     destroy: vi.fn(),
   } as unknown as SpriteInstanceLike;
 }
@@ -148,7 +164,7 @@ async function runColdConnect({
   resumed: boolean;
   lastActiveAt?: Date;
 }) {
-  const calls: SpriteCalls = { getSprite: [], createSprite: [], spawned: [] };
+  const calls: SpriteCalls = { getSprite: [], createSprite: [], spawned: [], policies: [] };
   const existing = new Set<string>(resumed ? [SPRITE_NAME] : []);
 
   // One cache per connect — the whole point of the leaf.
@@ -162,6 +178,10 @@ async function runColdConnect({
           sandboxId: SPRITE_NAME,
           userId: USER_ID,
           lastActiveAt: lastActiveAt ?? new Date(),
+          // Proof that THIS VM was locked down under THIS policy, recorded by the
+          // acquire that provisioned it. Still valid, so this connect must NOT
+          // re-push the policy (the Sprite's policy file is persistent).
+          egressPolicyToken: MACHINE_POLICY_TOKEN,
         }
       : null,
   );
@@ -263,6 +283,20 @@ describe('cold connect — Sprite control-plane budget', () => {
     });
   });
 
+  it('given a RESUMED sprite under an unchanged policy, should push NO egress policy and run NO mkdir', async () => {
+    const { calls } = await runColdConnect({ resumed: true });
+
+    assert({
+      given: 'a resumed Sprite whose recorded policy hash still matches',
+      should: 'skip the network-policy push and the SANDBOX_ROOT mkdir (both are persistent)',
+      actual: {
+        policies: calls.policies.length,
+        mkdirs: calls.spawned.filter((cmd) => cmd[0] === 'mkdir').length,
+      },
+      expected: { policies: 0, mkdirs: 0 },
+    });
+  });
+
   it('given a FRESH sprite (no session yet), should probe once, create it, and serve the launch handle from that create', async () => {
     const { calls, sprite } = await runColdConnect({ resumed: false });
 
@@ -278,6 +312,16 @@ describe('cold connect — Sprite control-plane budget', () => {
       should: 'hand the launch path the created handle without re-reading it',
       actual: sprite.name,
       expected: SPRITE_NAME,
+    });
+
+    assert({
+      given: 'a freshly created Sprite (platform default = open egress)',
+      should: 'lock it down and create the sandbox root exactly once',
+      actual: {
+        policies: calls.policies.length,
+        mkdirs: calls.spawned.filter((cmd) => cmd[0] === 'mkdir').length,
+      },
+      expected: { policies: 1, mkdirs: 1 },
     });
   });
 });
