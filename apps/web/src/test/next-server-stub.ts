@@ -11,6 +11,19 @@ class NextResponseStub extends Response {
     headers.set('Location', url.toString());
     return new NextResponseStub(null, { status, headers });
   }
+
+  // Models what the edge runtime actually emits for a rewrite: a 200 whose
+  // destination travels in the x-middleware-rewrite header, NOT a redirect.
+  // The `request` init (used to forward the nonce/CSP request headers) has no
+  // observable effect on the response, so the stub accepts and ignores it.
+  static rewrite(
+    destination: string | URL,
+    init?: { request?: { headers?: Headers } },
+  ) {
+    void init;
+    const headers = new Headers({ 'x-middleware-rewrite': destination.toString() });
+    return new NextResponseStub(null, { status: 200, headers });
+  }
 }
 
 export const NextResponse = NextResponseStub;

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
 import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
+import { setAppNavigator } from '@/lib/navigation/app-navigator';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
 
 // Module-level flag to prevent concurrent lazy device registration attempts
@@ -286,6 +287,15 @@ export function useAuth(): {
     // This prevents duplicate event listeners when multiple components use useAuth
     authStoreHelpers.initializeEventListeners();
   }, []); // Empty dependency array ensures this runs only once
+
+  // Hand the client router to the store's global auth:expired listener, which
+  // has no React context of its own. It must route rather than hard-navigate,
+  // or the iOS shell punts the signin page to Safari and blanks the WebView.
+  // Not cleared on unmount: useAuth has many concurrent instances, and one of
+  // them unmounting must not strip the navigator out from under the others.
+  useEffect(() => {
+    setAppNavigator((path) => router.replace(path));
+  }, [router]);
 
   return {
     user,
