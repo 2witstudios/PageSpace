@@ -297,6 +297,58 @@ describe('buildAgentTerminalCheckAuth', () => {
     });
   });
 
+  it('denies with page_not_found (skipping canRunCode + drive lookup) when the machine page is missing', async () => {
+    const sandbox = sandboxSpy(async () => resolvedOk);
+    let canRunCodeCalls = 0;
+    let driveLookups = 0;
+    const { deps } = buildDeps({
+      getPageDriveId: async () => undefined,
+      canRunCode: async () => {
+        canRunCodeCalls += 1;
+        return { ok: true };
+      },
+      getDriveAndUser: async () => {
+        driveLookups += 1;
+        return { driveRow: { ownerId: 'payer-1' }, userRow: undefined };
+      },
+      resolveSandbox: sandbox.fn,
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'a missing machine page row',
+      should: 'deny with page_not_found without probing canRunCode, the drive, or a Sprite',
+      actual: { result, canRunCodeCalls, driveLookups, spriteCalls: sandbox.getSpriteCalls.length },
+      expected: { result: { ok: false, reason: 'page_not_found' }, canRunCodeCalls: 0, driveLookups: 0, spriteCalls: 0 },
+    });
+  });
+
+  it('releases the slot and logs a plain denial when sandbox resolution fails for a non-provision reason', async () => {
+    let releases = 0;
+    const denials: Array<{ reason: string }> = [];
+    const { deps } = buildDeps({
+      releaseSlot: () => {
+        releases += 1;
+      },
+      resolveSandbox: async () => ({ ok: false, reason: 'not_found' }),
+      logDenied: (reason) => {
+        denials.push({ reason });
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'ghost' });
+
+    assert({
+      given: 'a read-only sandbox resolution denial (not_found) after the slot was reserved',
+      should: 'release the slot, log the denial, and return the reason',
+      actual: { result, releases, denials },
+      expected: { result: { ok: false, reason: 'not_found' }, releases: 1, denials: [{ reason: 'not_found' }] },
+    });
+  });
+
   it('returns a fully-populated authorization on the happy path', async () => {
     const { deps } = buildDeps();
     const checkAuth = buildAgentTerminalCheckAuth(deps);
@@ -334,6 +386,32 @@ describe('buildAgentTerminalCheckAuth', () => {
         payerId: 'payer-1',
         sprite: fakeSprite,
       },
+    });
+  });
+
+  it('defaults the tier to free and the actor email to empty when the user row is absent', async () => {
+    let acquiredTier: string | undefined;
+    let emailInput: string | null | undefined = 'unset';
+    const { deps } = buildDeps({
+      getDriveAndUser: async () => ({ driveRow: { ownerId: 'payer-1' }, userRow: undefined }),
+      acquireSlot: ({ tier }) => {
+        acquiredTier = tier;
+        return true;
+      },
+      resolveActorEmail: async (email) => {
+        emailInput = email;
+        return email ?? '';
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'an authorized connect whose user row is missing',
+      should: "still authorize, defaulting tier to 'free' and email to undefined→''",
+      actual: { ok: result.ok, acquiredTier, emailInput },
+      expected: { ok: true, acquiredTier: 'free', emailInput: undefined },
     });
   });
 
