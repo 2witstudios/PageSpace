@@ -1212,6 +1212,33 @@ describe('openPtyShell', () => {
       expect(shown.split(BANNER).length - 1).toBe(1);
     });
 
+    it('given a session with FAR more history than the anchor, still dedupes a full-ring replay', async () => {
+      // Every other shell test here uses a ~31-byte banner, i.e. `seen` smaller than
+      // MAX_ANCHOR_BYTES — the regime where the anchor is the whole of `seen` and
+      // trivially matches. Production leaves that regime within seconds. This is the
+      // real shape: a long-running session, an 8 KiB anchor taken from the tail of a
+      // 64 KiB history, and a replay carrying the whole ring.
+      const line = (p: string, n: number) => Array.from({ length: n }, (_, i) => `${p} ${i}\r\n`).join('');
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      const history = line('build step', 4000); // ~60 KiB, well past the 8 KiB anchor
+      cmd._stdout.emit('data', history);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      // The server replays its whole ring, then the shell prints one new line.
+      attachCmd._stdout.emit('data', `${history}$ echo done\r\n`);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput)).toEqual([history, '$ echo done\r\n']);
+    });
+
     it('given stdout arrives as Buffers (the production shape), dedupes on bytes just the same', async () => {
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();

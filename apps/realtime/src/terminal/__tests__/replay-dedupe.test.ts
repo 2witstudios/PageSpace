@@ -280,16 +280,25 @@ describe('rememberDelivered (pure)', () => {
     expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
   });
 
-  it('given many small chunks, should retain them AS chunks (not re-copy the whole history each time)', () => {
-    // Appending to one growing 64 KiB Buffer copies all of it, per chunk, forever —
-    // ~650x write amplification for a shell that writes in small bursts. The history
-    // is kept as the chunks it arrived in and joined once per attach, so the proof is
-    // structural: the retained history is many chunks, not one.
+  it('given a keystroke-sized delivery, should coalesce rather than mint a block per byte', () => {
+    // Both naive designs lose here. One growing 64 KiB buffer re-copies all of it per
+    // delivered chunk. A block per chunk is WORSE for an interactive shell — a
+    // keystroke echo is one byte, so the block count runs to tens of thousands and
+    // every append walks it. Small deliveries coalesce into the tail block, so the
+    // count stays in the low tens whatever the shell does, and both regimes are cheap.
     let tail = EMPTY_SEEN;
-    for (let i = 0; i < 2_000; i += 1) tail = rememberDelivered(tail, buf('x'.repeat(100)));
+    for (let i = 0; i < 80_000; i += 1) tail = rememberDelivered(tail, buf('x')); // past the bound
 
     expect(tail.bytes).toBe(MAX_SEEN_BYTES);
-    expect(tail.chunks.length).toBeGreaterThan(100);
+    expect(tail.chunks.length).toBeLessThanOrEqual(MAX_SEEN_BYTES / 4096 + 2);
     expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
+  });
+
+  it('given large deliveries, should keep them as separate blocks (no needless re-copy)', () => {
+    let tail = EMPTY_SEEN;
+    for (let i = 0; i < 8; i += 1) tail = rememberDelivered(tail, Buffer.alloc(8 * 1024, 0x61));
+
+    expect(tail.bytes).toBe(MAX_SEEN_BYTES);
+    expect(tail.chunks.length).toBe(8); // untouched, not merged
   });
 });

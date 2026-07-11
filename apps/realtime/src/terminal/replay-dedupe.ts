@@ -122,6 +122,12 @@ export type ReplayState = {
   /** Replayed bytes received in THIS attach that we can't yet classify. */
   pending: Buffer;
   /**
+   * How far into `pending` the anchor search has already looked. Every start
+   * position below this was tested and rejected, permanently — see the search in
+   * `planReplayEmission`.
+   */
+  scanned: number;
+  /**
    * The boundary has been decided (found, or given up on) — from here to the end
    * of this attach every byte is live output and passes straight through.
    */
@@ -129,7 +135,10 @@ export type ReplayState = {
 };
 
 /** A new attach starts with nothing buffered and nothing decided. */
-export const freshReplayState = (): ReplayState => ({ pending: EMPTY, resolved: false });
+export const freshReplayState = (): ReplayState => ({ pending: EMPTY, scanned: 0, resolved: false });
+
+/** Nothing left to classify: every later byte of this attach passes straight through. */
+const RESOLVED: ReplayState = { pending: EMPTY, scanned: 0, resolved: true };
 
 /**
  * The bytes of the REPLAYABLE stream (stdout) delivered to this client — what a
@@ -137,33 +146,50 @@ export const freshReplayState = (): ReplayState => ({ pending: EMPTY, resolved: 
  * replays stdout, so recording stderr would splice bytes into the history that no
  * replay contains, and the anchor would stop matching.
  *
- * Kept as the chunks it was delivered in rather than one growing buffer: appending
- * to a 64 KiB Buffer copies all of it, per chunk, forever, and a shell that writes
- * in small bursts would spend most of its time memcpying its own history.
- * Materialized once per attach instead.
+ * Held in blocks rather than one growing buffer, and materialized once per attach.
+ * Appending to a single 64 KiB buffer would copy all of it on every delivered
+ * chunk; keeping every chunk separately trades that for an O(block-count) rebuild
+ * per chunk, which is WORSE for an interactive shell (a keystroke echo is one byte,
+ * and the count would run to tens of thousands). So small deliveries coalesce into
+ * the tail block: the count stays in the low tens, and both regimes stay cheap.
  */
 export type SeenTail = { readonly chunks: readonly Buffer[]; readonly bytes: number };
 
 export const EMPTY_SEEN: SeenTail = { chunks: [], bytes: 0 };
 
 /**
+ * The size a tail block may reach by coalescing before a new block is started.
+ * Caps both the copy a small delivery pays (it rewrites at most this much) and the
+ * number of blocks the history can hold (MAX_SEEN_BYTES / this).
+ */
+const COALESCE_BLOCK_BYTES = 4 * 1024;
+
+/**
  * Record bytes just delivered to the client, dropping history past the bound.
  *
- * Trims TO the bound, never below it. Evicting whole chunks and stopping as soon as
- * the total fits would do exactly that: one chunk bigger than the bound — and this
+ * Trims TO the bound, never below it. Evicting whole blocks and stopping as soon as
+ * the total fits would do exactly that: one block bigger than the bound — and this
  * module produces them itself, since the give-up flush emits a single buffer of up
  * to MAX_PENDING_BYTES, and a cold attach can deliver an entire scrollback in one
  * frame — evicts everything before it, and then the next byte evicts THAT, leaving
  * the history equal to one prompt. The anchor would collapse with it, no replay
  * would ever align again, and the banner would reprint on every watchdog cycle: the
  * very bug this module exists to fix, resurrected by an input it produced. So an
- * oversized head chunk is SLICED, not dropped.
+ * oversized head block is SLICED, not dropped.
  */
 export function rememberDelivered(seen: SeenTail, emitted: Buffer): SeenTail {
   if (emitted.length === 0) return seen;
-  // Copy: `emitted` is typically a view into the pending buffer or Node's chunk
-  // pool, and keeping the view would pin that whole parent allocation.
-  const chunks = [...seen.chunks, Buffer.from(emitted)];
+  const chunks = seen.chunks.slice();
+  const tail = chunks[chunks.length - 1];
+  if (tail !== undefined && tail.length + emitted.length <= COALESCE_BLOCK_BYTES) {
+    // Small delivery (a keystroke echo, a prompt): fold it into the tail block
+    // rather than minting another one.
+    chunks[chunks.length - 1] = Buffer.concat([tail, emitted]);
+  } else {
+    // Copy: `emitted` is typically a view into the pending buffer or Node's chunk
+    // pool, and keeping the view would pin that whole parent allocation.
+    chunks.push(Buffer.from(emitted));
+  }
   let bytes = seen.bytes + emitted.length;
   while (bytes > MAX_SEEN_BYTES) {
     const head = chunks[0];
@@ -243,16 +269,26 @@ export function planReplayEmission({
     // `pending` is empty on every path that reaches here today (`seen` is frozen
     // for the life of an attach). Emitting it rather than assuming that keeps a
     // future caller who DOES recompute it from silently dropping buffered output.
-    return { emit: concat(state.pending, chunk), state: { pending: EMPTY, resolved: true } };
+    return { emit: concat(state.pending, chunk), state: RESOLVED };
   }
 
   const pending = concat(state.pending, chunk);
   const anchor = anchorOf(seen);
 
-  let at = pending.indexOf(anchor);
+  // Search only where a match could newly START. Everything before `state.scanned`
+  // was tested against a strictly smaller buffer and rejected — and rejection is
+  // permanent, because corroboration only ever looks BACKWARD from the match while
+  // pending only ever grows forward, so no later byte can rehabilitate an earlier
+  // candidate. Rescanning from zero on every chunk is what made this quadratic: a
+  // shell emitting 1 MiB in 256-byte chunks across an unalignable reconnect cost
+  // ~570ms of solid event loop, on the process every terminal shares, driven by
+  // bytes the sandbox chose. Bounding the candidate count without bounding the scan
+  // left the same door open one line down.
+  const from = state.scanned;
+  let at = pending.indexOf(anchor, from);
   for (let tried = 0; at !== -1 && tried < MAX_MATCH_CANDIDATES; tried += 1) {
     if (corroborated({ seen, pending, at, anchorLength: anchor.length })) {
-      return { emit: pending.subarray(at + anchor.length), state: { pending: EMPTY, resolved: true } };
+      return { emit: pending.subarray(at + anchor.length), state: RESOLVED };
     }
     // Not the boundary — the anchor's bytes merely recur here. Keep looking past it.
     at = pending.indexOf(anchor, at + 1);
@@ -261,9 +297,12 @@ export function planReplayEmission({
   // Unalignable. Hold the bytes until the caller closes the window — and if they
   // overflow first, emit them: duplication is survivable, losing them is not.
   if (pending.length > MAX_PENDING_BYTES) {
-    return { emit: pending, state: { pending: EMPTY, resolved: true } };
+    return { emit: pending, state: RESOLVED };
   }
-  return { emit: EMPTY, state: { pending, resolved: false } };
+  // A match can still begin in the last `anchor.length - 1` bytes: those are the only
+  // start positions the next chunk could complete.
+  const scanned = Math.max(0, pending.length - anchor.length + 1);
+  return { emit: EMPTY, state: { pending, scanned, resolved: false } };
 }
 
 /**
@@ -279,5 +318,5 @@ export function planReplayEmission({
  */
 export function flushReplay(state: ReplayState): { emit: Buffer; state: ReplayState } {
   if (state.resolved) return { emit: EMPTY, state };
-  return { emit: state.pending, state: { pending: EMPTY, resolved: true } };
+  return { emit: state.pending, state: RESOLVED };
 }

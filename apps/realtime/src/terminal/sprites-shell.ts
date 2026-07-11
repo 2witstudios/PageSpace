@@ -5,6 +5,7 @@ import type {
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   EMPTY_SEEN,
   flushReplay,
@@ -256,6 +257,10 @@ export function openPtyShell({
   // Cancels the replay-window timers of whichever command is currently wired, so a
   // teardown doesn't leave one armed against a shell nobody is watching any more.
   let cancelReplayTimers: () => void = () => {};
+  // Closes the replay window of whichever command is CURRENTLY wired. Hoisted because
+  // a DEAD command's late drain has to be able to flush the LIVE command's held bytes
+  // before it emits its own — its own `closeReplayWindow` closes the wrong window.
+  let closeCurrentReplayWindow: () => void = () => {};
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -307,14 +312,40 @@ export function openPtyShell({
       seenTail = rememberDelivered(seenTail, bytes);
       onOutput(bytes.toString('utf8'));
     };
+    // stderr that arrived while stdout was being held (see the stderr listener).
+    let heldStderr: Buffer[] = [];
+    const releaseStderr = () => {
+      if (heldStderr.length === 0) return;
+      const out = Buffer.concat(heldStderr);
+      heldStderr = [];
+      // Never recorded into `seenTail`: the server replays stdout, so stderr bytes in
+      // the history would be bytes no replay can contain, and the anchor would stop
+      // matching.
+      onOutput(out.toString('utf8'));
+    };
     /** Close the replay window: hand over whatever we were still holding. */
     const closeReplayWindow = () => {
       cancelTimers();
       if (closed) return;
+      const held = replay.pending.length;
       const { emit, state } = flushReplay(replay);
       replay = state;
+      if (held > 0) {
+        // The replay could not be aligned against what this client has already seen,
+        // so it goes out verbatim — correct, but it means the scrollback reprints.
+        // The likeliest cause is a server-side scrollback ring smaller than the anchor
+        // we search for, which no documentation pins down: log it, because otherwise
+        // this feature can degrade to a silent no-op and the bug report comes back
+        // looking identical to the one it fixed.
+        loggers.realtime.info('Agent terminal replay window closed unaligned (scrollback may reprint)', {
+          heldBytes: held,
+          seenBytes: seenTail.bytes,
+        });
+      }
       deliver(emit);
+      releaseStderr();
     };
+    closeCurrentReplayWindow = closeReplayWindow;
 
     cmd.stdout.on('data', (chunk) => {
       // The terminal is gone (killed, or a real exit): nothing may reach the client
@@ -335,8 +366,13 @@ export function openPtyShell({
       // fresh output needed to scroll the poison out. The banner would reprint on
       // every watchdog cycle: precisely the bug this file exists to prevent.
       if (stale) {
-        if (cmd === current) deliver(toBuf(chunk));
-        else onOutput(toStr(chunk));
+        if (cmd === current) { deliver(toBuf(chunk)); return; }
+        // A successor is already wired and may be HOLDING a replay — bytes that are
+        // older in the session's stream than this drain. Emitting straight into the
+        // client would render them out of order (and interleave escape sequences).
+        // Close that window first, then speak.
+        closeCurrentReplayWindow();
+        onOutput(toStr(chunk));
         return;
       }
       // Any inbound data proves the connection recovered; reset the failure budget.
@@ -346,7 +382,7 @@ export function openPtyShell({
       const { emit, state } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
       deliver(emit);
-      if (replay.resolved) { cancelTimers(); return; }
+      if (replay.resolved) { cancelTimers(); releaseStderr(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over:
       // on the next quiet gap, and on a deadline a chatty shell cannot push out by
       // talking.
@@ -357,11 +393,13 @@ export function openPtyShell({
     cmd.stderr.on('data', (chunk) => {
       if (closed) return;
       opened = true;
-      // Never deduped — the replay is a stdout stream — but it must not JUMP the
-      // stdout we are still holding: close the window first so ordering on the wire
-      // is preserved. On a tty the shell's stderr is folded into stdout anyway, so
-      // this listener is defensive rather than hot.
-      closeReplayWindow();
+      // Never deduped (the replay is a stdout stream) and never allowed to JUMP the
+      // stdout we are still holding — that would render it out of order. Force-closing
+      // the window here would be worse still: it would flush a HALF-RECEIVED replay,
+      // tearing the very banner we are trying to suppress. So it queues behind the
+      // held bytes and goes out when the window closes. On a tty the shell's stderr is
+      // folded into stdout anyway, so this listener is defensive rather than hot.
+      if (!replay.resolved && replay.pending.length > 0) { heldStderr.push(toBuf(chunk)); return; }
       onOutput(toStr(chunk));
     });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
