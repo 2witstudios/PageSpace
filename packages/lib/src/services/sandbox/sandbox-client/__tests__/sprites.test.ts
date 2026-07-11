@@ -19,6 +19,17 @@ import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
 /**
+ * riteway-style assertion (given/should/actual/expected) on top of vitest — the
+ * repo doesn't vendor riteway, so keep the contract and drop the package.
+ */
+function assert<T>({ given, should, actual, expected }: { given: string; should: string; actual: T; expected: T }): void {
+  it(`given ${given}, should ${should}`, () => {
+    expect(actual).toEqual(expected);
+  });
+}
+
+
+/**
  * A fake `SpriteCommand` mirroring the SDK shape the driver consumes: stdout /
  * stderr `data` events, an `exit`/`error` event, and a recording `kill`. Output
  * and the terminating event are emitted on a macrotask so the driver attaches
@@ -573,15 +584,6 @@ describe('ExecutableSandbox file ops', () => {
   });
 });
 
-/**
- * riteway-style assertion (given/should/actual/expected) on top of vitest — the
- * repo doesn't vendor riteway, so keep the contract and drop the package.
- */
-function assert<T>({ given, should, actual, expected }: { given: string; should: string; actual: T; expected: T }): void {
-  it(`given ${given}, should ${should}`, () => {
-    expect(actual).toEqual(expected);
-  });
-}
 
 describe('readSessionInfoId (pure)', () => {
   assert({
@@ -589,13 +591,6 @@ describe('readSessionInfoId (pure)', () => {
     should: 'return the authoritative session id it carries',
     actual: readSessionInfoId({ type: 'session_info', session_id: 'sess-authoritative', command: 'bash', tty: true }),
     expected: 'sess-authoritative',
-  });
-
-  assert({
-    given: 'a session_info frame for a DIFFERENT concurrently-created session',
-    should: 'return that frame\'s own id — each socket only ever sees its own session',
-    actual: readSessionInfoId({ type: 'session_info', session_id: 'sess-sibling', command: 'bash', tty: true }),
-    expected: 'sess-sibling',
   });
 
   assert({

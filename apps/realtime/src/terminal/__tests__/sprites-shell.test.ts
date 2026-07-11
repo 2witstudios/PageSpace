@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { openPtyShell, planReconnect, liveSessionIds } from '../sprites-shell';
+import { openPtyShell, planReconnect, sessionIds } from '../sprites-shell';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -11,8 +11,8 @@ function assert<T>({ given, should, actual, expected }: { given: string; should:
   });
 }
 
-// A promise whose resolution the test drives, to interleave a fire-and-forget
-// listSessions() against fake-timer-driven reconnect steps.
+// A promise the test settles by hand, to suspend reconnect() at its awaited
+// listSessions() and act (e.g. kill the shell) while it is in flight.
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void;
   const promise = new Promise<T>((r) => { resolve = r; });
@@ -106,13 +106,6 @@ describe('planReconnect (pure)', () => {
   });
 
   assert({
-    given: "no known id but a live shell session exists (possibly a SIBLING terminal's)",
-    should: 'create a fresh session — never guess which live shell is ours',
-    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1'] }),
-    expected: { action: 'create' } as const,
-  });
-
-  assert({
     given: 'no known id and several live shells on the Sprite',
     should: 'still create — an id is only ever obtained authoritatively, never picked',
     actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1', 'sess-2'] }),
@@ -127,11 +120,11 @@ describe('planReconnect (pure)', () => {
   });
 });
 
-describe('liveSessionIds (pure)', () => {
+describe('sessionIds (pure)', () => {
   assert({
     given: 'the Sprite\'s live sessions',
     should: 'return every id — a membership set for verifying an id we already hold',
-    actual: liveSessionIds([
+    actual: sessionIds([
       { id: 'shell-1', command: 'bash', isActive: true, tty: true },
       { id: 'shell-2', command: 'bash', isActive: false, tty: true },
     ]),
@@ -141,7 +134,7 @@ describe('liveSessionIds (pure)', () => {
   assert({
     given: 'sessions whose `tty` the SDK did not report (the published 0.0.1 build drops the field)',
     should: 'STILL return their ids — filtering on tty would verify nothing and orphan every live shell',
-    actual: liveSessionIds([
+    actual: sessionIds([
       { id: 'shell-1', command: '/usr/bin/bash', isActive: true },
       { id: 'shell-2', command: '/usr/bin/bash', isActive: true },
     ]),
@@ -151,7 +144,7 @@ describe('liveSessionIds (pure)', () => {
   assert({
     given: 'no live sessions',
     should: 'return an empty set',
-    actual: liveSessionIds([]),
+    actual: sessionIds([]),
     expected: [],
   });
 });
@@ -401,10 +394,15 @@ describe('openPtyShell', () => {
       expect(onOutput).toHaveBeenCalledWith('back\r\n');
     });
 
-    it('given a drop before the session announced its id, creates ONE replacement (the id can be lost to a socket that dies pre-announce)', async () => {
+    it('given a drop before the session announced its id, creates ONE replacement and never attaches to a SIBLING terminal\'s live shell', async () => {
+      // The id can be lost to a socket that dies pre-announce. The production shape:
+      // one Sprite hosts every terminal on the machine, so a live tty session may
+      // well be someone else's — the retired pickShellSession would have handed this
+      // user that PTY. We create our own instead, and tolerate the one strand.
       const cmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
-      const sprite = buildFakeSprite(cmd, { sessions: [] });
+      const sibling: SpriteSessionInfo = { id: 'sess-sibling', command: 'claude', isActive: true, tty: true };
+      const sprite = buildFakeSprite(cmd, { sessions: [sibling] });
       sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
       const onOutput = vi.fn();
       const onExit = vi.fn();
@@ -414,7 +412,7 @@ describe('openPtyShell', () => {
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
-      // One strand is tolerated; the user keeps a working terminal.
+      expect(sprite.attachSession).not.toHaveBeenCalled(); // the sibling is not ours to take
       expect(sprite.createSession).toHaveBeenCalledTimes(2);
       expect(onExit).not.toHaveBeenCalled();
       expect(onOutput).not.toHaveBeenCalledWith(expect.stringContaining('Shell error'));
@@ -511,23 +509,6 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
 
       expect(sprite.attachSession).toHaveBeenCalledTimes(1);
-    });
-
-    it('given no announced id while a SIBLING terminal\'s shell is live, never attaches to it (it is not ours to take)', async () => {
-      // The production shape: one Sprite hosts every terminal on the machine. The
-      // retired pickShellSession would have handed this user the sibling's PTY.
-      const cmd = buildFakeCommand();
-      const freshCmd = buildFakeCommand();
-      const sibling: SpriteSessionInfo = { id: 'sess-sibling', command: 'claude', isActive: true, tty: true };
-      const sprite = buildFakeSprite(cmd, { sessions: [sibling] });
-      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
-
-      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
-      cmd._emitter.emit('error', new Error('keepalive'));
-      await vi.advanceTimersByTimeAsync(500);
-
-      expect(sprite.attachSession).not.toHaveBeenCalled();
-      expect(sprite.createSession).toHaveBeenCalledTimes(2);
     });
 
     it('given every reconnect attempt fails, should give up after the bounded budget and surface onExit(-1)', async () => {

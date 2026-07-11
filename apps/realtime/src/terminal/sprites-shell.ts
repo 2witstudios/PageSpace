@@ -28,7 +28,7 @@ import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
  *
  * Matching on the id alone is immune to all of that.
  */
-export function liveSessionIds(sessions: SpriteSessionInfo[]): string[] {
+export function sessionIds(sessions: SpriteSessionInfo[]): string[] {
   return sessions.map((s) => s.id);
 }
 
@@ -167,8 +167,10 @@ export function openPtyShell({
   let current!: SpriteCommandLike;
   // The live session id to reattach to. Known immediately when attaching; for a
   // freshly created session it lands as soon as that session's socket announces
-  // it (`session_info`), which is typically before the first keystroke and always
-  // before any drop it could matter for.
+  // it (`session_info`), normally well before the first keystroke — but NOT
+  // guaranteed: a socket that dies in the sliver between 'spawn' and the frame
+  // leaves it unknown, and the session it named unreachable. That is the case
+  // `abandonedUnnamedSessions` exists to bound.
   let currentSessionId: string | undefined = sessionId;
   let lastCols = cols;
   let lastRows = rows;
@@ -363,7 +365,7 @@ export function openPtyShell({
       }
       const plan = planReconnect({
         knownId: currentSessionId,
-        liveSessionIds: liveSessionIds(liveSessions),
+        liveSessionIds: sessionIds(liveSessions),
       });
 
       if (plan.action === 'create') {
