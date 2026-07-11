@@ -43,6 +43,7 @@ import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machi
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import {
   resolveAgentTerminal,
+  resolveAgentTerminalRow,
   type AgentTerminalMachineSandbox,
   type AgentTerminalMachineSandboxResult,
 } from '@pagespace/lib/services/machines/agent-terminals';
@@ -284,6 +285,28 @@ const makeAgentTerminalCheckAuth = buildAgentTerminalCheckAuth({
   acquireSlot: ({ userId, tier }) => acquireCodeExecutionSlot({ userId, tier }),
   releaseSlot: (userId) => releaseCodeExecutionSlot({ userId }),
   resolveSandbox: (target) => resolveAgentTerminalSandbox(target),
+  // DB-only existence check for the (scope, name) target — no Sprite is resolved
+  // or woken, so the reattach fast path and the 60s re-auth tick can both afford
+  // to run it. It is what keeps a deleted project/branch/agent-terminal row from
+  // going unnoticed now that the sandbox resolution is lazy.
+  resolveTerminalRow: async ({ machineId, projectName, branchName, name }) => {
+    const [branchStore, agentTerminalStore, projectStore] = await Promise.all([
+      dbMachineBranchStorePromise,
+      dbMachineAgentTerminalStorePromise,
+      dbMachineProjectStorePromise,
+    ]);
+    return resolveAgentTerminalRow({
+      machineId,
+      projectName,
+      branchName,
+      name,
+      deps: {
+        branchStore,
+        store: agentTerminalStore,
+        projectStore: { findByName: (tId, pName) => projectStore.findByName(tId, pName) },
+      },
+    });
+  },
   // Write code execution audit record (agent terminal PTY session open) — this
   // launches an arbitrary pluggable agent binary (the resolved command, or a
   // per-terminal command override) inside the Sprite.

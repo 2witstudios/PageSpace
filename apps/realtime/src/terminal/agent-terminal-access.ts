@@ -156,6 +156,14 @@ export interface AgentTerminalCheckAuthDeps {
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (userId: string) => void;
   resolveSandbox: (target: ResolveTerminalSandboxTarget & { userId: string }) => Promise<ResolveTerminalSandboxResult>;
+  /**
+   * DB-only existence check for the (scope, name) target — resolves the branch/
+   * project scope rows and the agent-terminal row itself, touching NO Sprite.
+   * Part of the ACCESS half precisely because it is cheap: authorization must
+   * keep noticing that a terminal's project/branch/row was deleted, and the 60s
+   * re-auth tick (which never resolves a sandbox) is the only thing that will.
+   */
+  resolveTerminalRow: (target: ResolveTerminalSandboxTarget) => Promise<{ ok: true } | { ok: false; reason: string }>;
   writeAudit: (input: { userId: string; actorEmail: string; driveId: string; command: string }) => void;
   buildSessionKey: (args: { terminalId: string; projectName?: string; branchName?: string; name: string }) => string;
   logDenied: (reason: string, context: Record<string, unknown>) => void;
@@ -202,6 +210,23 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     if (!readOnly.allow) {
       deps.logDenied(readOnly.reason, { userId, machineId });
       return { ok: false, reason: readOnly.reason };
+    }
+
+    // The TARGET must still exist, not just the machine page. A DB-only check —
+    // it resolves the branch/project scope rows and the agent-terminal row, and
+    // wakes no Sprite — so it belongs in the access half even though the fused
+    // checkAuth only ever learned this as a side effect of resolving the sandbox.
+    //
+    // Keeping it here is load-bearing: the 60s re-auth tick calls ONLY this half.
+    // If the existence check lived behind the lazy sandbox thunk, deleting a
+    // terminal's project (or branch, or the row itself) would stop being noticed
+    // by re-auth at all, and the orphaned PTY would keep running against a scope
+    // that no longer exists. The fused check caught that — at the cost of waking
+    // the Sprite every 60 seconds, which is exactly what this epic is removing.
+    const terminalRow = await deps.resolveTerminalRow({ machineId, projectName, branchName, name });
+    if (!terminalRow.ok) {
+      deps.logDenied(terminalRow.reason, { userId, machineId, projectName, branchName, name });
+      return { ok: false, reason: terminalRow.reason };
     }
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here

@@ -253,7 +253,7 @@ function sandboxSpy(resolve: () => Promise<ResolveAgentTerminalResult>): Sandbox
   return spy;
 }
 
-type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number };
+type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number; resolveTerminalRow: number };
 
 /** Default deps whose read functions COUNT their own invocations, so a
  * short-circuit test can assert "this table was never queried" via `calls`
@@ -263,7 +263,7 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
   deps: AgentTerminalCheckAuthDeps;
   calls: DepCalls;
 } {
-  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0 };
+  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0, resolveTerminalRow: 0 };
   const base: AgentTerminalCheckAuthDeps = {
     getAccessLevel: async () => ({ canEdit: true }),
     getPageDriveId: async () => {
@@ -292,6 +292,10 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
       streamSessionId: null,
       sprite: fakeSprite,
     }),
+    resolveTerminalRow: async () => {
+      calls.resolveTerminalRow += 1;
+      return { ok: true };
+    },
     writeAudit: () => {},
     buildSessionKey: () => 'session-key-1',
     logDenied: () => {},
@@ -624,6 +628,71 @@ describe('buildAgentTerminalCheckAuth', () => {
       should: 'release the slot and propagate the original error (unchanged socket surface)',
       actual: { releases, thrown },
       expected: { releases: 1, thrown: boom },
+    });
+  });
+
+  it('DENIES when the terminal\'s scope row is gone, WITHOUT resolving a Sprite (so the 60s re-auth tick still notices a deleted project)', async () => {
+    // The regression this guards: with the sandbox resolution made lazy, the only
+    // thing that ever noticed a deleted project/branch/agent-terminal row was the
+    // resolve the re-auth tick no longer performs. A project deleted out from
+    // under a LIVE terminal would leave its PTY running against a scope that no
+    // longer exists. The existence check is DB-only, so re-auth can afford it —
+    // and it must never be answered by waking a Sprite.
+    const sandbox = sandboxSpy(async () => resolvedOk);
+    const denials: string[] = [];
+    const { deps } = buildDeps({
+      resolveSandbox: sandbox.fn,
+      resolveTerminalRow: async () => ({ ok: false, reason: 'project_not_found' }),
+      logDenied: (reason) => {
+        denials.push(reason);
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', projectName: 'gone', name: 'shell' });
+
+    assert({
+      given: 'a live terminal whose project row has been deleted',
+      should: 'deny with project_not_found from the ACCESS half, touching no Sprite',
+      actual: { result, denials, sandboxCalls: sandbox.calls, spriteCalls: sandbox.getSpriteCalls.length },
+      expected: {
+        result: { ok: false, reason: 'project_not_found' },
+        denials: ['project_not_found'],
+        sandboxCalls: 0,
+        spriteCalls: 0,
+      },
+    });
+  });
+
+  it('DENIES when the agent-terminal row itself is gone, without resolving a Sprite', async () => {
+    const sandbox = sandboxSpy(async () => resolvedOk);
+    const { deps } = buildDeps({
+      resolveSandbox: sandbox.fn,
+      resolveTerminalRow: async () => ({ ok: false, reason: 'not_found' }),
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'ghost' });
+
+    assert({
+      given: 'an agent-terminal row that no longer exists',
+      should: 'deny with not_found from the access half, touching no Sprite',
+      actual: { result, spriteCalls: sandbox.getSpriteCalls.length },
+      expected: { result: { ok: false, reason: 'not_found' }, spriteCalls: 0 },
+    });
+  });
+
+  it('checks the target row existence only AFTER the read-only access gates (a stranger learns nothing about which terminals exist)', async () => {
+    const { deps, calls } = buildDeps({ getAccessLevel: async () => ({ canEdit: false }) });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'shell' });
+
+    assert({
+      given: 'a user without edit access on the owning machine',
+      should: 'deny on access alone, without probing whether the named terminal exists',
+      actual: { result, rowLookups: calls.resolveTerminalRow },
+      expected: { result: { ok: false, reason: 'no_edit_access' }, rowLookups: 0 },
     });
   });
 
