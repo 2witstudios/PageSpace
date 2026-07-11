@@ -104,6 +104,13 @@ export interface SpriteCommandLike {
   readonly stdin?: { write(data: string | Buffer): void };
   on(event: 'exit', listener: (code: number) => void): unknown;
   on(event: 'error', listener: (error: unknown) => void): unknown;
+  /**
+   * A server control frame, forwarded verbatim. In TTY mode the SDK JSON-parses
+   * every inbound TEXT frame and re-emits it here (binary frames are terminal
+   * output) — which is how the exec session's own `session_info` reaches us; see
+   * {@link readSessionInfoId}.
+   */
+  on(event: 'message', listener: (message: unknown) => void): unknown;
   // Emitted by the SDK's WSCommand AFTER the WebSocket actually opens
   // (`cmd.start().then(() => cmd.emit('spawn'))`). A failed/flapping attach
   // rejects and emits 'error' instead, never 'spawn' — so 'spawn' is the
@@ -127,15 +134,53 @@ export interface SpriteSpawnOptions {
  * An exec session as reported by `listSessions()` (GET `/v1/sprites/{name}/exec`).
  * The `id` is the handle passed to `attachSession` (WSS `/v1/sprites/{name}/exec/{id}`)
  * to transparently reconnect to a shell that survived a WebSocket keepalive drop.
- * `isActive` is the SDK's mapping of the API's `is_active`; its exact meaning
- * (process-alive vs client-attached) is not specified by the docs, so callers
- * select a shell to reattach by `tty` and use `isActive` only as a tiebreaker.
+ *
+ * This listing is only ever used to VERIFY an id we already hold authoritatively
+ * (from {@link readSessionInfoId}) — never to guess which of a Sprite's shells is
+ * "ours". `isActive` is the SDK's mapping of the API's `is_active`, whose exact
+ * meaning (process-alive vs client-attached) the docs do not specify; nothing
+ * selects a session by it.
  */
 export interface SpriteSessionInfo {
   id: string;
   command: string;
   isActive: boolean;
-  tty: boolean;
+  /**
+   * OPTIONAL, and not to be trusted for identity. The raw API does return
+   * `tty` for a TTY session, but the SDK only sometimes surfaces it: the pinned
+   * rc37 maps it, while the published 0.0.1 build dropped `tty` (and `workdir`)
+   * from its `listSessions()` mapping entirely. Code that FILTERS on it silently
+   * matches nothing after an SDK bump, so treat its absence as "unknown", never
+   * as "not a shell", and identify sessions by id (see {@link readSessionInfoId}).
+   */
+  tty?: boolean;
+}
+
+/**
+ * The id of the exec session a command handle is bound to, read from the
+ * `session_info` control frame the server sends on that session's OWN socket
+ * immediately after it opens (API: WSS `/v1/sprites/{name}/exec` →
+ * `{"type":"session_info","session_id":…,"command":…,"tty":…}`; the SDK
+ * JSON-parses it and re-emits it as the command's `message` event).
+ *
+ * This is the authoritative, race-free source of a freshly created session's id:
+ * the frame arrives on the very socket `createSession()` returned, so N concurrent
+ * creates on ONE Sprite each learn their own id and cannot be mis-attributed. It
+ * replaces the old before/after `listSessions()` diffing, which could not tell a
+ * sibling terminal's new shell from ours and therefore had to abstain (persisting
+ * nothing) exactly when the Sprite was busiest.
+ *
+ * Returns undefined for any other frame (port notifications, resize acks, raw
+ * text) and for a malformed/absent id — the RC SDK ships no typed frame union, so
+ * this validates the wire shape defensively rather than trusting it.
+ */
+export function readSessionInfoId(message: unknown): string | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const frame = message as { type?: unknown; session_id?: unknown };
+  if (frame.type !== 'session_info') return undefined;
+  return typeof frame.session_id === 'string' && frame.session_id.length > 0
+    ? frame.session_id
+    : undefined;
 }
 
 /** The Sprite instance subset the driver consumes. */

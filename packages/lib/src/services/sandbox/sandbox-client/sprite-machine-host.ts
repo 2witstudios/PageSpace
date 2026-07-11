@@ -185,7 +185,16 @@ function wrapSpriteHandle({
     async listStreams(): Promise<MachineStreamSessionInfo[]> {
       const sprite = await sdk.getSprite(exec.sandboxId);
       const sessions = await sprite.listSessions();
-      return sessions.filter((s) => s.tty).map((s) => ({ id: s.id, command: s.command, isActive: s.isActive }));
+      // Exclude only sessions the SDK explicitly reports as NON-tty (plain batch
+      // execs are not terminals). `tty` is unreliable — see `SpriteSessionInfo`:
+      // the published 0.0.1 SDK drops the field from listSessions entirely, so a
+      // truthy filter would hide EVERY stream after a routine SDK bump. Treat an
+      // absent `tty` as unknown and keep the session: an extra row in the stream
+      // list is a cosmetic flaw; an empty one looks like the machine has no
+      // terminals at all.
+      return sessions
+        .filter((s) => s.tty !== false)
+        .map((s) => ({ id: s.id, command: s.command, isActive: s.isActive }));
     },
   };
 }
