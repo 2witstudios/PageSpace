@@ -281,9 +281,11 @@ export async function acquireTerminalSandbox(
     // destroyed (getOrCreate recreates it under the same name so the sandboxId
     // stays stable), (c) policy migration for sessions created before this change.
     // Shared by `resume` (within the warm window) and `noop` (persistent-idle:
-    // VM is hibernating). The VM is warmed before the PTY opens by the realtime
-    // path (ensureSpriteAwake), so a hibernated terminal's `bash` spawn lands on
-    // an awake VM instead of racing a cold-start drop.
+    // VM is hibernating). A hibernating VM is NOT pre-warmed here: it has no
+    // explicit wake API (docs.sprites.dev/concepts/lifecycle) and wakes on any
+    // incoming request, so the caller's first real operation — the PTY's
+    // createSession/attachSession, or an exec — is itself the wake, and carries
+    // the bounded pre-open retry that a cold-start drop needs.
     const reconnectExisting = async (): Promise<AcquireTerminalSandboxResult> => {
       // Reconnect uses getOrCreate, which RE-PROVISIONS a vanished/reaped VM under
       // the same name — i.e. it can mint a FRESH open-egress VM. So the containment

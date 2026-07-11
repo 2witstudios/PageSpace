@@ -1,3 +1,4 @@
+import { isPreOpenWakeError } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type {
   SpriteInstanceLike,
   SpriteCommandLike,
@@ -77,18 +78,34 @@ export type ReconnectPlan =
  *   is dead; the shell overwrites the persisted streamSessionId).
  * - No known id but a live shell exists → `attach` it (fresh-create path whose
  *   background id-capture hasn't landed yet).
+ * - No known id, nothing live, and the drop was PRE-OPEN → `create` (see below).
  * - No known id and nothing live → `fatal` (the shell is genuinely gone).
+ *
+ * `preOpenDrop` is what keeps a COLD Sprite openable. A Sprite has no wake API —
+ * an incoming request wakes it (docs.sprites.dev/concepts/lifecycle) — so the
+ * first `createSession` against a hibernated VM IS its wake, and Fly's
+ * wake-on-request can drop that first connection before it ever opens ("closed
+ * before open"). At that moment there is no known id (we were creating one) and
+ * nothing live (the VM is still booting): identical, on the surface, to a
+ * genuinely dead shell. Without this flag that state reads as `fatal` and the
+ * user gets `exit -1` instead of a prompt. A pre-open drop is provably a
+ * connection that never opened, so nothing was started and re-creating is safe;
+ * `consecutiveFailures` still bounds it, so a Sprite that truly never wakes
+ * exhausts the budget and surfaces the exit anyway.
  */
 export function planReconnect({
   knownId,
   liveSessionIds,
   consecutiveFailures,
   maxAttempts,
+  preOpenDrop = false,
 }: {
   knownId: string | undefined;
   liveSessionIds: string[];
   consecutiveFailures: number;
   maxAttempts: number;
+  /** The failure that triggered this reconnect was a cold-start pre-open drop. */
+  preOpenDrop?: boolean;
 }): ReconnectPlan {
   if (consecutiveFailures > maxAttempts) return { action: 'fatal' };
   if (knownId !== undefined) {
@@ -97,6 +114,7 @@ export function planReconnect({
       : { action: 'create' };
   }
   if (liveSessionIds.length > 0) return { action: 'attach', id: liveSessionIds[0] };
+  if (preOpenDrop) return { action: 'create' };
   return { action: 'fatal' };
 }
 
@@ -182,6 +200,9 @@ export function openPtyShell({
   let closed = false; // a real exit (or exhausted reconnects) — stop everything
   let reconnecting = false;
   let consecutiveFailures = 0;
+  // Whether the failure that triggered the pending reconnect was a cold-start
+  // pre-open drop (the Sprite wake handshake) rather than a post-open death.
+  let lastErrorWasPreOpenDrop = false;
   // Bumped on every session (re)establishment (attach or fresh-create). A
   // fresh session resolves its id via a fire-and-forget listSessions(); if a
   // LATER establishment supersedes it before that resolves, the stale resolver
@@ -221,7 +242,14 @@ export function openPtyShell({
       if (stale) return;
       fatal(code ?? -1);
     });
-    cmd.on('error', () => { stale = true; void reconnect(); });
+    cmd.on('error', (error) => {
+      stale = true;
+      // Remember WHY this command died: a pre-open drop (the cold-VM wake
+      // handshake) is retryable even with no session to fall back to — see
+      // planReconnect's `preOpenDrop`.
+      lastErrorWasPreOpenDrop = isPreOpenWakeError(error);
+      void reconnect();
+    });
   }
 
   // Start a brand-new shell for the SAME command and resolve its session id in
@@ -316,6 +344,7 @@ export function openPtyShell({
         liveSessionIds: liveIds,
         consecutiveFailures,
         maxAttempts: MAX_RECONNECT_ATTEMPTS,
+        preOpenDrop: lastErrorWasPreOpenDrop,
       });
 
       if (plan.action === 'fatal') {
