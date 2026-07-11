@@ -53,7 +53,7 @@ describe('SettingsTab', () => {
     });
   });
 
-  test('toggling an access switch optimistically PATCHes and reconciles with the server', async () => {
+  test('toggling an access switch optimistically PATCHes only the flipped flag', async () => {
     mockLoad();
     apiPatch.mockResolvedValue({ settings: { ...baseSettings, visibleToGlobalAssistant: true } });
     render(<SettingsTab machineId="m1" />);
@@ -63,7 +63,7 @@ describe('SettingsTab', () => {
 
     await waitFor(() => assert({
       given: 'the visible-to-global-assistant switch clicked',
-      should: 'PATCH the settings route with the machineId and the flipped flag',
+      should: 'PATCH the settings route with the machineId and the flipped flag only',
       actual: apiPatch.mock.calls[0],
       expected: ['/api/machines/settings', { machineId: 'm1', visibleToGlobalAssistant: true }],
     }));
@@ -73,6 +73,44 @@ describe('SettingsTab', () => {
       should: 'leave the switch on and never toast an error',
       actual: { checked: toggle.getAttribute('aria-checked'), errored: (toast.error as ReturnType<typeof vi.fn>).mock.calls.length },
       expected: { checked: 'true', errored: 0 },
+    }));
+  });
+
+  test('committing a text field by clicking a toggle does not swallow the toggle', async () => {
+    mockLoad({ ...baseSettings, description: null });
+    // A save that never settles: if an in-flight save disabled the controls, the
+    // switch would already be disabled by the time the click's mouseup landed.
+    apiPatch.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsTab machineId="m1" />);
+
+    const name = await screen.findByLabelText('Name');
+    await userEvent.type(name, '!');
+    // Clicking the switch blurs the input, which commits the name mid-click.
+    await userEvent.click(screen.getByRole('switch', { name: /visible to global assistant/i }));
+
+    await waitFor(() => assert({
+      given: 'a name edit committed on blur by the very click that hits a switch',
+      should: 'still PATCH the toggle — an in-flight save must not disable the control being clicked',
+      actual: apiPatch.mock.calls.map((call) => Object.keys(call[1] as object).filter((k) => k !== 'machineId')).flat(),
+      expected: ['name', 'visibleToGlobalAssistant'],
+    }));
+  });
+
+  test('a failed name save rolls the input back to the server value', async () => {
+    mockLoad();
+    apiPatch.mockRejectedValue(new Error('nope'));
+    render(<SettingsTab machineId="m1" />);
+
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed');
+    await userEvent.tab();
+
+    await waitFor(() => assert({
+      given: 'a rejected name PATCH',
+      should: 'restore the input to the last-known-good server name',
+      actual: name.value,
+      expected: 'My Machine',
     }));
   });
 

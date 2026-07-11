@@ -54,8 +54,9 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   const [reloadToken, setReloadToken] = useState(0);
 
   // Local drafts for the text fields — inputs stay editable per-keystroke and
-  // only persist on blur (the toggles persist immediately). Kept in sync with
-  // the server truth whenever `settings` is (re)loaded or reconciled.
+  // only persist on blur (the toggles persist immediately). Seeded from the
+  // server on load, and otherwise only ever written back by a failed save's
+  // rollback, so an in-flight request can never clobber what the user is typing.
   const [nameDraft, setNameDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
 
@@ -91,27 +92,32 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   }, [machineId, reloadToken]);
 
   /**
-   * Optimistically apply `patch` to local state, PATCH it, and reconcile with the
-   * server's authoritative response — rolling back (and toasting) on failure.
+   * Optimistically apply `patch`, PATCH it, and roll back ONLY the patched keys
+   * on failure (toasting the error).
+   *
+   * We deliberately do NOT reconcile from the server's response body. The route
+   * echoes the whole `MachineSettings`, so applying it would clobber a field the
+   * user is concurrently editing with a value that was already stale when the
+   * request left. Every field we send is normalized client-side exactly as the
+   * route normalizes it (name trimmed; blank description → null), so the
+   * optimistic value and the persisted value never diverge. Rolling back only the
+   * patched keys — rather than restoring a whole snapshot — keeps a failed toggle
+   * from reverting an unrelated edit that landed while it was in flight.
    */
   async function persist(patch: MachineSettingsPatch) {
     if (!settings) return;
-    const previous = settings;
-    const optimistic: MachineSettings = { ...settings, ...patch };
-    setSettings(optimistic);
+    const rollback: MachineSettingsPatch = {};
+    for (const key of Object.keys(patch) as (keyof MachineSettingsPatch)[]) {
+      Object.assign(rollback, { [key]: settings[key] });
+    }
+    setSettings((current) => (current ? { ...current, ...patch } : current));
     setSaving(true);
     try {
-      const { settings: updated } = await apiPatch<{ settings: MachineSettings }>(
-        '/api/machines/settings',
-        { machineId, ...patch },
-      );
-      setSettings(updated);
-      setNameDraft(updated.name);
-      setDescriptionDraft(updated.description ?? '');
+      await apiPatch('/api/machines/settings', { machineId, ...patch });
     } catch (error) {
-      setSettings(previous);
-      setNameDraft(previous.name);
-      setDescriptionDraft(previous.description ?? '');
+      setSettings((current) => (current ? { ...current, ...rollback } : current));
+      if (rollback.name !== undefined) setNameDraft(rollback.name);
+      if (rollback.description !== undefined) setDescriptionDraft(rollback.description ?? '');
       toast.error(error instanceof Error ? error.message : 'Failed to update machine settings');
     } finally {
       setSaving(false);
@@ -127,6 +133,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
       setNameDraft(settings.name);
       return;
     }
+    setNameDraft(trimmed);
     if (trimmed === settings.name) return;
     persist({ name: trimmed });
   }
@@ -134,8 +141,8 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   function commitDescription() {
     if (!settings) return;
     const trimmed = descriptionDraft.trim();
-    const current = settings.description ?? '';
-    if (trimmed === current) return;
+    setDescriptionDraft(trimmed);
+    if (trimmed === (settings.description ?? '')) return;
     // Whitespace-only clears the description (round-trips to null server-side).
     persist({ description: trimmed.length === 0 ? null : trimmed });
   }
@@ -176,8 +183,22 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
       <div className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">General</CardTitle>
-            <CardDescription>The Machine&apos;s name and description.</CardDescription>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <CardTitle className="text-lg">General</CardTitle>
+                <CardDescription>The Machine&apos;s name and description.</CardDescription>
+              </div>
+              {/* An in-flight save is surfaced, never enforced: disabling the
+                  controls here would swallow the very click that triggered the
+                  save (a field's blur-commit fires before the mouseup that lands
+                  on a switch, so the switch would already be disabled). */}
+              {saving && (
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Saving…
+                </span>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -185,7 +206,6 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
               <Input
                 id="machine-name"
                 value={nameDraft}
-                disabled={saving}
                 onChange={(e) => setNameDraft(e.target.value)}
                 onBlur={commitName}
               />
@@ -195,7 +215,6 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
               <Textarea
                 id="machine-description"
                 value={descriptionDraft}
-                disabled={saving}
                 placeholder="What is this Machine for?"
                 onChange={(e) => setDescriptionDraft(e.target.value)}
                 onBlur={commitDescription}
@@ -220,7 +239,6 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
               <Switch
                 id="machine-visible-global"
                 checked={settings.visibleToGlobalAssistant}
-                disabled={saving}
                 onCheckedChange={(checked) => persist({ visibleToGlobalAssistant: checked })}
               />
             </div>
@@ -234,7 +252,6 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
               <Switch
                 id="machine-allow-page-agents"
                 checked={settings.allowPageAgents}
-                disabled={saving}
                 onCheckedChange={(checked) => persist({ allowPageAgents: checked })}
               />
             </div>
