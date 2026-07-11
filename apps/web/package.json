@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch --yes",
     "test": "vitest run",
-    "test:coverage": "export NODE_OPTIONS='--max-old-space-size=6144'; rm -rf .vitest-reports && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=1/3 && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=2/3 && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=3/3 && vitest run --merge-reports --coverage"
+    "test:coverage": "rm -rf .vitest-reports && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=1/5 && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=2/5 && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=3/5 && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=4/5 && vitest run --config vitest.shard.config.ts --coverage --reporter=blob --shard=5/5 && vitest run --merge-reports --coverage"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.87",
