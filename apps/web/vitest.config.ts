@@ -17,8 +17,10 @@ export default defineConfig({
     // worker retains each file's module graph and never releases it — an
     // unbounded growth that fills any --max-old-space-size and OOMs the 16 GB CI
     // runner during both the run and the v8 coverage remap. The threads pool
-    // tears down each file's context and GCs it, so peak memory stays ~2.5 GB
-    // and `vitest run --coverage` completes within the default heap.
+    // tears down each file's context and GCs it, so peak memory stays ~2.5 GB.
+    // (Thread workers inherit the parent's --max-old-space-size, which the
+    // `test:coverage` script raises to 8 GB so a worker running heavier files
+    // doesn't hit the low default limit — ERR_WORKER_OUT_OF_MEMORY.)
     pool: 'threads',
     coverage: {
       provider: 'v8',
