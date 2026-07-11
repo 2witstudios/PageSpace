@@ -877,6 +877,20 @@ describe('buildAgentTerminalHandlers', () => {
       expect(shell.kill).not.toHaveBeenCalled();
     });
 
+    it('given the idle timeout elapses, should HAND BACK the concurrency slot as well as killing the shell', async () => {
+      // The reaped session held a slot for its whole detached grace; the reap must
+      // return it, or a user's tier capacity bleeds away one abandoned tab at a time.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
+      expect(shell.kill).toHaveBeenCalled();
+    });
+
     it('given the idle timeout elapses, should kill the shell and drop the session', async () => {
       const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
@@ -1097,6 +1111,86 @@ describe('buildAgentTerminalHandlers', () => {
         expect(call.holdId).toBeUndefined();
         expect(call.activeSeconds).toBeCloseTo(5, 0);
       });
+
+      it('given a settle that rejects with a NON-Error value, wraps it and keeps the session alive (fail-open)', async () => {
+        const billing = makeBilling({ trackUsage: vi.fn().mockRejectedValue('db string blip') });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // The non-Error rejection is coerced (never thrown), so the PTY survives.
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ holdId: 'hold-1' });
+      });
+
+      it('given the re-hold gate rejects with a NON-Error value at a heartbeat, keeps the session alive (fail-open)', async () => {
+        const billing = makeBilling({
+          gate: vi.fn().mockResolvedValueOnce({ allowed: true, holdId: 'hold-1' }).mockRejectedValue('gate string blip'),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // Settle succeeded; only the re-hold failed (and with a non-Error) — session stays alive.
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+        expect(shell.kill).not.toHaveBeenCalled();
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      });
+
+      it('given the session was already removed when a heartbeat fires, clears its interval without settling', async () => {
+        const billing = makeBilling();
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        // Session vanished (e.g. reaped elsewhere) before the heartbeat tick.
+        sessionMap.deleteByKey('branch1:agent:cli');
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+        // No settle attempted for a gone session, and the interval stopped firing.
+        expect(billing.trackUsage).not.toHaveBeenCalled();
+      });
+
+      it('given a settle still in flight when the next heartbeat fires, skips the overlapping run', async () => {
+        let resolveSettle: () => void = () => {};
+        const billing = makeBilling({
+          trackUsage: vi
+            .fn()
+            .mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSettle = () => resolve(undefined); }))
+            .mockResolvedValue(undefined),
+        });
+        const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // first heartbeat: settle hangs
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // second heartbeat: still settling → skipped
+
+        // Only the first settle is in flight; the overlapping tick did not start a second.
+        expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+
+        resolveSettle();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      });
+    });
+
+    it('given two teardown paths fire for one session, hands the concurrency slot back exactly ONCE (idempotent release)', async () => {
+      // The slot is a bare counter — a second release would hand back capacity the
+      // connect never held, letting the user exceed their tier. A re-auth teardown
+      // releases it; a late onExit for the same (now killed) PTY must be a no-op.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing: makeBilling() });
+      await onConnect(validPayload);
+      const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000); // re-auth teardown → release #1
+      onExitArg(0); // the killed PTY's exit lands later → release #2 attempt, must no-op
+
+      expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
     });
 
     it('given the shell exits naturally WHILE disconnected (idle reap still pending), should cancel the pending reap so it never double-settles', async () => {

@@ -254,10 +254,12 @@ function endAgentTerminalSession(
   session: TerminalSession,
   sessionKey: string,
 ): void {
-  // Only evict the key if THIS session is still the one under it. A session that
-  // never made it into the map (a cold-path racer that lost — see onConnect), or
-  // one already replaced, must not delete the live session that now holds its
-  // key: that would orphan a running PTY nothing can reach.
+  // Defensive: only evict the key if THIS session is still the one under it, so a
+  // teardown can never delete a DIFFERENT session that now holds the key and
+  // orphan its running PTY. Per-key create serialization (see onConnect) already
+  // guarantees one session per key at a time, so today `getByKey` is always this
+  // session or already-absent; this guard just keeps that invariant from being a
+  // silent precondition of correctness here.
   if (sessionMap.getByKey(sessionKey) === session) {
     sessionMap.deleteByKey(sessionKey);
   }
