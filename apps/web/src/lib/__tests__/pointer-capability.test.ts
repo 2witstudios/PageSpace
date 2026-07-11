@@ -135,9 +135,36 @@ describe('POINTER_CAPABILITY_SCRIPT', () => {
     expect(evalScript({ coarse: false, maxTouchPoints: 0, userAgent: UA.macOS })).toEqual({});
   });
 
-  it('agrees with detectCoarsePointer on the iPhone', () => {
-    expect(evalScript({ coarse: true, maxTouchPoints: 5, userAgent: UA.iPhone })).toEqual({
-      'data-pointer': 'coarse',
+  /**
+   * The script is a hand-minified copy of `detectCoarsePointer` — it has to be,
+   * because it runs before any bundle loads. That duplication is the one real
+   * maintenance hazard in this module, so pin the two together: every device in
+   * the matrix must produce the same verdict from both implementations. Change
+   * one without the other and this fails.
+   */
+  describe('parity with detectCoarsePointer', () => {
+    const DEVICES: Array<{ name: string; device: DeviceShape }> = [
+      { name: 'iPhone', device: { coarse: true, maxTouchPoints: 5, userAgent: UA.iPhone } },
+      { name: 'iPad, mobile content mode', device: { coarse: true, maxTouchPoints: 5, userAgent: UA.mobileIPad } },
+      { name: 'iPad, desktop-class', device: { coarse: false, maxTouchPoints: 5, userAgent: UA.desktopClassIPad } },
+      {
+        name: 'iPad, desktop-class, Capacitor native',
+        device: { coarse: false, maxTouchPoints: 5, userAgent: UA.desktopClassIPad, capacitorNative: true },
+      },
+      { name: 'macOS', device: { coarse: false, maxTouchPoints: 0, userAgent: UA.macOS } },
+      {
+        name: 'macOS with a non-native Capacitor shim',
+        device: { coarse: false, maxTouchPoints: 0, userAgent: UA.macOS, capacitorNative: false },
+      },
+      { name: 'Windows desktop', device: { coarse: false, maxTouchPoints: 0, userAgent: UA.windows } },
+      { name: 'Windows touchscreen laptop', device: { coarse: false, maxTouchPoints: 10, userAgent: UA.windows } },
+    ];
+
+    it.each(DEVICES)('agrees on $name', ({ device }) => {
+      const stamped = evalScript(device)['data-pointer'] === 'coarse';
+
+      stubDevice(device);
+      expect(stamped).toBe(detectCoarsePointer());
     });
   });
 });

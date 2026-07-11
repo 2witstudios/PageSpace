@@ -83,12 +83,17 @@ export function MessageHoverToolbar({
         'flex items-center gap-0.5 p-0.5',
         'rounded-md border border-border bg-popover shadow-sm',
         // Hover devices: hidden by default, shown on hover/focus or when picker is open.
-        // Touch devices: always visible so message actions remain reachable. This used
-        // to key off `[@media(hover:none)]`, which is dead on a desktop-class iPad —
-        // it reports `hover: hover`. `touch:` keys off the JS-stamped data-pointer
-        // attribute instead (see lib/pointer-capability.ts).
+        // Touch devices: always visible so message actions remain reachable.
+        //
+        // Both gates are kept on purpose. `[@media(hover:none)]` catches iPhone and
+        // Android with zero JS, but is dead on a desktop-class iPad, which reports
+        // `hover: hover`. `touch:` catches that iPad, but depends on the inline script
+        // in layout.tsx having stamped data-pointer (see lib/pointer-capability.ts).
+        // Together they degrade gracefully: if the script never runs, every device the
+        // media query already covered still works.
         'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100',
         'pointer-events-none group-hover/msg:pointer-events-auto focus-within:pointer-events-auto',
+        '[@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto',
         'touch:opacity-100 touch:pointer-events-auto',
         'transition-opacity',
         pickerOpen && 'opacity-100 pointer-events-auto',

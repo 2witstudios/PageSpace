@@ -15,27 +15,20 @@
  * laptops and change desktop rendering.
  */
 
-interface CapacitorGlobal {
-  isNativePlatform?: () => boolean;
-}
-
-type WindowWithCapacitor = Window & { Capacitor?: CapacitorGlobal };
+import { isCapacitorApp } from './capacitor-bridge';
 
 export function detectCoarsePointer(): boolean {
   if (typeof window === 'undefined') return false;
 
   // 1. Capacitor native shell — true regardless of content mode.
-  const capacitor = (window as WindowWithCapacitor).Capacitor;
-  if (capacitor?.isNativePlatform?.()) return true;
+  if (isCapacitorApp()) return true;
 
   // 2. Standard coarse pointer — iPhone, Android, iPad in mobile content mode.
   if (window.matchMedia?.('(pointer: coarse)').matches) return true;
 
   // 3. Desktop-class iPad: reports `pointer: fine` but still has multi-touch.
   //    Real macOS has maxTouchPoints === 0, so it never matches.
-  const nav = typeof navigator === 'undefined' ? undefined : navigator;
-  if (!nav) return false;
-  return (nav.maxTouchPoints ?? 0) > 1 && /iPad|Macintosh|iPhone/.test(nav.userAgent);
+  return (navigator.maxTouchPoints ?? 0) > 1 && /iPad|Macintosh|iPhone/.test(navigator.userAgent);
 }
 
 /**

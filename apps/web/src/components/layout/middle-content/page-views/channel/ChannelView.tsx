@@ -707,7 +707,7 @@ function ChannelView({ page }: ChannelViewProps) {
                                 </span>
                               </div>
                             )}
-                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "touch:pr-28")}>
+                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "[@media(hover:none)]:pr-28 touch:pr-28")}>
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>

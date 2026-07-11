@@ -55,10 +55,30 @@ svg.lucide {
   opacity: 0;
 }
 
-/* Display-based reveal (`hidden group-hover:inline`), not opacity-based. */
-:where([data-pointer='coarse'])
-  [class*='group-hover:inline']:not([data-hover-only]) {
+/* Display-based reveals (`hidden group-hover:inline`), not opacity-based. Only
+   `inline` is in use today; the others are the natural forms for the next such
+   control, covered now so it can't silently re-break.
+
+   These match the exact class token (`~=`), NOT a substring. Substring matching
+   is correct for the opacity rules above — it is what catches `sm:` and
+   named-group variants — but here it would make `group-hover:flex` also match
+   `group-hover:flex-row` and force `display: flex` on an element that only asked
+   to change its flex-direction. For a display reveal there is nothing to catch:
+   the token is written out in full. */
+:where([data-pointer='coarse']) [class~='group-hover:inline']:not([data-hover-only]) {
   display: inline;
+}
+:where([data-pointer='coarse']) [class~='group-hover:inline-flex']:not([data-hover-only]) {
+  display: inline-flex;
+}
+:where([data-pointer='coarse']) [class~='group-hover:flex']:not([data-hover-only]) {
+  display: flex;
+}
+:where([data-pointer='coarse']) [class~='group-hover:block']:not([data-hover-only]) {
+  display: block;
+}
+:where([data-pointer='coarse']) [class~='group-hover:grid']:not([data-hover-only]) {
+  display: grid;
 }
 
 @theme inline {

@@ -627,7 +627,7 @@ export default function InboxDMPage() {
                     </div>
                   )}
 
-                  <div className={cn("flex-1 min-w-0", !isFirst && "touch:pr-28")}>
+                  <div className={cn("flex-1 min-w-0", !isFirst && "[@media(hover:none)]:pr-28 touch:pr-28")}>
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>

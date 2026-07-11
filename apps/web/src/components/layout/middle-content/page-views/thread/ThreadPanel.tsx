@@ -781,7 +781,7 @@ export function ThreadPanel({
                   {author.image && <AvatarImage src={author.image} />}
                   <AvatarFallback>{initial}</AvatarFallback>
                 </Avatar>
-                <div className={cn("min-w-0 flex-1", "touch:pr-28")}>
+                <div className={cn("min-w-0 flex-1", "[@media(hover:none)]:pr-28 touch:pr-28")}>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold">{author.name}</span>
                     <span className="text-xs text-muted-foreground">
