@@ -8,16 +8,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -37,6 +27,7 @@ import { useAgentTerminals, type AgentTerminal } from '@/hooks/useAgentTerminals
 import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { useTerminalWorkspaceStore, type OpenTerminalScope } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
+import ConfirmRemoveDialog from '../workspace/ConfirmRemoveDialog';
 
 const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
 
@@ -171,8 +162,11 @@ function TerminalList({
           <button
             type="button"
             onClick={() => setPendingRemove(terminal.name)}
-            className="invisible size-5 shrink-0 rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:visible"
+            // Hover-reveal, but kept in the tab order and revealed on keyboard
+            // focus (opacity, not visibility) so keyboard users can reach it.
+            className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
             title="Remove terminal"
+            aria-label={`Remove terminal ${terminal.name}`}
           >
             <X className="mx-auto size-3.5" />
           </button>
@@ -248,51 +242,3 @@ function AddAgentTerminalDialog({ onAdd }: { onAdd(name: string, agentType: Agen
   );
 }
 
-function ConfirmRemoveDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  title: string;
-  description: string;
-  onConfirm(): Promise<unknown>;
-}) {
-  const [removing, setRemoving] = useState(false);
-
-  const handleConfirm = async () => {
-    setRemoving(true);
-    try {
-      await onConfirm();
-      onOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove');
-    } finally {
-      setRemoving(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={open} onOpenChange={(v) => !removing && onOpenChange(v)}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleConfirm}
-            disabled={removing}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {removing ? 'Removing…' : 'Remove'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}

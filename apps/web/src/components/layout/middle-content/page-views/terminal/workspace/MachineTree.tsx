@@ -17,16 +17,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -52,6 +42,7 @@ import { useMachineBranches } from '@/hooks/useMachineBranches';
 import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
 import { useProviders } from '@/hooks/useIntegrations';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
+import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import EmptyState from './EmptyState';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
@@ -124,8 +115,12 @@ function TreeRow({
         <button
           type="button"
           onClick={onRemove}
-          className="invisible size-5 shrink-0 rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:visible"
+          // Hover-reveal, but kept in the tab order and revealed on keyboard
+          // focus (opacity, not visibility) so keyboard users can reach it —
+          // same chrome-free reveal pattern as TerminalPanes' pane controls.
+          className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
           title={removeTitle}
+          aria-label={removeTitle}
         >
           <X className="mx-auto size-3.5" />
         </button>
@@ -284,55 +279,6 @@ function BranchNode({
       />
       {expandable && expanded && <div className="pl-4">{renderNodeChildren?.(node)}</div>}
     </div>
-  );
-}
-
-function ConfirmRemoveDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  title: string;
-  description: string;
-  onConfirm(): Promise<unknown>;
-}) {
-  const [removing, setRemoving] = useState(false);
-
-  const handleConfirm = async () => {
-    setRemoving(true);
-    try {
-      await onConfirm();
-      onOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove');
-    } finally {
-      setRemoving(false);
-    }
-  };
-
-  return (
-    <AlertDialog open={open} onOpenChange={(v) => !removing && onOpenChange(v)}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={handleConfirm}
-            disabled={removing}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          >
-            {removing ? 'Removing…' : 'Remove'}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   );
 }
 

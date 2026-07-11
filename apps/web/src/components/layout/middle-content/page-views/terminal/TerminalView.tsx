@@ -1,7 +1,7 @@
 "use client";
 
 import '@xterm/xterm/css/xterm.css';
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
 import { Code2, GitCompare, Settings, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -29,9 +29,9 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
  * The Machine page's 4-tab command center (Terminal / Code / Diff / Settings).
  *
  * `pageId` IS the Machine id, so it's threaded down to every tab as `machineId`.
- * Each tab's body is mounted only while it is the active tab — switching tabs
- * unmounts the previous one — so opening a Machine page never eagerly fires all
- * four tabs' data fetches / socket connections at once; only the visible tab
+ * Radix `TabsContent` (no `forceMount`) renders only the active tab's body and
+ * unmounts it on switch, so opening a Machine page never eagerly fires all four
+ * tabs' data fetches / socket connections at once — only the visible tab
  * initializes. Terminal is the default. The export name (`TerminalView`) and
  * `{ pageId }` prop shape are preserved so `CenterPanel.tsx` /
  * `TerminalKeepAliveHost.tsx` need no change.
@@ -39,7 +39,6 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
 const TerminalView = ({ pageId }: TerminalViewProps) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
-  const [activeTab, setActiveTab] = useState<MachineTabValue>('terminal');
 
   return (
     <motion.div
@@ -58,11 +57,7 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
       )}
 
       {isAdmin && (
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => setActiveTab(value as MachineTabValue)}
-          className="flex min-h-0 flex-1 flex-col gap-0"
-        >
+        <Tabs defaultValue="terminal" className="flex min-h-0 flex-1 flex-col gap-0">
           <div className="border-b border-border px-2 py-1.5">
             <TabsList className="h-auto bg-transparent p-0">
               {TAB_TRIGGERS.map(({ value, label, icon: Icon }) => (
@@ -81,19 +76,17 @@ const TerminalView = ({ pageId }: TerminalViewProps) => {
             </TabsList>
           </div>
 
-          {/* Each body is gated on the active tab so it mounts lazily and
-              unmounts on switch — no eager 4x fetch/socket init on page load. */}
           <TabsContent value="terminal" className="min-h-0 flex-1 outline-none">
-            {activeTab === 'terminal' && <TerminalTab machineId={pageId} />}
+            <TerminalTab machineId={pageId} />
           </TabsContent>
           <TabsContent value="code" className="min-h-0 flex-1 outline-none">
-            {activeTab === 'code' && <CodeTab machineId={pageId} />}
+            <CodeTab machineId={pageId} />
           </TabsContent>
           <TabsContent value="diff" className="min-h-0 flex-1 outline-none">
-            {activeTab === 'diff' && <DiffTab machineId={pageId} />}
+            <DiffTab machineId={pageId} />
           </TabsContent>
           <TabsContent value="settings" className="min-h-0 flex-1 outline-none">
-            {activeTab === 'settings' && <SettingsTab machineId={pageId} />}
+            <SettingsTab machineId={pageId} />
           </TabsContent>
         </Tabs>
       )}
