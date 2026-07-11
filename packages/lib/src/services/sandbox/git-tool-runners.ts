@@ -16,15 +16,23 @@ const GITHUB_CREDENTIAL_HELPER =
 /**
  * Where `gh` keeps its durable config (hosts.yml, prefs, cached auth state).
  *
- * MUST live on the persistent sandbox disk under SANDBOX_ROOT — NOT `/tmp`,
- * which the Sprites platform wipes on ANY pause
- * (https://docs.sprites.dev/concepts/lifecycle/ — "Lost on any pause: /tmp
- * scratch files"). Durable state belongs on the persistent disk
- * (https://docs.sprites.dev/working-with-sprites/). Deliberately kept at the
- * sandbox root, outside `${SANDBOX_ROOT}/repo` and agent project dirs where
- * git/gh operations run, so it can never collide with a checked-out repo.
+ * MUST live on the persistent disk — NOT `/tmp`, which the Sprites platform
+ * wipes on ANY pause (https://docs.sprites.dev/concepts/lifecycle/ — "disk
+ * persists, memory does not"; `/tmp` is scratch). The ENTIRE Sprite filesystem
+ * is durable, so any non-`/tmp` path survives pause/wake.
+ *
+ * It must ALSO sit OUTSIDE the sandbox workspace root (SANDBOX_ROOT =
+ * `/workspace`). The agent git tools default `git_clone` / `git_init` to
+ * SANDBOX_ROOT itself when no `path` is given
+ * (apps/web/src/lib/ai/tools/sandbox-git-tools.ts) — so a config dir anywhere
+ * under `/workspace` would make the root non-empty and break a no-path clone
+ * (git refuses a non-empty destination) or get swept into a `git init` +
+ * `git add .`. We therefore anchor it in the Sprite user's persistent home
+ * (`/home/sprite`, per https://docs.sprites.dev/working-with-sprites/), which
+ * is durable, writable by the running `sprite` user, gh auto-creates it on
+ * first write, and it is never a git destination.
  */
-export const GH_CONFIG_DIR = `${SANDBOX_ROOT}/.gh-config`;
+export const GH_CONFIG_DIR = '/home/sprite/.gh-config';
 
 /**
  * Pure builder for the environment passed to a single in-sprite git/gh

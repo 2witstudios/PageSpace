@@ -169,12 +169,14 @@ describe('runGitInSandbox', () => {
     expect(runCommandCalls[0].env).toMatchObject({ GIT_CONFIG_NOSYSTEM: '1' });
   });
 
-  it('always injects GH_CONFIG_DIR pointed at the persistent sandbox disk (not /tmp)', async () => {
+  it('always injects GH_CONFIG_DIR pointed at the persistent disk, not /tmp', async () => {
     const { deps, runCommandCalls } = makeDepsWithSpy();
     await runGitInSandbox({ cmd: 'gh', args: ['auth', 'status'], ctx: makeCtx(), deps });
     expect(runCommandCalls[0].env).toMatchObject({ GH_CONFIG_DIR });
-    expect(runCommandCalls[0].env?.GH_CONFIG_DIR).toMatch(new RegExp(`^${SANDBOX_ROOT}/`));
     expect(runCommandCalls[0].env?.GH_CONFIG_DIR).not.toContain('/tmp');
+    // Must NOT live under the workspace root — git_clone/git_init default their
+    // destination there, and a non-empty /workspace breaks a no-path clone.
+    expect(runCommandCalls[0].env?.GH_CONFIG_DIR?.startsWith(`${SANDBOX_ROOT}/`)).toBe(false);
   });
 
   it('returns success result with stdout, stderr, exitCode, truncated', async () => {
@@ -260,12 +262,12 @@ describe('runGitInSandbox — injection seam (screenOutput, fail-open)', () => {
 describe('buildGitToolEnv (pure)', () => {
   const base = { NODE_ENV: 'test' };
 
-  it('given the tool env, should point GH_CONFIG_DIR under the persistent SANDBOX_ROOT', () => {
+  it('given the tool env, should root GH_CONFIG_DIR at an absolute persistent path (not /tmp)', () => {
     const env = buildGitToolEnv({ baseEnv: base, token: 'ghp_x' });
     assert({
       given: 'a git/gh tool env',
-      should: 'root GH_CONFIG_DIR at the persistent sandbox disk',
-      actual: env.GH_CONFIG_DIR.startsWith(`${SANDBOX_ROOT}/`),
+      should: 'root GH_CONFIG_DIR at an absolute, non-ephemeral disk path',
+      actual: env.GH_CONFIG_DIR.startsWith('/') && !env.GH_CONFIG_DIR.includes('/tmp'),
       expected: true,
     });
   });
@@ -283,11 +285,19 @@ describe('buildGitToolEnv (pure)', () => {
     });
   });
 
-  it('given the GH_CONFIG_DIR path, should sit outside the repo working dir', () => {
+  it('given the GH_CONFIG_DIR path, should sit entirely outside the workspace root', () => {
+    // git_clone / git_init default their destination to SANDBOX_ROOT itself, so
+    // ANY path under /workspace (not just /workspace/repo) would collide: a
+    // non-empty /workspace breaks a no-path clone. The config dir must be fully
+    // outside the workspace root. (Widen to string — the literal constants are
+    // provably disjoint, which would otherwise trip TS's unintentional-compare
+    // check.)
+    const dir: string = GH_CONFIG_DIR;
+    const root: string = SANDBOX_ROOT;
     assert({
       given: 'the persistent gh config dir',
-      should: 'not live under the agent repo dir where git operations run',
-      actual: GH_CONFIG_DIR.startsWith(`${SANDBOX_ROOT}/repo`),
+      should: 'be neither the workspace root nor nested under it',
+      actual: dir === root || dir.startsWith(`${root}/`),
       expected: false,
     });
   });
