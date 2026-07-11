@@ -15,6 +15,7 @@ import { mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
+import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 
 /** Statuses whose cert is still advancing — worth a lazy reconcile on read. */
 const CERT_NON_TERMINAL = new Set(['verified', 'provisioning']);
@@ -155,7 +156,7 @@ export async function POST(
       // Nothing else triggers this backfill for a row inserted straight as
       // `active` — the existing backfill only fires on the pending -> active
       // TRANSITION inside reconcileCustomDomainCert, which this path bypasses.
-      mirrorDriveToCustomHost(driveId, hostname).catch((err) => {
+      mirrorDriveToCustomHost(driveId, hostname, renderDomainNotFoundOverride).catch((err) => {
         loggers.api.warn('Failed to backfill platform-owned domain mirror', {
           driveId,
           hostname,

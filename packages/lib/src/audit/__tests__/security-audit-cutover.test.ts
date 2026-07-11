@@ -287,11 +287,69 @@ describe('securityAudit default wiring cutover', () => {
     });
   });
 
-  describe('fail mode (no Admin PG, flag not armed)', () => {
+  describe('main-db mode (unconfigured trust plane — THE incident fix: silent, working)', () => {
+    beforeEach(() => {
+      mockGetAdminDbMode.mockReturnValue({ mode: 'main-db', reason: 'main db default' });
+    });
+
+    it('given logEvent, should use the advisory-lock chained append against the MAIN db (audit writes SUCCEED)', async () => {
+      const { securityAuditModule } = await loadFreshModules();
+
+      await securityAuditModule.securityAudit.logEvent({ eventType: 'data.read', userId: 'u' });
+      await vi.waitFor(() => expect(state.mainInserts.length).toBeGreaterThanOrEqual(1));
+
+      expect(lockSqlSeen().length).toBeGreaterThanOrEqual(1);
+      expect(state.mainInserts.map((v) => v.eventType)).toContain('data.read');
+      // The Admin PG is never touched.
+      expect(mockGetAdminDb).not.toHaveBeenCalled();
+      expect(state.adminInserts).toHaveLength(0);
+    });
+
+    it('should NOT self-record any break-glass security event (silent operation)', async () => {
+      const { securityAuditModule } = await loadFreshModules();
+
+      await securityAuditModule.securityAudit.logEvent({ eventType: 'data.read', userId: 'u' });
+      await securityAuditModule.securityAudit.logEvent({ eventType: 'data.write', userId: 'u' });
+      await vi.waitFor(() => expect(state.mainInserts.length).toBeGreaterThanOrEqual(2));
+
+      const breakGlassEvents = state.mainInserts.filter(
+        (v) =>
+          Array.isArray(v.anomalyFlags) &&
+          (v.anomalyFlags as string[]).includes('admin_db_break_glass'),
+      );
+      expect(breakGlassEvents).toHaveLength(0);
+    });
+
+    it('should NOT fire any alert through the security-audit-alerting channel', async () => {
+      const { securityAuditModule, alerting } = await loadFreshModules();
+      const handler = vi.fn();
+      alerting.setChainAlertHandler(handler);
+
+      await securityAuditModule.securityAudit.logEvent({ eventType: 'data.read', userId: 'u' });
+      await securityAuditModule.securityAudit.logEvent({ eventType: 'data.write', userId: 'u' });
+      await vi.waitFor(() => expect(state.mainInserts.length).toBeGreaterThanOrEqual(2));
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('should NOT log the break-glass banner (no BREAK-GLASS security error)', async () => {
+      const { securityAuditModule } = await loadFreshModules();
+
+      await securityAuditModule.securityAudit.logEvent({ eventType: 'data.read', userId: 'u' });
+      await vi.waitFor(() => expect(state.mainInserts.length).toBeGreaterThanOrEqual(1));
+
+      const banners = mockLoggers.security.error.mock.calls.filter(([msg]) =>
+        String(msg).includes('BREAK-GLASS'),
+      );
+      expect(banners).toHaveLength(0);
+    });
+  });
+
+  describe('fail mode (trust plane declared required but unconfigured)', () => {
     beforeEach(() => {
       mockGetAdminDbMode.mockReturnValue({
         mode: 'fail',
-        reason: 'ADMIN_DATABASE_URL is not set. The Admin PG (trust plane) is required.',
+        reason: "AUDIT_TRUST_PLANE_REQUIRED='true' but ADMIN_DATABASE_URL is not set.",
       });
     });
 

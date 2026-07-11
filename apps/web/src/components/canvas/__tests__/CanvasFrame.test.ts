@@ -1,4 +1,5 @@
 import React from 'react';
+import { flushSync } from 'react-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
@@ -7,8 +8,24 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => fetchWithAuthMock(...args),
 }));
 
+const useThemeMock = vi.fn();
+vi.mock('next-themes', () => ({
+  useTheme: () => useThemeMock(),
+}));
+
 import { CANVAS_IFRAME_SANDBOX, CanvasFrame } from '../CanvasFrame';
-import { NonceProvider } from '@/contexts/NonceContext';
+
+// React 19.2.6 production build in this sandbox doesn't export `act`;
+// @testing-library/react 16.x requires it. Polyfill with flushSync so React
+// updates are committed synchronously. In CI (development React build) React.act
+// exists and this is never reached.
+if (typeof (React as Record<string, unknown>).act !== 'function') {
+  (React as Record<string, unknown>).act = (cb: () => unknown) => {
+    let result: unknown;
+    flushSync(() => { result = cb(); });
+    return result;
+  };
+}
 
 /**
  * Security invariant guard for the in-app canvas iframe.
@@ -39,6 +56,7 @@ describe('CANVAS_IFRAME_SANDBOX', () => {
 describe('CanvasFrame', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
     fetchWithAuthMock.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -70,31 +88,130 @@ describe('CanvasFrame', () => {
   });
 });
 
-/**
- * A srcDoc iframe unconditionally inherits the embedder (app shell) document's
- * CSP, which is nonce-based. Author <script> tags need a matching nonce or the
- * inherited policy blocks them, even though canvas's own <meta> CSP would
- * allow them. This guards the fix: the nonce reaches CanvasFrame via context
- * and lands on the rendered author script.
- */
-describe('CanvasFrame — CSP nonce threading', () => {
-  it('given a NonceProvider with a known nonce, should stamp it onto the rendered author <script> in the iframe srcdoc', async () => {
-    fetchWithAuthMock.mockResolvedValue({ ok: true, json: async () => ({ links: [] }) });
-
-    render(
-      React.createElement(
-        NonceProvider,
-        { nonce: 'test-nonce-123' },
-        React.createElement(CanvasFrame, {
-          html: '<script>console.log("hi")</script>',
-          title: 'Canvas',
-        }),
-      ),
-    );
-
-    await waitFor(() => {
-      const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
-      expect(iframe.srcdoc).toContain('<script nonce="test-nonce-123">console.log("hi")</script>');
+describe('CanvasFrame — theme sync', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useThemeMock.mockReturnValue({ resolvedTheme: 'dark' });
+    fetchWithAuthMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ links: [] }),
     });
+  });
+
+  it('given injectThemeBridge, should pass it to renderCanvasDocument so the srcDoc contains the bridge script', () => {
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain('pagespace-theme');
+  });
+
+  it('given resolvedTheme, should postMessage the theme to the iframe on mount', async () => {
+    const mockPostMessage = vi.fn();
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    // jsdom does not create contentWindow for sandboxed iframes, so inject a
+    // mock that the effect's postMessage call will use.
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: { postMessage: mockPostMessage },
+      configurable: true,
+    });
+
+    mockPostMessage.mockClear();
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: iframe.contentWindow,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: true },
+      '*',
+    );
+  });
+
+  it('given a pagespace-theme-request message from the iframe, should respond with the current theme', async () => {
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    // Simulate the iframe's bridge script requesting the theme on load.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: true },
+      '*',
+    );
+  });
+
+  it('given resolvedTheme is light, should send isDark: false', async () => {
+    useThemeMock.mockReturnValue({ resolvedTheme: 'light' });
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    const { container } = render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: mockContentWindow as unknown as MessageEventSource,
+    }));
+
+    expect(mockPostMessage).toHaveBeenCalledWith(
+      { type: 'pagespace-theme', isDark: false },
+      '*',
+    );
+  });
+
+  it('given a message from a different source, should NOT respond', async () => {
+    const mockPostMessage = vi.fn();
+    const mockContentWindow = { postMessage: mockPostMessage };
+
+    render(React.createElement(CanvasFrame, {
+      html: '<p>x</p>',
+      title: 'Canvas',
+    }));
+
+    const iframe = screen.getByTitle('Canvas') as HTMLIFrameElement;
+    Object.defineProperty(iframe, 'contentWindow', {
+      value: mockContentWindow,
+      configurable: true,
+    });
+
+    // Simulate a message from a source that is NOT the iframe.
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'pagespace-theme-request' },
+      source: window,
+    }));
+
+    expect(mockPostMessage).not.toHaveBeenCalled();
   });
 });

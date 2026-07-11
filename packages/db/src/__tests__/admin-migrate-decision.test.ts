@@ -31,8 +31,16 @@ describe('resolveAdminMigrateDecision', () => {
     }
   });
 
-  it('given no URL and no flag, should refuse with the fail-fast reason', () => {
+  it('given no URL and no flag (main-db default), should refuse — migrations only run against a dedicated Admin PG', () => {
     const decision = resolveAdminMigrateDecision({});
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.reason).toMatch(/ADMIN_DATABASE_URL/);
+    }
+  });
+
+  it('given AUDIT_TRUST_PLANE_REQUIRED armed but no URL, should refuse with the fail-fast reason', () => {
+    const decision = resolveAdminMigrateDecision({ AUDIT_TRUST_PLANE_REQUIRED: 'true' });
     expect(decision.ok).toBe(false);
     if (!decision.ok) {
       expect(decision.reason).toMatch(/ADMIN_DATABASE_URL/);

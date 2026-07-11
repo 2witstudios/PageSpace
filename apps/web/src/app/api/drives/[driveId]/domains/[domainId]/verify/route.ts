@@ -10,6 +10,7 @@ import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-do
 import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 import { isAuthError, checkMCPDriveScope } from '@/lib/auth/auth-core';
 import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
+import { renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -65,7 +66,7 @@ export async function POST(
     // content stops being served. Both best-effort and fire-and-forget: a
     // storage failure must never fail the verify response.
     if (nextStatus === 'verified') {
-      mirrorDriveToCustomHost(driveId, domain.hostname).catch((err) => {
+      mirrorDriveToCustomHost(driveId, domain.hostname, renderDomainNotFoundOverride).catch((err) => {
         loggers.api.warn('Failed to mirror drive to custom host on verify', {
           driveId,
           hostname: domain.hostname,

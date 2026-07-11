@@ -342,6 +342,7 @@ export async function processSiemDelivery(deps: SiemDeliveryDeps = {}): Promise<
   const env = deps.env ?? {
     ADMIN_DATABASE_URL: process.env.ADMIN_DATABASE_URL,
     ADMIN_DB_BREAK_GLASS: process.env.ADMIN_DB_BREAK_GLASS,
+    AUDIT_TRUST_PLANE_REQUIRED: process.env.AUDIT_TRUST_PLANE_REQUIRED,
   };
   const { decision, routing } = resolveSiemPoolRouting(env);
   if (routing === null) {

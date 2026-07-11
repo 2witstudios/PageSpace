@@ -226,6 +226,48 @@ describe('runBashInSandbox', () => {
     ]);
   });
 
+  it('given a successful session and a resolved pageId, should opportunistically measure storage with the live sandbox', async () => {
+    const measured: Array<{ sandbox: unknown; pageId: string }> = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      measureStorage: async (input) => {
+        measured.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    // Fire-and-forget: give the microtask a tick to run.
+    await Promise.resolve();
+    expect(measured).toHaveLength(1);
+    expect(measured[0].pageId).toBe('terminal-page-1');
+  });
+
+  it('given no resolved machine pageId, should never measure storage', async () => {
+    const measured: unknown[] = [];
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false }),
+      measureStorage: async (input) => {
+        measured.push(input);
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: true });
+    await Promise.resolve();
+    expect(measured).toEqual([]);
+  });
+
+  it('given a throwing storage measurement, should still return the successful result (best-effort)', async () => {
+    const { deps } = makeDeps({
+      acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' }),
+      measureStorage: async () => {
+        throw new Error('measure failed');
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+    expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
+    await Promise.resolve();
+  });
+
   it('given no resolved machine pageId, should never call the terminal activity feed', async () => {
     const notified: unknown[] = [];
     const { deps } = makeDeps({

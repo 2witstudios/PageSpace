@@ -406,7 +406,7 @@ describe('POST /api/drives/[driveId]/domains', () => {
     expect(valuesMock).toHaveBeenCalledWith(
       expect.objectContaining({ hostname: 'pagespace.ai', status: 'active', platformOwned: true }),
     );
-    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'pagespace.ai');
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'pagespace.ai', expect.any(Function));
   });
 
   it('does not let a platform admin bypass the blocklist for an unrelated pagespace.* host', async () => {

@@ -1,10 +1,14 @@
 /**
  * Pure resolver for a drive's "primary published host".
  *
- * Every custom-domain mirror is byte-for-byte identical to the subdomain copy
- * (no re-render). To consolidate SEO we pick ONE host as canonical — the same
- * value baked into `<link rel=canonical>`, `og:url`, `sitemap.xml <loc>`, and
- * `robots.txt Sitemap:` across ALL copies. When multiple copies point at the
+ * Every custom-domain mirror carries the same page paths as the subdomain
+ * copy (no re-render of ordinary pages), EXCEPT the root (`/`) and 404.html,
+ * which a domain may override via `publishLandingPageId`/`publishNotFoundPageId`
+ * (see `custom-domain-mirror.ts`) to diverge from the drive-wide default. That
+ * per-domain divergence is orthogonal to primary-host selection below: SEO
+ * canonicalization still needs ONE host as canonical — the same value baked
+ * into `<link rel=canonical>`, `og:url`, `sitemap.xml <loc>`, and
+ * `robots.txt Sitemap:` across every copy. When multiple copies point at the
  * same primary host, search engines consolidate ranking signals on that one URL.
  *
  * Primary-host selection rule (deterministic):

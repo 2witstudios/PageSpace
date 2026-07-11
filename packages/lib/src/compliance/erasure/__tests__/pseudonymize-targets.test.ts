@@ -59,6 +59,14 @@ describe('planSecurityAuditErasure (pure)', () => {
     expect(plan).toEqual({ ok: true, mode: 'break-glass', stores: ['main'] });
   });
 
+  it('given main-db mode (unconfigured default), should target only the main store like break-glass', () => {
+    const plan = planSecurityAuditErasure({
+      auditMode: 'main-db',
+      eraserMode: 'unavailable',
+    });
+    expect(plan).toEqual({ ok: true, mode: 'main-db', stores: ['main'] });
+  });
+
   it('given fail mode, should refuse loudly with the audit reason — a misconfigured trust plane never silently no-ops an erasure', () => {
     const plan = planSecurityAuditErasure({
       auditMode: 'fail',

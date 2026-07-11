@@ -213,7 +213,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/verify', () => {
 
       await POST(makeReq(), ctx());
 
-      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'acme.com');
+      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'acme.com', expect.any(Function));
       expect(clearCustomHost).not.toHaveBeenCalled();
     });
 

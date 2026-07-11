@@ -45,7 +45,7 @@ export interface SecurityAuditErasurePlanInput {
 }
 
 export type SecurityAuditErasurePlan =
-  | { ok: true; mode: 'dedicated' | 'break-glass'; stores: SecurityAuditErasureStore[] }
+  | { ok: true; mode: 'dedicated' | 'break-glass' | 'main-db'; stores: SecurityAuditErasureStore[] }
   | { ok: false; reason: string };
 
 /** Pure: which stores an erasure run must touch, or why it must refuse. */
@@ -64,6 +64,10 @@ export function planSecurityAuditErasure(
       // The whole audit surface (writes AND reads) is the main DB; there are
       // no admin-store rows the eraser identity could reach.
       return { ok: true, mode: 'break-glass', stores: ['main'] };
+    case 'main-db':
+      // Unconfigured trust plane: the audit surface is entirely the main DB,
+      // exactly like break-glass — no admin-store rows exist to erase.
+      return { ok: true, mode: 'main-db', stores: ['main'] };
     case 'dedicated':
       if (input.eraserMode === 'unavailable') {
         return {
@@ -89,7 +93,7 @@ export interface SecurityAuditErasureTarget {
 }
 
 export type ResolvedSecurityAuditErasureTargets =
-  | { ok: true; mode: 'dedicated' | 'break-glass'; targets: SecurityAuditErasureTarget[] }
+  | { ok: true; mode: 'dedicated' | 'break-glass' | 'main-db'; targets: SecurityAuditErasureTarget[] }
   | { ok: false; reason: string };
 
 /**

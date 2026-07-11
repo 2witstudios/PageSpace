@@ -70,11 +70,39 @@ describe('resolveSiemPoolRouting', () => {
     });
   });
 
-  it('given no admin URL and no break-glass flag, should return no routing (worker halts loudly)', () => {
+  it('given no admin URL and no flags (main-db default), should route every operation to main — silently, like the legacy worker', () => {
     const { decision, routing } = resolveSiemPoolRouting({});
 
     assert({
-      given: 'unconfigured trust plane',
+      given: 'unconfigured trust plane, no enforcement flag',
+      should: 'resolve mode main-db (the silent pre-trust-plane default)',
+      actual: decision.mode,
+      expected: 'main-db',
+    });
+    assert({
+      given: 'main-db mode',
+      should: 'route everything to the main pool, identical to break-glass but silent',
+      actual: routing,
+      expected: {
+        mode: 'main-db',
+        advisoryLock: 'main',
+        cursors: 'main',
+        receipts: 'main',
+        data: {
+          activity_logs: 'main',
+          security_audit_log: 'main',
+        },
+        seedCursorFromLegacy: false,
+        awaitingBackfillProbe: false,
+      },
+    });
+  });
+
+  it('given AUDIT_TRUST_PLANE_REQUIRED armed but no URL, should return no routing (worker halts loudly)', () => {
+    const { decision, routing } = resolveSiemPoolRouting({ AUDIT_TRUST_PLANE_REQUIRED: 'true' });
+
+    assert({
+      given: 'trust plane declared required but unconfigured',
       should: 'resolve mode fail',
       actual: decision.mode,
       expected: 'fail',

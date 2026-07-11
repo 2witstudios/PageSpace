@@ -63,8 +63,10 @@ vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
 }));
 
 const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
+const renderDomainNotFoundOverride = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/canvas/publish-page', () => ({
   regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
+  renderDomainNotFoundOverride: (...args: unknown[]) => renderDomainNotFoundOverride(...args),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -314,7 +316,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
 
       await POST(makeReq(), ctx());
 
-      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com', expect.any(Function));
     });
 
     it('regenerates site files before mirroring when domain becomes active', async () => {
@@ -332,7 +334,7 @@ describe('POST /api/drives/[driveId]/domains/[domainId]/cert/refresh', () => {
 
       await POST(makeReq(), ctx());
 
-      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+      expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com', expect.any(Function));
     });
 
     it('does NOT trigger mirrorDriveToCustomHost when already-active domain is re-checked', async () => {

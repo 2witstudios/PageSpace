@@ -109,7 +109,7 @@ describe('putPublishedSiteFile', () => {
   });
 
   it('writes robots.txt as text/plain at the subdomain-root key', async () => {
-    const result = await putPublishedSiteFile({ subdomain: 'acme', file: 'robots.txt', body: 'User-agent: *' });
+    const result = await putPublishedSiteFile({ prefix: 'acme', file: 'robots.txt', body: 'User-agent: *' });
 
     expect(result).toEqual({ key: 'published/acme/robots.txt' });
     const command = send.mock.calls[0][0];
@@ -123,12 +123,12 @@ describe('putPublishedSiteFile', () => {
   });
 
   it('writes sitemap.xml as application/xml', async () => {
-    await putPublishedSiteFile({ subdomain: 'acme', file: 'sitemap.xml', body: '<urlset/>' });
+    await putPublishedSiteFile({ prefix: 'acme', file: 'sitemap.xml', body: '<urlset/>' });
     expect(send.mock.calls[0][0].input.ContentType).toBe('application/xml; charset=utf-8');
   });
 
   it('writes 404.html as text/html', async () => {
-    await putPublishedSiteFile({ subdomain: 'acme', file: '404.html', body: '<!doctype html>' });
+    await putPublishedSiteFile({ prefix: 'acme', file: '404.html', body: '<!doctype html>' });
     expect(send.mock.calls[0][0].input.ContentType).toBe('text/html; charset=utf-8');
   });
 });

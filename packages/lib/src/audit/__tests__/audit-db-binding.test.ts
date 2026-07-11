@@ -78,6 +78,27 @@ describe('resolveAuditDbBinding()', () => {
     });
   });
 
+  describe('main-db mode (unconfigured trust plane — THE incident fix)', () => {
+    beforeEach(() => {
+      mockGetAdminDbMode.mockReturnValue({ mode: 'main-db', reason: 'main db default' });
+    });
+
+    it('given main-db, should bind to the MAIN db client (silent legacy path)', () => {
+      const binding = resolveAuditDbBinding();
+      expect(binding.mode).toBe('main-db');
+      expect(binding.db).toBe(mockMainDb);
+    });
+
+    it('given main-db, should never touch getAdminDb — the admin-schema-typed main-pool client is shape-unsafe for main-plane reads', () => {
+      resolveAuditDbBinding();
+      expect(mockGetAdminDb).not.toHaveBeenCalled();
+    });
+
+    it('should carry the decision reason for the bind point', () => {
+      expect(resolveAuditDbBinding().reason).toBe('main db default');
+    });
+  });
+
   describe('fail mode', () => {
     beforeEach(() => {
       mockGetAdminDbMode.mockReturnValue({

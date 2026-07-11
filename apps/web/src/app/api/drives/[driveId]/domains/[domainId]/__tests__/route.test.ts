@@ -29,11 +29,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 const dbDelete = vi.fn();
+const dbUpdate = vi.fn();
 const findFirst = vi.fn();
 const dbTransaction = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     delete: (...args: unknown[]) => dbDelete(...args),
+    update: (...args: unknown[]) => dbUpdate(...args),
     query: { customDomains: { findFirst: (...args: unknown[]) => findFirst(...args) } },
     transaction: (...args: unknown[]) => dbTransaction(...args),
   },
@@ -50,18 +52,28 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
     status: 'col_status',
     isPrimary: 'col_isPrimary',
     createdAt: 'col_createdAt',
+    publishLandingPageId: 'col_publishLandingPageId',
+    publishNotFoundPageId: 'col_publishNotFoundPageId',
   },
 }));
 
 const clearCustomHost = vi.fn().mockResolvedValue(undefined);
+const mirrorDriveToCustomHost = vi.fn().mockResolvedValue(undefined);
 const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
 const republishDriveCanonical = vi.fn().mockResolvedValue(0);
+const renderDomainNotFoundOverride = vi.fn().mockResolvedValue(undefined);
+const isValidDriveNotFoundPage = vi.fn().mockResolvedValue(true);
 vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
   clearCustomHost: (...args: unknown[]) => clearCustomHost(...args),
+  mirrorDriveToCustomHost: (...args: unknown[]) => mirrorDriveToCustomHost(...args),
 }));
 vi.mock('@/lib/canvas/publish-page', () => ({
   regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
   republishDriveCanonical: (...args: unknown[]) => republishDriveCanonical(...args),
+  renderDomainNotFoundOverride: (...args: unknown[]) => renderDomainNotFoundOverride(...args),
+}));
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  isValidDriveNotFoundPage: (...args: unknown[]) => isValidDriveNotFoundPage(...args),
 }));
 
 const DRIVE_ID = 'drive-1';
@@ -78,6 +90,7 @@ beforeEach(() => {
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
+  isValidDriveNotFoundPage.mockResolvedValue(true);
 });
 
 describe('DELETE /api/drives/[driveId]/domains/[domainId]', () => {
@@ -267,6 +280,130 @@ describe('PATCH /api/drives/[driveId]/domains/[domainId] (set primary)', () => {
   it('returns 500 on unexpected db error', async () => {
     findFirst.mockRejectedValue(new Error('db down'));
     const res = await PATCH(makePatchReq(), ctx());
+    expect(res.status).toBe(500);
+  });
+
+  it('rejects a mixed payload without partially applying the primary-domain change', async () => {
+    // isPrimary is valid on its own (domain is active), but the accompanying
+    // publishLandingPageId is not — the whole request must be rejected before
+    // either mutation runs, not just the invalid half.
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    isValidDriveNotFoundPage.mockResolvedValue(false);
+
+    const res = await PATCH(makePatchReq({ isPrimary: true, publishLandingPageId: 'invalid-page-id' }), ctx());
+
+    expect(res.status).toBe(400);
+    expect(dbTransaction).not.toHaveBeenCalled();
+    expect(dbUpdate).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/drives/[driveId]/domains/[domainId] (landing/404 page overrides)', () => {
+  const makePatchReq = (body: unknown): Request =>
+    ({ json: () => Promise.resolve(body) } as unknown as Request);
+
+  const wireUpdate = (updated: unknown) => {
+    dbUpdate.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([updated]) }),
+      }),
+    });
+  };
+
+  it('returns 400 on an invalid body (all fields omitted)', async () => {
+    const res = await PATCH(makePatchReq({}), ctx());
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when the domain is not in the drive', async () => {
+    findFirst.mockResolvedValue(undefined);
+    const res = await PATCH(makePatchReq({ publishLandingPageId: 'page-1' }), ctx());
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when publishLandingPageId is not a valid Canvas page in this drive', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'pending' });
+    isValidDriveNotFoundPage.mockResolvedValue(false);
+
+    const res = await PATCH(makePatchReq({ publishLandingPageId: 'page-1' }), ctx());
+    expect(res.status).toBe(400);
+    expect(dbUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when publishNotFoundPageId is not a valid Canvas page in this drive', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'pending' });
+    isValidDriveNotFoundPage.mockResolvedValue(false);
+
+    const res = await PATCH(makePatchReq({ publishNotFoundPageId: 'page-404' }), ctx());
+    expect(res.status).toBe(400);
+    expect(dbUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not require the domain to be active (unlike isPrimary)', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'pending' });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', publishLandingPageId: 'page-1' });
+
+    const res = await PATCH(makePatchReq({ publishLandingPageId: 'page-1' }), ctx());
+    expect(res.status).toBe(200);
+  });
+
+  it('sets publishLandingPageId and re-mirrors the host', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', publishLandingPageId: 'page-1' });
+
+    const res = await PATCH(makePatchReq({ publishLandingPageId: 'page-1' }), ctx());
+    await Promise.resolve();
+
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.domain.publishLandingPageId).toBe('page-1');
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'acme.com', expect.any(Function));
+  });
+
+  it('clears publishLandingPageId when null is sent explicitly', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', publishLandingPageId: null });
+
+    const res = await PATCH(makePatchReq({ publishLandingPageId: null }), ctx());
+    expect(res.status).toBe(200);
+    expect(isValidDriveNotFoundPage).not.toHaveBeenCalled();
+  });
+
+  it('sets publishNotFoundPageId independently of publishLandingPageId', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', publishNotFoundPageId: 'page-404' });
+
+    const res = await PATCH(makePatchReq({ publishNotFoundPageId: 'page-404' }), ctx());
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.domain.publishNotFoundPageId).toBe('page-404');
+  });
+
+  it('audits the override change with both field values', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com' });
+
+    await PATCH(makePatchReq({ publishLandingPageId: 'page-1', publishNotFoundPageId: null }), ctx());
+
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventType: 'data.write',
+      details: expect.objectContaining({
+        operation: 'set-custom-domain-page-overrides',
+        hostname: 'acme.com',
+        publishLandingPageId: 'page-1',
+        publishNotFoundPageId: null,
+      }),
+    }));
+  });
+
+  it('returns 500 on unexpected db error', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    dbUpdate.mockImplementation(() => {
+      throw new Error('db down');
+    });
+
+    const res = await PATCH(makePatchReq({ publishLandingPageId: 'page-1' }), ctx());
     expect(res.status).toBe(500);
   });
 });

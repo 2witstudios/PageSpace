@@ -1,14 +1,30 @@
 /**
  * Pure decision logic for the Admin PG (trust plane) connection registry
- * (#890 Phase 1). No I/O, no process.env reads — callers pass env values in.
+ * (#890). No I/O, no process.env reads — callers pass env values in.
  *
- * Three-state contract:
- *   ADMIN_DATABASE_URL set (valid postgres URL)      → 'dedicated'
- *   URL unset + ADMIN_DB_BREAK_GLASS exactly 'true'  → 'break-glass'
- *   URL unset + flag not armed                       → 'fail'
+ * FIVE-state contract (post prod audit-write incident):
+ *   URL set + VALID postgres URL                    → 'dedicated'
+ *   URL set + INVALID URL                           → 'fail'   (positive misconfig — stop)
+ *   URL unset + AUDIT_TRUST_PLANE_REQUIRED='true'   → 'fail'   (declared but not configured)
+ *   URL unset + ADMIN_DB_BREAK_GLASS='true'         → 'break-glass' (main DB + LOUD alert)
+ *   URL unset + neither flag                        → 'main-db' (DEFAULT: main DB, SILENT)
  *
- * A set-but-invalid URL is 'fail' even when break-glass is armed: a
- * misconfigured deploy must stop, never silently degrade to the main DB.
+ * Precedence when several apply:
+ *   invalid-URL fail > TRUST_PLANE_REQUIRED fail > break-glass > main-db.
+ *
+ * Why 'main-db' is the default: the trust plane (dedicated Admin PG) has not
+ * been adopted in every deployment. The pre-adoption behavior is exactly the
+ * pre-epic one — audit rows live in the MAIN application database. Making an
+ * unconfigured ADMIN_DATABASE_URL resolve to 'fail' broke that silently: every
+ * audit write threw and was swallowed by the fire-and-forget audit() wrapper,
+ * so security audit logging stopped in prod with no signal. 'main-db' restores
+ * the silent, working default; loud failure is now OPT-IN via
+ * AUDIT_TRUST_PLANE_REQUIRED='true' (declare you want the trust plane and it
+ * fails closed when unconfigured), and break-glass remains a purely explicit
+ * emergency override that keeps the loud alert.
+ *
+ * A set-but-invalid URL is always 'fail', even with a flag armed: a positive
+ * misconfiguration must stop, never silently degrade to the main DB.
  */
 
 export interface AdminDbEnv {
@@ -16,9 +32,16 @@ export interface AdminDbEnv {
   ADMIN_DATABASE_SSL?: string | undefined;
   ADMIN_DB_POOL_MAX?: string | undefined;
   ADMIN_DB_BREAK_GLASS?: string | undefined;
+  /**
+   * Opt-in enforcement: when exactly 'true' AND ADMIN_DATABASE_URL is unset,
+   * the mode is 'fail' (fail closed) instead of the silent 'main-db' default.
+   * Set this only in deployments that HAVE adopted the trust plane and want a
+   * missing URL to halt rather than silently fall back to the main DB.
+   */
+  AUDIT_TRUST_PLANE_REQUIRED?: string | undefined;
 }
 
-export type AdminDbModeName = 'dedicated' | 'break-glass' | 'fail';
+export type AdminDbModeName = 'dedicated' | 'break-glass' | 'main-db' | 'fail';
 
 export interface AdminDbModeDecision {
   mode: AdminDbModeName;
@@ -28,14 +51,14 @@ export interface AdminDbModeDecision {
 const isPostgresUrl = (url: string): boolean =>
   url.startsWith('postgresql://') || url.startsWith('postgres://');
 
-// Fail-closed: only the exact string 'true' arms the fallback. 'TRUE', '1',
-// ' true ', '' etc. do not — mirrors the serverEnvSchema contract from leaf 1.
-const isBreakGlassArmed = (flag: string | undefined): boolean => flag === 'true';
+// Fail-closed: only the exact string 'true' arms a flag. 'TRUE', '1',
+// ' true ', '' etc. do not — mirrors the serverEnvSchema contract.
+const isArmed = (flag: string | undefined): boolean => flag === 'true';
 
 export const resolveAdminDbMode = (env: AdminDbEnv): AdminDbModeDecision => {
   const url = env.ADMIN_DATABASE_URL;
 
-  // Empty string is treated as unset (falls through to break-glass/fail).
+  // Empty string is treated as unset (falls through to the URL-unset ladder).
   if (url !== undefined && url !== '') {
     if (!isPostgresUrl(url)) {
       return {
@@ -48,7 +71,20 @@ export const resolveAdminDbMode = (env: AdminDbEnv): AdminDbModeDecision => {
     return { mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' };
   }
 
-  if (isBreakGlassArmed(env.ADMIN_DB_BREAK_GLASS)) {
+  // URL unset. Enforcement is opt-in and wins over both the emergency override
+  // and the silent default: an operator who declared AUDIT_TRUST_PLANE_REQUIRED
+  // wants the trust plane, so a missing URL must halt loudly.
+  if (isArmed(env.AUDIT_TRUST_PLANE_REQUIRED)) {
+    return {
+      mode: 'fail',
+      reason:
+        "AUDIT_TRUST_PLANE_REQUIRED='true' but ADMIN_DATABASE_URL is not set. " +
+        'Enforcement was requested without a dedicated Admin PG configured — set ADMIN_DATABASE_URL ' +
+        'to the trust-plane database, or unset AUDIT_TRUST_PLANE_REQUIRED to run on the main DB.',
+    };
+  }
+
+  if (isArmed(env.ADMIN_DB_BREAK_GLASS)) {
     return {
       mode: 'break-glass',
       reason:
@@ -57,10 +93,11 @@ export const resolveAdminDbMode = (env: AdminDbEnv): AdminDbModeDecision => {
   }
 
   return {
-    mode: 'fail',
+    mode: 'main-db',
     reason:
-      'ADMIN_DATABASE_URL is not set. The Admin PG (trust plane) is required in every deployment mode. ' +
-      "Set ADMIN_DATABASE_URL to the dedicated admin Postgres, or — as an emergency rollback only — set ADMIN_DB_BREAK_GLASS='true' to permit audit writes to the main DB.",
+      'ADMIN_DATABASE_URL is not set and the trust plane is not required — audit writes use the main ' +
+      'application database (the pre-trust-plane default). Set ADMIN_DATABASE_URL to adopt the dedicated ' +
+      "Admin PG, or AUDIT_TRUST_PLANE_REQUIRED='true' to fail closed when it is unconfigured.",
   };
 };
 
@@ -124,23 +161,24 @@ export const resolveAdminMigrateEnv = (env: AdminMigrateEnv): AdminDbEnv => {
 };
 
 /**
- * db:migrate:admin gate — only 'dedicated' may migrate. Break-glass degrades
- * audit WRITES to the main DB at runtime, but running admin migrations there
- * would plant the drizzle_admin journal inside the app plane, so it refuses.
+ * db:migrate:admin gate — only 'dedicated' may migrate. Break-glass and the
+ * main-db default both degrade audit WRITES to the main DB at runtime, but
+ * running admin migrations there would plant the drizzle_admin journal inside
+ * the app plane, so both refuse. 'fail' surfaces its actionable reason.
  */
 export const resolveAdminMigrateDecision = (env: AdminMigrateEnv): AdminMigrateDecision => {
   const resolvedEnv = resolveAdminMigrateEnv(env);
   const decision = resolveAdminDbMode(resolvedEnv);
-  if (decision.mode === 'break-glass') {
+  if (decision.mode === 'fail') {
+    return { ok: false, reason: decision.reason };
+  }
+  if (decision.mode === 'break-glass' || decision.mode === 'main-db') {
     return {
       ok: false,
       reason:
-        'admin migrations never run under break-glass — they target only a dedicated Admin PG. ' +
+        `admin migrations never run under ${decision.mode} — they target only a dedicated Admin PG. ` +
         'Set ADMIN_DATABASE_URL to the trust-plane database.',
     };
-  }
-  if (decision.mode === 'fail') {
-    return { ok: false, reason: decision.reason };
   }
   return { ok: true, poolConfig: resolveAdminPoolConfig(resolvedEnv) };
 };
