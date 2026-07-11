@@ -235,6 +235,9 @@ export function openPtyShell({
   // way every replayed byte is new to this xterm and passes straight through,
   // which is what keeps the cold-attach scrollback UX intact.
   let forwardedTail: Buffer = Buffer.alloc(0);
+  // Cancels the replay-settle timer of whichever command is currently wired, so a
+  // teardown doesn't leave one armed against a shell nobody is watching any more.
+  let cancelActiveSettle: () => void = () => {};
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -272,6 +275,7 @@ export function openPtyShell({
       if (settleTimer !== undefined) clearTimeout(settleTimer);
       settleTimer = undefined;
     };
+    cancelActiveSettle = cancelSettle;
     const deliver = (bytes: Buffer) => {
       if (bytes.length === 0) return;
       // Bytes the client HAS are the bytes the next reconnect must not repeat.
@@ -282,7 +286,7 @@ export function openPtyShell({
     const settleReplay = () => {
       cancelSettle();
       if (stale || closed) return;
-      const { emit, state } = flushReplay(replay);
+      const { emit, state } = flushReplay(anchor, replay);
       replay = state;
       deliver(emit);
     };
@@ -517,6 +521,6 @@ export function openPtyShell({
   return {
     write: (data) => { if (!closed) current.stdin?.write(data); },
     resize: (c, r) => { lastCols = c; lastRows = r; if (!closed) current.resize?.(c, r); },
-    kill: () => { closed = true; current.kill('SIGKILL'); },
+    kill: () => { closed = true; cancelActiveSettle(); current.kill('SIGKILL'); },
   };
 }

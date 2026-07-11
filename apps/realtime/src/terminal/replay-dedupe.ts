@@ -122,11 +122,41 @@ export function planReplayEmission({
 }
 
 /**
- * Release whatever is still buffered. The caller arms this when a replay goes
- * quiet without ever matching the anchor (and on exit), so an unalignable replay
- * costs a redraw, never the output itself.
+ * The shortest overlap worth trusting when the anchor was never found whole (see
+ * `flushReplay`). Long enough that matching it by chance is not a realistic
+ * concern — a lone `\n`, or a bare `$ ` prompt, would otherwise "overlap" with
+ * almost any replay and trim real bytes off its front.
  */
-export function flushReplay(state: ReplayState): { emit: Buffer; state: ReplayState } {
+const MIN_TRUSTED_OVERLAP = 64;
+
+/**
+ * The bytes at the head of `pending` that the client already has, for a replay
+ * whose window opens PART-WAY INTO the anchor — the case `planReplayEmission`
+ * cannot see. The server's scrollback is a buffer of unknown size: if it holds
+ * less than the anchor (or trimmed to somewhere inside it), the anchor never
+ * appears in the replay whole, and the already-seen prefix of that replay is
+ * whatever SUFFIX of the anchor the buffer still reaches back to. So: the longest
+ * suffix of the anchor that is a prefix of the replay.
+ *
+ * Only meaningful once the replay is complete, which is why it lives in the flush
+ * and not in the per-chunk path — mid-replay, a longer overlap may still be one
+ * chunk away.
+ */
+function seenPrefixLength(anchor: Buffer, pending: Buffer): number {
+  for (let k = Math.min(anchor.length, pending.length); k >= MIN_TRUSTED_OVERLAP; k -= 1) {
+    if (anchor.subarray(anchor.length - k).equals(pending.subarray(0, k))) return k;
+  }
+  return 0;
+}
+
+/**
+ * Release whatever is still buffered, minus any head of it the client provably
+ * already has. The caller arms this when a replay goes quiet without the anchor
+ * ever turning up (and on exit), so a replay we cannot fully align costs at worst
+ * a partial redraw — never the output itself.
+ */
+export function flushReplay(anchor: Buffer, state: ReplayState): { emit: Buffer; state: ReplayState } {
   if (state.resolved) return { emit: EMPTY, state };
-  return { emit: state.pending, state: { pending: EMPTY, resolved: true } };
+  const seen = seenPrefixLength(anchor, state.pending);
+  return { emit: state.pending.subarray(seen), state: { pending: EMPTY, resolved: true } };
 }

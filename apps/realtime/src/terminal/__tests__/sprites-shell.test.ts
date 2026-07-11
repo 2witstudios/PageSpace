@@ -1035,6 +1035,28 @@ describe('openPtyShell', () => {
       expect(session.scrollbackBytes).toBe(Buffer.byteLength(BANNER, 'utf8'));
     });
 
+    it('given the terminal is killed while replay bytes are buffered, emits nothing after the kill', async () => {
+      // The viewer is gone; a settle timer left armed against a dead shell would
+      // fire output at a socket nobody is listening on.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'unalignable\r\n'); // buffered, settle armed
+      shell.kill();
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
     it('given a shell that exits while replay bytes are still buffered, flushes them before the exit', async () => {
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();

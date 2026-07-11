@@ -111,10 +111,10 @@ describe('planReplayEmission (pure)', () => {
 
 describe('flushReplay (pure)', () => {
   assert({
-    given: 'buffered bytes whose replay boundary was never found (the replay ended without the anchor)',
+    given: 'buffered bytes that overlap the anchor nowhere (a replay of output we never forwarded)',
     should: 'emit them all — never hold real output hostage',
     actual: (() => {
-      const { emit, state } = flushReplay({ pending: buf('unaligned output\r\n'), resolved: false });
+      const { emit, state } = flushReplay(buf(BANNER), { pending: buf('unaligned output\r\n'), resolved: false });
       return { emit: emit.toString('utf8'), resolved: state.resolved };
     })(),
     expected: { emit: 'unaligned output\r\n', resolved: true },
@@ -124,10 +124,33 @@ describe('flushReplay (pure)', () => {
     given: 'an already-resolved state',
     should: 'emit nothing',
     actual: (() => {
-      const { emit } = flushReplay({ pending: Buffer.alloc(0), resolved: true });
+      const { emit } = flushReplay(buf(BANNER), { pending: Buffer.alloc(0), resolved: true });
       return emit.toString('utf8');
     })(),
     expected: '',
+  });
+
+  // The server's scrollback is a buffer of unspecified size. If it reaches back
+  // LESS far than our anchor, the anchor never appears whole in the replay and
+  // `planReplayEmission` cannot align it — but the replay's head is still a
+  // suffix of the anchor, and the client already has every byte of it.
+  it('given a replay window that opens part-way INTO the anchor (a scrollback shorter than 8 KiB), should still trim the part the client has', () => {
+    const forwarded = Buffer.concat([Buffer.alloc(200, 0x61), buf('\r\nsandbox:~$ ')]); // ...aaa\r\nsandbox:~$
+    const anchor = trackForwarded(Buffer.alloc(0), forwarded);
+    // The server only kept the last 100 bytes of what we forwarded, then the shell
+    // printed something new.
+    const replay = Buffer.concat([forwarded.subarray(forwarded.length - 100), buf('date\r\n')]);
+
+    const { emit, state } = flushReplay(anchor, { pending: replay, resolved: false });
+
+    expect(emit.toString('utf8')).toBe('date\r\n');
+    expect(state.resolved).toBe(true);
+  });
+
+  it('given only a trivially short coincidental overlap, should NOT trim it (a bare newline matches almost anything)', () => {
+    const { emit } = flushReplay(buf('...done\r\n'), { pending: buf('\r\nfresh output\r\n'), resolved: false });
+
+    expect(emit.toString('utf8')).toBe('\r\nfresh output\r\n');
   });
 });
 
