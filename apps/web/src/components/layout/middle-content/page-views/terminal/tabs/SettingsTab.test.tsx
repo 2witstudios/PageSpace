@@ -83,6 +83,105 @@ describe('SettingsTab', () => {
     });
   });
 
+  test('blurring a field the user never edited sends no PATCH', async () => {
+    mockLoad();
+    render(<SettingsTab machineId="m1" />);
+
+    const name = await screen.findByLabelText('Name');
+    await userEvent.click(name);
+    await userEvent.tab(); // focus + blur, no edit
+    await userEvent.click(screen.getByLabelText('Description'));
+    await userEvent.tab();
+
+    assert({
+      given: 'both text fields focused and blurred without an edit',
+      should: 'send no PATCH — an unchanged value is not a save',
+      actual: apiPatch.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  test('a name is trimmed before it is persisted and before it is displayed', async () => {
+    mockLoad();
+    apiPatch.mockResolvedValue({ settings: baseSettings });
+    render(<SettingsTab machineId="m1" />);
+
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    await userEvent.clear(name);
+    await userEvent.type(name, '  Padded  ');
+    await userEvent.tab();
+
+    await waitFor(() => assert({
+      given: 'a name typed with surrounding whitespace',
+      should: 'PATCH the trimmed name and settle the input on it — the client must normalize exactly as the route does, which is what licenses not reconciling from the response',
+      actual: { patched: apiPatch.mock.calls[0]?.[1], displayed: name.value },
+      expected: { patched: { machineId: 'm1', name: 'Padded' }, displayed: 'Padded' },
+    }));
+  });
+
+  test('a resync adopts server values for untouched fields but never clobbers a dirty draft', async () => {
+    // The failed toggle triggers a resync GET. That GET must not delete text the
+    // user is in the middle of typing — but it SHOULD pick up the server's value
+    // for a field they haven't touched.
+    const serverMoved: MachineSettings = { ...baseSettings, description: 'changed elsewhere' };
+    fetchWithAuth
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: baseSettings }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: serverMoved }) });
+    let failToggle: (e: Error) => void = () => {};
+    apiPatch.mockImplementation(() => new Promise((_r, reject) => { failToggle = reject; }));
+    render(<SettingsTab machineId="m1" />);
+
+    await userEvent.click(await screen.findByRole('switch', { name: /allow page agents/i }));
+
+    // Type into Name WITHOUT blurring — this draft is dirty and uncommitted.
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Half-typed');
+
+    failToggle(new Error('boom')); // -> revert + resync GET
+
+    await waitFor(() => assert({
+      given: 'a resync landing while the user is mid-edit in Name',
+      should: "keep the dirty Name draft and adopt the server's Description (untouched)",
+      actual: {
+        name: (screen.getByLabelText('Name') as HTMLInputElement).value,
+        description: (screen.getByLabelText('Description') as HTMLTextAreaElement).value,
+      },
+      expected: { name: 'Half-typed', description: 'changed elsewhere' },
+    }));
+  });
+
+  test('escaping a hung delete leaves a usable dialog, not a stuck "Deleting…" button', async () => {
+    mockLoad();
+    apiDelete.mockImplementation(() => new Promise(() => {})); // never settles
+    render(<SettingsTab machineId="m1" />);
+
+    await screen.findByLabelText('Name');
+    await userEvent.click(screen.getByRole('button', { name: /delete machine/i }));
+    await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /delete machine/i }));
+    await screen.findByRole('button', { name: /deleting/i }); // request is in flight
+
+    // The DELETE is held open behind preventDefault, so Escape is the only exit.
+    // Closing must clear `deleting` or reopening shows a dead, disabled button.
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => assert({
+      given: 'Escape pressed during a hung delete',
+      should: 'close the dialog',
+      actual: screen.queryByRole('alertdialog') === null,
+      expected: true,
+    }));
+
+    await userEvent.click(screen.getByRole('button', { name: /delete machine/i }));
+    const reopened = within(await screen.findByRole('alertdialog')).getByRole('button', { name: /delete machine/i }) as HTMLButtonElement;
+
+    assert({
+      given: 'the confirm dialog reopened after escaping a hung delete',
+      should: 'offer an enabled "Delete Machine" button, not a stuck "Deleting…" one',
+      actual: { label: reopened.textContent, disabled: reopened.disabled },
+      expected: { label: 'Delete Machine', disabled: false },
+    });
+  });
+
   test('clearing the description persists null, not an empty string', async () => {
     mockLoad();
     apiPatch.mockResolvedValue({ settings: { ...baseSettings, description: null } });
