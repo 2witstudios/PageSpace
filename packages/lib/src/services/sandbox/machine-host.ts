@@ -95,6 +95,12 @@ export interface MachineStream {
 /** A provisioned/attached machine session — the full surface a caller drives. */
 export interface MachineHandle {
   readonly machineId: string;
+  /**
+   * Proof of the egress lockdown confirmed for THIS VM, for the caller to persist
+   * and hand back on the next provision (see `egress-lockdown.ts`). Undefined when
+   * unproven — the caller then records nothing and the next hand-back re-applies.
+   */
+  readonly egressPolicyToken?: string;
   exec(args: RunCommandArgs): Promise<SandboxRunResult>;
   writeFiles(files: WriteFileEntry[]): Promise<void>;
   readFile(args: { path: string }): Promise<Buffer | null>;
@@ -114,11 +120,12 @@ export interface MachineHost {
     substrate: MachineSubstrateSpec;
     options: SandboxCreateOptions;
     /**
-     * Hash of the egress policy this machine is already known to run under (see
-     * `egress-lockdown.ts`). Absent/stale → the backend re-applies the lockdown;
-     * matching → it skips the redundant push on a warm resume.
+     * The lockdown token recorded for this machine — proof that a policy was
+     * applied to a specific VM instance (see `egress-lockdown.ts`). Absent, stale,
+     * or naming a VM that has since been replaced → the backend re-applies the
+     * lockdown; still valid → it skips the redundant push on a warm resume.
      */
-    appliedPolicyHash?: string | null;
+    appliedEgressToken?: string | null;
   }): Promise<MachineHandle>;
   attach(args: { machineId: string }): Promise<MachineHandle | null>;
   kill(args: { machineId: string }): Promise<void>;

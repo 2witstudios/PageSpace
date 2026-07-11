@@ -7,21 +7,24 @@
  * `getOrCreate` resumes an existing Sprite by name or creates a fresh one.
  *
  * Provisioning is locked down, never platform defaults:
- *  - **Egress** — the deny-by-default L3 network policy is applied when it is not
- *    already known-good: on a FRESH create (a new Sprite starts with the
- *    platform's open outbound), on a hash mismatch (the desired policy changed),
- *    and when the caller records no applied hash at all (unknown → fail closed).
- *    A warm resume whose recorded hash still matches skips it: the policy is a
- *    persistent file (`/.sprite/policy/network.json`) that survives hibernation,
- *    so re-pushing an identical policy on every hand-back was pure chatter on the
- *    connect critical path. The crash window the old unconditional re-apply
+ *  - **Egress** — the deny-by-default L3 network policy is applied whenever THIS
+ *    VM is not already PROVEN to be running THIS policy: on a FRESH create (a new
+ *    Sprite starts with the platform's open outbound), on a changed policy, on a
+ *    Sprite re-created under the same name (a different VM instance, whose
+ *    predecessor's proof must not carry over), and when the caller records no
+ *    proof at all (unknown → fail closed). Only a warm resume of the same VM under
+ *    the same policy skips it: the policy is a persistent file
+ *    (`/.sprite/policy/network.json`) that survives hibernation, so re-pushing it
+ *    on every hand-back was pure chatter on the connect critical path. The proof
+ *    is a token over (Sprite instance id, policy hash) — see
+ *    `../egress-lockdown.ts`. The crash window the old unconditional re-apply
  *    defended (a crash between `createSprite` and its lockdown) is closed by
  *    ORDERING instead: the caller links the session only after `getOrCreate`
- *    resolves, so an unlocked Sprite is never reachable from a session row. See
- *    `../egress-lockdown.ts`. On a FRESH Sprite a lockdown failure destroys it and
- *    rejects; on a RESUMED one we never destroy a warm session we don't own the
- *    lifecycle of, but we still refuse to hand it back — the call rejects so no
- *    command runs without a confirmed policy.
+ *    resolves, so an unlocked Sprite is never reachable from a session row. On a
+ *    FRESH Sprite a lockdown failure destroys it and rejects; on a RESUMED one we
+ *    never destroy a warm session we don't own the lifecycle of, but we still
+ *    refuse to hand it back — the call rejects so no command runs without a
+ *    confirmed policy.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
  *    defaults.
@@ -52,7 +55,7 @@
 // pure transformation logic and type-safe wrappers; it never touches the SDK.
 import type { NetworkPolicy, SpriteConfig } from '@fly/sprites';
 import { buildSpriteNetworkPolicy } from '../egress';
-import { hashPolicy, shouldApplyPolicy } from '../egress-lockdown';
+import { hashPolicy, egressLockdownToken, shouldApplyPolicy } from '../egress-lockdown';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import type {
   ExecSandboxClient,
@@ -230,6 +233,22 @@ export function readSessionInfoId(message: unknown): string | undefined {
 /** The Sprite instance subset the driver consumes. */
 export interface SpriteInstanceLike {
   readonly name: string;
+  /**
+   * The platform's id for this Sprite INSTANCE, hydrated from the API response by
+   * both `getSprite` and `createSprite` (the SDK `Object.assign`s the parsed body
+   * onto the handle), so reading it costs nothing extra.
+   *
+   * Distinct from `name`, which is OURS and is reused across re-creates: a Sprite
+   * destroyed and re-provisioned under the same session key is a different VM,
+   * with a different id — and, crucially, with the platform's default OPEN egress
+   * until it is locked down. The egress record is therefore keyed on this id, not
+   * on the name (see `../egress-lockdown.ts`).
+   *
+   * Optional because the RC SDK types it optional: a build that stops reporting it
+   * must degrade to "identity unknown" → re-apply the lockdown, never to "same
+   * Sprite, skip it".
+   */
+  readonly id?: string;
   spawn(
     file: string,
     args?: string[],
@@ -637,9 +656,13 @@ async function fsWithWakeRetry<T>(
   }
 }
 
-function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
+function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
+    // Proof of THIS VM's confirmed lockdown, for the caller to persist. Undefined
+    // on the `get` path (which applies no policy) and whenever the Sprite's
+    // identity is unknown — both of which the caller must treat as "unproven".
+    egressPolicyToken,
 
     async runCommand({ cmd, args = [], cwd, env, timeoutMs, maxBytes }: RunCommandArgs): Promise<SandboxRunResult> {
       // spawn (arg array), never a host-side shell string. The untrusted command
@@ -867,7 +890,7 @@ export function createSpriteHandleCache(sdk: SpritesSdk): SpritesSdk {
 
 export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSandboxClient {
   return {
-    async getOrCreate({ name, options, appliedPolicyHash }) {
+    async getOrCreate({ name, options, appliedEgressToken }) {
       // Resume by name when the Sprite already exists; create fresh ONLY on a
       // genuine not-found. Auth/rate-limit/outage errors from getSprite surface
       // rather than spawning a duplicate Sprite under a name that may still be live.
@@ -888,19 +911,27 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
           sprite = await sdk.createSprite(spriteName, options.caps);
           fresh = true;
         }
-        // Lock down egress only when it is not already known-good on this Sprite
-        // (fresh create / changed policy / unknown recorded state) — see file
-        // header and `../egress-lockdown.ts`. A warm resume under the same policy
-        // skips the control-plane round-trip and the `mkdir` exec entirely: the
-        // policy file and the sandbox root are both persistent.
+        // Lock down egress only when THIS VM is not already proven to be running
+        // THIS policy — see the file header and `../egress-lockdown.ts`. The proof
+        // is a token over (Sprite instance id, policy hash): a warm resume of the
+        // same VM under the same policy skips the control-plane round-trip and the
+        // `mkdir` exec entirely (both the policy file and the sandbox root are
+        // persistent), while a Sprite that was re-created under this name — even
+        // by a concurrent caller that has not reached its own lockdown yet — has a
+        // different id, does not match, and is locked down here rather than handed
+        // back on the platform's default open egress.
         const policy = buildSpriteNetworkPolicy({
           egressAllowlist: options.egressAllowlist,
           egressMode: options.egressMode,
         });
-        if (shouldApplyPolicy({ fresh, appliedPolicyHash, desiredPolicyHash: hashPolicy(policy) })) {
+        const desiredToken = egressLockdownToken({ spriteId: sprite.id, policyHash: hashPolicy(policy) });
+        if (shouldApplyPolicy({ fresh, appliedToken: appliedEgressToken, desiredToken })) {
           await applyEgressLockdown({ sdk, sprite, policy, destroyOnFailure: fresh });
         }
-        return wrap(sprite);  // wrap sets sandboxId = sprite.name = spriteName (truncated)
+        // wrap sets sandboxId = sprite.name = spriteName (truncated). The token is
+        // now CONFIRMED for this VM (freshly applied, or already proven) — the
+        // caller records it, and it is what lets the next hand-back skip the push.
+        return wrap(sprite, desiredToken);
       } catch (error) {
         // Normalize every provisioning failure (rate limit / conflict / outage)
         // so the lifecycle can surface a distinct reason instead of one opaque

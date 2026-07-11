@@ -32,13 +32,18 @@ import {
   type MachineSessionRecord,
   type MachineSessionStore,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
-import { hashSandboxEgressPolicy } from '@pagespace/lib/services/sandbox/egress-lockdown';
+import { egressLockdownToken, hashSandboxEgressPolicy } from '@pagespace/lib/services/sandbox/egress-lockdown';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { resolveMachineSandbox } from '../agent-terminal-access';
 
 const SECRET = 'test-secret';
-/** The hash the machine acquire derives for its own (open-egress) policy. */
-const MACHINE_POLICY_HASH = hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'machine' }));
+/** The Sprite instance id the fake control plane reports for a resumed VM. */
+const SPRITE_INSTANCE_ID = 'sprite-instance-1';
+/** The lockdown token the driver proves for that VM under the machine's own (open-egress) policy. */
+const MACHINE_POLICY_TOKEN = egressLockdownToken({
+  spriteId: SPRITE_INSTANCE_ID,
+  policyHash: hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'machine' })),
+});
 const MACHINE_ID = 'machine-page-1';
 const DRIVE_ID = 'drive-1';
 const TENANT_ID = 'tenant-1';
@@ -92,6 +97,9 @@ function noopCommand(): SpriteCommandLike {
 function fakeSprite(name: string, calls: SpriteCalls): SpriteInstanceLike {
   return {
     name,
+    // The platform's instance id — what the egress record is keyed on, so a
+    // replacement VM under the same name never inherits the old proof.
+    id: SPRITE_INSTANCE_ID,
     spawn: (file: string, args: string[]) => {
       calls.spawned.push([file, ...args]);
       return noopCommand();
@@ -170,10 +178,10 @@ async function runColdConnect({
           sandboxId: SPRITE_NAME,
           userId: USER_ID,
           lastActiveAt: lastActiveAt ?? new Date(),
-          // The policy this session was last locked down with — recorded by the
-          // acquire that provisioned it. Unchanged since, so this connect must
-          // NOT re-push it (the Sprite's policy file is persistent).
-          egressPolicyHash: MACHINE_POLICY_HASH,
+          // Proof that THIS VM was locked down under THIS policy, recorded by the
+          // acquire that provisioned it. Still valid, so this connect must NOT
+          // re-push the policy (the Sprite's policy file is persistent).
+          egressPolicyToken: MACHINE_POLICY_TOKEN,
         }
       : null,
   );

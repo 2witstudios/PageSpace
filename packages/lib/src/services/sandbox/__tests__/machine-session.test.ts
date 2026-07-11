@@ -25,7 +25,7 @@ function makeStore(seed?: MachineSessionRecord) {
         userId: input.userId,
         sandboxId: input.sandboxId,
         lastActiveAt: input.now,
-        egressPolicyHash: input.egressPolicyHash,
+        egressPolicyToken: input.egressPolicyToken,
       });
     },
     touch: async ({ sessionKey, now }) => {

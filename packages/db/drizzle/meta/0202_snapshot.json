@@ -1,5 +1,5 @@
 {
-  "id": "032eed8c-0da6-4a5d-8b4b-d5ddecea454d",
+  "id": "1d049488-0bf7-4360-8e88-457dd580078b",
   "prevId": "c1f6a9e2-7b34-4d58-9a01-3e7c5b8d2f10",
   "version": "7",
   "dialect": "postgresql",
@@ -16078,8 +16078,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "egressPolicyHash": {
-          "name": "egressPolicyHash",
+        "egressPolicyToken": {
+          "name": "egressPolicyToken",
           "type": "text",
           "primaryKey": false,
           "notNull": false

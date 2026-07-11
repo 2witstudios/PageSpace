@@ -14,11 +14,15 @@ import {
 } from '../sprites';
 import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
-import { hashSandboxEgressPolicy } from '../../egress-lockdown';
+import { hashSandboxEgressPolicy, egressLockdownToken } from '../../egress-lockdown';
 import { SANDBOX_ROOT } from '../../sandbox-paths';
 import { parentDir, fsRecoveryExec, spawnWithSelfHealingCwd } from '../sprites';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
+
+/** The token the driver proves for a given Sprite instance under `options`. */
+const tokenFor = (spriteId: string) =>
+  egressLockdownToken({ spriteId, policyHash: hashSandboxEgressPolicy(options) });
 
 /**
  * riteway-style assertion (given/should/actual/expected) on top of vitest — the
@@ -100,6 +104,10 @@ function fakeSprite(
   const fs = over.fs ?? fakeFs();
   return {
     name: 'session-key',
+    // The platform's instance id, hydrated by getSprite/createSprite. A Sprite
+    // re-created under the same name gets a NEW one — which is what the egress
+    // record is keyed on.
+    id: 'sprite-1',
     spawn: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
     createSession: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
     attachSession: () => fakeCommand({ stdout: ['out'], exitCode: 0 }),
@@ -244,10 +252,10 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(calls.created).toEqual([]);
   });
 
-  it('given a resume whose recorded policy hash matches, should apply NEITHER the policy NOR the mkdir', async () => {
+  it('given a warm resume of the SAME VM whose token still holds, should apply NEITHER the policy NOR the mkdir', async () => {
     const { sdk, calls } = makeSdk();
     const client = createSpritesSandboxClient({ sdk });
-    await client.getOrCreate({ name: 'k', options, appliedPolicyHash: hashSandboxEgressPolicy(options) });
+    await client.getOrCreate({ name: 'k', options, appliedEgressToken: tokenFor('sprite-1') });
     // The policy file (/.sprite/policy/network.json) and the sandbox root are both
     // persistent — re-pushing them on a warm hand-back is pure chatter on the
     // connect critical path.
@@ -256,14 +264,17 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(calls.created).toEqual([]);
   });
 
-  it('given a resume whose recorded policy hash is stale, should re-apply the policy once', async () => {
+  it('given a resume whose recorded policy is stale, should re-apply the policy once', async () => {
     const { sdk, calls } = makeSdk();
     const client = createSpritesSandboxClient({ sdk });
     // e.g. the egress mode changed since this Sprite was locked down.
     await client.getOrCreate({
       name: 'k',
       options,
-      appliedPolicyHash: hashSandboxEgressPolicy({ ...options, egressMode: 'open' }),
+      appliedEgressToken: egressLockdownToken({
+        spriteId: 'sprite-1',
+        policyHash: hashSandboxEgressPolicy({ ...options, egressMode: 'open' }),
+      }),
     });
     expect(calls.policies).toBe(1);
     expect(calls.spawned).toEqual([`mkdir -p ${SANDBOX_ROOT}`]);
@@ -327,11 +338,60 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       },
     });
     const client = createSpritesSandboxClient({ sdk });
-    // A recycled name: the recorded hash describes the DESTROYED Sprite. The new
+    // A recycled name: the recorded token describes the DESTROYED Sprite. The new
     // one starts on the platform default (open outbound), so it must be locked down.
-    await client.getOrCreate({ name: 'k', options, appliedPolicyHash: hashSandboxEgressPolicy(options) });
+    await client.getOrCreate({ name: 'k', options, appliedEgressToken: tokenFor('sprite-1') });
     expect(calls.created).toEqual(['k']);
     expect(calls.policies).toBe(1);
+  });
+
+  it('given the Sprite was RE-CREATED under the same name (concurrent recreate), should lock it down even though the policy is unchanged', async () => {
+    // The race: this session's Sprite vanished; a CONCURRENT getOrCreate created
+    // the replacement (id sprite-2) and has not yet reached its own lockdown. We
+    // find that new VM by name — so `fresh` is false — and our recorded token
+    // names the DEAD Sprite (sprite-1) under the very same policy. Trusting the
+    // policy hash alone would skip the push and hand back a VM still on the
+    // platform's default OPEN egress. Binding the token to the instance id is what
+    // makes this case indistinguishable from any other unproven VM: we apply.
+    const calls = { policies: 0, created: [] as string[] };
+    const replacement = fakeSprite({
+      id: 'sprite-2',
+      updateNetworkPolicy: async () => { calls.policies += 1; },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => replacement,
+      createSprite: async (name) => { calls.created.push(name); return replacement; },
+      deleteSprite: async () => {},
+    };
+    const client = createSpritesSandboxClient({ sdk });
+
+    const handle = await client.getOrCreate({ name: 'k', options, appliedEgressToken: tokenFor('sprite-1') });
+
+    expect(calls.policies).toBe(1);
+    expect(calls.created).toEqual([]);
+    // And the token it hands back names the VM it actually locked down.
+    expect(handle.egressPolicyToken).toBe(tokenFor('sprite-2'));
+  });
+
+  it('given a platform that reports no Sprite id, should apply the policy and record NO token (fail closed)', async () => {
+    let policies = 0;
+    const anonymous = fakeSprite({
+      id: undefined,
+      updateNetworkPolicy: async () => { policies += 1; },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => anonymous,
+      createSprite: async () => anonymous,
+      deleteSprite: async () => {},
+    };
+    const client = createSpritesSandboxClient({ sdk });
+
+    // Identity unknown → the lockdown cannot be proven for THIS VM, so it is
+    // applied, and nothing is recorded that a later connect could wrongly trust.
+    const handle = await client.getOrCreate({ name: 'k', options, appliedEgressToken: tokenFor('sprite-1') });
+
+    expect(policies).toBe(1);
+    expect(handle.egressPolicyToken).toBeUndefined();
   });
 
   it('given the egress lockdown fails, should destroy the Sprite and reject (never hand back open egress)', async () => {

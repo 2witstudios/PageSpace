@@ -1,1 +1,0 @@
-ALTER TABLE "machine_sessions" ADD COLUMN "egressPolicyHash" text;

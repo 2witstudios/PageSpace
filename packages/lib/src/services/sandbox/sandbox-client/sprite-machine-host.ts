@@ -142,6 +142,7 @@ function wrapSpriteHandle({
 }): MachineHandle {
   return {
     machineId: exec.sandboxId,
+    egressPolicyToken: exec.egressPolicyToken,
     exec: (args) => exec.runCommand(args),
     writeFiles: (files) => exec.writeFiles(files),
     readFile: (args) => exec.readFileToBuffer(args),
@@ -238,8 +239,8 @@ export function createSpriteMachineHost({
   return {
     // `substrate.size` is intentionally unused here — see the file header:
     // Sprite has one resource tier, driven entirely by `options.caps`.
-    async provision({ name, options, appliedPolicyHash }) {
-      const exec = await client.getOrCreate({ name, options, appliedPolicyHash });
+    async provision({ name, options, appliedEgressToken }) {
+      const exec = await client.getOrCreate({ name, options, appliedEgressToken });
       return wrapSpriteHandle({ sdk, exec, streamOpenTimeoutMs });
     },
 
