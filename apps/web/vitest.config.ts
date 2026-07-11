@@ -12,18 +12,18 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
     // Fit the web suite's memory on the 16 GB CI runner. A fork worker's heap
-    // grows ~linearly with the number of files it runs (~30 MB/file of retained
-    // module graph — the suite does not release much between files), so the full
-    // 833-file suite is ~24 GB however it is split across concurrent forks, well
-    // over the runner. The `test` script solves this by running the suite in
-    // four SEQUENTIAL shards (separate processes that fully release memory
-    // between them): ~208 files per shard, ~52 per fork across the default 4
-    // forks, ~1.5 GB each. The 3 GB per-fork cap leaves headroom for transient
-    // spikes and stops the forks inheriting the main process's larger
-    // NODE_OPTIONS ceiling (V8 lazily grows to whatever limit it is given), so a
-    // shard peaks around 12 GB.
+    // grows ~linearly with the number of files it runs (~58 MB/file of retained
+    // module graph — the suite releases little between files), and heavy
+    // component-render files cluster unevenly across forks, so a fork can hold
+    // more than an even split implies. The `test` script runs the suite in six
+    // SEQUENTIAL shards (separate processes that fully release memory between
+    // them): ~139 files/shard, ~35 per fork across the default 4 forks (~2 GB),
+    // and the whole shard's ~8 GB spread across forks. The 4 GB per-fork cap
+    // absorbs heavy-file clustering and stops the forks inheriting the main
+    // process's larger NODE_OPTIONS ceiling (V8 lazily grows to whatever limit
+    // it is given).
     pool: 'forks',
-    poolOptions: { forks: { execArgv: ['--max-old-space-size=3072'] } },
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=4096'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
