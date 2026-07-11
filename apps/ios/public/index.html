@@ -8,7 +8,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #000;
+      background: #0B0B0B;
       color: #fff;
       min-height: 100vh;
       display: flex;
@@ -38,7 +38,17 @@
   <div class="container">
     <h1>Unable to Connect</h1>
     <p>Please check your internet connection and try again.</p>
-    <button onclick="window.location.reload()">Retry</button>
+    <button id="retry">Retry</button>
   </div>
+  <script>
+    // This page is server.errorPath: it is served from the local bundle
+    // (capacitor://localhost) when the remote load fails, so reload() would only
+    // re-render this file. Retry has to re-target the server explicitly. The host
+    // is in server.allowNavigation, so this loads back in-app rather than being
+    // punted to Safari. Keep in sync with server.url in capacitor.config.ts.
+    document.getElementById('retry').addEventListener('click', function () {
+      window.location.href = 'https://pagespace.ai/dashboard';
+    });
+  </script>
 </body>
 </html>

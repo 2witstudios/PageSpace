@@ -1478,12 +1478,12 @@ describe('active machine access', () => {
     expect(deps.gitRunDeps.acquireSandbox).not.toHaveBeenCalled();
   });
 
-  it('git_status: given no configured machines (terminalAccess off), should deny instead of falling back to the own machine', async () => {
+  it('git_status: given no configured machines (machineAccess off), should deny instead of falling back to the own machine', async () => {
     const deps = makeDeps();
-    // createMachineDirectory.listMachines returns [] exactly when terminalAccess
+    // createMachineDirectory.listMachines returns [] exactly when machineAccess
     // is off — this must deny the call, not silently resolve to { kind: 'own' }
     // (which used to key an implicit persistent machine off the agent's own
-    // page, bypassing the terminalAccess gate entirely).
+    // page, bypassing the machineAccess gate entirely).
     deps.machines.listMachines = vi.fn().mockResolvedValue([]);
     const { git_status } = createSandboxGitTools(deps);
     const result = await git_status.execute!({}, {} as never);

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
 import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
 import useSWR from 'swr';
@@ -67,6 +67,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
   // Deep-link support: a tool-call card (or any link) can open a specific event
   // via ?eventId=<id>&date=<ISO>. The date seeds the initial view window so the
   // target event is actually loaded before we open its modal.
+  const router = useRouter();
   const searchParams = useSearchParams();
   const deepLinkEventId = searchParams.get('eventId');
   const deepLinkDate = searchParams.get('date');
@@ -289,8 +290,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
       setIsEventModalOpen(false);
     },
     onTaskClick: (task) => {
-      // Navigate to task list page
-      window.location.href = `/dashboard/${task.driveId}/${task.taskListPageId}`;
+      // Navigate to task list page. router.push, not window.location: a hard
+      // navigation is handed to the iOS shell's navigation policy, which cancels
+      // it (see lib/navigation/app-navigator.ts).
+      router.push(`/dashboard/${task.driveId}/${task.taskListPageId}`);
     },
     onDateChange: setCurrentDate,
     onViewChange: setViewMode,

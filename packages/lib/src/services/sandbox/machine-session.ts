@@ -3,7 +3,7 @@
  *
  * Resolves the ACTIVE machine for an agent tool call onto a persistent,
  * page-keyed Sprite session — the same lifecycle a human Terminal page uses
- * (`terminal-session-manager.ts`) — instead of a throwaway per-conversation
+ * (`machine-session-manager.ts`) — instead of a throwaway per-conversation
  * one (the old `session-manager.ts`, deleted). `{ kind: 'existing', machineId }`
  * addresses that Terminal page's machine directly; `{ kind: 'own' }` (the
  * default when unset) addresses the agent's OWN page as its dedicated
@@ -18,7 +18,7 @@
 
 import type { CanRunCodeInput, CanRunCodeResult, CodeExecutionDenialReason } from './can-run-code';
 import type { FullEgressEnablement, FullEgressDenialReason } from './containment';
-import { acquireTerminalSandbox, type SandboxClient, type TerminalSessionStore } from './terminal-session-manager';
+import { acquireMachineSession, type SandboxClient, type MachineSessionStore } from './machine-session-manager';
 import type { MachineRuntimeGuardrailDecision } from './quota';
 
 /**
@@ -46,14 +46,14 @@ export function resolveMachinePageId(input: {
 }
 
 export interface AcquireMachineSandboxDeps {
-  store: TerminalSessionStore;
+  store: MachineSessionStore;
   client: SandboxClient;
   /** Re-authorize the CURRENT actor. Fail-closed; must never throw (canRunCode). */
   authorize: (input: CanRunCodeInput) => Promise<CanRunCodeResult>;
   now: () => Date;
   /** Server-held secret for session-key derivation. */
   secret: string;
-  /** REQUIRED full-egress enablement gate — see terminal-session-manager.ts. */
+  /** REQUIRED full-egress enablement gate — see machine-session-manager.ts. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   /**
    * Per-machine active-runtime cost backstop (Terminal Epic 1 T1.5, pulled
@@ -105,7 +105,7 @@ export async function acquireMachineSandbox(
   const guardrail = deps.checkMachineRuntimeGuardrail({ machineKey: pageId, now: nowMs });
   if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
 
-  const result = await acquireTerminalSandbox({
+  const result = await acquireMachineSession({
     pageId,
     driveId,
     tenantId,

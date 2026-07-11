@@ -46,7 +46,7 @@ const PAGE_TYPES_CONFIG_SYMBOLS = new Set([
   'isCanvasPage',
   'isChannelPage',
   'isTaskListPage',
-  'isTerminalPage',
+  'isMachinePage',
   'getPageTypeEmoji',
   'getDefaultContent',
   'getCreatablePageTypes',

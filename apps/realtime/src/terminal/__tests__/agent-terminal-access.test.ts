@@ -4,10 +4,10 @@ import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox
 import type { ResolveAgentTerminalResult } from '@pagespace/lib/services/machines/agent-terminals';
 import {
   decideAgentTerminalAccess,
-  resolveTerminalSandbox,
+  resolveMachineSandbox,
   buildAgentTerminalCheckAuth,
   type AgentTerminalAccessInputs,
-  type ResolveTerminalSandboxDeps,
+  type ResolveMachineSandboxDeps,
   type AgentTerminalCheckAuthDeps,
 } from '../agent-terminal-access';
 
@@ -105,7 +105,7 @@ describe('decideAgentTerminalAccess', () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolveTerminalSandbox — narrow integration with injected fakes
+// resolveMachineSandbox — narrow integration with injected fakes
 // ---------------------------------------------------------------------------
 
 const resolvedOk: ResolveAgentTerminalResult = {
@@ -128,15 +128,15 @@ function spyGetSprite(impl?: (sandboxId: string) => Promise<SpriteInstanceLike>)
   return { fn, calls };
 }
 
-describe('resolveTerminalSandbox', () => {
+describe('resolveMachineSandbox', () => {
   it('resolves the sandbox and reads the Sprite exactly once on the happy path', async () => {
     const getSprite = spyGetSprite();
-    const deps: ResolveTerminalSandboxDeps = {
+    const deps: ResolveMachineSandboxDeps = {
       resolveAgentTerminal: async () => resolvedOk,
       getSprite: getSprite.fn,
     };
 
-    const result = await resolveTerminalSandbox({ machineId: 'm-1', name: 'shell' }, deps);
+    const result = await resolveMachineSandbox({ machineId: 'm-1', name: 'shell' }, deps);
 
     assert({
       given: 'a resolvable agent terminal',
@@ -158,7 +158,7 @@ describe('resolveTerminalSandbox', () => {
 
   it('calls getSprite exactly once (single sprite resolution)', async () => {
     const getSprite = spyGetSprite();
-    await resolveTerminalSandbox(
+    await resolveMachineSandbox(
       { machineId: 'm-1', name: 'shell' },
       { resolveAgentTerminal: async () => resolvedOk, getSprite: getSprite.fn },
     );
@@ -172,7 +172,7 @@ describe('resolveTerminalSandbox', () => {
   });
 
   it('surfaces a per-terminal command override as commandOverride', async () => {
-    const result = await resolveTerminalSandbox(
+    const result = await resolveMachineSandbox(
       { machineId: 'm-1', name: 'runner' },
       {
         resolveAgentTerminal: async () => ({ ...resolvedOk, agentType: 'claude', command: 'claude --dangerously' }),
@@ -190,7 +190,7 @@ describe('resolveTerminalSandbox', () => {
 
   it('performs zero sprite reads when the agent terminal does not resolve', async () => {
     const getSprite = spyGetSprite();
-    const result = await resolveTerminalSandbox(
+    const result = await resolveMachineSandbox(
       { machineId: 'm-1', name: 'ghost' },
       { resolveAgentTerminal: async () => ({ ok: false, reason: 'not_found' }), getSprite: getSprite.fn },
     );
@@ -204,7 +204,7 @@ describe('resolveTerminalSandbox', () => {
   });
 
   it('denies with provision_failed (and the sandboxId) when the Sprite lookup throws', async () => {
-    const result = await resolveTerminalSandbox(
+    const result = await resolveMachineSandbox(
       { machineId: 'm-1', name: 'shell' },
       {
         resolveAgentTerminal: async () => resolvedOk,
@@ -233,13 +233,13 @@ type SandboxSpy = {
   getSpriteCalls: string[];
 };
 
-/** A resolveSandbox wired through the REAL resolveTerminalSandbox so a spy
+/** A resolveSandbox wired through the REAL resolveMachineSandbox so a spy
  * getSprite records whether the sprite SDK was touched at all. */
 function sandboxSpy(resolve: () => Promise<ResolveAgentTerminalResult>): SandboxSpy {
   const spy: SandboxSpy = { fn: async () => ({ ok: false, reason: 'unset' }), calls: 0, getSpriteCalls: [] };
   spy.fn = async ({ machineId, projectName, branchName, name }) => {
     spy.calls += 1;
-    return resolveTerminalSandbox(
+    return resolveMachineSandbox(
       { machineId, projectName, branchName, name },
       {
         resolveAgentTerminal: resolve,
@@ -253,7 +253,7 @@ function sandboxSpy(resolve: () => Promise<ResolveAgentTerminalResult>): Sandbox
   return spy;
 }
 
-type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number; resolveTerminalRow: number };
+type DepCalls = { getPageDriveId: number; canRunCode: number; getDriveAndUser: number; resolveMachineRow: number };
 
 /** Default deps whose read functions COUNT their own invocations, so a
  * short-circuit test can assert "this table was never queried" via `calls`
@@ -263,7 +263,7 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
   deps: AgentTerminalCheckAuthDeps;
   calls: DepCalls;
 } {
-  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0, resolveTerminalRow: 0 };
+  const calls: DepCalls = { getPageDriveId: 0, canRunCode: 0, getDriveAndUser: 0, resolveMachineRow: 0 };
   const base: AgentTerminalCheckAuthDeps = {
     getAccessLevel: async () => ({ canEdit: true }),
     getPageDriveId: async () => {
@@ -292,8 +292,8 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
       streamSessionId: null,
       sprite: fakeSprite,
     }),
-    resolveTerminalRow: async () => {
-      calls.resolveTerminalRow += 1;
+    resolveMachineRow: async () => {
+      calls.resolveMachineRow += 1;
       return { ok: true };
     },
     writeAudit: () => {},
@@ -642,7 +642,7 @@ describe('buildAgentTerminalCheckAuth', () => {
     const denials: string[] = [];
     const { deps } = buildDeps({
       resolveSandbox: sandbox.fn,
-      resolveTerminalRow: async () => ({ ok: false, reason: 'project_not_found' }),
+      resolveMachineRow: async () => ({ ok: false, reason: 'project_not_found' }),
       logDenied: (reason) => {
         denials.push(reason);
       },
@@ -668,7 +668,7 @@ describe('buildAgentTerminalCheckAuth', () => {
     const sandbox = sandboxSpy(async () => resolvedOk);
     const { deps } = buildDeps({
       resolveSandbox: sandbox.fn,
-      resolveTerminalRow: async () => ({ ok: false, reason: 'not_found' }),
+      resolveMachineRow: async () => ({ ok: false, reason: 'not_found' }),
     });
     const checkAuth = buildAgentTerminalCheckAuth(deps);
 
@@ -691,7 +691,7 @@ describe('buildAgentTerminalCheckAuth', () => {
     assert({
       given: 'a user without edit access on the owning machine',
       should: 'deny on access alone, without probing whether the named terminal exists',
-      actual: { result, rowLookups: calls.resolveTerminalRow },
+      actual: { result, rowLookups: calls.resolveMachineRow },
       expected: { result: { ok: false, reason: 'no_edit_access' }, rowLookups: 0 },
     });
   });

@@ -4,7 +4,7 @@
  * Binds the provider-agnostic orchestration (`@pagespace/lib/services/machines/
  * machine-projects`) to the real implementations. A Machine's identity is its
  * backing page (`machineId`) — Projects clone onto the SAME persistent Sprite
- * session (`terminal_sessions` / `acquireTerminalSandbox`) that a live
+ * session (`machine_sessions` / `acquireMachineSession`) that a live
  * Terminal shell or a page-agent's "own machine" tool calls already
  * reconnect to, not a separate one. The underlying Sprite client
  * (`createProductionSpritesSandboxClient`) is composed through the MachineHost
@@ -24,10 +24,10 @@ import { users } from '@pagespace/db/schema/auth';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
 import {
-  acquireTerminalSandbox,
-  createDbTerminalSessionStore,
+  acquireMachineSession,
+  createDbMachineSessionStore,
   getSandboxSessionSecret,
-} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+} from '@pagespace/lib/services/sandbox/machine-session-manager';
 import {
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
@@ -79,10 +79,10 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
   return sandboxClientPromise;
 }
 
-let terminalSessionStorePromise: ReturnType<typeof createDbTerminalSessionStore> | null = null;
-function getTerminalSessionStore() {
-  terminalSessionStorePromise ??= createDbTerminalSessionStore();
-  return terminalSessionStorePromise;
+let machineSessionStorePromise: ReturnType<typeof createDbMachineSessionStore> | null = null;
+function getMachineSessionStore() {
+  machineSessionStorePromise ??= createDbMachineSessionStore();
+  return machineSessionStorePromise;
 }
 
 let machineProjectStorePromise: ReturnType<typeof createDbMachineProjectStore> | null = null;
@@ -165,14 +165,14 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
         if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
       }
 
-      const result = await acquireTerminalSandbox({
+      const result = await acquireMachineSession({
         pageId: machineId,
         driveId: page.driveId,
         tenantId: drive.ownerId,
         userId: actorUserId,
         canRun,
         deps: {
-          store: await getTerminalSessionStore(),
+          store: await getMachineSessionStore(),
           client: await getSandboxClient(),
           now: () => new Date(),
           secret: getSandboxSessionSecret(),

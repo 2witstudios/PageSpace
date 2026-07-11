@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone, Link2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useAuthStore } from "@/stores/useAuthStore";
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
 import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
@@ -128,12 +129,15 @@ export default function AccountPage() {
     }
   }, [user]);
 
-  // Redirect if not authenticated
+  // Redirect if not authenticated — except while deleting the account, which nulls
+  // `user` on purpose (endSession) and then hard-navigates to the marketing home.
+  // Without this guard that deliberate exit races with a client push to /auth/signin,
+  // flashing the sign-in page at the user for a second on their way out.
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (!authLoading && !user && !isDeletingAccount) {
       router.push("/auth/signin");
     }
-  }, [authLoading, user, router]);
+  }, [authLoading, user, isDeletingAccount, router]);
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -334,7 +338,16 @@ export default function AccountPage() {
     try {
       await del("/api/account", { emailConfirmation });
 
-      // Clear authentication and redirect to home
+      // Tear down the session before leaving: the account is gone, so the persisted
+      // auth store and the token-refresh poller must not survive the navigation.
+      useAuthStore.getState().endSession();
+
+      // Deliberately a HARD navigation, unlike the other in-app navs this branch
+      // converted to the router. `/` is not a route of this app at all — it is the
+      // marketing app behind the proxy — so router.replace('/') would fetch an RSC
+      // payload for it through middleware, find no session (we just deleted it) and
+      // bounce the user to /auth/signin instead of home. The iOS shell handles this
+      // one correctly: pagespace.ai is in server.allowNavigation, so it loads in-app.
       setTimeout(() => {
         window.location.href = "/";
       }, 1000);

@@ -86,7 +86,7 @@ export interface SandboxBillingDeps {
    * Resolves who pays for THIS run (Terminal Epic 3 owner-pays) — the
    * referenced machine's actual page owner when resolvable, else the acting
    * tenantId. The one seam payer resolution goes through; see
-   * `terminal-payer.ts`'s `resolveTerminalPayerId`.
+   * `machine-payer.ts`'s `resolveMachinePayerId`.
    */
   resolvePayerId: (input: { tenantId: string; machinePageId?: string }) => Promise<string>;
   /** Places a flat-estimate hold for this payer before the machine run begins. */

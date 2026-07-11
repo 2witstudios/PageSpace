@@ -811,7 +811,7 @@ export interface AIUsageData {
 
   // Per-call override for the markup applied at settle (basis points), threaded
   // verbatim to consumeCredits. Absent for ordinary AI-model calls (they get the
-  // shared global MARKUP_BPS); terminal/Machine billing passes TERMINAL_MARKUP_BPS
+  // shared global MARKUP_BPS); terminal/Machine billing passes MACHINE_MARKUP_BPS
   // so its 1.5× substrate floor holds independent of AI markup changes.
   markupBpsOverride?: number;
 

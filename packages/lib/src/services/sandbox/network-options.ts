@@ -21,7 +21,7 @@ import type { SandboxCreateOptions } from './sandbox-options';
 import { resolveEgressIpTag } from './egress-ip';
 
 /** The two sandbox surfaces that share the network posture. */
-export type SandboxSurface = 'agent' | 'terminal';
+export type SandboxSurface = 'agent' | 'machine';
 
 /**
  * Resolve the create-time network options for a sandbox surface. Both surfaces get

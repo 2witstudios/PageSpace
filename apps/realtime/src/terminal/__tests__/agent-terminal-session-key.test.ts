@@ -45,12 +45,12 @@ describe('agentTerminalScopeFromNames', () => {
 });
 
 describe('deriveAgentTerminalSessionKey', () => {
-  it('derives a stable key with zero I/O from terminalId, scope and name', () => {
+  it('derives a stable key with zero I/O from machineId, scope and name', () => {
     assert({
       given: 'a machine-scope terminal',
-      should: 'encode terminalId, scope and name into the key',
+      should: 'encode machineId, scope and name into the key',
       actual: deriveAgentTerminalSessionKey({
-        terminalId: 'term-1',
+        machineId: 'term-1',
         scope: { kind: 'machine' },
         name: 'shell',
       }),
@@ -60,7 +60,7 @@ describe('deriveAgentTerminalSessionKey', () => {
 
   it('is deterministic across repeated derivation (warm reattach)', () => {
     const params = {
-      terminalId: 'term-1',
+      machineId: 'term-1',
       scope: { kind: 'branch', projectName: 'proj', branchName: 'main' } as const,
       name: 'cli',
     };
@@ -73,8 +73,8 @@ describe('deriveAgentTerminalSessionKey', () => {
   });
 
   it('produces distinct keys for terminals differing only by scope', () => {
-    const machine = deriveAgentTerminalSessionKey({ terminalId: 't', scope: { kind: 'machine' }, name: 'cli' });
-    const project = deriveAgentTerminalSessionKey({ terminalId: 't', scope: { kind: 'project', projectName: 'p' }, name: 'cli' });
+    const machine = deriveAgentTerminalSessionKey({ machineId: 't', scope: { kind: 'machine' }, name: 'cli' });
+    const project = deriveAgentTerminalSessionKey({ machineId: 't', scope: { kind: 'project', projectName: 'p' }, name: 'cli' });
     assert({
       given: 'two terminals differing only by scope',
       should: 'produce distinct keys',
@@ -84,8 +84,8 @@ describe('deriveAgentTerminalSessionKey', () => {
   });
 
   it('produces distinct keys for terminals differing only by name', () => {
-    const a = deriveAgentTerminalSessionKey({ terminalId: 't', scope: { kind: 'machine' }, name: 'shell' });
-    const b = deriveAgentTerminalSessionKey({ terminalId: 't', scope: { kind: 'machine' }, name: 'cli' });
+    const a = deriveAgentTerminalSessionKey({ machineId: 't', scope: { kind: 'machine' }, name: 'shell' });
+    const b = deriveAgentTerminalSessionKey({ machineId: 't', scope: { kind: 'machine' }, name: 'cli' });
     assert({
       given: 'two terminals differing only by name',
       should: 'produce distinct keys',
@@ -94,11 +94,11 @@ describe('deriveAgentTerminalSessionKey', () => {
     });
   });
 
-  it('produces distinct keys for terminals differing only by terminalId', () => {
-    const a = deriveAgentTerminalSessionKey({ terminalId: 't1', scope: { kind: 'machine' }, name: 'cli' });
-    const b = deriveAgentTerminalSessionKey({ terminalId: 't2', scope: { kind: 'machine' }, name: 'cli' });
+  it('produces distinct keys for terminals differing only by machineId', () => {
+    const a = deriveAgentTerminalSessionKey({ machineId: 't1', scope: { kind: 'machine' }, name: 'cli' });
+    const b = deriveAgentTerminalSessionKey({ machineId: 't2', scope: { kind: 'machine' }, name: 'cli' });
     assert({
-      given: 'two terminals differing only by terminalId',
+      given: 'two terminals differing only by machineId',
       should: 'produce distinct keys',
       actual: a !== b,
       expected: true,
@@ -109,12 +109,12 @@ describe('deriveAgentTerminalSessionKey', () => {
     // Naive `${a}:${b}` joins collide when a colon lands inside a component:
     // project "a", branch "b:c" would join identically to project "a:b", branch "c".
     const left = deriveAgentTerminalSessionKey({
-      terminalId: 't',
+      machineId: 't',
       scope: { kind: 'branch', projectName: 'a', branchName: 'b:c' },
       name: 'cli',
     });
     const right = deriveAgentTerminalSessionKey({
-      terminalId: 't',
+      machineId: 't',
       scope: { kind: 'branch', projectName: 'a:b', branchName: 'c' },
       name: 'cli',
     });
@@ -126,20 +126,20 @@ describe('deriveAgentTerminalSessionKey', () => {
     });
   });
 
-  it('avoids collisions when a terminalId contains a separator', () => {
-    const a = deriveAgentTerminalSessionKey({ terminalId: 'a:agent:machine', scope: { kind: 'machine' }, name: 'x' });
-    const b = deriveAgentTerminalSessionKey({ terminalId: 'a', scope: { kind: 'machine' }, name: 'x' });
+  it('avoids collisions when a machineId contains a separator', () => {
+    const a = deriveAgentTerminalSessionKey({ machineId: 'a:agent:machine', scope: { kind: 'machine' }, name: 'x' });
+    const b = deriveAgentTerminalSessionKey({ machineId: 'a', scope: { kind: 'machine' }, name: 'x' });
     assert({
-      given: 'a terminalId containing the structural separators',
-      should: 'not collide with a shorter terminalId',
+      given: 'a machineId containing the structural separators',
+      should: 'not collide with a shorter machineId',
       actual: a !== b,
       expected: true,
     });
   });
 
   it('avoids collisions between a project named "machine" and a real machine scope', () => {
-    const machine = deriveAgentTerminalSessionKey({ terminalId: 't', scope: { kind: 'machine' }, name: 'cli' });
-    const projMachine = deriveAgentTerminalSessionKey({ terminalId: 't', scope: { kind: 'project', projectName: 'machine' }, name: 'cli' });
+    const machine = deriveAgentTerminalSessionKey({ machineId: 't', scope: { kind: 'machine' }, name: 'cli' });
+    const projMachine = deriveAgentTerminalSessionKey({ machineId: 't', scope: { kind: 'project', projectName: 'machine' }, name: 'cli' });
     assert({
       given: 'a project literally named "machine"',
       should: 'not collide with the machine scope',

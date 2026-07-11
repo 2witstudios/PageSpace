@@ -50,7 +50,7 @@ import { machineBranches } from './machine-branches';
  * binary (mirrors PurePoint's `AgentEntry.command`). `streamSessionId` is the
  * Sprite exec session id this agent terminal's PTY was created/reattached
  * under — set lazily by the realtime PTY bridge on first connect (mirrors how
- * `terminal_sessions` never eagerly opens a shell either), so a row can exist
+ * `machine_sessions` never eagerly opens a shell either), so a row can exist
  * with `streamSessionId: null` before anyone has connected to it yet.
  */
 export const machineAgentTerminals = pgTable('machine_agent_terminals', {

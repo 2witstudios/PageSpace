@@ -287,7 +287,8 @@ type CreateSecureResponseOptions = {
   disableCOEP?: boolean;
 };
 
-export const createSecureResponse = (
+const buildSecureResponse = (
+  make: (requestHeaders: Headers) => NextResponse,
   isProduction: boolean,
   request?: Request,
   options: CreateSecureResponseOptions = {},
@@ -306,14 +307,40 @@ export const createSecureResponse = (
     requestHeaders.set('Content-Security-Policy', csp);
   }
 
-  const response = NextResponse.next({
-    request: {
-      headers: requestHeaders,
-    },
-  });
+  const response = make(requestHeaders);
 
   // Also set CSP on response headers for browser enforcement
   applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP });
 
   return { response, nonce };
 };
+
+export const createSecureResponse = (
+  isProduction: boolean,
+  request?: Request,
+  options: CreateSecureResponseOptions = {},
+): { response: NextResponse; nonce: string } =>
+  buildSecureResponse(
+    (requestHeaders) => NextResponse.next({ request: { headers: requestHeaders } }),
+    isProduction,
+    request,
+    options,
+  );
+
+/**
+ * A rewrite renders a page (unlike the redirect it replaces), so it needs the
+ * same nonce + CSP treatment `createSecureResponse` gives a passthrough — the
+ * root layout reads the nonce off the request headers during SSR.
+ */
+export const createSecureRewrite = (
+  destination: URL,
+  isProduction: boolean,
+  request?: Request,
+  options: CreateSecureResponseOptions = {},
+): { response: NextResponse; nonce: string } =>
+  buildSecureResponse(
+    (requestHeaders) => NextResponse.rewrite(destination, { request: { headers: requestHeaders } }),
+    isProduction,
+    request,
+    options,
+  );

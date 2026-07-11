@@ -326,7 +326,14 @@ export function PromptInputAttachment({
             </div>
             <Button
               aria-label="Remove attachment"
-              className="absolute inset-0 size-5 cursor-pointer rounded p-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 [&>svg]:size-2.5"
+              // On touch this button is pinned visible (globals.css) and there is no
+              // hover to fade the thumbnail out from under it, so the ✕ needs a
+              // backdrop or it is unreadable over a dark image. At a 20px chip there
+              // is no room for both: the backdrop largely occludes the thumbnail.
+              // That is the right trade — the filename beside it identifies the
+              // attachment, and a legible remove control matters more than a 20px
+              // preview.
+              className="absolute inset-0 size-5 cursor-pointer rounded p-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 touch:bg-background/80 [&>svg]:size-2.5"
               onClick={(e) => {
                 e.stopPropagation();
                 attachments.remove(data.id);

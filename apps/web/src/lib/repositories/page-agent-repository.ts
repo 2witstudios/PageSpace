@@ -130,7 +130,7 @@ export const pageAgentRepository = {
       aiModel: agent.aiModel,
       toolExposureMode: agent.toolExposureMode,
       isTrashed: agent.isTrashed,
-      terminalAccess: agent.terminalAccess ?? false,
+      machineAccess: agent.machineAccess ?? false,
       machines: isMachineRefArray(machines) ? machines : [],
     };
   },
@@ -195,7 +195,7 @@ export interface AgentDetails {
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
-  terminalAccess: boolean;
+  machineAccess: boolean;
   machines: MachineRef[];
 }
 
@@ -210,7 +210,7 @@ export interface AgentConfigUpdate {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
-  terminalAccess?: boolean;
+  machineAccess?: boolean;
   machines?: MachineRef[];
 }
 
@@ -250,7 +250,7 @@ export interface PageAgentConfig {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
-  terminalAccess: boolean;
+  machineAccess: boolean;
   machines: MachineRef[];
 }
 

@@ -3,16 +3,16 @@
  * (terminal, scope, name) target.
  *
  * The key is deliberately derived from the OWNING Machine Terminal page id
- * (`terminalId`) rather than the Sprite `sandboxId`. `terminalId` is known the
+ * (`machineId`) rather than the Sprite `sandboxId`. `machineId` is known the
  * instant a socket connects (it rides in on the handshake), whereas resolving
- * `sandboxId` requires a Sprite/DB round-trip. Keying on `terminalId` lets a
+ * `sandboxId` requires a Sprite/DB round-trip. Keying on `machineId` lets a
  * warm reattach hit the fast-path map lookup with ZERO I/O — the platform then
  * wakes the paused Sprite lazily on the next exec (docs.sprites.dev/lifecycle,
  * warm wake 100–500ms). Keying on `sandboxId` forced full resolution before the
  * lookup could even run.
  *
  * Machine and project scope share the SAME owning Machine's Sprite, so the
- * scope discriminant (not just terminalId + name) is required to keep e.g. a
+ * scope discriminant (not just machineId + name) is required to keep e.g. a
  * machine-scope "cli" terminal and a project-scope "cli" terminal on the SAME
  * machine from colliding onto one shared PTY session.
  *
@@ -68,7 +68,7 @@ function encodeScope(scope: AgentTerminalScope): string {
 
 /**
  * Derive the stable, collision-free server-side session-map key. Pure and
- * deterministic: the same (terminalId, scope, name) always yields the same key,
+ * deterministic: the same (machineId, scope, name) always yields the same key,
  * so a reopened terminal reattaches to its existing session.
  *
  * NOTE: this is the SERVER-side map key only. It is intentionally distinct from
@@ -76,13 +76,13 @@ function encodeScope(scope: AgentTerminalScope): string {
  * (`TerminalPanes.tsx`) — do not conflate the two.
  */
 export function deriveAgentTerminalSessionKey({
-  terminalId,
+  machineId,
   scope,
   name,
 }: {
-  terminalId: string;
+  machineId: string;
   scope: AgentTerminalScope;
   name: string;
 }): string {
-  return `${encodeURIComponent(terminalId)}:agent:${encodeScope(scope)}:${encodeURIComponent(name)}`;
+  return `${encodeURIComponent(machineId)}:agent:${encodeScope(scope)}:${encodeURIComponent(name)}`;
 }

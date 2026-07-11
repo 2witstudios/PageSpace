@@ -3,7 +3,7 @@
  *
  * A branch-terminal is its OWN Sprite — never the owning Machine's, and never
  * shared with any other branch of the same Project. `deriveBranchSessionKey`
- * mirrors `deriveTerminalSessionKey` (services/sandbox/terminal-session-manager.ts):
+ * mirrors `deriveMachineSessionKey` (services/sandbox/machine-session-manager.ts):
  * an opaque HMAC name, namespaced so a (tenant, machine, project, branch)
  * tuple ALWAYS resolves to the same Sprite name — and, critically, two
  * different branch names always resolve to two DIFFERENT Sprite names, so
@@ -34,7 +34,7 @@ export function deriveBranchSessionKey({
     throw new Error('deriveBranchSessionKey requires a non-empty secret');
   }
   const payload = [NAMESPACE_VERSION, tenantId, machineId, projectName, branchName].join('\0');
-  // codeql[js/insufficient-password-hash] not a password hash — a keyed HMAC over SANDBOX_SESSION_SECRET (a >=32-char server secret, never user input) deriving a deterministic Sprite-name pseudonym, same as terminal-session-manager.ts's deriveTerminalSessionKey
+  // codeql[js/insufficient-password-hash] not a password hash — a keyed HMAC over SANDBOX_SESSION_SECRET (a >=32-char server secret, never user input) deriving a deterministic Sprite-name pseudonym, same as machine-session-manager.ts's deriveMachineSessionKey
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-brn-${digest}`;
 }

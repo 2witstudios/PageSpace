@@ -28,22 +28,22 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Mock dotenv so the config call is a no-op
 vi.mock('dotenv', () => ({ config: vi.fn() }));
 
-// createDbTerminalSessionStore does a dynamic import('@pagespace/db/db') from
+// createDbMachineSessionStore does a dynamic import('@pagespace/db/db') from
 // INSIDE @pagespace/lib's (externalized, pre-built) dependency graph, which
 // bypasses this file's `@pagespace/db/db` mock (vi.mock only intercepts
 // modules Vitest's own loader transforms, not a workspace package's own
 // transitive requires) — so it's mocked directly here instead. Everything
-// else from this module (deriveTerminalSessionKey, acquireTerminalSandbox,
+// else from this module (deriveMachineSessionKey, acquireMachineSession,
 // etc.) passes through to the real, pure/DI'd implementation.
 const mockFindBySessionKey = vi.fn();
-vi.mock('@pagespace/lib/services/sandbox/terminal-session-manager', async () => {
-  const actual = await vi.importActual<typeof import('@pagespace/lib/services/sandbox/terminal-session-manager')>(
-    '@pagespace/lib/services/sandbox/terminal-session-manager',
+vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', async () => {
+  const actual = await vi.importActual<typeof import('@pagespace/lib/services/sandbox/machine-session-manager')>(
+    '@pagespace/lib/services/sandbox/machine-session-manager',
   );
   return {
     ...actual,
     getSandboxSessionSecret: () => 'a'.repeat(32),
-    createDbTerminalSessionStore: async () => ({ findBySessionKey: mockFindBySessionKey }),
+    createDbMachineSessionStore: async () => ({ findBySessionKey: mockFindBySessionKey }),
   };
 });
 
@@ -667,7 +667,7 @@ describe('requestListener - /api/terminal-activity', () => {
   });
 
   // Regression test: resolveSessionKey does a real async DB lookup
-  // (terminal_sessions), unlike the old synchronous deriveSessionKey it
+  // (machine_sessions), unlike the old synchronous deriveSessionKey it
   // replaced. Without a .catch() on the handleTerminalActivityRequest(...)
   // promise chain, a rejection here left the HTTP request hanging forever
   // and could crash the whole realtime process via an unhandled rejection.
