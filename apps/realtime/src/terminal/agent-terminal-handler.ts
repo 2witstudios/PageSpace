@@ -622,6 +622,14 @@ export function buildAgentTerminalHandlers({
       if (winner !== undefined) {
         session.outputFn = () => {};
         session.closedFn = () => {};
+        // Billing: this PTY is killed the instant it opened, so its window is the
+        // openShell-throw case, not a session that ran — RELEASE the hold rather
+        // than settling it. Clearing connectedAt/holdId first is what makes that
+        // stick: killing the shell fires onExit asynchronously, and
+        // endAgentTerminalSession would otherwise settle the very hold released
+        // here (double-handling it) against a window that never happened.
+        session.connectedAt = undefined;
+        session.holdId = undefined;
         shell.kill();
         releaseSlot();
         if (holdId) void billing?.releaseHold(holdId).catch(() => {});

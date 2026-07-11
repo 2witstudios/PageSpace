@@ -1076,6 +1076,38 @@ describe('buildAgentTerminalHandlers', () => {
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
     });
 
+    it('given a lost cold-connect race, RELEASES the duplicate\'s hold rather than settling it (even after its onExit lands)', async () => {
+      // The discarded PTY is killed the instant it opened — it ran no billable
+      // window. Its hold must be handed back, and the onExit that follows the
+      // kill must NOT then settle that same (already-released) hold.
+      const billing = makeBilling();
+      const authA = makeAuthSuccess();
+      const authB = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValueOnce(authA).mockResolvedValueOnce(authB) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const shellA = makeShell();
+      const shellB = makeShell();
+      openShell = vi.fn().mockReturnValueOnce(shellA).mockReturnValueOnce(shellB) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+
+      await Promise.all([
+        onConnect({ ...validPayload, connectionId: 'pane-a' }),
+        onConnect({ ...validPayload, connectionId: 'pane-b' }),
+      ]);
+
+      // Two cold paths raced, so two holds were placed; the loser's is released.
+      expect(billing.gate).toHaveBeenCalledTimes(2);
+      expect(billing.releaseHold).toHaveBeenCalledTimes(1);
+      expect(billing.trackUsage).not.toHaveBeenCalled();
+
+      // The kill's onExit lands afterwards — it must not settle the released hold.
+      const loserOnExit = openShell.mock.calls[1][0].onExit as (exitCode: number) => void;
+      loserOnExit(0);
+      expect(billing.trackUsage).not.toHaveBeenCalled();
+
+      // The winner is still live and still billable.
+      expect(sessionMap.getByKey('branch1:agent:cli')?.command).toBe(shellA);
+    });
+
     it('reattaching to a live session does NOT place a second hold', async () => {
       const billing = makeBilling();
       const { onConnect: connect1 } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
