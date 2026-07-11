@@ -51,29 +51,62 @@ const filesFor = (branchName: string, scope: string): MachineDiffFilesResponse =
   };
 };
 
-vi.mock('@/hooks/useMachineDiff', () => ({
-  useMachineDiffFiles: (
-    _machineId: string,
-    projectName: string | null,
-    branchName: string | null,
-    scope: string | null,
-  ) => ({
-    data: projectName && branchName && scope ? filesFor(branchName, scope) : undefined,
-    error: undefined,
-    isLoading: false,
-    mutate: vi.fn(),
-  }),
-  useMachineDiffPair: () => ({
-    data: { notApplicable: false, scope: 'uncommitted', path: 'x', original: 'a', modified: 'b' },
-    error: undefined,
-    isLoading: false,
-  }),
-}));
+// The pair fixture MUST mirror the route's real wire shape — each side is
+// `{ content, truncated }`, NOT a bare string. An earlier version of this mock
+// asserted the string shape and so kept the suite green while the production
+// code handed Monaco an object; useMachineDiff.test.tsx now pins the real
+// contract against fetchWithAuth so this mock can't drift from it again.
+const pairFor = (enabled: boolean) => ({
+  data: enabled
+    ? {
+        notApplicable: false as const,
+        scope: 'uncommitted' as const,
+        path: 'src/uncommitted.ts',
+        original: { content: 'a', truncated: false },
+        modified: { content: 'b', truncated: truncatedPair },
+      }
+    : undefined,
+  error: undefined,
+  isLoading: false,
+});
+
+let truncatedPair = false;
+
+vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useMachineDiff')>();
+  return {
+    // Keep the real key predicate — the refresh path depends on it.
+    isMachineDiffKey: actual.isMachineDiffKey,
+    useMachineDiffFiles: (
+      _machineId: string,
+      projectName: string | null,
+      branchName: string | null,
+      scope: string | null,
+    ) => ({
+      data: projectName && branchName && scope ? filesFor(branchName, scope) : undefined,
+      error: undefined,
+      isLoading: false,
+      mutate: vi.fn(),
+    }),
+    // Honors `enabled`, so a collapsed card genuinely fetches nothing.
+    useMachineDiffPair: (
+      _machineId: string,
+      _projectName: string | null,
+      _branchName: string | null,
+      _scope: string | null,
+      _file: unknown,
+      enabled: boolean,
+    ) => pairFor(enabled),
+  };
+});
 
 import DiffTab from './DiffTab';
 
 describe('DiffTab', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    truncatedPair = false;
+  });
 
   test('shows the empty placeholder until a branch is selected', () => {
     render(<DiffTab machineId="m1" />);
@@ -151,9 +184,24 @@ describe('DiffTab', () => {
     await waitFor(() => screen.getByTestId('monaco-diff'));
     assert({
       given: 'the changed file card clicked open',
-      should: 'mount MonacoDiffEditor with the fetched original/modified pair',
+      should: "mount MonacoDiffEditor with each side's CONTENT string, not the raw { content, truncated } side object",
       actual: screen.getByTestId('monaco-diff').textContent,
       expected: 'a→b',
+    });
+  });
+
+  test('a truncated side is called out instead of being rendered as the whole file', async () => {
+    truncatedPair = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await userEvent.click(await waitFor(() => screen.getByText('src/uncommitted.ts')));
+
+    await waitFor(() => screen.getByTestId('monaco-diff'));
+    assert({
+      given: 'a file whose content the sandbox cut at its output cap',
+      should: 'warn that the diff is cut off — silently diffing a truncated side paints the untouched tail as changed',
+      actual: screen.queryByText(/too large to load in full/i) !== null,
+      expected: true,
     });
   });
 });

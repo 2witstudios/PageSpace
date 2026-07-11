@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useState } from 'react';
+import { useSWRConfig } from 'swr';
 import { GitCompare, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useMachineDiffFiles } from '@/hooks/useMachineDiff';
+import { useMachineDiffFiles, isMachineDiffKey } from '@/hooks/useMachineDiff';
 import { isMachineDiffScope, type MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import DiffFileCard from './DiffFileCard';
@@ -19,6 +20,20 @@ const SCOPE_LABELS: Record<MachineDiffScope, string> = {
 interface SelectedBranch {
   projectName: string;
   branchName: string;
+}
+
+/**
+ * The empty state for a clean scope. The main-branch case names the branch
+ * explicitly ("No uncommitted changes on main") — on the default branch
+ * Uncommitted is the ONLY scope, so an unqualified "no changes" would leave the
+ * user wondering what happened to the other two.
+ */
+function emptyMessage(scope: MachineDiffScope, branchName: string, scopesApplicable: boolean): string {
+  if (scope === 'uncommitted') {
+    return scopesApplicable ? 'No uncommitted changes' : `No uncommitted changes on ${branchName}`;
+  }
+  if (scope === 'committed') return `No commits on ${branchName} yet`;
+  return `${branchName} is identical to the default branch`;
 }
 
 /**
@@ -97,10 +112,15 @@ function BranchDiffPane({
   const active: MachineDiffScope = scopesApplicable ? scope : 'uncommitted';
   const list = useMachineDiffFiles(machineId, projectName, branchName, active);
 
+  // Revalidate the WHOLE diff surface, not just the two lists this pane holds:
+  // every expanded card owns a separate pair key, and refreshing only the lists
+  // would leave an open Monaco diff showing pre-edit content indefinitely (the
+  // pair hook sets revalidateOnFocus: false, so nothing else would ever refetch
+  // it). The keyed predicate catches lists and pairs alike.
+  const { mutate } = useSWRConfig();
   const refresh = useCallback(() => {
-    void committed.mutate();
-    void list.mutate();
-  }, [committed, list]);
+    void mutate(isMachineDiffKey);
+  }, [mutate]);
 
   const availableScopes: MachineDiffScope[] = scopesApplicable
     ? ['uncommitted', 'committed', 'branch']
@@ -140,14 +160,21 @@ function BranchDiffPane({
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
-        <DiffFileList
-          machineId={machineId}
-          projectName={projectName}
-          branchName={branchName}
-          scope={active}
-          scopesApplicable={scopesApplicable}
-          list={list}
-        />
+        {/* Hold the list until the probe answers: rendering it first would show
+            a generic "No uncommitted changes" that then flips to the
+            main-branch-specific copy once applicability is known. */}
+        {!probeResolved ? (
+          <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>
+        ) : (
+          <DiffFileList
+            machineId={machineId}
+            projectName={projectName}
+            branchName={branchName}
+            scope={active}
+            scopesApplicable={scopesApplicable}
+            list={list}
+          />
+        )}
       </ScrollArea>
     </div>
   );
@@ -176,19 +203,23 @@ function DiffFileList({
   if (error) {
     return <div className="p-4 text-sm text-destructive">Failed to load diff: {error.message}</div>;
   }
-  if (!data || data.notApplicable) {
-    // Only reachable if the active scope is itself not applicable — which the
-    // toggle already prevents; render nothing rather than an empty-diff lie.
-    return null;
+  if (!data) {
+    return <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>;
   }
-  if (data.files.length === 0) {
+  if (data.notApplicable) {
+    // The toggle normally prevents this (a not-applicable scope isn't offered),
+    // but say so explicitly rather than render a blank pane — a transiently
+    // failed probe can leave the full toggle up on a main branch, and an empty
+    // white pane would read as "no changes", which is a different claim.
     return (
       <div className="p-4 text-sm text-muted-foreground">
-        {scope === 'uncommitted' && !scopesApplicable
-          ? `No uncommitted changes on ${branchName}`
-          : `No ${SCOPE_LABELS[scope].toLowerCase()} changes`}
+        This scope doesn&apos;t apply on <span className="font-mono">{branchName}</span> — it is the repository&apos;s
+        default branch, so there is nothing to compare it against.
       </div>
     );
+  }
+  if (data.files.length === 0) {
+    return <div className="p-4 text-sm text-muted-foreground">{emptyMessage(scope, branchName, scopesApplicable)}</div>;
   }
 
   return (

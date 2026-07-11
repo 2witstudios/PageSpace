@@ -56,7 +56,12 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
         )}
         <span className="truncate font-mono text-xs">{file.path}</span>
         {file.previousPath && (
-          <span className="truncate font-mono text-xs text-muted-foreground">← {file.previousPath}</span>
+          // A COPY also carries a previousPath but is statused 'added' (see
+          // parseNameStatusZ), so name the relationship rather than showing a
+          // bare arrow that reads like a rename wearing the wrong badge.
+          <span className="truncate font-mono text-xs text-muted-foreground">
+            {file.status === 'renamed' ? 'renamed from' : 'copied from'} {file.previousPath}
+          </span>
         )}
         <span className={cn('ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', STATUS_STYLES[file.status])}>
           {file.status}
@@ -68,15 +73,28 @@ export default function DiffFileCard({ machineId, projectName, branchName, scope
           {isLoading && <div className="px-3 py-4 text-xs text-muted-foreground">Loading diff…</div>}
           {error && <div className="px-3 py-4 text-xs text-destructive">Failed to load diff: {error.message}</div>}
           {!isLoading && !error && data && !data.notApplicable && (
-            <div className="h-[420px]">
-              <MonacoDiffEditor
-                // A missing side means the file doesn't exist there (added → no
-                // original, deleted → no modified); Monaco needs a string.
-                original={data.original ?? ''}
-                modified={data.modified ?? ''}
-                filename={file.path}
-              />
-            </div>
+            <>
+              {(data.original?.truncated || data.modified?.truncated) && (
+                // Diffing a CUT-OFF side against a whole one paints the file's
+                // entire tail as removed/added lines that never changed — so a
+                // truncated side has to be called out, never rendered as if it
+                // were the complete file.
+                <div className="border-b border-border bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  This file is too large to load in full — it is cut off below, so changes near the end may be
+                  missing or shown incorrectly.
+                </div>
+              )}
+              <div className="h-[420px]">
+                <MonacoDiffEditor
+                  // A null side means the file doesn't exist there (added → no
+                  // original, deleted → no modified). Each side carries its own
+                  // content + truncated flag; Monaco needs the string.
+                  original={data.original?.content ?? ''}
+                  modified={data.modified?.content ?? ''}
+                  filename={file.path}
+                />
+              </div>
+            </>
           )}
         </div>
       )}

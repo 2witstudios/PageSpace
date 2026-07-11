@@ -23,9 +23,22 @@ export type MachineDiffFilesResponse =
     };
 
 /**
+ * One SIDE of a file's diff. NOT a bare string: the route ships the content
+ * together with its own `truncated` flag, because each side has its own cap — a
+ * git-blob side is cut at `runGitInSandbox`'s 256 KB stdout limit, a
+ * working-tree side at 2 MB (see `machine-diff.ts`). A truncated side matters to
+ * the UI: diffing a cut-off original against a whole modified paints the file's
+ * entire tail as removed lines that were never removed, so the flag has to reach
+ * the renderer rather than be dropped here.
+ */
+export interface MachineDiffSide {
+  content: string;
+  truncated: boolean;
+}
+
+/**
  * One file's original/modified pair for a scope. A side is `null` when the file
- * doesn't exist there (an added file's original, a deleted file's modified);
- * the caller coerces null to '' before handing it to Monaco.
+ * doesn't exist there (an added file's original, a deleted file's modified).
  */
 export type MachineDiffPairResponse =
   | { notApplicable: true }
@@ -33,9 +46,23 @@ export type MachineDiffPairResponse =
       notApplicable: false;
       scope: MachineDiffScope;
       path: string;
-      original: string | null;
-      modified: string | null;
+      original: MachineDiffSide | null;
+      modified: MachineDiffSide | null;
     };
+
+/**
+ * Every diff SWR key (lists AND per-file pairs) starts with this, so a refresh
+ * can invalidate the whole surface with one keyed predicate — the expanded
+ * cards' pair keys are separate SWR entries the pane doesn't own, and revalidating
+ * only the lists would leave an open card serving pre-edit content forever
+ * (both hooks set `revalidateOnFocus: false`).
+ */
+export const MACHINE_DIFF_KEY_PREFIX = '/api/machines/diff?';
+
+/** True for any SWR key belonging to this surface — pass to SWR's global `mutate`. */
+export function isMachineDiffKey(key: unknown): boolean {
+  return typeof key === 'string' && key.startsWith(MACHINE_DIFF_KEY_PREFIX);
+}
 
 const fetcher = <T>(url: string): Promise<T> =>
   fetchWithAuth(url).then(async (res) => {
@@ -59,10 +86,8 @@ export function useMachineDiffFiles(
 ) {
   const key =
     projectName && branchName && scope
-      ? `/api/machines/diff?machineId=${encodeURIComponent(machineId)}` +
-        `&projectName=${encodeURIComponent(projectName)}` +
-        `&branchName=${encodeURIComponent(branchName)}` +
-        `&scope=${scope}`
+      ? MACHINE_DIFF_KEY_PREFIX +
+        new URLSearchParams({ machineId, projectName, branchName, scope }).toString()
       : null;
 
   const { data, error, isLoading, mutate } = useSWR<MachineDiffFilesResponse>(key, fetcher, {
@@ -98,8 +123,11 @@ export function useMachineDiffPair(
             path: file.path,
             status: file.status,
           });
+          // The rename SOURCE, so the route reads the 'original' side from the
+          // pre-rename location instead of missing at the new path and
+          // mis-showing the rename as an add.
           if (file.previousPath) params.set('previousPath', file.previousPath);
-          return `/api/machines/diff?${params.toString()}`;
+          return MACHINE_DIFF_KEY_PREFIX + params.toString();
         })()
       : null;
 
