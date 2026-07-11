@@ -75,9 +75,9 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
  * Chrome-free by design (no per-pane header, ever, verified against
  * PurePoint's real chrome-free pane design) — a top accent bar shows focus
  * and hover-revealed controls handle splitting/closing without permanent
- * chrome. Known tradeoff: with 2+ panes open the Navigator sidebar does not
- * yet indicate which open terminal is showing in which pane — that's
- * sidebar/Navigator work, out of scope for this theming-foundation round.
+ * chrome. Known tradeoff: with 2+ panes open the Machine tree sidebar does not
+ * yet indicate which open terminal is showing in which pane — that's tree
+ * sidebar work, out of scope for this theming-foundation round.
  */
 function TerminalPane({
   socket,

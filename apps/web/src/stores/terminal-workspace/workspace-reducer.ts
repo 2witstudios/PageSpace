@@ -2,8 +2,8 @@
  * Terminal Workspace — functional core.
  *
  * Pure, framework-free state transitions for the pane layout shared between
- * the Terminal page's Navigator (right sidebar) and TerminalPanes (middle
- * content). IDs are passed in rather than generated here, so every
+ * the Machine page's Terminal-tab tree sidebar and TerminalPanes (its pane
+ * region). IDs are passed in rather than generated here, so every
  * transition is deterministic and independently testable.
  *
  * Layout is a two-level structure — a horizontal row of columns, each an

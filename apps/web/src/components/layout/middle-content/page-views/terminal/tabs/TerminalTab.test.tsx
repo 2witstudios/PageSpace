@@ -62,7 +62,8 @@ describe('TerminalTab', () => {
       given: 'the Terminal tab for a machine',
       should: 'render both the Machine tree and the workspace pane, scoped to the machineId',
       actual: {
-        tree: !!screen.getByText('Machine'),
+        // queryByText returns null (not a throw) when absent, so this is a real boolean.
+        tree: screen.queryByText('Machine') !== null,
         workspace: workspace.textContent,
       },
       expected: { tree: true, workspace: 'workspace:machine-1' },
