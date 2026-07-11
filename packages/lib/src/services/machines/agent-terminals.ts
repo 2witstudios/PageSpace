@@ -31,7 +31,7 @@
  * later reconnect can reattach instead of spawning a duplicate process.
  * Resolving/killing DOES need a live sandbox: a branch's Sprite is looked up
  * directly (by name or by id), but machine/project scope goes through the
- * injected `machineSandbox.acquire` (the same `acquireTerminalSandbox`-backed
+ * injected `machineSandbox.acquire` (the same `acquireMachineSandbox`-backed
  * path a Terminal page shell uses) since that Sprite may need to be
  * reconnected or resumed from hibernation.
  */

@@ -74,7 +74,7 @@ export const updateConfig = async (
       | 'enabledUserIntegrations'
       | 'driveOverrides'
       | 'inheritDriveIntegrations'
-      | 'terminalAccess'
+      | 'machineAccess'
       | 'machines'
       | 'ownMachinePageId'
     >

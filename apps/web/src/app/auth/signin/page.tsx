@@ -19,7 +19,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useAuthCSRF } from "@/hooks/useAuthCSRF";
 import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
-import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from "@/lib/auth/url-utils";
+import { resolveSigninNext } from "@/lib/auth/resolve-signin-next";
 import { detectInAppBrowser, getPreferredBrowserName } from "@/lib/auth/browser-detection";
 
 function SignInForm() {
@@ -28,11 +28,16 @@ function SignInForm() {
   const searchParams = useSearchParams();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const inviteToken = searchParams.get('invite') ?? undefined;
-  const rawNext = searchParams.get('next');
-  const nextPath = rawNext && isSafeNextPath({
-    path: rawNext,
-    allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES,
-  }) ? rawNext : undefined;
+
+  // Logged-out /dashboard requests reach this page via a middleware REWRITE (see
+  // resolveSigninNext), so the deep link lives in the browser path, not in `next=`.
+  // Read post-mount: window is browser-only.
+  const [browserPath, setBrowserPath] = useState<string | null>(null);
+  useEffect(() => {
+    setBrowserPath(`${window.location.pathname}${window.location.search}`);
+  }, []);
+
+  const nextPath = resolveSigninNext({ paramNext: searchParams.get('next'), browserPath });
   const {
     handleGoogleSignIn,
     handleAppleSignIn,

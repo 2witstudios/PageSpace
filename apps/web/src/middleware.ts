@@ -4,12 +4,14 @@ import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
   applyApiCorsHeaders,
   createSecureResponse,
+  createSecureRewrite,
   createSecureErrorResponse,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
   validateOriginForMiddleware,
@@ -36,6 +38,63 @@ import { getClientIP } from '@/lib/security/edge-client-ip';
 const MCP_BEARER_PREFIX = `Bearer ${MCP_TOKEN_PREFIX}`;
 const SESSION_BEARER_PREFIX = `Bearer ${SESSION_TOKEN_PREFIX}`;
 const OAUTH_BEARER_PREFIX = `Bearer ${OAUTH_ACCESS_TOKEN_PREFIX}`;
+
+const SIGNIN_PATH = '/auth/signin';
+
+// The iOS shell remote-loads https://pagespace.ai/dashboard (apps/ios/capacitor.config.ts).
+// Capacitor decides every top-level navigation in WebViewDelegationHandler.swift:98-116:
+// with no `server.allowNavigation` the host allowlist is empty, so it falls through to a
+// raw string-prefix test of the target URL against `server.url` — path included. A signin
+// *redirect* fails that test, gets opened in system Safari, and is cancelled in the
+// WebView, which is then left holding no document at all: the black screen. A *rewrite*
+// is not a navigation, so the policy delegate is never consulted and the signin page just
+// renders in place. Only /dashboard needs this — it is the shell's sole entry point — and
+// scoping it there keeps the honest redirect (and its correct URL bar) everywhere else.
+const REWRITE_SIGNIN_ROOT = '/dashboard';
+
+const isShellEntryPath = (pathname: string): boolean =>
+  pathname === REWRITE_SIGNIN_ROOT || pathname.startsWith(`${REWRITE_SIGNIN_ROOT}/`);
+
+// Query params that must never survive into `next=`. `next` itself, because the
+// destination is always the path actually requested — honouring a caller-supplied
+// `next` instead would let a query param override the real destination, and leaving a
+// rejected one embedded would fail validation for the whole reconstructed path and cost
+// the user the rest of their query string with it. `_rsc` because a soft navigation that
+// finds an expired session carries Next's RSC cache-buster, which is meaningless (and
+// stale) by the time the user is landed back on the page after signing in.
+const NON_FORWARDABLE_PARAMS = ['next', '_rsc'];
+
+/**
+ * Signin URL for the REDIRECT path, carrying the deep link the user was denied so signin
+ * can return them there. The deep link is always reconstructed from the request itself;
+ * only destinations the signin surface actually accepts survive, and anything else is
+ * dropped rather than passed along to be rejected there.
+ *
+ * Deliberately NOT used for the rewrite. A rewrite leaves the browser URL alone, so under
+ * one the browser is still sitting on the deep link and the client reads it straight off
+ * the path (resolve-signin-next.ts). Putting `next=` on the rewrite destination as well
+ * would have the server render a value the client cannot see — and `nextPath` reaches the
+ * DOM (the signup link's href), so that is a hydration mismatch. Omitting it keeps server
+ * and client in agreement on every reachable flow.
+ */
+const buildSigninUrl = (req: NextRequest): URL => {
+  // Resolved against req.url, so the origin is always this request's own — a rewrite
+  // to a *foreign* origin would be a server-side proxy instruction rather than a
+  // client-side hop, but that is unreachable here by construction, however the Host
+  // header is set. Same idiom as the WELL_KNOWN_REWRITES rewrite below.
+  const url = new URL(SIGNIN_PATH, req.url);
+
+  const search = new URLSearchParams(req.nextUrl.search);
+  for (const param of NON_FORWARDABLE_PARAMS) search.delete(param);
+  const query = search.toString();
+  const candidate = query ? `${req.nextUrl.pathname}?${query}` : req.nextUrl.pathname;
+
+  if (isSafeNextPath({ path: candidate, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
+    url.searchParams.set('next', candidate);
+  }
+
+  return url;
+};
 
 const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
 const IS_TENANT = process.env.DEPLOYMENT_MODE === 'tenant';
@@ -273,7 +332,38 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
         return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
       }
 
-      return NextResponse.redirect(new URL('/auth/signin', req.url));
+      if (isShellEntryPath(pathname)) {
+        // A `next=` on a /dashboard URL is visible to the client (which reads the browser
+        // URL) but NOT to the server (which renders the bare rewrite destination), and
+        // nextPath reaches the DOM — so such a URL would desync the two renders. Nothing
+        // in the app produces one, but a hand-crafted one must not be able to provoke a
+        // hydration mismatch, so strip it with a redirect and let the clean URL rewrite.
+        // Safe under the iOS shell: the target is still under /dashboard, so it passes
+        // Capacitor's prefix test. No loop — the redirected URL has no `next` left.
+        if (req.nextUrl.searchParams.has('next')) {
+          const clean = new URL(req.url);
+          clean.searchParams.delete('next');
+          return NextResponse.redirect(clean);
+        }
+
+        // Bare /auth/signin, with no `next=` — see buildSigninUrl. The browser URL is
+        // untouched by a rewrite, so it IS still the deep link and the client recovers it
+        // from there; carrying it here as well would desync the server render from the
+        // client's.
+        //
+        // disableCOEP mirrors what the /auth/* branch above would have applied: the signin
+        // page's OAuth popups and Google One Tap iframe need it, and under the rewrite
+        // shouldDisableCOEP() only ever sees the /dashboard pathname.
+        const { response } = createSecureRewrite(
+          new URL(SIGNIN_PATH, req.url),
+          isProduction,
+          req,
+          { disableCOEP: true },
+        );
+        return response;
+      }
+
+      return NextResponse.redirect(buildSigninUrl(req));
     }
 
     // Session cookie exists - let request through

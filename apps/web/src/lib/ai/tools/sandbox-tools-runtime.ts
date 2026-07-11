@@ -29,12 +29,12 @@ import {
 } from '@pagespace/lib/services/sandbox/injection-seam';
 import {
   getSandboxSessionSecret,
-  createDbTerminalSessionStore,
-} from '@pagespace/lib/services/sandbox/terminal-session-manager';
+  createDbMachineSessionStore,
+} from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
-import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/terminal-storage-billing';
-import { lookupPageOwnerId } from '@pagespace/lib/billing/terminal-payer';
+import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
+import { lookupPageOwnerId } from '@pagespace/lib/billing/machine-payer';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
   acquireCodeExecutionSlot,
@@ -52,18 +52,18 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
 import { canActorViewPage } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
-import { globalTerminalConfigRepository } from '@/lib/repositories/global-terminal-config-repository';
+import { globalMachineConfigRepository } from '@/lib/repositories/global-machine-config-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { notifyTerminalAgentActivity } from '@/lib/websocket/socket-utils';
 
 // The session store and Sprites client are process-wide singletons: the store
 // reconnects to one DB pool and the client is stateless. Both are built lazily
 // so importing this module does no DB or SDK work at load.
-let storePromise: ReturnType<typeof createDbTerminalSessionStore> | null = null;
+let storePromise: ReturnType<typeof createDbMachineSessionStore> | null = null;
 let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
 
 function getStore() {
-  storePromise ??= createDbTerminalSessionStore();
+  storePromise ??= createDbMachineSessionStore();
   return storePromise;
 }
 
@@ -176,7 +176,7 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     now: () => new Date(),
     logger: loggers.ai,
     // Terminal Epic 3: meter this run's active-runtime cost against the machine's
-    // payer (the drive owner by default — see resolveTerminalPayerId).
+    // payer (the drive owner by default — see resolveMachinePayerId).
     billing: defaultSandboxBillingDeps,
     // Sprites Platform Alignment 6-1: while the sprite is awake for this op,
     // opportunistically (throttled, best-effort) measure its used storage bytes
@@ -326,13 +326,13 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
 export interface MachineDirectoryRuntimeDeps {
   findPage: (pageId: string) => Promise<{ title: string; type: string; driveId: string } | undefined>;
   canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
-  /** `PageAgentConfig.terminalAccess`/`machines` — the canonical config source. */
-  getAgentConfig: (agentPageId: string) => Promise<{ terminalAccess: boolean; machines: MachineRef[] } | null>;
+  /** `PageAgentConfig.machineAccess`/`machines` — the canonical config source. */
+  getAgentConfig: (agentPageId: string) => Promise<{ machineAccess: boolean; machines: MachineRef[] } | null>;
   /** The global assistant's user-level parallel of `getAgentConfig` (globalAssistantConfig). */
-  getGlobalConfig: (userId: string) => Promise<{ terminalAccess: boolean; machines: MachineRef[] }>;
+  getGlobalConfig: (userId: string) => Promise<{ machineAccess: boolean; machines: MachineRef[] }>;
   /** Lazily provision (or reuse) the personal Terminal page backing a user's global "own" machine. */
   getOrCreateOwnMachinePageId: (userId: string) => Promise<string>;
-  /** A page's owning drive's `ownerId` — the same lookup `resolveTerminalPayerId` uses for billing attribution. */
+  /** A page's owning drive's `ownerId` — the same lookup `resolveMachinePayerId` uses for billing attribution. */
   lookupPageOwnerId: (pageId: string) => Promise<string | null>;
 }
 
@@ -341,14 +341,14 @@ const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
     db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true, driveId: true } }),
   canViewPage: canActorViewPage,
   getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
-  getGlobalConfig: (userId) => globalTerminalConfigRepository.getConfig(userId),
-  getOrCreateOwnMachinePageId: (userId) => globalTerminalConfigRepository.getOrCreateOwnMachinePageId(userId),
+  getGlobalConfig: (userId) => globalMachineConfigRepository.getConfig(userId),
+  getOrCreateOwnMachinePageId: (userId) => globalMachineConfigRepository.getOrCreateOwnMachinePageId(userId),
   lookupPageOwnerId,
 };
 
 /**
  * Resolves the global assistant's configured machine list: gated by the
- * user's own `terminalAccess` (default off → no machines), same as a page
+ * user's own `machineAccess` (default off → no machines), same as a page
  * agent. Its 'own' machine has no agent page to serve as its identity
  * (machine-session.ts's resolveMachinePageId doc comment), so it is resolved
  * transparently here into the user's lazily-provisioned personal Terminal
@@ -360,7 +360,7 @@ async function resolveGlobalConfiguredMachines(
   deps: MachineDirectoryRuntimeDeps,
 ): Promise<MachineRef[]> {
   const config = await deps.getGlobalConfig(userId);
-  if (!config.terminalAccess) return [];
+  if (!config.machineAccess) return [];
   const configured = config.machines.length > 0 ? config.machines : [{ kind: 'own' as const }];
   return Promise.all(
     configured.map(async (m) =>
@@ -373,9 +373,9 @@ async function resolveGlobalConfiguredMachines(
 
 /**
  * Resolves an agent's configured machine list for `listMachines`. A page
- * agent's list is gated by `terminalAccess` (default off → no machines);
+ * agent's list is gated by `machineAccess` (default off → no machines);
  * `machines[0]` is the default active machine, falling back to 'own' if
- * `terminalAccess` is on but no machine has been configured yet. No
+ * `machineAccess` is on but no machine has been configured yet. No
  * `agentPageId` means the global assistant — see resolveGlobalConfiguredMachines.
  */
 async function resolveConfiguredMachines(
@@ -385,7 +385,7 @@ async function resolveConfiguredMachines(
 ): Promise<MachineRef[]> {
   if (agentPageId) {
     const agent = await deps.getAgentConfig(agentPageId);
-    if (!agent?.terminalAccess) return [];
+    if (!agent?.machineAccess) return [];
     return agent.machines.length > 0 ? agent.machines : [{ kind: 'own' }];
   }
   if (!userId) return [];

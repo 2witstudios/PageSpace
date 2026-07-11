@@ -10,8 +10,8 @@ import { pages } from './core';
  * A git repo checked out on a Machine's persistent filesystem — the
  * "Projects" tier of the Terminal workspace navigator (Machine → Projects →
  * Branches). A Machine's identity IS its backing page (`machineId`): the
- * page's persistent Sprite session (`terminal_sessions`, services/sandbox/
- * terminal-session-manager.ts) is the same one a live Terminal shell or a
+ * page's persistent Sprite session (`machine_sessions`, services/sandbox/
+ * machine-session-manager.ts) is the same one a live Terminal shell or a
  * page-agent's "own machine" tool calls already reconnect to — Projects are
  * cloned onto that SAME filesystem, not a separate one. `ownerId` is the
  * actor who added the project, kept for audit only — resource-level access is

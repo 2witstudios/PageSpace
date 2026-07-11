@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { writeSandboxFile, readSandboxFile, type SandboxActorContext, type SandboxRunDeps } from '../tool-runners';
 import { acquireMachineSandbox, type AcquireMachineSandboxDeps } from '../machine-session';
-import type { SandboxClient, TerminalSessionStore, TerminalSessionRecord } from '../terminal-session-manager';
+import type { SandboxClient, MachineSessionStore, MachineSessionRecord } from '../machine-session-manager';
 import type { ExecutableSandbox } from '../sandbox-client/types';
 
 /**
  * End-to-end proof of the epic's core claim — "my tools are already
  * installed" — by driving the REAL production code paths (writeSandboxFile /
- * readSandboxFile → acquireMachineSandbox → acquireTerminalSandbox) across two
+ * readSandboxFile → acquireMachineSandbox → acquireMachineSandbox) across two
  * separate, independently-constructed contexts standing in for two different
  * conversations/turns. Only the outermost IO boundaries (the session store and
  * the Sprites client/filesystem) are faked; everything else — session-key
@@ -18,8 +18,8 @@ import type { ExecutableSandbox } from '../sandbox-client/types';
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 const passGate = async (): Promise<{ ok: true }> => ({ ok: true });
 
-function makeStore(): TerminalSessionStore {
-  const rows = new Map<string, TerminalSessionRecord>();
+function makeStore(): MachineSessionStore {
+  const rows = new Map<string, MachineSessionRecord>();
   return {
     findBySessionKey: async (sessionKey) => rows.get(sessionKey) ?? null,
     save: async (input) => {
@@ -98,7 +98,7 @@ function makeSpriteWorld() {
   return { client, reconnect };
 }
 
-function makeRunDeps(world: ReturnType<typeof makeSpriteWorld>, store: TerminalSessionStore): SandboxRunDeps {
+function makeRunDeps(world: ReturnType<typeof makeSpriteWorld>, store: MachineSessionStore): SandboxRunDeps {
   const acquireDeps: AcquireMachineSandboxDeps = {
     store,
     client: world.client,

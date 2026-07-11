@@ -20,7 +20,7 @@ import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from
  * "recent usage" view.
  *
  * `byMachine` needs no separate drive-ownership filter: `creditLedger.userId` IS the
- * PAYER (`resolveTerminalPayerId` in terminal-payer.ts always resolves to the backing
+ * PAYER (`resolveMachinePayerId` in machine-payer.ts always resolves to the backing
  * page's drive owner, falling back to the acting tenant only when unresolvable), so
  * every row this query returns for `userId` is already scoped to a machine they own
  * or a run they footed the bill for directly.

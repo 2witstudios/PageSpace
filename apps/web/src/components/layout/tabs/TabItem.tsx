@@ -181,7 +181,10 @@ export const TabItem = memo(function TabItem({
               title="Unsaved changes"
             />
           ) : shortcutNumber && !tab.isPinned ? (
-            <span className="text-[10px] text-white/70 flex-shrink-0 hidden group-hover:inline">
+            // The Cmd/Ctrl+N shortcut hint — a keyboard affordance, so it stays
+            // hover-only. Revealing it on touch would pin a stray digit into every
+            // tab, next to the close button this same mechanism already surfaces.
+            <span data-hover-only="" className="text-[10px] text-white/70 flex-shrink-0 hidden group-hover:inline">
               {shortcutNumber}
             </span>
           ) : null}

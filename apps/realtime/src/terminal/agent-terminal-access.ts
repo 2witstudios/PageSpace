@@ -4,7 +4,7 @@
  *
  *   (a) DECIDING whether the user may attach — a pure decision over plain data
  *       gathered from the DB (`decideAgentTerminalAccess`), and
- *   (b) RESOLVING the Sprite for a fresh PTY — `resolveTerminalSandbox`, which
+ *   (b) RESOLVING the Sprite for a fresh PTY — `resolveMachineSandbox`, which
  *       only runs once the access decision has already allowed.
  *
  * The split matters because a Sprite is woken automatically by any exec
@@ -72,16 +72,16 @@ export function decideAgentTerminalAccess(inputs: AgentTerminalAccessInputs): Ag
 // (b) Lazy sprite resolution — runs ONLY for fresh PTY creation
 // ---------------------------------------------------------------------------
 
-export interface ResolveTerminalSandboxTarget {
+export interface ResolveMachineSandboxTarget {
   machineId: string;
   projectName?: string;
   branchName?: string;
   name: string;
 }
 
-export interface ResolveTerminalSandboxDeps {
+export interface ResolveMachineSandboxDeps {
   /** Resolve the named agent terminal to its Sprite + cwd + launch metadata. */
-  resolveAgentTerminal: (target: ResolveTerminalSandboxTarget) => Promise<ResolveAgentTerminalResult>;
+  resolveAgentTerminal: (target: ResolveMachineSandboxTarget) => Promise<ResolveAgentTerminalResult>;
   /**
    * Read the resolved Sprite handle. Called exactly once here — and the caller
    * (`apps/realtime/src/index.ts`) backs this with a per-connect
@@ -92,7 +92,7 @@ export interface ResolveTerminalSandboxDeps {
   getSprite: (sandboxId: string) => Promise<SpriteInstanceLike>;
 }
 
-export type ResolveTerminalSandboxResult =
+export type ResolveMachineSandboxResult =
   | {
       ok: true;
       agentTerminalId: string;
@@ -116,10 +116,10 @@ export type ResolveTerminalSandboxResult =
  * touches the Sprite; a vanished Sprite (getSprite throws) denies with
  * `provision_failed`.
  */
-export async function resolveTerminalSandbox(
-  target: ResolveTerminalSandboxTarget,
-  deps: ResolveTerminalSandboxDeps,
-): Promise<ResolveTerminalSandboxResult> {
+export async function resolveMachineSandbox(
+  target: ResolveMachineSandboxTarget,
+  deps: ResolveMachineSandboxDeps,
+): Promise<ResolveMachineSandboxResult> {
   const resolved = await deps.resolveAgentTerminal(target);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
 
@@ -160,7 +160,7 @@ export interface AgentTerminalCheckAuthDeps {
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (userId: string) => void;
-  resolveSandbox: (target: ResolveTerminalSandboxTarget & { userId: string }) => Promise<ResolveTerminalSandboxResult>;
+  resolveSandbox: (target: ResolveMachineSandboxTarget & { userId: string }) => Promise<ResolveMachineSandboxResult>;
   /**
    * DB-only existence check for the (scope, name) target — resolves the branch/
    * project scope rows and the agent-terminal row itself, touching NO Sprite.
@@ -168,9 +168,9 @@ export interface AgentTerminalCheckAuthDeps {
    * keep noticing that a terminal's project/branch/row was deleted, and the 60s
    * re-auth tick (which never resolves a sandbox) is the only thing that will.
    */
-  resolveTerminalRow: (target: ResolveTerminalSandboxTarget) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  resolveMachineRow: (target: ResolveMachineSandboxTarget) => Promise<{ ok: true } | { ok: false; reason: string }>;
   writeAudit: (input: { userId: string; actorEmail: string; driveId: string; command: string }) => void;
-  buildSessionKey: (args: { terminalId: string; projectName?: string; branchName?: string; name: string }) => string;
+  buildSessionKey: (args: { machineId: string; projectName?: string; branchName?: string; name: string }) => string;
   logDenied: (reason: string, context: Record<string, unknown>) => void;
   logSandboxLookupFailed: (context: Record<string, unknown>) => void;
 }
@@ -228,10 +228,10 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     // by re-auth at all, and the orphaned PTY would keep running against a scope
     // that no longer exists. The fused check caught that — at the cost of waking
     // the Sprite every 60 seconds, which is exactly what this epic is removing.
-    const terminalRow = await deps.resolveTerminalRow({ machineId, projectName, branchName, name });
-    if (!terminalRow.ok) {
-      deps.logDenied(terminalRow.reason, { userId, machineId, projectName, branchName, name });
-      return { ok: false, reason: terminalRow.reason };
+    const machineRow = await deps.resolveMachineRow({ machineId, projectName, branchName, name });
+    if (!machineRow.ok) {
+      deps.logDenied(machineRow.reason, { userId, machineId, projectName, branchName, name });
+      return { ok: false, reason: machineRow.reason };
     }
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
@@ -244,7 +244,7 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
       // Derived from the (scope, name) target alone — no Sprite needed (leaf
       // 1-1), which is precisely what lets the caller look up a live session
       // before deciding whether any sandbox work is warranted at all.
-      sessionKey: deps.buildSessionKey({ terminalId: machineId, projectName, branchName, name }),
+      sessionKey: deps.buildSessionKey({ machineId: machineId, projectName, branchName, name }),
       payerId: readOnly.payerId,
 
       /**
@@ -290,7 +290,7 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
         }
         const releaseSlot = () => deps.releaseSlot(userId);
 
-        let sandbox: ResolveTerminalSandboxResult;
+        let sandbox: ResolveMachineSandboxResult;
         try {
           sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
         } catch (error) {

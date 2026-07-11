@@ -15,7 +15,7 @@ import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
 import CodePageView from './page-views/code/CodePageView';
-import TerminalKeepAliveHost from './TerminalKeepAliveHost';
+import MachineKeepAliveHost from './MachineKeepAliveHost';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
@@ -177,8 +177,8 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // DocumentView uses pageId-only pattern for stability
   // Other components still use full page object (to be migrated)
   let pageComponent: React.ReactNode;
-  if (componentName === 'TerminalView') {
-    // Terminals are rendered by TerminalKeepAliveHost (kept mounted across
+  if (componentName === 'MachineView') {
+    // Terminals are rendered by MachineKeepAliveHost (kept mounted across
     // navigation, CSS-hidden when inactive), NOT inline here — rendering one
     // here too would mount a second, competing terminal subtree. Render
     // nothing; the host draws over this content region for the active page.
@@ -377,7 +377,7 @@ export default function CenterPanel() {
           {/* Terminals live here, not inside PageContent: kept mounted across
               navigation (bounded LRU) and CSS-hidden when inactive, so tab-back
               is instant with the xterm buffer and socket listeners intact. */}
-          <TerminalKeepAliveHost driveId={activeDriveId} activePageId={activePageId} />
+          <MachineKeepAliveHost driveId={activeDriveId} activePageId={activePageId} />
         </div>
       </div>
     </div>

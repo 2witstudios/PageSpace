@@ -187,10 +187,10 @@
       "import": "./dist/billing/automation-preferences.js",
       "require": "./dist/billing/automation-preferences.js"
     },
-    "./billing/terminal-payer": {
-      "types": "./dist/billing/terminal-payer.d.ts",
-      "import": "./dist/billing/terminal-payer.js",
-      "require": "./dist/billing/terminal-payer.js"
+    "./billing/machine-payer": {
+      "types": "./dist/billing/machine-payer.d.ts",
+      "import": "./dist/billing/machine-payer.js",
+      "require": "./dist/billing/machine-payer.js"
     },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
@@ -477,10 +477,10 @@
       "import": "./dist/services/sandbox/egress-ip.js",
       "require": "./dist/services/sandbox/egress-ip.js"
     },
-    "./services/sandbox/terminal-session-manager": {
-      "types": "./dist/services/sandbox/terminal-session-manager.d.ts",
-      "import": "./dist/services/sandbox/terminal-session-manager.js",
-      "require": "./dist/services/sandbox/terminal-session-manager.js"
+    "./services/sandbox/machine-session-manager": {
+      "types": "./dist/services/sandbox/machine-session-manager.d.ts",
+      "import": "./dist/services/sandbox/machine-session-manager.js",
+      "require": "./dist/services/sandbox/machine-session-manager.js"
     },
     "./services/sandbox/machine-session": {
       "types": "./dist/services/sandbox/machine-session.d.ts",
@@ -492,15 +492,15 @@
       "import": "./dist/services/sandbox/machine-billing.js",
       "require": "./dist/services/sandbox/machine-billing.js"
     },
-    "./services/sandbox/terminal-storage-reconcile": {
-      "types": "./dist/services/sandbox/terminal-storage-reconcile.d.ts",
-      "import": "./dist/services/sandbox/terminal-storage-reconcile.js",
-      "require": "./dist/services/sandbox/terminal-storage-reconcile.js"
+    "./services/sandbox/machine-storage-reconcile": {
+      "types": "./dist/services/sandbox/machine-storage-reconcile.d.ts",
+      "import": "./dist/services/sandbox/machine-storage-reconcile.js",
+      "require": "./dist/services/sandbox/machine-storage-reconcile.js"
     },
-    "./services/sandbox/terminal-storage-billing": {
-      "types": "./dist/services/sandbox/terminal-storage-billing.d.ts",
-      "import": "./dist/services/sandbox/terminal-storage-billing.js",
-      "require": "./dist/services/sandbox/terminal-storage-billing.js"
+    "./services/sandbox/machine-storage-billing": {
+      "types": "./dist/services/sandbox/machine-storage-billing.d.ts",
+      "import": "./dist/services/sandbox/machine-storage-billing.js",
+      "require": "./dist/services/sandbox/machine-storage-billing.js"
     },
     "./services/sandbox/command-policy": {
       "types": "./dist/services/sandbox/command-policy.d.ts",
@@ -1683,8 +1683,8 @@
       "services/sandbox/sandbox-options": [
         "./dist/services/sandbox/sandbox-options.d.ts"
       ],
-      "services/sandbox/terminal-session-manager": [
-        "./dist/services/sandbox/terminal-session-manager.d.ts"
+      "services/sandbox/machine-session-manager": [
+        "./dist/services/sandbox/machine-session-manager.d.ts"
       ],
       "services/sandbox/machine-session": [
         "./dist/services/sandbox/machine-session.d.ts"

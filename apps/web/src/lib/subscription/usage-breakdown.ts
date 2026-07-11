@@ -131,7 +131,7 @@ export function aggregateUsageBreakdown(
   const modelBuckets = new Map<string, Bucket & { model: string; provider: string }>();
   const machineBuckets = new Map<string, { millicents: number; calls: number; activeSeconds: number; pageId: string | null; label: string }>();
   let totalMillicents = 0;
-  let terminalMillicents = 0;
+  let machineMillicents = 0;
 
   for (const r of rows) {
     const charge = r.chargeMillicents ?? 0;
@@ -156,7 +156,7 @@ export function aggregateUsageBreakdown(
     modelBuckets.set(key, mb);
 
     if (source === 'terminal') {
-      terminalMillicents += charge;
+      machineMillicents += charge;
       // Rows without a resolvable page (pre-attribution history, or a machine with
       // no backing page e.g. the global assistant) collapse into one bucket rather
       // than being dropped, so terminal spend is never silently under-reported.
@@ -199,7 +199,7 @@ export function aggregateUsageBreakdown(
       activeSeconds: Math.round(b.activeSeconds),
       spendCents: millicentsToCents(b.millicents),
       calls: b.calls,
-      sharePct: sharePct(b.millicents, terminalMillicents),
+      sharePct: sharePct(b.millicents, machineMillicents),
     }))
     .sort((a, b) => b.spendCents - a.spendCents);
 

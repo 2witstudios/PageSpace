@@ -25,7 +25,7 @@ export interface PageTypeConfig {
   defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code' | 'terminal';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code' | 'machine';
   experimental?: boolean;
 }
 
@@ -188,8 +188,8 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
   },
   [PageType.MACHINE]: {
     type: PageType.MACHINE,
-    displayName: 'Terminal',
-    description: 'Interactive terminal with shell access',
+    displayName: 'Machine',
+    description: 'A persistent sandboxed machine — clone repos, run code, and open terminals',
     iconName: 'SquareTerminal',
     emoji: '🖥️',
     capabilities: {
@@ -200,8 +200,8 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsAI: false,
     },
     defaultContent: () => JSON.stringify({ history: [] }),
-    uiComponent: 'TerminalView',
-    layoutViewType: 'terminal',
+    uiComponent: 'MachineView',
+    layoutViewType: 'machine',
     experimental: true,
   },
 };
