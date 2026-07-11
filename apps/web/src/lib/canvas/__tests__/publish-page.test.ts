@@ -684,7 +684,7 @@ describe('publishCanvasPage site-file regeneration', () => {
     const files = vi.mocked(putPublishedSiteFile).mock.calls.map((c) => c[0].file).sort();
     expect(files).toEqual(['404.html', 'robots.txt', 'sitemap.xml']);
     expect(putPublishedSiteFile).toHaveBeenCalledWith(
-      expect.objectContaining({ subdomain: 'my-drive', file: 'robots.txt' }),
+      expect.objectContaining({ prefix: 'my-drive', file: 'robots.txt' }),
     );
   });
 });

@@ -36,8 +36,10 @@ vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
 }));
 
 const regeneratePublishedSiteFiles = vi.fn().mockResolvedValue(undefined);
+const renderDomainNotFoundOverride = vi.fn().mockResolvedValue(undefined);
 vi.mock('@/lib/canvas/publish-page', () => ({
   regeneratePublishedSiteFiles: (...args: unknown[]) => regeneratePublishedSiteFiles(...args),
+  renderDomainNotFoundOverride: (...args: unknown[]) => renderDomainNotFoundOverride(...args),
 }));
 
 import { reconcileCustomDomainCert } from '../reconcile-cert';
@@ -105,7 +107,7 @@ describe('reconcileCustomDomainCert — cert advance', () => {
     expect(result).toEqual({ status: 'active', action: 'mark-active' });
     expect(setMock).toHaveBeenCalledWith({ status: 'active' });
     expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
-    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com', expect.any(Function));
     expect(clearCustomHost).not.toHaveBeenCalled();
   });
 
@@ -136,7 +138,7 @@ describe('reconcileCustomDomainCert — cert advance', () => {
 
     expect(result.status).toBe('active');
     expect(regeneratePublishedSiteFiles).toHaveBeenCalledWith(DRIVE_ID);
-    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com', expect.any(Function));
   });
 
   it('Fly error → cert_failed, clears the host prefix', async () => {
@@ -180,7 +182,7 @@ describe('reconcileCustomDomainCert — non-destructive read path (allowFailureT
 
     expect(result.status).toBe('active');
     expect(setMock).toHaveBeenCalledWith({ status: 'active' });
-    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com', expect.any(Function));
   });
 
   it('still advances provisioning → provisioning (poll) with failures suppressed', async () => {
@@ -218,7 +220,7 @@ describe('reconcileCustomDomainCert — side effects never throw', () => {
     const result = await reconcileCustomDomainCert(domain('verified'));
 
     expect(result.status).toBe('active');
-    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com');
+    expect(mirrorDriveToCustomHost).toHaveBeenCalledWith(DRIVE_ID, 'docs.acme.com', expect.any(Function));
   });
 
   it('does not throw when the fire-and-forget re-mirror rejects', async () => {

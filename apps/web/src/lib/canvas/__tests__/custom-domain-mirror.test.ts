@@ -6,11 +6,12 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       drives: { findFirst: vi.fn() },
       publishedPages: { findMany: vi.fn().mockResolvedValue([]) },
+      customDomains: { findFirst: vi.fn().mockResolvedValue(undefined) },
     },
   },
 }));
 
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
 
 vi.mock('@pagespace/db/schema/custom-domains', () => ({
   customDomains: {
@@ -20,6 +21,8 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
     createdAt: 'customDomains.createdAt',
     isPrimary: 'customDomains.isPrimary',
     platformOwned: 'customDomains.platformOwned',
+    publishLandingPageId: 'customDomains.publishLandingPageId',
+    publishNotFoundPageId: 'customDomains.publishNotFoundPageId',
   },
 }));
 
@@ -81,6 +84,9 @@ function mockSelect(rows: Record<string, unknown>[]) {
   return chain;
 }
 
+/** Shared override-404 renderer, defaulting to a successful render. */
+const renderOverride404 = vi.fn().mockResolvedValue(true);
+
 describe('mirrorPublishedPageToHosts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,13 +94,14 @@ describe('mirrorPublishedPageToHosts', () => {
   });
 
   it('copies slug artifact to each active host', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+    mockSelect([{ hostname: 'a.example.com', status: 'active', publishLandingPageId: null }]);
 
     await mirrorPublishedPageToHosts({
       driveId: 'drive-1',
       subdomain: 'acme',
       path: 'about',
-      isHomePage: false,
+      pageId: 'p1',
+      homePageId: null,
     });
 
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
@@ -104,14 +111,15 @@ describe('mirrorPublishedPageToHosts', () => {
     expect(copyPublishedArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it('also copies root mirror when isHomePage is true', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+  it('also copies root mirror when the publish IS the drive home page', async () => {
+    mockSelect([{ hostname: 'a.example.com', status: 'active', publishLandingPageId: null }]);
 
     await mirrorPublishedPageToHosts({
       driveId: 'drive-1',
       subdomain: 'acme',
       path: 'home',
-      isHomePage: true,
+      pageId: 'p1',
+      homePageId: 'p1',
     });
 
     expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
@@ -120,22 +128,60 @@ describe('mirrorPublishedPageToHosts', () => {
       'published/a.example.com/home/index.html',
     );
     expect(copyPublishedArtifact).toHaveBeenCalledWith(
-      'published/acme/index.html',
+      'published/acme/home/index.html',
       'published/a.example.com/index.html',
+    );
+  });
+
+  it('a host overridden to a DIFFERENT page does not get its root touched by the home-page publish', async () => {
+    mockSelect([{ hostname: 'docs.example.com', status: 'active', publishLandingPageId: 'p-docs' }]);
+
+    await mirrorPublishedPageToHosts({
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      path: 'home',
+      pageId: 'p1',
+      homePageId: 'p1',
+    });
+
+    // Path copy still happens; root copy is skipped since this host's override targets p-docs, not p1.
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(1);
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/home/index.html',
+      'published/docs.example.com/home/index.html',
+    );
+  });
+
+  it('a host overridden to THIS page gets its root updated even though this is not the drive home page', async () => {
+    mockSelect([{ hostname: 'docs.example.com', status: 'active', publishLandingPageId: 'p-docs' }]);
+
+    await mirrorPublishedPageToHosts({
+      driveId: 'drive-1',
+      subdomain: 'acme',
+      path: 'docs',
+      pageId: 'p-docs',
+      homePageId: 'p1',
+    });
+
+    expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
+    expect(copyPublishedArtifact).toHaveBeenCalledWith(
+      'published/acme/docs/index.html',
+      'published/docs.example.com/index.html',
     );
   });
 
   it('copies to all active hosts, not just the first', async () => {
     mockSelect([
-      { hostname: 'a.example.com', status: 'active' },
-      { hostname: 'b.example.com', status: 'active' },
+      { hostname: 'a.example.com', status: 'active', publishLandingPageId: null },
+      { hostname: 'b.example.com', status: 'active', publishLandingPageId: null },
     ]);
 
     await mirrorPublishedPageToHosts({
       driveId: 'drive-1',
       subdomain: 'acme',
       path: 'about',
-      isHomePage: false,
+      pageId: 'p1',
+      homePageId: null,
     });
 
     expect(copyPublishedArtifact).toHaveBeenCalledTimes(2);
@@ -143,18 +189,19 @@ describe('mirrorPublishedPageToHosts', () => {
 
   it('mirrors to serving (verified/provisioning/active) hosts but NOT pending/dns_failed', async () => {
     mockSelect([
-      { hostname: 'pending.example.com', status: 'pending' },
-      { hostname: 'verified.example.com', status: 'verified' },
-      { hostname: 'provisioning.example.com', status: 'provisioning' },
-      { hostname: 'active.example.com', status: 'active' },
-      { hostname: 'dnsfailed.example.com', status: 'dns_failed' },
+      { hostname: 'pending.example.com', status: 'pending', publishLandingPageId: null },
+      { hostname: 'verified.example.com', status: 'verified', publishLandingPageId: null },
+      { hostname: 'provisioning.example.com', status: 'provisioning', publishLandingPageId: null },
+      { hostname: 'active.example.com', status: 'active', publishLandingPageId: null },
+      { hostname: 'dnsfailed.example.com', status: 'dns_failed', publishLandingPageId: null },
     ]);
 
     await mirrorPublishedPageToHosts({
       driveId: 'drive-1',
       subdomain: 'acme',
       path: 'about',
-      isHomePage: false,
+      pageId: 'p1',
+      homePageId: null,
     });
 
     // verified + provisioning + active each receive a copy; pending/dns_failed do not.
@@ -173,15 +220,16 @@ describe('mirrorPublishedPageToHosts', () => {
 
   it('is a no-op when there are no serving custom domains', async () => {
     mockSelect([
-      { hostname: 'pending.example.com', status: 'pending' },
-      { hostname: 'dnsfailed.example.com', status: 'dns_failed' },
+      { hostname: 'pending.example.com', status: 'pending', publishLandingPageId: null },
+      { hostname: 'dnsfailed.example.com', status: 'dns_failed', publishLandingPageId: null },
     ]);
 
     await mirrorPublishedPageToHosts({
       driveId: 'drive-1',
       subdomain: 'acme',
       path: 'about',
-      isHomePage: false,
+      pageId: 'p1',
+      homePageId: null,
     });
 
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
@@ -194,14 +242,15 @@ describe('mirrorPublishedPageToHosts', () => {
       driveId: 'drive-1',
       subdomain: 'acme',
       path: 'about',
-      isHomePage: false,
+      pageId: 'p1',
+      homePageId: null,
     });
 
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
   });
 
   it('swallows copy failures (best-effort)', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+    mockSelect([{ hostname: 'a.example.com', status: 'active', publishLandingPageId: null }]);
     vi.mocked(copyPublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(
@@ -209,25 +258,33 @@ describe('mirrorPublishedPageToHosts', () => {
         driveId: 'drive-1',
         subdomain: 'acme',
         path: 'about',
-        isHomePage: false,
+        pageId: 'p1',
+        homePageId: null,
       }),
     ).resolves.toBeUndefined();
   });
 });
 
 describe('mirror404ToHosts', () => {
+  const driveCtx = {
+    homePageId: null,
+    publishFaviconUrl: null,
+    publishDefaultOgImageUrl: null,
+    ownerId: 'owner-1',
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isPublishConfigured).mockReturnValue(true);
   });
 
-  it('copies 404.html, robots.txt, and sitemap.xml to each active host', async () => {
+  it('copies 404.html, robots.txt, and sitemap.xml to each active host with no override', async () => {
     mockSelect([
-      { hostname: 'a.example.com', status: 'active', createdAt: new Date() },
-      { hostname: 'b.example.com', status: 'active', createdAt: new Date() },
+      { hostname: 'a.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: null },
+      { hostname: 'b.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: null },
     ]);
 
-    await mirror404ToHosts('drive-1', 'acme');
+    await mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404);
 
     // 3 site files × 2 hosts = 6 — all use copyPublishedSiteFileArtifact (preserves content-type)
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
@@ -244,12 +301,62 @@ describe('mirror404ToHosts', () => {
       'published/acme/sitemap.xml',
       'published/a.example.com/sitemap.xml',
     );
+    expect(renderOverride404).not.toHaveBeenCalled();
+  });
+
+  it('a host with publishNotFoundPageId gets its own rendered 404 instead of the drive-wide copy', async () => {
+    mockSelect([
+      { hostname: 'a.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: null },
+      { hostname: 'docs.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: 'p-404' },
+    ]);
+
+    await mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404);
+
+    // Plain host: 404 + robots + sitemap via copy. Override host: robots + sitemap via
+    // copy, 404 via renderOverride404 instead — never copyPublishedSiteFileArtifact for 404.
+    expect(copyPublishedSiteFileArtifact).toHaveBeenCalledWith(
+      'published/acme/404.html',
+      'published/a.example.com/404.html',
+    );
+    const to404 = vi.mocked(copyPublishedSiteFileArtifact).mock.calls.map(([, to]) => to);
+    expect(to404).not.toContain('published/docs.example.com/404.html');
+    expect(copyPublishedSiteFileArtifact).toHaveBeenCalledWith(
+      'published/acme/robots.txt',
+      'published/docs.example.com/robots.txt',
+    );
+    expect(renderOverride404).toHaveBeenCalledWith(
+      expect.objectContaining({ driveId: 'drive-1', host: 'docs.example.com', pageId: 'p-404' }),
+    );
+  });
+
+  it('falls back to the drive-wide 404.html when the override render fails (e.g. its page was trashed)', async () => {
+    mockSelect([{ hostname: 'docs.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: 'p-404' }]);
+    renderOverride404.mockResolvedValueOnce(false);
+
+    await mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404);
+
+    expect(copyPublishedSiteFileArtifact).toHaveBeenCalledWith(
+      'published/acme/404.html',
+      'published/docs.example.com/404.html',
+    );
+  });
+
+  it('falls back to the drive-wide 404.html when the override render throws', async () => {
+    mockSelect([{ hostname: 'docs.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: 'p-404' }]);
+    renderOverride404.mockRejectedValueOnce(new Error('render boom'));
+
+    await mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404);
+
+    expect(copyPublishedSiteFileArtifact).toHaveBeenCalledWith(
+      'published/acme/404.html',
+      'published/docs.example.com/404.html',
+    );
   });
 
   it('is a no-op when no active hosts', async () => {
     mockSelect([]);
 
-    await mirror404ToHosts('drive-1', 'acme');
+    await mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404);
 
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
     expect(copyPublishedSiteFileArtifact).not.toHaveBeenCalled();
@@ -258,17 +365,17 @@ describe('mirror404ToHosts', () => {
   it('is a no-op when publishing is not configured', async () => {
     vi.mocked(isPublishConfigured).mockReturnValue(false);
 
-    await mirror404ToHosts('drive-1', 'acme');
+    await mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404);
 
     expect(copyPublishedArtifact).not.toHaveBeenCalled();
     expect(copyPublishedSiteFileArtifact).not.toHaveBeenCalled();
   });
 
   it('swallows failures (best-effort)', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active', createdAt: new Date() }]);
+    mockSelect([{ hostname: 'a.example.com', status: 'active', createdAt: new Date(), publishNotFoundPageId: null }]);
     vi.mocked(copyPublishedSiteFileArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
-    await expect(mirror404ToHosts('drive-1', 'acme')).resolves.toBeUndefined();
+    await expect(mirror404ToHosts('drive-1', 'acme', driveCtx, renderOverride404)).resolves.toBeUndefined();
   });
 });
 
@@ -279,9 +386,9 @@ describe('deletePageFromCustomHosts', () => {
   });
 
   it('deletes slug artifact from each active host', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+    mockSelect([{ hostname: 'a.example.com', status: 'active', publishLandingPageId: null }]);
 
-    await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false });
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'about', isHomePage: false });
 
     expect(deletePublishedArtifact).toHaveBeenCalledWith(
       'published/a.example.com/about/index.html',
@@ -289,10 +396,10 @@ describe('deletePageFromCustomHosts', () => {
     expect(deletePublishedArtifact).toHaveBeenCalledTimes(1);
   });
 
-  it('also deletes root mirror when isHomePage is true', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+  it('also deletes root mirror when isHomePage is true (no override)', async () => {
+    mockSelect([{ hostname: 'a.example.com', status: 'active', publishLandingPageId: null }]);
 
-    await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'home', isHomePage: true });
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'home', isHomePage: true });
 
     expect(deletePublishedArtifact).toHaveBeenCalledTimes(2);
     expect(deletePublishedArtifact).toHaveBeenCalledWith(
@@ -303,15 +410,38 @@ describe('deletePageFromCustomHosts', () => {
     );
   });
 
+  it('also deletes root mirror when the deleted page is a host\'s own landing-page override, even if not the drive home page', async () => {
+    mockSelect([{ hostname: 'docs.example.com', status: 'active', publishLandingPageId: 'p1' }]);
+
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'docs', isHomePage: false });
+
+    expect(deletePublishedArtifact).toHaveBeenCalledTimes(2);
+    expect(deletePublishedArtifact).toHaveBeenCalledWith(
+      'published/docs.example.com/index.html',
+    );
+  });
+
+  it('does NOT delete an overridden host\'s root when a different page (e.g. the drive home page) is deleted', async () => {
+    mockSelect([{ hostname: 'docs.example.com', status: 'active', publishLandingPageId: 'p-docs' }]);
+
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'home', isHomePage: true });
+
+    // Only the slug artifact is deleted — this host's root belongs to p-docs, not p1.
+    expect(deletePublishedArtifact).toHaveBeenCalledTimes(1);
+    expect(deletePublishedArtifact).toHaveBeenCalledWith(
+      'published/docs.example.com/home/index.html',
+    );
+  });
+
   it('deletes from serving (verified/active) hosts but NOT pending/dns_failed', async () => {
     mockSelect([
-      { hostname: 'pending.example.com', status: 'pending' },
-      { hostname: 'verified.example.com', status: 'verified' },
-      { hostname: 'active.example.com', status: 'active' },
-      { hostname: 'dnsfailed.example.com', status: 'dns_failed' },
+      { hostname: 'pending.example.com', status: 'pending', publishLandingPageId: null },
+      { hostname: 'verified.example.com', status: 'verified', publishLandingPageId: null },
+      { hostname: 'active.example.com', status: 'active', publishLandingPageId: null },
+      { hostname: 'dnsfailed.example.com', status: 'dns_failed', publishLandingPageId: null },
     ]);
 
-    await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false });
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'about', isHomePage: false });
 
     expect(deletePublishedArtifact).toHaveBeenCalledTimes(2);
     const targets = vi.mocked(deletePublishedArtifact).mock.calls.map(([key]) => key);
@@ -328,7 +458,7 @@ describe('deletePageFromCustomHosts', () => {
   it('is a no-op when no serving hosts', async () => {
     mockSelect([]);
 
-    await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false });
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'about', isHomePage: false });
 
     expect(deletePublishedArtifact).not.toHaveBeenCalled();
   });
@@ -336,17 +466,17 @@ describe('deletePageFromCustomHosts', () => {
   it('is a no-op when publishing is not configured', async () => {
     vi.mocked(isPublishConfigured).mockReturnValue(false);
 
-    await deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false });
+    await deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'about', isHomePage: false });
 
     expect(deletePublishedArtifact).not.toHaveBeenCalled();
   });
 
   it('swallows delete failures (best-effort)', async () => {
-    mockSelect([{ hostname: 'a.example.com', status: 'active' }]);
+    mockSelect([{ hostname: 'a.example.com', status: 'active', publishLandingPageId: null }]);
     vi.mocked(deletePublishedArtifact).mockRejectedValueOnce(new Error('S3 down'));
 
     await expect(
-      deletePageFromCustomHosts({ driveId: 'drive-1', path: 'about', isHomePage: false }),
+      deletePageFromCustomHosts({ driveId: 'drive-1', pageId: 'p1', path: 'about', isHomePage: false }),
     ).resolves.toBeUndefined();
   });
 });
@@ -498,6 +628,46 @@ describe('mirrorDriveToCustomHost', () => {
     // Despite the failure, remaining page copies and all site file copies were still attempted
     expect(copyPublishedArtifact).toHaveBeenCalledTimes(2); // 2 page artifacts
     expect(copyPublishedSiteFileArtifact).toHaveBeenCalledTimes(3); // 3 site files
+  });
+
+  it('skips the drive-wide 404.html copy when the host has a working publishNotFoundPageId override', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'acme',
+      homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
+    vi.mocked(db.query.customDomains.findFirst).mockResolvedValue({
+      publishLandingPageId: null,
+      publishNotFoundPageId: 'p-404',
+    } as never);
+    const renderOverride404 = vi.fn().mockResolvedValue(true);
+
+    await mirrorDriveToCustomHost('drive-1', 'www.example.com', renderOverride404);
+
+    expect(renderOverride404).toHaveBeenCalledWith(expect.objectContaining({ pageId: 'p-404' }));
+    expect(copyPublishedSiteFileArtifact).toHaveBeenCalledTimes(2); // robots + sitemap, NOT 404
+    const to404 = vi.mocked(copyPublishedSiteFileArtifact).mock.calls.map(([, to]) => to);
+    expect(to404).not.toContain('published/www.example.com/404.html');
+  });
+
+  it('falls back to the drive-wide 404.html when the publishNotFoundPageId override fails to render', async () => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      publishSubdomain: 'acme',
+      homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findMany).mockResolvedValue(publishedRows([]));
+    vi.mocked(db.query.customDomains.findFirst).mockResolvedValue({
+      publishLandingPageId: null,
+      publishNotFoundPageId: 'p-404',
+    } as never);
+    const renderOverride404 = vi.fn().mockResolvedValue(false);
+
+    await mirrorDriveToCustomHost('drive-1', 'www.example.com', renderOverride404);
+
+    expect(copyPublishedSiteFileArtifact).toHaveBeenCalledWith(
+      'published/acme/404.html',
+      'published/www.example.com/404.html',
+    );
   });
 });
 

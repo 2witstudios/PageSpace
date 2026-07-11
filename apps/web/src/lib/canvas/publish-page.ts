@@ -385,7 +385,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // For every active custom domain on this drive, copy the newly-written
   // subdomain artifacts (slug + root when home page) to the matching host
   // prefix so Caddy can serve them there immediately.
-  await mirrorPublishedPageToHosts({ driveId, subdomain, path, isHomePage });
+  await mirrorPublishedPageToHosts({ driveId, subdomain, path, pageId, homePageId: drive.homePageId });
 
   // Return the PRIMARY host URL (custom domain when one is active/selected,
   // otherwise the pagespace.site subdomain) so the publish control displays and
@@ -615,6 +615,42 @@ async function renderNotFoundPageHtml(params: {
   }
 }
 
+/**
+ * Render a custom domain's own `publishNotFoundPageId` override and write it
+ * directly to that host's `404.html`, bypassing the drive-wide copy.
+ *
+ * Returns `true` when the override actually rendered and was written, `false`
+ * when it couldn't (page trashed/missing/non-canvas — e.g. trashed AFTER the
+ * override was set; soft-delete never clears the FK, only a hard delete does
+ * via `onDelete: 'set null'`). Callers MUST fall back to mirroring the
+ * drive-wide 404.html for this host when this returns `false` — leaving the
+ * host on a stale or absent 404.html is exactly the bug this return value
+ * exists to prevent. See `mirror404ToHosts` / `mirrorDriveToCustomHost`.
+ */
+export async function renderDomainNotFoundOverride(params: {
+  driveId: string;
+  host: string;
+  pageId: string;
+  subdomain: string;
+  homePageId: string | null;
+  publishFaviconUrl: string | null;
+  publishDefaultOgImageUrl: string | null;
+  ownerId: string;
+}): Promise<boolean> {
+  const { host, ...renderParams } = params;
+  const html = await renderNotFoundPageHtml(renderParams);
+  if (!html) {
+    loggers.api.warn('Custom domain 404 override page unavailable (missing/trashed/non-canvas) — falling back to the drive-wide 404', {
+      driveId: params.driveId,
+      host,
+      pageId: params.pageId,
+    });
+    return false;
+  }
+  await putPublishedSiteFile({ prefix: host, file: '404.html', body: html });
+  return true;
+}
+
 export async function regeneratePublishedSiteFiles(driveId: string): Promise<void> {
   try {
     if (!isPublishConfigured()) return;
@@ -700,15 +736,26 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
     const notFoundHtml = customNotFoundHtml ?? buildNotFoundHtml({ siteName: drive.name ?? undefined });
 
     await Promise.all([
-      putPublishedSiteFile({ subdomain, file: 'robots.txt', body: robotsTxt }),
-      putPublishedSiteFile({ subdomain, file: 'sitemap.xml', body: sitemapXml }),
-      putPublishedSiteFile({ subdomain, file: '404.html', body: notFoundHtml }),
+      putPublishedSiteFile({ prefix: subdomain, file: 'robots.txt', body: robotsTxt }),
+      putPublishedSiteFile({ prefix: subdomain, file: 'sitemap.xml', body: sitemapXml }),
+      putPublishedSiteFile({ prefix: subdomain, file: '404.html', body: notFoundHtml }),
     ]);
 
     // Mirror the 404.html to every active custom-domain host so unknown paths
-    // render the branded not-found page there too. Best-effort (errors logged
-    // internally by mirror404ToHosts).
-    await mirror404ToHosts(driveId, subdomain);
+    // render the branded not-found page there too. Hosts with their own
+    // `publishNotFoundPageId` override get their own rendered 404 instead of
+    // the drive-wide copy. Best-effort (errors logged internally).
+    await mirror404ToHosts(
+      driveId,
+      subdomain,
+      {
+        homePageId: drive.homePageId,
+        publishFaviconUrl: drive.publishFaviconUrl,
+        publishDefaultOgImageUrl: drive.publishDefaultOgImageUrl,
+        ownerId: drive.ownerId,
+      },
+      renderDomainNotFoundOverride,
+    );
   } catch (err) {
     loggers.api.warn('Failed to regenerate published site files', {
       driveId,

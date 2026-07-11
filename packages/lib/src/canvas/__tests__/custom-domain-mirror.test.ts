@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { planCustomDomainMirror } from '../custom-domain-mirror';
+import {
+  planCustomDomainMirror,
+  resolveHostRootCopies,
+  resolveBackfillRootCopy,
+} from '../custom-domain-mirror';
 
 describe('planCustomDomainMirror', () => {
   it('zero active hosts → empty copy set (no-op)', () => {
@@ -223,5 +227,152 @@ describe('planCustomDomainMirror', () => {
     const keys = copies.map((c) => c.to);
     expect(keys).not.toContain('published/www.example.com/index.html');
     expect(keys).not.toContain('published/www.example.com/404.html');
+  });
+});
+
+describe('resolveHostRootCopies', () => {
+  it('a host with no override gets the root copy when the publish IS the drive home page', () => {
+    const copies = resolveHostRootCopies({
+      subdomain: 'acme',
+      pageId: 'page-home',
+      path: 'home',
+      homePageId: 'page-home',
+      hosts: [{ hostname: 'www.example.com', publishLandingPageId: null }],
+    });
+
+    expect(copies).toEqual([
+      { from: 'published/acme/home/index.html', to: 'published/www.example.com/index.html' },
+    ]);
+  });
+
+  it('a host with no override is skipped when the publish is NOT the drive home page', () => {
+    const copies = resolveHostRootCopies({
+      subdomain: 'acme',
+      pageId: 'page-about',
+      path: 'about',
+      homePageId: 'page-home',
+      hosts: [{ hostname: 'www.example.com', publishLandingPageId: null }],
+    });
+
+    expect(copies).toHaveLength(0);
+  });
+
+  it('a host with an override gets the root copy only when the publish IS its override page', () => {
+    const copies = resolveHostRootCopies({
+      subdomain: 'acme',
+      pageId: 'page-docs-index',
+      path: 'docs',
+      homePageId: 'page-home',
+      hosts: [{ hostname: 'docs.example.com', publishLandingPageId: 'page-docs-index' }],
+    });
+
+    expect(copies).toEqual([
+      { from: 'published/acme/docs/index.html', to: 'published/docs.example.com/index.html' },
+    ]);
+  });
+
+  it('publishing the drive home page must NOT touch a host overridden to a different page', () => {
+    const copies = resolveHostRootCopies({
+      subdomain: 'acme',
+      pageId: 'page-home',
+      path: 'home',
+      homePageId: 'page-home',
+      hosts: [{ hostname: 'docs.example.com', publishLandingPageId: 'page-docs-index' }],
+    });
+
+    expect(copies).toHaveLength(0);
+  });
+
+  it('mixed hosts: default-following and overridden hosts resolve independently in one call', () => {
+    const copies = resolveHostRootCopies({
+      subdomain: 'acme',
+      pageId: 'page-home',
+      path: 'home',
+      homePageId: 'page-home',
+      hosts: [
+        { hostname: 'www.example.com', publishLandingPageId: null },
+        { hostname: 'docs.example.com', publishLandingPageId: 'page-docs-index' },
+      ],
+    });
+
+    expect(copies).toEqual([
+      { from: 'published/acme/home/index.html', to: 'published/www.example.com/index.html' },
+    ]);
+  });
+});
+
+describe('resolveBackfillRootCopy', () => {
+  it('override set + override page published → copies from the override page\'s own path', () => {
+    const copy = resolveBackfillRootCopy({
+      subdomain: 'acme',
+      host: 'docs.example.com',
+      publishLandingPageId: 'page-docs-index',
+      homePageId: 'page-home',
+      homeRootExists: true,
+      published: [
+        { pageId: 'page-home', path: 'home' },
+        { pageId: 'page-docs-index', path: 'docs' },
+      ],
+    });
+
+    expect(copy).toEqual({
+      from: 'published/acme/docs/index.html',
+      to: 'published/docs.example.com/index.html',
+    });
+  });
+
+  it('override set but override page not yet published → null (nothing to copy)', () => {
+    const copy = resolveBackfillRootCopy({
+      subdomain: 'acme',
+      host: 'docs.example.com',
+      publishLandingPageId: 'page-docs-index',
+      homePageId: 'page-home',
+      homeRootExists: true,
+      published: [{ pageId: 'page-home', path: 'home' }],
+    });
+
+    expect(copy).toBeNull();
+  });
+
+  it('no override + home root exists → falls back to the drive-wide root object', () => {
+    const copy = resolveBackfillRootCopy({
+      subdomain: 'acme',
+      host: 'www.example.com',
+      publishLandingPageId: null,
+      homePageId: 'page-home',
+      homeRootExists: true,
+      published: [{ pageId: 'page-home', path: 'home' }],
+    });
+
+    expect(copy).toEqual({
+      from: 'published/acme/index.html',
+      to: 'published/www.example.com/index.html',
+    });
+  });
+
+  it('no override + home root does not exist yet → null', () => {
+    const copy = resolveBackfillRootCopy({
+      subdomain: 'acme',
+      host: 'www.example.com',
+      publishLandingPageId: null,
+      homePageId: 'page-home',
+      homeRootExists: false,
+      published: [{ pageId: 'page-home', path: 'home' }],
+    });
+
+    expect(copy).toBeNull();
+  });
+
+  it('no override + no home page set → null', () => {
+    const copy = resolveBackfillRootCopy({
+      subdomain: 'acme',
+      host: 'www.example.com',
+      publishLandingPageId: null,
+      homePageId: null,
+      homeRootExists: false,
+      published: [],
+    });
+
+    expect(copy).toBeNull();
   });
 });
