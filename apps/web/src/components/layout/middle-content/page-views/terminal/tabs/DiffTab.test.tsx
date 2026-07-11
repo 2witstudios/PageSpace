@@ -338,6 +338,35 @@ describe('DiffTab', () => {
     });
   });
 
+  test('a recovered probe drags the active scope back to Uncommitted', async () => {
+    // The one reachable path to a scope that is selected but not applicable:
+    // the probe fails transiently (so the full toggle shows), the user picks
+    // Committed, then the probe recovers and answers notApplicable — this IS the
+    // default branch. `active` must fall back to 'uncommitted' rather than leave a
+    // meaningless scope selected and render the not-applicable notice.
+    probeErrors = true;
+    const { rerender } = render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-main'));
+
+    await waitFor(() => screen.getByText('Committed'));
+    await userEvent.click(screen.getByText('Committed'));
+
+    probeErrors = false;
+    rerender(<DiffTab machineId="m1" />);
+
+    await waitFor(() => screen.getByText(/No uncommitted changes on main/i));
+    assert({
+      given: "a Committed scope selected while the probe was failing, then the probe recovering with notApplicable",
+      should: 'fall back to Uncommitted — not strand the user on a scope this branch does not have',
+      actual: {
+        fellBack: screen.queryByText(/No uncommitted changes on main/i) !== null,
+        strandedNotice: screen.queryByText(/doesn't apply on/i) !== null,
+        committedStillOffered: screen.queryByText('Committed') !== null,
+      },
+      expected: { fellBack: true, strandedNotice: false, committedStillOffered: false },
+    });
+  });
+
   test('a clean uncommitted tree on main shows the explicit empty state', async () => {
     render(<DiffTab machineId="m1" />);
     await userEvent.click(screen.getByText('select-main'));
