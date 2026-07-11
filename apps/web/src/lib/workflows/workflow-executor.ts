@@ -4,6 +4,7 @@ import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { createId } from '@paralleldrive/cuid2';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -254,9 +255,12 @@ async function runExecution(input: WorkflowExecutionInput, startTime: number): P
 
     // 6. Filter tools based on agent's enabled tools
     const enabledTools = (agent.enabledTools as string[] | null) ?? [];
+    // Image generation is in an ADMIN-ONLY rollout and is exposed solely through the
+    // chat/global routes' explicit toggle — never through scheduled workflows.
+    const workflowTools = filterToolsForImageGen(pageSpaceTools, false);
     let availableTools: ToolSet = enabledTools.length > 0
       ? Object.fromEntries(
-          Object.entries(pageSpaceTools).filter(([toolName]) =>
+          Object.entries(workflowTools).filter(([toolName]) =>
             enabledTools.includes(toolName)
           )
         ) as ToolSet
