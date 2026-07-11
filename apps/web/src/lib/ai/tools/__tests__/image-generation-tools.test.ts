@@ -22,7 +22,6 @@ vi.mock('@/lib/upload/create-file-page', () => ({
 }));
 
 import { imageGenerationTools } from '../image-generation-tools';
-import { isImageGenerationAllowedForTier } from '@/lib/ai/core/image-gen-access';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
 
@@ -41,17 +40,6 @@ beforeEach(() => {
   trackUsage.mockResolvedValue(undefined);
   generateImageBytes.mockReset();
   createImageFilePage.mockReset();
-});
-
-describe('isImageGenerationAllowedForTier (pure)', () => {
-  it('allows paid tiers, denies free/unknown', () => {
-    assert({
-      given: 'the four tiers + undefined',
-      should: 'allow pro/founder/business only',
-      actual: ['free', 'pro', 'founder', 'business', undefined].map(isImageGenerationAllowedForTier),
-      expected: [false, true, true, true, false],
-    });
-  });
 });
 
 describe('generate_image registration', () => {
@@ -76,11 +64,11 @@ describe('generate_image execute', () => {
 
     const res = (await run(
       { prompt: 'a red panda astronaut' },
-      { userId: 'u1', subscriptionTier: 'pro', imageGenerationModel: 'google/gemini-3.1-flash-image-preview' },
+      { userId: 'u1', isAdmin: true, subscriptionTier: 'pro', imageGenerationModel: 'google/gemini-3.1-flash-image-preview' },
     )) as { success: boolean; pageId: string; viewUrl: string };
 
     assert({
-      given: 'a Pro user and a working model',
+      given: 'an admin user and a working model',
       should: 'return success with the file view URL',
       actual: { success: res.success, viewUrl: res.viewUrl },
       expected: { success: true, viewUrl: '/api/files/page-9/view' },
@@ -91,8 +79,8 @@ describe('generate_image execute', () => {
     expect(releaseHold).not.toHaveBeenCalled();
   });
 
-  it('denies a free-tier user without any OpenRouter call or hold', async () => {
-    const res = (await run({ prompt: 'x' }, { userId: 'u1', subscriptionTier: 'free' })) as { success: boolean };
+  it('denies a non-admin user without any OpenRouter call or hold', async () => {
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: false, subscriptionTier: 'pro' })) as { success: boolean };
     expect(res.success).toBe(false);
     expect(canConsumeAI).not.toHaveBeenCalled();
     expect(generateImageBytes).not.toHaveBeenCalled();
@@ -102,7 +90,7 @@ describe('generate_image execute', () => {
     canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-2' });
     generateImageBytes.mockRejectedValue(new Error('model down'));
 
-    const res = (await run({ prompt: 'x' }, { userId: 'u1', subscriptionTier: 'pro' })) as { success: boolean };
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean };
     expect(res.success).toBe(false);
     expect(releaseHold).toHaveBeenCalledWith('hold-2');
     expect(createImageFilePage).not.toHaveBeenCalled();
@@ -110,7 +98,7 @@ describe('generate_image execute', () => {
 
   it('fails softly when credits are exhausted', async () => {
     canConsumeAI.mockResolvedValue({ allowed: false });
-    const res = (await run({ prompt: 'x' }, { userId: 'u1', subscriptionTier: 'pro' })) as { success: boolean };
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean };
     expect(res.success).toBe(false);
     expect(generateImageBytes).not.toHaveBeenCalled();
   });

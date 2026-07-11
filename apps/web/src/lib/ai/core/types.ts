@@ -42,9 +42,11 @@ export interface ToolExecutionContext {
   // Allowlist of tool names this agent is permitted to execute (null = unrestricted)
   enabledTools?: string[] | null;
 
-  // Image generation: the user's subscription tier (for the Pro+ gate) and their
-  // chosen OpenRouter image model. Threaded by the chat/global routes so the
-  // generate_image tool can gate + pick a model without an extra DB read.
+  // Image generation: whether the caller is an app admin (the rollout gate), the
+  // user's subscription tier (for the billing gate), and their chosen OpenRouter
+  // image model. Threaded by the chat/global routes so the generate_image tool can
+  // gate + pick a model without an extra DB read.
+  isAdmin?: boolean;
   subscriptionTier?: string;
   imageGenerationModel?: string | null;
 

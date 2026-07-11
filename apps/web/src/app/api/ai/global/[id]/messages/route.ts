@@ -813,7 +813,6 @@ MENTION PROCESSING:
       ),
       shouldExposeImageGen({
         imageGenEnabled: imageGenEnabled === true,
-        tier: userSubscriptionTier,
         isAdmin: auth.role === 'admin',
         hasToolDef: true,
       })
@@ -1161,6 +1160,7 @@ MENTION PROCESSING:
               conversationId,
               locationContext,
               modelCapabilities: modelCapabilitiesForTools,
+              isAdmin: auth.role === 'admin',
               subscriptionTier: userSubscriptionTier,
               imageGenerationModel: userImageGenerationModel ?? DEFAULT_IMAGE_MODEL,
               chatSource: { type: 'global' as const },

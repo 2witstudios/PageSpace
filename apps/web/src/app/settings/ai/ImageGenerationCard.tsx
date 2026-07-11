@@ -3,12 +3,10 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
 import { ImageIcon, Loader2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
-import { useRouter } from 'next/navigation';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
-import { isImageGenerationAllowedForTier } from '@/lib/ai/core/image-gen-access';
+import { isImageGenerationAllowed } from '@/lib/ai/core/image-gen-access';
 
 interface ImageModel {
   id: string;
@@ -18,10 +16,9 @@ interface ImageModel {
 const NONE = '__none__';
 
 export function ImageGenerationCard() {
-  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [tier, setTier] = useState<string>('free');
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [models, setModels] = useState<ImageModel[]>([]);
 
@@ -37,7 +34,7 @@ export function ImageGenerationCard() {
         const settings = await settingsRes.json();
         const modelList = modelsRes.ok ? (await modelsRes.json()).models ?? [] : [];
         if (!cancelled) {
-          setTier(settings.userSubscriptionTier ?? 'free');
+          setIsAdmin(settings.isAdmin === true);
           setSelected(settings.imageGenerationModel ?? null);
           setModels(modelList);
         }
@@ -50,7 +47,7 @@ export function ImageGenerationCard() {
     return () => { cancelled = true; };
   }, []);
 
-  const allowed = isImageGenerationAllowedForTier(tier);
+  const allowed = isImageGenerationAllowed(isAdmin);
 
   async function onChange(value: string) {
     const next = value === NONE ? null : value;
@@ -84,12 +81,9 @@ export function ImageGenerationCard() {
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading…</p>
         ) : !allowed ? (
-          <div className="flex items-center justify-between rounded-md border p-3 max-w-md">
-            <span className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Lock className="h-4 w-4" />
-              Image generation is available on paid plans.
-            </span>
-            <Button size="sm" onClick={() => router.push('/settings/plan')}>Upgrade</Button>
+          <div className="flex items-center gap-2 rounded-md border p-3 max-w-md text-sm text-muted-foreground">
+            <Lock className="h-4 w-4" />
+            Image generation is currently restricted to app administrators.
           </div>
         ) : (
           <div className="max-w-md space-y-2">

@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
 import { fetchOpenRouterImageModels } from '@/lib/ai/core/model-capabilities';
-import { isImageGenerationAllowedForTier, isValidImageModel } from '@/lib/ai/core/image-gen-access';
+import { isImageGenerationAllowed, isValidImageModel } from '@/lib/ai/core/image-gen-access';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -44,13 +44,12 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Pro+ gate (admins allowed for testing).
-    if (auth.role !== 'admin' && !isImageGenerationAllowedForTier(user.subscriptionTier)) {
+    // Rollout gate: image generation is currently restricted to app admins.
+    if (!isImageGenerationAllowed(auth.role === 'admin')) {
       return NextResponse.json(
         {
-          error: 'Subscription required',
-          message: 'Image generation is available on paid plans. Upgrade to enable it.',
-          upgradeUrl: '/settings/plan',
+          error: 'Not available',
+          message: 'Image generation is currently restricted to app administrators.',
         },
         { status: 403 },
       );

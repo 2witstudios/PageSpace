@@ -25,7 +25,7 @@ export interface InputFooterProps {
   imageGenEnabled?: boolean;
   /** Callback when image generation is toggled */
   onImageGenToggle?: (enabled: boolean) => void;
-  /** Whether the user's plan allows image generation (Pro+) */
+  /** Whether the user may use image generation (app admins only during rollout) */
   canUseImageGen?: boolean;
   /** Whether write mode is active (true = write, false = read only) */
   writeMode?: boolean;

@@ -21,7 +21,7 @@ export interface ToolsPopoverProps {
   imageGenEnabled?: boolean;
   /** Callback when image generation is toggled */
   onImageGenToggle?: (enabled: boolean) => void;
-  /** Whether the user's plan allows image generation (Pro+). When false, the row is locked. */
+  /** Whether the user may use image generation (app admins only during rollout). When false, the row is locked. */
   canUseImageGen?: boolean;
   /** Whether write mode is active (true = write, false = read only) */
   writeMode?: boolean;
@@ -155,14 +155,14 @@ export function ToolsPopover({
             />
           </div>
 
-          {/* Image Generation Toggle (Pro+ gated) */}
+          {/* Image Generation Toggle (admin-only during rollout) */}
           <div
             className={cn(
               'flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors',
               'hover:bg-accent hover:text-accent-foreground',
               (disabled || !canUseImageGen) && 'opacity-50 cursor-not-allowed'
             )}
-            title={canUseImageGen ? undefined : 'Image generation is available on paid plans'}
+            title={canUseImageGen ? undefined : 'Image generation is restricted to app administrators'}
           >
             <div className="flex items-center gap-2">
               <ImageIcon className={cn(

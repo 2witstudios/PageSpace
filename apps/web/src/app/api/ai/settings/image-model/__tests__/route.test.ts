@@ -36,27 +36,31 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/ai/settings/image-model', () => {
-  it('persists a valid model for a Pro user', async () => {
+  it('persists a valid model for an app admin', async () => {
+    asMock(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1', role: 'admin' });
     asMock(aiSettingsRepository.getUserSettings).mockResolvedValue({ id: 'u1', subscriptionTier: 'pro', imageGenerationModel: null });
     const res = await PATCH(req({ imageGenerationModel: 'google/gemini-3.1-flash-image-preview' }));
     expect(res.status).toBe(200);
     expect(asMock(aiSettingsRepository.updateImageGenerationModel)).toHaveBeenCalledWith('u1', 'google/gemini-3.1-flash-image-preview');
   });
 
-  it('rejects a free user with 403', async () => {
-    asMock(aiSettingsRepository.getUserSettings).mockResolvedValue({ id: 'u1', subscriptionTier: 'free', imageGenerationModel: null });
+  it('rejects a non-admin user with 403', async () => {
+    asMock(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1', role: 'user' });
+    asMock(aiSettingsRepository.getUserSettings).mockResolvedValue({ id: 'u1', subscriptionTier: 'pro', imageGenerationModel: null });
     const res = await PATCH(req({ imageGenerationModel: 'google/gemini-3.1-flash-image-preview' }));
     expect(res.status).toBe(403);
     expect(asMock(aiSettingsRepository.updateImageGenerationModel)).not.toHaveBeenCalled();
   });
 
-  it('rejects an unknown model with 400', async () => {
+  it('rejects an unknown model with 400 (admin)', async () => {
+    asMock(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1', role: 'admin' });
     asMock(aiSettingsRepository.getUserSettings).mockResolvedValue({ id: 'u1', subscriptionTier: 'pro', imageGenerationModel: null });
     const res = await PATCH(req({ imageGenerationModel: 'made/up-model' }));
     expect(res.status).toBe(400);
   });
 
-  it('allows clearing with null', async () => {
+  it('allows an admin clearing with null', async () => {
+    asMock(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1', role: 'admin' });
     asMock(aiSettingsRepository.getUserSettings).mockResolvedValue({ id: 'u1', subscriptionTier: 'pro', imageGenerationModel: 'x' });
     const res = await PATCH(req({ imageGenerationModel: null }));
     expect(res.status).toBe(200);

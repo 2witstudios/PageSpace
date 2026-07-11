@@ -13,19 +13,25 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
 import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
 import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
-import { isImageGenerationAllowedForTier } from '../core/image-gen-access';
+import { isImageGenerationAllowed } from '../core/image-gen-access';
 import { createImageFilePage, ImageStorageQuotaError } from '@/lib/upload/create-file-page';
 
 const imageLogger = loggers.ai.child({ module: 'image-generation-tools' });
 
-/** Load the user's subscription tier (defensive fallback when not threaded via context). */
-async function loadSubscriptionTier(userId: string): Promise<SubscriptionTier> {
+/**
+ * Load the user's app-admin flag + subscription tier (defensive fallback when not
+ * threaded via experimental_context, e.g. non-chat tool callers).
+ */
+async function loadUserGating(userId: string): Promise<{ isAdmin: boolean; tier: SubscriptionTier }> {
   const rows = await db
-    .select({ tier: users.subscriptionTier })
+    .select({ role: users.role, tier: users.subscriptionTier })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return (rows[0]?.tier ?? 'free') as SubscriptionTier;
+  return {
+    isAdmin: rows[0]?.role === 'admin',
+    tier: (rows[0]?.tier ?? 'free') as SubscriptionTier,
+  };
 }
 
 /** Derive a concise page/file title from the prompt. */
@@ -39,7 +45,7 @@ export const imageGenerationTools = {
     description: `Generate an image from a text prompt using the user's configured image model.
 The image is saved to the user's drive (a "Generated Images" folder in their Home drive by default)
 and shown inline in the conversation. Use this when the user asks you to create, draw, generate, or
-illustrate an image, logo, diagram, or picture. Requires a Pro subscription.`,
+illustrate an image, logo, diagram, or picture. Currently restricted to app administrators.`,
     inputSchema: z.object({
       prompt: z
         .string()
@@ -60,21 +66,26 @@ illustrate an image, logo, diagram, or picture. Requires a Pro subscription.`,
         throw new Error('User authentication required for image generation');
       }
 
-      // Pro+ gate (defensive — the route also gates exposure). Fast-path from context,
-      // fall back to a DB read so the tool self-defends regardless of caller.
-      const tier = context?.subscriptionTier ?? (await loadSubscriptionTier(userId));
-      if (!isImageGenerationAllowedForTier(tier)) {
+      // Admin-only rollout gate (defensive — the route also gates exposure). Fast-path
+      // from context; fall back to a DB read so the tool self-defends regardless of caller.
+      let isAdmin = context?.isAdmin;
+      let tier = context?.subscriptionTier as SubscriptionTier | undefined;
+      if (isAdmin === undefined || tier === undefined) {
+        const gating = await loadUserGating(userId);
+        isAdmin = isAdmin ?? gating.isAdmin;
+        tier = tier ?? gating.tier;
+      }
+      if (!isImageGenerationAllowed(isAdmin)) {
         return {
           success: false,
-          error: 'Image generation requires a Pro subscription. Ask the user to upgrade to enable it.',
+          error: 'Image generation is currently restricted to app administrators.',
         };
       }
 
       const model = context?.imageGenerationModel || DEFAULT_IMAGE_MODEL;
 
       // Reserve credits for the call (image-sized estimate; real cost settles at trackUsage).
-      // tier is one of the paid tiers here (guarded above); narrow for canConsumeAI.
-      const gate = await canConsumeAI(userId, tier as SubscriptionTier, {
+      const gate = await canConsumeAI(userId, (tier ?? 'free') as SubscriptionTier, {
         estCostCents: IMAGE_GEN_HOLD_ESTIMATE_CENTS,
       });
       if (!gate.allowed) {

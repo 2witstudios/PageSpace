@@ -1,11 +1,15 @@
 /**
  * Pure access/validation helpers for image generation. No I/O — safe to import from
- * routes and tools alike (keeps the Pro+ gate and model validation in one tested place).
+ * routes and tools alike (keeps the access gate and model validation in one tested place).
+ *
+ * ROLLOUT GATE: image generation is currently restricted to APP ADMINS only, so the
+ * feature can be verified end-to-end (including correct metering) in production before
+ * it is broadened to paid tiers. When broadening, relax `isImageGenerationAllowed`.
  */
 
-/** Image generation requires a paid (Pro+) tier — free/unknown is denied. */
-export function isImageGenerationAllowedForTier(tier: string | undefined | null): boolean {
-  return tier === 'pro' || tier === 'founder' || tier === 'business';
+/** Image generation is currently allowed for app admins only (rollout safety). */
+export function isImageGenerationAllowed(isAdmin: boolean): boolean {
+  return isAdmin === true;
 }
 
 /** A chosen image model id must be one of the currently available OpenRouter image models. */
@@ -15,15 +19,14 @@ export function isValidImageModel(modelId: string, available: ReadonlyArray<{ id
 
 /**
  * Pure: should the generate_image tool be exposed on this request? True only when the
- * composer toggle is on, a paid tier (or admin) is present, and the tool exists in the
- * baseline set. Mirrors the web_search runtime override but adds the Pro+ gate.
+ * composer toggle is on, the caller is an app admin, and the tool exists in the baseline
+ * set. Mirrors the web_search runtime override but adds the admin-only rollout gate.
  */
 export function shouldExposeImageGen(params: {
   imageGenEnabled: boolean;
-  tier: string | undefined | null;
   isAdmin: boolean;
   hasToolDef: boolean;
 }): boolean {
   if (!params.imageGenEnabled || !params.hasToolDef) return false;
-  return params.isAdmin || isImageGenerationAllowedForTier(params.tier);
+  return isImageGenerationAllowed(params.isAdmin);
 }

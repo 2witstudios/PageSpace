@@ -720,11 +720,10 @@ export async function POST(request: Request) {
     }
 
     // Step 4b: image generation is a Pro+-gated runtime toggle (same override pattern).
-    // Only exposed when the composer toggle is on AND the user is on a paid tier (or admin).
+    // Only exposed when the composer toggle is on AND the user is an app admin (rollout gate).
     if (
       shouldExposeImageGen({
         imageGenEnabled: imageGenEnabled === true,
-        tier: user?.subscriptionTier,
         isAdmin: isAdminUser,
         hasToolDef: !!imageGenToolDef,
       }) &&
@@ -1223,6 +1222,7 @@ export async function POST(request: Request) {
                   breadcrumbs: pageContext.breadcrumbs,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
+                isAdmin: isAdminUser,
                 subscriptionTier: user?.subscriptionTier,
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 chatSource: {
