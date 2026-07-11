@@ -8,7 +8,6 @@ import {
 import type { PolicyRule } from '@fly/sprites';
 
 const hasInclude = (rules: PolicyRule[]): boolean => rules.some((r) => r.include !== undefined);
-const domains = (rules: PolicyRule[]): (string | undefined)[] => rules.map((r) => r.domain);
 
 describe('buildSpriteNetworkPolicy — allowlist mode', () => {
   it('empty allowlist is pure deny-all', () => {
@@ -399,12 +398,38 @@ describe('sanitizeEgressAllowlist', () => {
   });
 
   it('keeps public hosts that merely share a parent domain with an internal zone', () => {
-    // Only the exact internal zones are blocked; a sibling public host is fine.
+    // A non-wildcard sibling host only matches itself, so it cannot reach the
+    // internal zone and is fine.
     assert({
-      given: 'a public host that shares a parent domain but is not an internal zone',
+      given: 'a public non-wildcard host that shares a parent domain but is not an internal zone',
       should: 'keep it',
       actual: sanitizeEgressAllowlist(['other.tigrisfiles.io', 'notinternal.com']),
       expected: ['other.tigrisfiles.io', 'notinternal.com'],
+    });
+  });
+
+  it('drops ANCESTOR wildcards that would match into an internal zone', () => {
+    // A wildcard `*.base` matches subdomains of `base`; if an internal zone is a
+    // subdomain of `base`, the allow overlaps the internal surface (same
+    // wildcard tier as the deny, which the docs do not tie-break) and must go.
+    assert({
+      given: 'wildcard entries whose base is an ancestor of an internal zone',
+      should: 'drop every one so no allow can reach the internal object-storage surface',
+      actual: sanitizeEgressAllowlist([
+        '*.tigrisfiles.io', // ancestor of t3.tigrisfiles.io
+        '*.tigris.dev', // ancestor of fly.storage.tigris.dev
+        '*.storage.tigris.dev', // ancestor of fly.storage.tigris.dev
+      ]),
+      expected: [],
+    });
+  });
+
+  it('keeps legit subdomain wildcards that do not overlap any internal zone', () => {
+    assert({
+      given: 'subdomain wildcards for public hosts with no internal zone beneath them',
+      should: 'keep them',
+      actual: sanitizeEgressAllowlist(['*.githubusercontent.com', '*.pkg.dev', '*.npmjs.org']),
+      expected: ['*.githubusercontent.com', '*.pkg.dev', '*.npmjs.org'],
     });
   });
 });

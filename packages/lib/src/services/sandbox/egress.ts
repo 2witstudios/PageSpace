@@ -82,17 +82,31 @@ const INTERNAL_SURFACE_DENY_DOMAINS: readonly string[] = Object.freeze([
 // The internal-surface DNS zones a caller must never be able to ALLOW. Derived
 // from the deny list (leading `*.` stripped, deduped) so the two stay in
 // lockstep — a future deny addition automatically extends this filter. Needed
-// because the internal denies are wildcards/apexes: a caller-supplied MORE
-// specific allow (e.g. `foo.internal` beats `*.internal`) would win under the
-// documented precedence ("an exact match beats a subdomain wildcard") and reopen
-// the surface. So `sanitizeEgressAllowlist` drops any entry inside these zones.
+// because the internal denies are wildcards/apexes: a caller-supplied allow that
+// overlaps one would win (or, wildcard-vs-wildcard, MIGHT win — the docs only
+// rank exact > subdomain wildcard > global, not two wildcards) and reopen the
+// surface. So `sanitizeEgressAllowlist` drops any entry that overlaps a zone.
 const INTERNAL_SURFACE_ZONES: readonly string[] = Object.freeze(
   Array.from(new Set(INTERNAL_SURFACE_DENY_DOMAINS.map((d) => d.replace(/^\*\./, '')))),
 );
 
-/** True when `host` is one of the internal zones or a subdomain of one. */
-function targetsInternalSurface(host: string): boolean {
-  return INTERNAL_SURFACE_ZONES.some((zone) => host === zone || host.endsWith(`.${zone}`));
+/**
+ * True when an allowlist entry would overlap the internal surface. `base` is the
+ * entry with any leading `*.` stripped; `isWildcard` says whether the original
+ * entry was a `*.`-subdomain wildcard. Two overlap directions:
+ *  - the entry IS an internal zone or a subdomain of one (e.g. `foo.internal`
+ *    beats `*.internal`; `*.internal` itself; `t3.tigrisfiles.io`); OR
+ *  - the entry is a WILDCARD whose base is an ANCESTOR of a zone (e.g.
+ *    `*.tigrisfiles.io` matches `<bucket>.t3.tigrisfiles.io`), so the allow could
+ *    reach into the internal surface.
+ * A non-wildcard entry only matches itself, so only the first direction applies.
+ */
+function targetsInternalSurface(base: string, isWildcard: boolean): boolean {
+  return INTERNAL_SURFACE_ZONES.some((zone) => {
+    if (base === zone || base.endsWith(`.${zone}`)) return true; // entry is/descends a zone
+    if (isWildcard && zone.endsWith(`.${base}`)) return true; // wildcard ancestor of a zone
+    return false;
+  });
 }
 
 /**
@@ -137,11 +151,12 @@ export function sanitizeEgressAllowlist(egressAllowlist: readonly string[] = [])
     if (entry.length === 0 || entry === '*') continue;
     // The label validated is the entry itself, or — for a subdomain wildcard —
     // the base host after the `*.` prefix.
-    const base = entry.startsWith(WILDCARD_PREFIX) ? entry.slice(WILDCARD_PREFIX.length) : entry;
+    const isWildcard = entry.startsWith(WILDCARD_PREFIX);
+    const base = isWildcard ? entry.slice(WILDCARD_PREFIX.length) : entry;
     if (base.length === 0) continue; // bare `*.`
     if (isIP(base) !== 0) continue; // reject IPv4/IPv6 literals (incl. `*.1.2.3.4`)
     if (!HOSTNAME_RE.test(base)) continue; // reject URLs, schemes, host:port, paths, `*.*`
-    if (targetsInternalSurface(base)) continue; // never allow the internal surface
+    if (targetsInternalSurface(base, isWildcard)) continue; // never allow the internal surface
     if (seen.has(entry)) continue;
     seen.add(entry);
     hosts.push(entry);
@@ -178,7 +193,9 @@ export function buildSpriteNetworkPolicy({
       // Internal surface denied via EXPLICIT deny rules — defense in depth on top
       // of allowlist sanitization and the platform's own IP/private-range blocks.
       // Not `{ include: 'defaults' }`: that preset only pre-allows common dev
-      // domains, it denies nothing.
+      // domains, it denies nothing. Allowlist mode is therefore a PURE explicit
+      // allowlist — dev registries (GitHub/npm/PyPI/…) are NOT auto-allowed here;
+      // a caller that wants them must list them (or use `egressMode: 'open'`).
       ...buildInternalSurfaceDenyRules(),
       ...hosts.map((domain): PolicyRule => ({ domain, action: 'allow' })),
       { ...DENY_ALL },
