@@ -47,10 +47,53 @@ describe('SettingsTab', () => {
 
     assert({
       given: 'a Machine whose settings load successfully',
-      should: 'populate the name field and reflect the access toggle state',
-      actual: { name: nameInput.value, visible: globalToggle.getAttribute('aria-checked') },
-      expected: { name: 'My Machine', visible: 'false' },
+      should: 'GET the settings by machineId and populate the form from the response',
+      actual: {
+        url: fetchWithAuth.mock.calls[0][0],
+        name: nameInput.value,
+        visible: globalToggle.getAttribute('aria-checked'),
+      },
+      expected: {
+        // The route reads machineId from the QUERY on GET (body only on PATCH) —
+        // pin it, since that mismatch would 400 in prod but pass a lax mock.
+        url: '/api/machines/settings?machineId=m1',
+        name: 'My Machine',
+        visible: 'false',
+      },
     });
+  });
+
+  test('blanking the name reverts instead of firing a PATCH the route would reject', async () => {
+    mockLoad();
+    render(<SettingsTab machineId="m1" />);
+
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    await userEvent.clear(name);
+    await userEvent.tab();
+
+    assert({
+      given: 'the name field blanked and blurred',
+      should: 'revert to the server name and send no PATCH (an empty name is a 400)',
+      actual: { value: name.value, patches: apiPatch.mock.calls.length },
+      expected: { value: 'My Machine', patches: 0 },
+    });
+  });
+
+  test('clearing the description persists null, not an empty string', async () => {
+    mockLoad();
+    apiPatch.mockResolvedValue({ settings: { ...baseSettings, description: null } });
+    render(<SettingsTab machineId="m1" />);
+
+    const description = await screen.findByLabelText('Description');
+    await userEvent.clear(description);
+    await userEvent.tab();
+
+    await waitFor(() => assert({
+      given: 'the description emptied and blurred',
+      should: 'PATCH description:null — the route round-trips blank to null',
+      actual: apiPatch.mock.calls[0]?.[1],
+      expected: { machineId: 'm1', description: null },
+    }));
   });
 
   test('toggling an access switch optimistically PATCHes only the flipped flag', async () => {
@@ -135,6 +178,46 @@ describe('SettingsTab', () => {
       actual: toggle.getAttribute('aria-checked'),
       expected: 'false',
     }));
+  });
+
+  test('a failed save resyncs from the server rather than trusting the local rollback', async () => {
+    // The PATCH fails, but the server had ALREADY committed it (commit-then-timeout).
+    // A pure client-side rollback would strand the tab showing the stale value with
+    // nothing to revalidate it, so persist() must refetch.
+    const committed: MachineSettings = { ...baseSettings, allowPageAgents: true };
+    fetchWithAuth
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: baseSettings }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: committed }) });
+    apiPatch.mockRejectedValue(new Error('timeout'));
+    render(<SettingsTab machineId="m1" />);
+
+    const toggle = await screen.findByRole('switch', { name: /allow page agents/i });
+    await userEvent.click(toggle);
+
+    await waitFor(() => assert({
+      given: 'a PATCH that failed after the server committed it',
+      should: 'refetch and converge on the true server state, not the guessed rollback',
+      actual: { fetches: fetchWithAuth.mock.calls.length, checked: toggle.getAttribute('aria-checked') },
+      expected: { fetches: 2, checked: 'true' },
+    }));
+  });
+
+  test('a first-load failure shows the error state and Retry refetches', async () => {
+    fetchWithAuth
+      .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: baseSettings }) });
+    render(<SettingsTab machineId="m1" />);
+
+    const retry = await screen.findByRole('button', { name: /retry/i });
+    await userEvent.click(retry);
+
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    assert({
+      given: 'the initial GET failing and then Retry clicked',
+      should: 'refetch and render the form once the settings load',
+      actual: name.value,
+      expected: 'My Machine',
+    });
   });
 
   test('Delete Machine is gated behind the confirm dialog', async () => {

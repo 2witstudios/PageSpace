@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { Loader2, Trash2, TriangleAlert } from 'lucide-react';
@@ -47,23 +47,29 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   const driveId = typeof params?.driveId === 'string' ? params.driveId : undefined;
 
   const [settings, setSettings] = useState<MachineSettings | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
+  // In-flight save COUNT, not a flag: a text field's blur-commit and a switch
+  // click can be airborne at once, and a boolean would report "done" as soon as
+  // the first of them settled.
+  const [pendingSaves, setPendingSaves] = useState(0);
+
   // Local drafts for the text fields — inputs stay editable per-keystroke and
   // only persist on blur (the toggles persist immediately). Seeded from the
-  // server on load, and otherwise only ever written back by a failed save's
-  // rollback, so an in-flight request can never clobber what the user is typing.
+  // server whenever settings (re)load.
   const [nameDraft, setNameDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
 
+  // Only the FIRST load blocks on a spinner. `reloadToken` refetches (retry after
+  // a load error, resync after a failed save) revalidate in place, so a failed
+  // toggle doesn't flash the whole form away and back.
+  const hasLoaded = useRef(false);
+  const [loading, setLoading] = useState(true);
+
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setLoadError(false);
+    if (!hasLoaded.current) setLoading(true);
     (async () => {
       try {
         const response = await fetchWithAuth(
@@ -72,16 +78,16 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
         if (!response.ok) throw new Error('Failed to load machine settings');
         const json = (await response.json()) as { settings: MachineSettings };
         if (!cancelled) {
+          hasLoaded.current = true;
           setSettings(json.settings);
           setNameDraft(json.settings.name);
           setDescriptionDraft(json.settings.description ?? '');
         }
       } catch (error) {
         console.error('Failed to load machine settings:', error);
-        if (!cancelled) {
-          setLoadError(true);
-          toast.error('Failed to load machine settings');
-        }
+        // A failed RESYNC keeps the form (and its already-good settings) on screen
+        // — only a failed FIRST load falls through to the error state below.
+        if (!cancelled) toast.error('Failed to load machine settings');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -92,35 +98,37 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
   }, [machineId, reloadToken]);
 
   /**
-   * Optimistically apply `patch`, PATCH it, and roll back ONLY the patched keys
-   * on failure (toasting the error).
+   * Optimistically apply `patch`, PATCH it, and on failure revert + resync.
    *
-   * We deliberately do NOT reconcile from the server's response body. The route
-   * echoes the whole `MachineSettings`, so applying it would clobber a field the
-   * user is concurrently editing with a value that was already stale when the
-   * request left. Every field we send is normalized client-side exactly as the
-   * route normalizes it (name trimmed; blank description → null), so the
-   * optimistic value and the persisted value never diverge. Rolling back only the
-   * patched keys — rather than restoring a whole snapshot — keeps a failed toggle
-   * from reverting an unrelated edit that landed while it was in flight.
+   * We do NOT reconcile from the PATCH response body. The route echoes the whole
+   * `MachineSettings`, so applying it would clobber a field the user is
+   * concurrently editing with a value that was already stale when the request
+   * left. Every field we send is normalized client-side exactly as the route
+   * normalizes it (name trimmed; blank description → null), so on success the
+   * optimistic value already equals the persisted one.
+   *
+   * On failure the local snapshot is only a GUESS at server truth — the request
+   * may have committed and then timed out, and two saves in flight can land out
+   * of order. So we revert optimistically (instant, no flicker) and then refetch,
+   * which is authoritative and settles both cases. Without that refetch a
+   * commit-then-timeout would strand the tab showing the old value forever, with
+   * nothing to revalidate it (no SWR, no socket subscription here).
    */
   async function persist(patch: MachineSettingsPatch) {
     if (!settings) return;
-    const rollback: MachineSettingsPatch = {};
-    for (const key of Object.keys(patch) as (keyof MachineSettingsPatch)[]) {
-      Object.assign(rollback, { [key]: settings[key] });
-    }
+    const previous = settings;
     setSettings((current) => (current ? { ...current, ...patch } : current));
-    setSaving(true);
+    setPendingSaves((n) => n + 1);
     try {
       await apiPatch('/api/machines/settings', { machineId, ...patch });
     } catch (error) {
-      setSettings((current) => (current ? { ...current, ...rollback } : current));
-      if (rollback.name !== undefined) setNameDraft(rollback.name);
-      if (rollback.description !== undefined) setDescriptionDraft(rollback.description ?? '');
+      setSettings(previous);
+      setNameDraft(previous.name);
+      setDescriptionDraft(previous.description ?? '');
+      setReloadToken((t) => t + 1);
       toast.error(error instanceof Error ? error.message : 'Failed to update machine settings');
     } finally {
-      setSaving(false);
+      setPendingSaves((n) => n - 1);
     }
   }
 
@@ -167,7 +175,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
     );
   }
 
-  if (loadError || !settings) {
+  if (!settings) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
         <p className="text-sm text-muted-foreground">Could not load machine settings.</p>
@@ -189,10 +197,10 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
                 <CardDescription>The Machine&apos;s name and description.</CardDescription>
               </div>
               {/* An in-flight save is surfaced, never enforced: disabling the
-                  controls here would swallow the very click that triggered the
-                  save (a field's blur-commit fires before the mouseup that lands
-                  on a switch, so the switch would already be disabled). */}
-              {saving && (
+                  controls would swallow the very click that triggered the save
+                  (a field's blur-commit fires before the mouseup lands on a
+                  switch, so the switch would already be disabled). */}
+              {pendingSaves > 0 && (
                 <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   Saving…
@@ -273,12 +281,8 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
           <CardContent>
             <AlertDialog>
               <AlertDialogTrigger asChild>
-                <Button type="button" variant="destructive" disabled={deleting}>
-                  {deleting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-4 w-4" />
-                  )}
+                <Button type="button" variant="destructive">
+                  <Trash2 className="h-4 w-4" />
                   Delete Machine
                 </Button>
               </AlertDialogTrigger>
@@ -292,12 +296,21 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+                  {/* `AlertDialogAction` composes `DialogClose`, so without
+                      preventDefault the dialog unmounts on the very click that
+                      starts the request — the in-progress state could never
+                      render, and a FAILED delete would toast against a dialog the
+                      user then had to reopen. Hold it open until we know. */}
                   <AlertDialogAction
-                    onClick={handleDelete}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      handleDelete();
+                    }}
                     disabled={deleting}
                     className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
-                    Delete Machine
+                    {deleting && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {deleting ? 'Deleting…' : 'Delete Machine'}
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
