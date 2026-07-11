@@ -11,6 +11,15 @@ export default defineConfig({
     css: true,
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
+    // Use the worker_threads pool, not the default 'forks'. This suite executes
+    // ~1500 real modules (the auth-barrel elimination made ~285 test files load
+    // real modules instead of a wholesale barrel mock). Under the forks pool a
+    // worker retains each file's module graph and never releases it — an
+    // unbounded growth that fills any --max-old-space-size and OOMs the 16 GB CI
+    // runner during both the run and the v8 coverage remap. The threads pool
+    // tears down each file's context and GCs it, so peak memory stays ~2.5 GB
+    // and `vitest run --coverage` completes within the default heap.
+    pool: 'threads',
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
