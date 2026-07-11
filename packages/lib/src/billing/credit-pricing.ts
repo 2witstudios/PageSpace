@@ -177,7 +177,7 @@ export function resolveImageCost(
  * real cost always settles exactly via consumeCredits and the 1.5× markup; concurrent
  * overdraw is bounded by TERMINAL_MAX_INFLIGHT instead. Tune via env.
  */
-export const TERMINAL_HOLD_ESTIMATE_CENTS = envInt('TERMINAL_HOLD_ESTIMATE_CENTS', 2);
+export const MACHINE_HOLD_ESTIMATE_CENTS = envInt('MACHINE_HOLD_ESTIMATE_CENTS', 2);
 
 /**
  * Max concurrent in-flight Machine (Terminal) runs per payer, applied to ALL tiers
@@ -190,7 +190,7 @@ export const TERMINAL_HOLD_ESTIMATE_CENTS = envInt('TERMINAL_HOLD_ESTIMATE_CENTS
 export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
 
 /**
- * Absolute floor for {@link TERMINAL_MARKUP_BPS} — 15000bps (1.5x). The whole
+ * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole
  * point of that constant is to GUARANTEE terminal billing never falls below
  * 1.5x real substrate cost, independent of {@link MARKUP_BPS}; an env
  * misconfiguration (typo, someone mirroring a reduced AI markup) must not be
@@ -212,14 +212,14 @@ export const TERMINAL_MARKUP_FLOOR_BPS = 15000;
  * to {@link TERMINAL_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
  * the markup but never lower it below the documented floor.
  */
-export const TERMINAL_MARKUP_BPS = Math.max(
-  envInt('TERMINAL_MARKUP_BPS', TERMINAL_MARKUP_FLOOR_BPS),
+export const MACHINE_MARKUP_BPS = Math.max(
+  envInt('MACHINE_MARKUP_BPS', TERMINAL_MARKUP_FLOOR_BPS),
   TERMINAL_MARKUP_FLOOR_BPS,
 );
 
 /**
  * Published Sprites rates, in USD per resource-hour (tasks/terminal.md: active
- * CPU-hour $0.07 + mem GB-hour $0.04375). Lives here (not terminal-pricing.ts) so
+ * CPU-hour $0.07 + mem GB-hour $0.04375). Lives here (not machine-pricing.ts) so
  * every terminal-billing constant is env-overridable from one place, matching
  * every other pricing table in this file.
  */
@@ -244,7 +244,7 @@ export const TERMINAL_ASSUMED_MEMORY_GB = envFloat('TERMINAL_ASSUMED_MEMORY_GB',
  * bytes actually WRITTEN (TRIM-friendly — deleting files lowers the bill), not
  * the provisioned volume size (docs.sprites.dev/concepts/lifecycle), so the
  * quantity this rate multiplies is the machine's MEASURED footprint in GB-months
- * (see terminal-storage-reconcile.ts), not its allocation. The HOT (NVMe cache)
+ * (see machine-storage-reconcile.ts), not its allocation. The HOT (NVMe cache)
  * and COLD (durable object store) layers underneath the filesystem are infra,
  * not separately-billed tiers — a single used-bytes figure is the right
  * quantity; a per-tier split, if the API ever exposes one, is a follow-up.

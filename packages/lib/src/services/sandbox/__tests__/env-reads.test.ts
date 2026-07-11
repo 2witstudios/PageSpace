@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { isCodeExecutionEnabled } from '../can-run-code';
-import { getSandboxSessionSecret } from '../terminal-session-manager';
+import { getSandboxSessionSecret } from '../machine-session-manager';
 import { resolveSpritesToken } from '../sandbox-client/sprites';
 
 /**

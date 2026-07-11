@@ -158,8 +158,8 @@ function makeMachineDirectoryDeps(
   return {
     findPage: async () => ({ title: 'Shared Terminal', type: 'MACHINE', driveId: 'drive-1' }),
     canViewPage: async () => true,
-    getAgentConfig: async () => ({ terminalAccess: false, machines: [] }),
-    getGlobalConfig: async () => ({ terminalAccess: false, machines: [] }),
+    getAgentConfig: async () => ({ machineAccess: false, machines: [] }),
+    getGlobalConfig: async () => ({ machineAccess: false, machines: [] }),
     getOrCreateOwnMachinePageId: async () => 'own-machine-page-1',
     lookupPageOwnerId: async () => 'drive-owner-1',
     ...overrides,
@@ -178,17 +178,17 @@ describe('createMachineDirectory', () => {
       await expect(directory.listMachines(undefined)).resolves.toEqual([]);
     });
 
-    it('given a global assistant context with terminalAccess off, should return no machines (fail closed)', async () => {
+    it('given a global assistant context with machineAccess off, should return no machines (fail closed)', async () => {
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getGlobalConfig: async () => ({ terminalAccess: false, machines: [] }) }),
+        makeMachineDirectoryDeps({ getGlobalConfig: async () => ({ machineAccess: false, machines: [] }) }),
       );
       await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([]);
     });
 
-    it('given a global assistant context with terminalAccess on and no machines configured, should default to the own machine resolved into the personal Terminal page', async () => {
+    it('given a global assistant context with machineAccess on and no machines configured, should default to the own machine resolved into the personal Terminal page', async () => {
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({
-          getGlobalConfig: async () => ({ terminalAccess: true, machines: [] }),
+          getGlobalConfig: async () => ({ machineAccess: true, machines: [] }),
           getOrCreateOwnMachinePageId: async () => 'personal-page-1',
         }),
       );
@@ -201,7 +201,7 @@ describe('createMachineDirectory', () => {
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({
           getGlobalConfig: async () => ({
-            terminalAccess: true,
+            machineAccess: true,
             machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
           }),
           getOrCreateOwnMachinePageId: async () => 'personal-page-1',
@@ -213,24 +213,24 @@ describe('createMachineDirectory', () => {
       ]);
     });
 
-    it('given a page agent with terminalAccess off, should return no machines (fail closed)', async () => {
+    it('given a page agent with machineAccess off, should return no machines (fail closed)', async () => {
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: false, machines: [{ kind: 'own' }] }) }),
+        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ machineAccess: false, machines: [{ kind: 'own' }] }) }),
       );
       await expect(directory.listMachines(pageContext)).resolves.toEqual([]);
     });
 
-    it('given a page agent with terminalAccess on and configured machines, should return the configured machines', async () => {
+    it('given a page agent with machineAccess on and configured machines, should return the configured machines', async () => {
       const machines: MachineRef[] = [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }];
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: true, machines }) }),
+        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ machineAccess: true, machines }) }),
       );
       await expect(directory.listMachines(pageContext)).resolves.toEqual(machines);
     });
 
-    it('given a page agent with terminalAccess on but no machines configured, should default to the own machine', async () => {
+    it('given a page agent with machineAccess on but no machines configured, should default to the own machine', async () => {
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ terminalAccess: true, machines: [] }) }),
+        makeMachineDirectoryDeps({ getAgentConfig: async () => ({ machineAccess: true, machines: [] }) }),
       );
       await expect(directory.listMachines(pageContext)).resolves.toEqual([{ kind: 'own' }]);
     });
@@ -246,7 +246,7 @@ describe('createMachineDirectory', () => {
         makeMachineDirectoryDeps({
           getAgentConfig: async (agentPageId) => {
             seen.push(agentPageId);
-            return { terminalAccess: true, machines: [{ kind: 'own' }] };
+            return { machineAccess: true, machines: [{ kind: 'own' }] };
           },
         }),
       );

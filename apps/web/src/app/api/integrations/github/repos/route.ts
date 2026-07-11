@@ -1,7 +1,7 @@
 /**
  * GitHub Repos API — lists the connected user's own GitHub repositories, for
  * the Machine tree's "Add project" repo picker (`apps/web/src/components/
- * layout/middle-content/page-views/terminal/workspace/MachineTree.tsx`).
+ * layout/middle-content/page-views/machine/workspace/MachineTree.tsx`).
  *
  * GET ?page=<n> → { connected: false } | { connected: true, repos, page }
  *

@@ -100,7 +100,7 @@ export interface MachineDescriptor {
 
 /**
  * Resolves an actor's configured machines and their metadata/accessibility.
- * `PageAgentConfig.terminalAccess`/`machines` (apps/web/src/lib/repositories/
+ * `PageAgentConfig.machineAccess`/`machines` (apps/web/src/lib/repositories/
  * page-agent-repository.ts) is the canonical config source; production wires
  * `listMachines` to it (`createMachineDirectory` in sandbox-tools-runtime.ts).
  */
@@ -136,7 +136,7 @@ export interface MachineDirectoryDeps {
    * reference a Terminal page in a drive the acting context doesn't already
    * reflect (global assistant, or a page agent's active machine switched to a
    * shared drive's Terminal). Session-key derivation
-   * (`packages/lib/src/services/sandbox/terminal-session-manager.ts`) keys off
+   * (`packages/lib/src/services/sandbox/machine-session-manager.ts`) keys off
    * `tenantId` + `driveId` + `pageId`; the realtime PTY path
    * (`apps/realtime/src/index.ts`'s `buildMachineSandbox`) always resolves
    * tenantId fresh from the machine's own page, so leaving this ambient would
@@ -161,11 +161,11 @@ export interface MachineDirectoryDeps {
  *
  * Returns `undefined` when the actor has no configured machines at all —
  * `listMachines` (createMachineDirectory) already returns `[]` exactly when
- * `terminalAccess` is off, so an empty list here is never "no preference,
+ * `machineAccess` is off, so an empty list here is never "no preference,
  * default to 'own'"; it is "not entitled." Callers MUST treat `undefined` as
  * a denial, not silently fall back to `{ kind: 'own' }` — that fallback used
  * to key an implicit persistent machine off the agent's own page even with
- * terminalAccess off, defeating the gate (OWASP A01).
+ * machineAccess off, defeating the gate (OWASP A01).
  */
 export async function resolveActiveMachine(
   rawContext: ToolExecutionContext | undefined,

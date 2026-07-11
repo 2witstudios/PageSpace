@@ -13,7 +13,7 @@ import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { and, eq, lt, gt, isNull, notInArray } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { computeBackfillActions } from './credit-core';
-import { TERMINAL_MARKUP_BPS } from './credit-pricing';
+import { MACHINE_MARKUP_BPS } from './credit-pricing';
 import { consumeCredits, settlePendingLedgerRow } from './credit-consume';
 import { emitCreditsUpdated } from './credit-emit';
 import { loggers } from '../logging/logger-config';
@@ -23,7 +23,7 @@ import type { AIUsageSource } from '../monitoring/usage-source';
 // adding a second per-source floor is a one-line addition here, not a change
 // to the pure planning function.
 const MARKUP_BPS_OVERRIDES_BY_SOURCE: Partial<Record<AIUsageSource, number>> = {
-  terminal: TERMINAL_MARKUP_BPS,
+  terminal: MACHINE_MARKUP_BPS,
 };
 
 const BATCH = 200;

@@ -13,13 +13,13 @@ import { users } from '@pagespace/db/schema/auth';
 import { canConsumeAI } from '../../billing/credit-gate';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import {
-  TERMINAL_HOLD_ESTIMATE_CENTS,
+  MACHINE_HOLD_ESTIMATE_CENTS,
   TERMINAL_MAX_INFLIGHT,
-  TERMINAL_MARKUP_BPS,
+  MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
-import { resolveTerminalPayerId, lookupPageOwnerId } from '../../billing/terminal-payer';
+import { resolveMachinePayerId, lookupPageOwnerId } from '../../billing/machine-payer';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
-import { calculateTerminalCostDollars } from '../../monitoring/terminal-pricing';
+import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
 import type { SubscriptionTier } from '../subscription-utils';
 import type { SandboxBillingDeps } from './tool-runners';
 
@@ -46,13 +46,13 @@ async function resolvePayerTier(payerId: string): Promise<SubscriptionTier> {
 
 export const defaultSandboxBillingDeps: SandboxBillingDeps = {
   async resolvePayerId({ tenantId, machinePageId }) {
-    return resolveTerminalPayerId({ tenantId, machinePageId, lookupPageOwnerId });
+    return resolveMachinePayerId({ tenantId, machinePageId, lookupPageOwnerId });
   },
 
   async gate({ payerId }) {
     const tier = await resolvePayerTier(payerId);
     const result = await canConsumeAI(payerId, tier, {
-      estCostCents: TERMINAL_HOLD_ESTIMATE_CENTS,
+      estCostCents: MACHINE_HOLD_ESTIMATE_CENTS,
       maxInFlight: TERMINAL_MAX_INFLIGHT,
     });
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
@@ -67,15 +67,15 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
       // The machine's identifying page (resolveMachinePageId's output) — the ONE
       // attribution field the usage-breakdown's per-machine view groups on.
       pageId,
-      providerCostDollars: calculateTerminalCostDollars({ activeSeconds }),
+      providerCostDollars: calculateMachineCostDollars({ activeSeconds }),
       // Active-window duration (ms), matching the quantity that was billed —
       // not a request-latency figure, since there is no single "request" here.
       duration: Math.round(activeSeconds * 1000),
       success: true,
       holdId,
       // Terminal's own 1.5x substrate floor, independent of the shared AI
-      // MARKUP_BPS default — see TERMINAL_MARKUP_BPS's doc comment.
-      markupBpsOverride: TERMINAL_MARKUP_BPS,
+      // MARKUP_BPS default — see MACHINE_MARKUP_BPS's doc comment.
+      markupBpsOverride: MACHINE_MARKUP_BPS,
       // Deterministic list-price cost (active seconds x published rate), not a
       // live provider-returned figure — mirrors voice's 'list_price' labeling.
       costSource: 'list_price',

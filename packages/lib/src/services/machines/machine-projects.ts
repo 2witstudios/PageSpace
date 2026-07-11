@@ -3,8 +3,8 @@
  * filesystem (IO, dependency-injected where it touches the sandbox/DB).
  *
  * A Machine's identity is its backing page (`machineId`) — the SAME page
- * whose persistent Sprite session (`terminal_sessions`, see
- * services/sandbox/terminal-session-manager.ts) a live Terminal shell, or a
+ * whose persistent Sprite session (`machine_sessions`, see
+ * services/sandbox/machine-session-manager.ts) a live Terminal shell, or a
  * page-agent's "own machine" tool calls (services/sandbox/machine-session.ts),
  * already reconnects to. `addProject` acquires and execs against that exact
  * session (via the injected `acquireMachineSandbox`/`reconnect`, which

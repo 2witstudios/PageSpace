@@ -18,11 +18,11 @@ import { AgentDrivesCard } from './AgentDrivesCard';
 import { useEditingStore } from '@/stores/useEditingStore';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
-// The Terminal tool group: gated behind the Terminal Access toggle below and
+// The Machine tool group: gated behind the Machine Access toggle below and
 // hidden from the Default Tools list when access is off. switch_machine/
 // list_machines are named ahead of their registration landing in ai-tools.ts
 // so this list needs no changes once they ship.
-const TERMINAL_TOOL_NAMES = new Set(['bash', 'writeFile', 'readFile', 'editFile', 'switch_machine', 'list_machines']);
+const MACHINE_TOOL_NAMES = new Set(['bash', 'writeFile', 'readFile', 'editFile', 'switch_machine', 'list_machines']);
 
 interface AgentConfig {
   systemPrompt: string;
@@ -37,9 +37,9 @@ interface AgentConfig {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
-  terminalAccess?: boolean;
+  machineAccess?: boolean;
   machines?: MachineRef[];
-  availableTerminals?: Array<{ id: string; title: string }>;
+  availableMachines?: Array<{ id: string; title: string }>;
 }
 
 interface AgentMembership {
@@ -118,7 +118,7 @@ interface FormData {
   includePageTree: boolean;
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
-  terminalAccess: boolean;
+  machineAccess: boolean;
   machines: MachineRef[];
 }
 
@@ -139,7 +139,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const [membershipUserRole, setMembershipUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [membershipSaving, setMembershipSaving] = useState(false);
-  const [selectedTerminalId, setSelectedTerminalId] = useState('');
+  const [selectedMachineId, setSelectedMachineId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -215,7 +215,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       includePageTree: config?.includePageTree ?? false,
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
-      terminalAccess: config?.terminalAccess ?? false,
+      machineAccess: config?.machineAccess ?? false,
       machines: config?.machines ?? [],
     }
   });
@@ -239,7 +239,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         includePageTree: config.includePageTree ?? false,
         pageTreeScope: config.pageTreeScope ?? 'children',
         toolExposureMode: config.toolExposureMode ?? 'upfront',
-        terminalAccess: config.terminalAccess ?? false,
+        machineAccess: config.machineAccess ?? false,
         machines: config.machines ?? [],
       });
     }
@@ -324,7 +324,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
-        terminalAccess: data.terminalAccess,
+        machineAccess: data.machineAccess,
         machines: data.machines,
       };
 
@@ -340,7 +340,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
         visibleToGlobalAssistant: data.visibleToGlobalAssistant,
         includePageTree: data.includePageTree,
         pageTreeScope: data.pageTreeScope,
-        terminalAccess: data.terminalAccess,
+        machineAccess: data.machineAccess,
         machines: data.machines,
       } as AgentConfig;
       onConfigUpdate(updatedConfig);
@@ -379,13 +379,13 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
 
   // Watch enabledTools for the count display
   const enabledTools = watch('enabledTools', []);
-  const terminalAccess = watch('terminalAccess', false);
+  const machineAccess = watch('machineAccess', false);
 
   const visibleTools = useMemo(
     () => (config?.availableTools || []).filter(
-      (tool) => terminalAccess || !TERMINAL_TOOL_NAMES.has(tool.name)
+      (tool) => machineAccess || !MACHINE_TOOL_NAMES.has(tool.name)
     ),
-    [config, terminalAccess]
+    [config, machineAccess]
   );
 
   const handleSelectAllTools = () => {
@@ -396,16 +396,16 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     setValue('enabledTools', []);
   };
 
-  const availableTerminalsById = useMemo(
-    () => new Map((config?.availableTerminals || []).map((t) => [t.id, t])),
+  const availableMachinesById = useMemo(
+    () => new Map((config?.availableMachines || []).map((t) => [t.id, t])),
     [config]
   );
-  const usedTerminalIds = useMemo(
+  const usedMachineIds = useMemo(
     () => new Set(machineFields.filter((m) => m.kind === 'existing').map((m) => m.machineId)),
     [machineFields]
   );
   const hasOwnMachine = machineFields.some((m) => m.kind === 'own');
-  const terminalOptions = (config?.availableTerminals || []).filter((t) => !usedTerminalIds.has(t.id));
+  const machineOptions = (config?.availableMachines || []).filter((t) => !usedMachineIds.has(t.id));
 
   // Register with useEditingStore while dirty so SWR doesn't revalidate this
   // page mid-edit and clobber unsaved changes.
@@ -653,21 +653,21 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
           )}
         </Card>
 
-        {/* Terminal Access */}
+        {/* Machine Access */}
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <TerminalSquare className="h-5 w-5" />
                 <div>
-                  <CardTitle className="text-lg">Terminal Access</CardTitle>
+                  <CardTitle className="text-lg">Machine Access</CardTitle>
                   <CardDescription>
                     Let this agent run commands on a persistent Machine and move between Machines.
                   </CardDescription>
                 </div>
               </div>
               <Controller
-                name="terminalAccess"
+                name="machineAccess"
                 control={control}
                 render={({ field }) => (
                   <Switch
@@ -682,7 +682,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               />
             </div>
           </CardHeader>
-          {terminalAccess && (
+          {machineAccess && (
             <CardContent className="space-y-4">
               <div>
                 <label className="text-sm font-medium mb-2 block">Machines</label>
@@ -696,7 +696,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                     {machineFields.map((field, index) => {
                       const label = field.kind === 'own'
                         ? 'Own machine'
-                        : availableTerminalsById.get(field.machineId)?.title ?? 'Unknown terminal';
+                        : availableMachinesById.get(field.machineId)?.title ?? 'Unknown machine';
                       return (
                         <div
                           key={field.id}
@@ -753,14 +753,14 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                 >
                   Add own machine
                 </Button>
-                <Select value={selectedTerminalId} onValueChange={setSelectedTerminalId} disabled={terminalOptions.length === 0}>
+                <Select value={selectedMachineId} onValueChange={setSelectedMachineId} disabled={machineOptions.length === 0}>
                   <SelectTrigger className="h-8 w-56 text-sm">
-                    <SelectValue placeholder={terminalOptions.length === 0 ? 'No more terminals to add' : 'Use existing machine…'} />
+                    <SelectValue placeholder={machineOptions.length === 0 ? 'No more machines to add' : 'Use existing machine…'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {terminalOptions.map((terminal) => (
-                      <SelectItem key={terminal.id} value={terminal.id}>
-                        {terminal.title}
+                    {machineOptions.map((machine) => (
+                      <SelectItem key={machine.id} value={machine.id}>
+                        {machine.title}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -768,10 +768,10 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                 <Button
                   type="button"
                   size="sm"
-                  disabled={!selectedTerminalId}
+                  disabled={!selectedMachineId}
                   onClick={() => {
-                    appendMachine({ kind: 'existing', machineId: selectedTerminalId });
-                    setSelectedTerminalId('');
+                    appendMachine({ kind: 'existing', machineId: selectedMachineId });
+                    setSelectedMachineId('');
                   }}
                 >
                   Add
@@ -920,14 +920,14 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                       </div>
                     </div>
                   );
-                  const terminalTools = visibleTools.filter((tool) => TERMINAL_TOOL_NAMES.has(tool.name));
-                  const otherTools = visibleTools.filter((tool) => !TERMINAL_TOOL_NAMES.has(tool.name));
+                  const machineTools = visibleTools.filter((tool) => MACHINE_TOOL_NAMES.has(tool.name));
+                  const otherTools = visibleTools.filter((tool) => !MACHINE_TOOL_NAMES.has(tool.name));
                   return (
                     <div className="space-y-3">
-                      {terminalTools.length > 0 && (
+                      {machineTools.length > 0 && (
                         <>
-                          <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Terminal</p>
-                          {terminalTools.map(toolRow)}
+                          <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">Machine</p>
+                          {machineTools.map(toolRow)}
                         </>
                       )}
                       {otherTools.map(toolRow)}

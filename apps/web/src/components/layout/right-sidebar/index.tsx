@@ -24,7 +24,7 @@ export interface RightPanelProps {
  *
  * Machine/Terminal session navigation used to live here as a fourth "Terminal"
  * tab; it now lives inside the Machine page's own Terminal tab
- * (page-views/terminal), so this sidebar no longer carries a terminal surface.
+ * (page-views/machine), so this sidebar no longer carries a terminal surface.
  *
  * TAB STATE MANAGEMENT:
  * - Dashboard context: Uses usePageAgentDashboardStore.activeTab (synced with GlobalAssistantView)
