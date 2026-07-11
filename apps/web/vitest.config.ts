@@ -12,18 +12,19 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
     setupFiles: ['./src/test/setup.ts'],
     // Fit the web suite's memory on the 16 GB CI runner. With `isolate: true`
-    // (needed — the suite's files vi.mock overlapping modules differently and
-    // do not reset mocks, so registries can't be shared) each file retains its
-    // full module graph, ~58 MB/file, released only when its shard process
-    // exits. vitest also packs files onto forks unevenly (one fork was seen
-    // taking ~50% of a shard). So the `test` script runs TEN sequential shards
-    // (~83 files each, separate processes that release all memory between them);
-    // even a fork that grabs half a shard holds ~42 files ≈ 2.4 GB, within the
-    // 4 GB per-fork cap. The cap also stops forks inheriting the main process's
-    // larger NODE_OPTIONS ceiling (V8 lazily grows to whatever it is given) and
-    // keeps 4 concurrent forks within the runner's RAM.
+    // (needed — the suite's files vi.mock overlapping modules differently and do
+    // not reset mocks, so registries can't be shared) each file retains its full
+    // module graph, ~48 MB/file of REAL accumulation, released only when its
+    // shard process exits. vitest packs files onto forks unevenly — one fork was
+    // seen running an entire shard while the others sat idle — so a fork's heap
+    // must be able to hold a whole shard, but the shard's total data is what
+    // actually lives in RAM (it does not multiply by fork count; idle forks hold
+    // almost nothing). So: five sequential shards (~167 files ≈ 8 GB each,
+    // separate processes that release everything between them) with a 9 GB
+    // per-fork cap that covers even one-fork-takes-all. The `test` script's
+    // 8 GB is for the main process's post-shard aggregation. Peak stays ~8-10 GB.
     pool: 'forks',
-    poolOptions: { forks: { execArgv: ['--max-old-space-size=4096'] } },
+    poolOptions: { forks: { execArgv: ['--max-old-space-size=9216'] } },
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
