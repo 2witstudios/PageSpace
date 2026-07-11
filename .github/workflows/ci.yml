@@ -70,18 +70,19 @@ jobs:
 
       # apps/web runs its full suite for correctness but WITHOUT v8 coverage.
       # The auth-barrel elimination made ~285 test files load real modules (the
-      # run executes ~1500). The threads pool + sequential execution (CI branch
-      # of apps/web/vitest.config) bounds the plain run's memory so every test
-      # passes on the 16 GB runner, but full v8 coverage still accumulates in a
-      # single worker past its default heap, and worker_threads expose no way to
-      # raise or recycle it. So web is gated on test correctness here (every web
-      # test runs and must pass); web coverage-% is measured locally
+      # run executes ~1500). The threads pool (apps/web/vitest.config) bounds the
+      # run, but under concurrent execution on the 4-core runner a worker
+      # accumulates faster than V8 GCs it and one straggler exceeds the worker's
+      # default heap (ERR_WORKER_OUT_OF_MEMORY) — which vitest 2.x can't raise for
+      # threads. `--no-file-parallelism` runs files one at a time so GC keeps up
+      # (measured max per-file heap ~172 MB). Coverage still accumulates in the
+      # single worker past its heap, so web is gated on test correctness here
+      # (every web test runs and must pass); web coverage-% is measured locally
       # (`bun run --filter web test:coverage`).
       - name: Run web tests (Node 24, no coverage — see note above)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-          CI: 'true'
-        run: bunx turbo run test --filter='web'
+        run: bunx turbo run test --filter='web' -- --no-file-parallelism
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
       # onnxruntime native bindings fail to initialize on Node 24, so test the

@@ -22,14 +22,6 @@ export default defineConfig({
     // runner — threads can't raise or recycle that heap — so CI gates web on
     // test correctness and measures web coverage separately; see ci.yml.)
     pool: 'threads',
-    // In CI, run test files sequentially. Even under threads, running files
-    // concurrently lets a worker accumulate faster than V8 GCs it and one
-    // straggler exceeds the worker's default heap (ERR_WORKER_OUT_OF_MEMORY);
-    // the CI worker default is lower than a dev machine's, so this only bites
-    // there. Sequential execution gives GC time between files — measured max
-    // per-file heap is ~172 MB — at the cost of wall-clock. Local runs stay
-    // parallel (fast; dev machines have the RAM headroom).
-    fileParallelism: !process.env.CI,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'json-summary'],
