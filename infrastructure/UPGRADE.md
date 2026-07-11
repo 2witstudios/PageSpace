@@ -26,9 +26,23 @@ security audit writes land:
 | unset | `ADMIN_DB_BREAK_GLASS=true` | `break-glass` | writes to the **main** DB + a LOUD alert on every process (explicit emergency override) |
 | unset | neither flag | `main-db` | writes to the **main** DB, **SILENTLY** — the pre-trust-plane default |
 
-Precedence when several apply: invalid-URL `fail` > `AUDIT_TRUST_PLANE_REQUIRED`
-`fail` > `break-glass` > `main-db`. Both flags are fail-closed — only the exact
-string `true` arms them.
+Precedence when several apply (highest first):
+
+1. **`ADMIN_DATABASE_URL` set but invalid** → `fail` (a positive misconfiguration
+   must never silently degrade — beats every flag).
+2. **`AUDIT_TRUST_PLANE_REQUIRED=true`** (URL unset) → `fail` (declared enforcement
+   wins over both the emergency override and the silent default).
+3. **`ADMIN_DB_BREAK_GLASS=true`** (URL unset, not required) → `break-glass`.
+4. **neither flag** (URL unset) → `main-db`.
+
+So with URL unset and BOTH flags armed, `AUDIT_TRUST_PLANE_REQUIRED` wins → `fail`
+(the stricter declared intent is honored).
+
+"Fail-closed" here refers only to **flag PARSING**: `true` is the sole value that
+arms either flag (`TRUE`, `1`, ` true `, `''` do not). It does NOT mean both
+flags fail the process — `ADMIN_DB_BREAK_GLASS=true` deliberately *degrades* to
+the main DB (loudly); only `AUDIT_TRUST_PLANE_REQUIRED=true` (or an invalid URL)
+halts.
 
 **Unconfigured deployments need no action.** If you have not adopted the
 dedicated Admin PG, leave `ADMIN_DATABASE_URL` unset and both flags unset: audit
@@ -61,6 +75,16 @@ fly secrets unset ADMIN_DB_BREAK_GLASS -a pagespace-admin
 Do this only AFTER the new code is deployed to each app. With the flag gone and
 `ADMIN_DATABASE_URL` still unset, each app resolves to `main-db` and audit
 writes continue against the main DB silently.
+
+> ⚠️ This is safe **only because** `AUDIT_TRUST_PLANE_REQUIRED` is NOT set on
+> these apps (unset → precedence rule 4 → `main-db`). If you had armed
+> `AUDIT_TRUST_PLANE_REQUIRED=true` without configuring `ADMIN_DATABASE_URL`,
+> unsetting break-glass would drop the app to `fail` (precedence rule 2) and
+> break audit writes again. In that case, first set a valid `ADMIN_DATABASE_URL`
+> (adopt the trust plane) or unset `AUDIT_TRUST_PLANE_REQUIRED` before removing
+> break-glass. Verify with `fly secrets list -a <app>` that neither
+> `ADMIN_DATABASE_URL` nor `AUDIT_TRUST_PLANE_REQUIRED` is present before running
+> the unset commands above.
 
 ## 2026-07 — Phase 1 admin database (issue #890)
 

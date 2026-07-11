@@ -243,7 +243,12 @@ describe('env-validation', () => {
       }
     });
 
-    it('given an empty-string ADMIN_DATABASE_URL, should fail validation', () => {
+    it('given an empty-string ADMIN_DATABASE_URL, should PARSE (empty is treated as unset — must not crash boot)', () => {
+      // #890 prod audit-write incident: instrumentation.ts calls validateEnv()
+      // at boot. Rejecting '' here would exit the process BEFORE
+      // resolveAdminDbMode (which maps '' → unset → the silent 'main-db'
+      // default) ever runs — defeating the incident fix for the common
+      // `ADMIN_DATABASE_URL=` blank-value form.
       const env = {
         ...baseEnv,
         ADMIN_DATABASE_URL: '',
@@ -251,11 +256,9 @@ describe('env-validation', () => {
 
       const result = serverEnvSchema.safeParse(env);
 
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(
-          result.error.issues.some((i) => i.path.includes('ADMIN_DATABASE_URL')),
-        ).toBe(true);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DATABASE_URL).toBe('');
       }
     });
 
@@ -283,6 +286,14 @@ describe('env-validation', () => {
 
       const unset = serverEnvSchema.safeParse(baseEnv);
       expect(unset.success).toBe(true);
+    });
+
+    it('given an empty-string ADMIN_ERASER_DATABASE_URL, should PARSE (empty is treated as unset — mirrors ADMIN_DATABASE_URL, must not crash boot)', () => {
+      const result = serverEnvSchema.safeParse({
+        ...baseEnv,
+        ADMIN_ERASER_DATABASE_URL: '',
+      });
+      expect(result.success).toBe(true);
     });
 
     it('given ADMIN_DATABASE_URL unset with ADMIN_DB_BREAK_GLASS=true, should parse and expose the flag (degrade-loudly path)', () => {
@@ -402,6 +413,23 @@ describe('env-validation', () => {
       process.env.DATABASE_URL = '';
 
       expect(() => validateEnv()).toThrow(/Environment validation failed/);
+    });
+
+    it('given a blank ADMIN_DATABASE_URL and no flags, validateEnv should PASS at boot AND the resolved mode is main-db (#890 incident: the two must agree)', async () => {
+      // The boot half: validateEnv() (called from instrumentation.ts) must not
+      // throw for the common `ADMIN_DATABASE_URL=` blank form.
+      process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
+      process.env.CSRF_SECRET = 'b'.repeat(32);
+      process.env.ENCRYPTION_KEY = 'c'.repeat(32);
+      process.env.ADMIN_DATABASE_URL = '';
+
+      expect(() => validateEnv()).not.toThrow();
+
+      // The runtime half: the same blank value resolves to the silent main-db
+      // default (resolveAdminDbMode reads an env object; '' → unset). Pinning
+      // both here guarantees the boot gate and the mode decision never diverge.
+      const { resolveAdminDbMode } = await import('@pagespace/db/admin-db');
+      expect(resolveAdminDbMode({ ADMIN_DATABASE_URL: '' }).mode).toBe('main-db');
     });
   });
 

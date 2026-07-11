@@ -18,9 +18,16 @@ export const serverEnvSchema = z
 
     // Admin Postgres (trust plane) — dedicated database for the tamper-evident
     // security audit chain and related admin/audit tables, isolated from the app
-    // DB in every deployment mode. Optional at the schema level: the hard
-    // fail-fast when unset (and no break-glass flag) is enforced by the adminDb
-    // client at init, not here, so non-audit code paths can still validate env.
+    // DB in every deployment mode. Optional at the schema level: the mode
+    // decision (dedicated / break-glass / main-db / fail) is owned by
+    // resolveAdminDbMode at adminDb init, not here, so non-audit code paths can
+    // still validate env. An EMPTY string is explicitly accepted (via
+    // `.or(z.literal(''))`) and treated as UNSET — resolveAdminDbMode already
+    // maps '' → unset (→ the silent 'main-db' default). Rejecting '' here would
+    // crash the process at boot (instrumentation.ts calls validateEnv) BEFORE
+    // the mode decision runs, defeating the incident fix for the common
+    // `ADMIN_DATABASE_URL=` blank-value form. A NON-empty value must still be a
+    // postgres URL.
     ADMIN_DATABASE_URL: z
       .string()
       .min(1, 'ADMIN_DATABASE_URL must not be empty when set')
@@ -28,14 +35,18 @@ export const serverEnvSchema = z
         (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
         'ADMIN_DATABASE_URL must be a valid PostgreSQL connection string'
       )
-      .optional(),
+      .optional()
+      .or(z.literal('')),
     ADMIN_DATABASE_SSL: z.enum(['true', 'false']).optional(),
     ADMIN_DB_POOL_MAX: z.coerce.number().int().positive().optional(),
 
     // GDPR eraser identity (#890 Phase 2, leaf 6): the web pseudonymization
     // route connects to the Admin PG as admin_gdpr_eraser_user through this
     // URL. Optional at the schema level — when unset, the pseudonymize route
-    // refuses (503) via the eraser client, never at app boot.
+    // refuses (503) via the eraser client, never at app boot. An EMPTY string is
+    // accepted and treated as UNSET, mirroring ADMIN_DATABASE_URL and the eraser
+    // client (resolveAdminEraserDbMode maps '' → unavailable): a blank
+    // `ADMIN_ERASER_DATABASE_URL=` must not crash boot.
     ADMIN_ERASER_DATABASE_URL: z
       .string()
       .min(1, 'ADMIN_ERASER_DATABASE_URL must not be empty when set')
@@ -43,7 +54,8 @@ export const serverEnvSchema = z
         (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
         'ADMIN_ERASER_DATABASE_URL must be a valid PostgreSQL connection string'
       )
-      .optional(),
+      .optional()
+      .or(z.literal('')),
 
     // Break-glass rollback ONLY: arms the fallback that permits audit writes to
     // the main DB (which must alert loudly) when the Admin PG is unavailable.
