@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { openPtyShell, planReconnect, liveShellSessionIds, newTtySessionId } from '../sprites-shell';
+import { openPtyShell, planReconnect, liveShellSessionIds } from '../sprites-shell';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -75,6 +75,14 @@ function buildFakeSprite(
 
 const liveSession: SpriteSessionInfo = { id: 'sess-1', command: 'bash', isActive: true, tty: true };
 
+/**
+ * The `session_info` control frame the server sends on a newly created session's
+ * OWN socket — the authoritative source of that session's id (see
+ * `readSessionInfoId`). A shell that never receives one holds no id and, by
+ * design, will never attach to a session it cannot prove is its own.
+ */
+const announces = (id: string) => ({ type: 'session_info', session_id: id, command: 'bash', tty: true });
+
 describe('planReconnect (pure)', () => {
   const MAX = 5;
 
@@ -100,17 +108,24 @@ describe('planReconnect (pure)', () => {
   });
 
   assert({
-    given: 'no known id but a live shell session exists',
-    should: 'attach to the first live session',
+    given: 'no known id but a live shell session exists (possibly a SIBLING terminal\'s)',
+    should: 'create a fresh session — never guess which live shell is ours',
     actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1'], consecutiveFailures: 1, maxAttempts: MAX }),
-    expected: { action: 'attach', id: 'sess-1' } as const,
+    expected: { action: 'create' } as const,
+  });
+
+  assert({
+    given: 'no known id and several live shells on the Sprite',
+    should: 'still create — an id is only ever obtained authoritatively, never picked',
+    actual: planReconnect({ knownId: undefined, liveSessionIds: ['sess-1', 'sess-2'], consecutiveFailures: 1, maxAttempts: MAX }),
+    expected: { action: 'create' } as const,
   });
 
   assert({
     given: 'no known id and no live sessions',
-    should: 'be fatal (the shell is genuinely gone)',
+    should: 'create a fresh session',
     actual: planReconnect({ knownId: undefined, liveSessionIds: [], consecutiveFailures: 1, maxAttempts: MAX }),
-    expected: { action: 'fatal' } as const,
+    expected: { action: 'create' } as const,
   });
 
   assert({
@@ -133,57 +148,91 @@ describe('liveShellSessionIds (pure)', () => {
   });
 
   assert({
-    given: 'an active and an inactive shell session',
-    should: 'order the active shell first (mirrors pickShellSession)',
+    given: 'an inactive and an active shell session',
+    should: 'return both ids in list order — this is a membership set for verifying a KNOWN id, not a ranking to pick from',
     actual: liveShellSessionIds([
       { id: 'shell-inactive', command: 'bash', isActive: false, tty: true },
       { id: 'shell-active', command: 'bash', isActive: true, tty: true },
     ]),
-    expected: ['shell-active', 'shell-inactive'],
+    expected: ['shell-inactive', 'shell-active'],
   });
 });
 
-describe('newTtySessionId (pure)', () => {
-  assert({
-    given: 'a new tty session appearing after a create alongside a pre-existing one',
-    should: 'return the id absent from the before set (OUR new session, not the other terminal)',
-    actual: newTtySessionId(['sess-other'], [
-      { id: 'sess-other', command: 'bash', isActive: true, tty: true },
-      { id: 'sess-new', command: 'bash', isActive: false, tty: true },
-    ]),
-    expected: 'sess-new',
+/**
+ * Session identity comes from the create handle itself: the server sends a
+ * `session_info` frame carrying `session_id` on the very socket `createSession()`
+ * returned, so the id is known authoritatively and cannot be confused with a
+ * sibling terminal's — no `listSessions()` diffing, no `is_active` guessing.
+ */
+describe('openPtyShell session identity (from create, not list-diffing)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('given a fresh create whose socket delivers session_info, reports that id WITHOUT ever listing sessions', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+    const onSessionId = vi.fn();
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), onSessionId });
+    cmd._emitter.emit('message', announces('sess-created'));
+
+    expect(onSessionId).toHaveBeenCalledWith('sess-created');
+    // The whole point of the leaf: the create path no longer snapshots/diffs.
+    expect(sprite.listSessions).not.toHaveBeenCalled();
   });
 
-  assert({
-    given: 'an empty before set and one new tty session',
-    should: 'return that session id',
-    actual: newTtySessionId([], [{ id: 'sess-new', command: 'bash', isActive: true, tty: true }]),
-    expected: 'sess-new',
+  it('given TWO concurrent creates on ONE sprite, each shell reports its OWN id (never mis-attributed)', () => {
+    // The racy case the old before/after diff could not resolve: two terminals
+    // creating shells on the same Sprite in the same window. Each id arrives on
+    // its own socket, so attribution is structural, not inferred.
+    const cmdA = buildFakeCommand();
+    const cmdB = buildFakeCommand();
+    const sprite = buildFakeSprite(cmdA);
+    sprite.createSession.mockReturnValueOnce(cmdA).mockReturnValueOnce(cmdB);
+    const onSessionIdA = vi.fn();
+    const onSessionIdB = vi.fn();
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), onSessionId: onSessionIdA });
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), onSessionId: onSessionIdB });
+
+    // Frames interleave (B's lands first) — attribution must not depend on order.
+    cmdB._emitter.emit('message', announces('sess-b'));
+    cmdA._emitter.emit('message', announces('sess-a'));
+
+    expect(onSessionIdA.mock.calls).toEqual([['sess-a']]);
+    expect(onSessionIdB.mock.calls).toEqual([['sess-b']]);
   });
 
-  assert({
-    given: 'no session appeared beyond the before set (ambiguous/empty diff)',
-    should: 'return undefined so the caller persists nothing',
-    actual: newTtySessionId(['sess-other'], [{ id: 'sess-other', command: 'bash', isActive: true, tty: true }]),
-    expected: undefined,
+  it('given a non-session_info control frame, reports no id', () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+    const onSessionId = vi.fn();
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), onSessionId });
+    cmd._emitter.emit('message', { type: 'port_open', port: 3000 });
+
+    expect(onSessionId).not.toHaveBeenCalled();
   });
 
-  assert({
-    given: 'TWO new tty sessions appeared (a concurrent terminal created one in the same window)',
-    should: 'return undefined — the diff can no longer tell which is ours, so persist nothing',
-    actual: newTtySessionId(['sess-other'], [
-      { id: 'sess-other', command: 'bash', isActive: true, tty: true },
-      { id: 'sess-a', command: 'bash', isActive: false, tty: true },
-      { id: 'sess-b', command: 'bash', isActive: false, tty: true },
-    ]),
-    expected: undefined,
-  });
+  it('given the created session announced its id, a later drop reattaches BY THAT ID (not by picking a live shell)', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    // The Sprite also hosts a sibling terminal's shell: the old pickShellSession
+    // path could reattach to 'sess-sibling'. We must attach to our own id.
+    const sprite = buildFakeSprite(cmd, {
+      sessions: [
+        { id: 'sess-sibling', command: 'bash', isActive: true, tty: true },
+        { id: 'sess-mine', command: 'bash', isActive: false, tty: true },
+      ],
+      attachCmd,
+    });
 
-  assert({
-    given: 'the only new session is non-tty (a plain exec, not a shell)',
-    should: 'return undefined (a shell reattach target must be tty)',
-    actual: newTtySessionId([], [{ id: 'exec-1', command: 'ls', isActive: true, tty: false }]),
-    expected: undefined,
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-mine'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(sprite.attachSession).toHaveBeenCalledWith('sess-mine', { cols: 80, rows: 24 });
   });
 });
 
@@ -331,6 +380,7 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      cmd._emitter.emit('message', announces('sess-1')); // the session names itself
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
@@ -345,6 +395,7 @@ describe('openPtyShell', () => {
       const onOutput = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
@@ -352,9 +403,11 @@ describe('openPtyShell', () => {
       expect(onOutput).toHaveBeenCalledWith('back\r\n');
     });
 
-    it('given an error and NO live session, should call onExit(-1) without an error banner', async () => {
+    it('given a drop with no announced id and NO live session, creates a fresh shell rather than exiting', async () => {
       const cmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [] });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
       const onOutput = vi.fn();
       const onExit = vi.fn();
 
@@ -362,18 +415,24 @@ describe('openPtyShell', () => {
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
-      expect(onExit).toHaveBeenCalledWith(-1);
+      expect(sprite.createSession).toHaveBeenCalledTimes(2);
+      expect(onExit).not.toHaveBeenCalled();
       expect(onOutput).not.toHaveBeenCalledWith(expect.stringContaining('Shell error'));
     });
 
-    it('given reattach repeatedly fails, should give up after the bounded budget and surface onExit(-1)', async () => {
-      const cmd = buildFakeCommand();
-      const sprite = buildFakeSprite(cmd, { listRejects: true });
+    it('given every reconnect attempt fails, should give up after the bounded budget and surface onExit(-1)', async () => {
+      // A genuinely dead Sprite: each (re)created session's socket errors before
+      // it ever opens, so no 'spawn'/stdout ever resets the budget.
+      const sprite = buildFakeSprite(buildFakeCommand(), { listRejects: true });
+      sprite.createSession.mockImplementation(() => {
+        const next = buildFakeCommand();
+        setTimeout(() => next._emitter.emit('error', new Error('WebSocket closed before open')), 0);
+        return next;
+      });
       const onOutput = vi.fn();
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
-      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(10_000);
 
       expect(onExit).toHaveBeenCalledWith(-1);
@@ -402,6 +461,7 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      cmd._emitter.emit('message', announces('sess-1'));
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       cmd._emitter.emit('exit', 0); // trailing stale exit from the SAME dead command
       await vi.advanceTimersByTimeAsync(500);
@@ -429,6 +489,7 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
+      initial._emitter.emit('message', announces('sess-1'));
 
       // Run more cycles than MAX_RECONNECT_ATTEMPTS (5) would otherwise allow.
       let currentCmd: FakeCommand = initial;
@@ -461,6 +522,7 @@ describe('openPtyShell', () => {
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd: buildFakeCommand() });
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
       cmd._emitter.emit('error', new Error('keepalive'));
       cmd._emitter.emit('error', new Error('keepalive again'));
       await vi.advanceTimersByTimeAsync(500);
@@ -481,19 +543,17 @@ describe('openPtyShell', () => {
       expect(sprite.attachSession).not.toHaveBeenCalled();
     });
 
-    it('given a persisted id ABSENT from listSessions, creates a fresh session and reports the new id (not exit -1)', async () => {
+    it('given a persisted id ABSENT from listSessions, creates a fresh session and reports the NEW authoritative id (not exit -1)', async () => {
       // Sprite paused: the persisted 'sess-dead' is dangling. Initial attach
       // errors; reconnect must verify against listSessions, see it's gone, and
-      // fall back to a fresh session — overwriting the stale streamSessionId.
+      // fall back to a fresh session — whose id comes from ITS OWN session_info
+      // frame, overwriting the stale streamSessionId.
       const attachCmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
-      const newSession: SpriteSessionInfo = { id: 'sess-fresh', command: 'bash', isActive: true, tty: true };
       const sprite = buildFakeSprite(freshCmd);
       sprite.attachSession.mockReturnValue(attachCmd);
       sprite.createSession.mockReturnValue(freshCmd);
-      sprite.listSessions
-        .mockResolvedValueOnce([])            // reconnect verification: sess-dead is gone
-        .mockResolvedValueOnce([newSession]); // fresh session's background id capture
+      sprite.listSessions.mockResolvedValue([]); // reconnect verification: sess-dead is gone
       const onExit = vi.fn();
       const onSessionId = vi.fn();
 
@@ -502,54 +562,54 @@ describe('openPtyShell', () => {
 
       attachCmd._emitter.emit('error', new Error('lost connection to shell'));
       await vi.advanceTimersByTimeAsync(500);
+      freshCmd._emitter.emit('message', announces('sess-fresh'));
 
       expect(sprite.createSession).toHaveBeenCalledTimes(1);
       expect(onSessionId).toHaveBeenCalledWith('sess-fresh');
       expect(onExit).not.toHaveBeenCalled();
     });
 
-    it('given the Sprite also hosts ANOTHER terminal tty session, the fallback reports only the NEW id (not the pre-existing one)', async () => {
-      // Multi-terminal-per-Sprite: pickShellSession over all sessions could pick
-      // the OTHER terminal's shell and persist its id — corrupting reattach. The
-      // before/after diff must isolate our freshly created session.
+    it('given the Sprite also hosts ANOTHER terminal tty session, the fallback reports only OUR new id (never the sibling\'s)', async () => {
+      // Multi-terminal-per-Sprite: the retired pickShellSession could pick the
+      // OTHER terminal's shell and persist its id — pointing this terminal's next
+      // cold connect at someone else's PTY. Our id now arrives on our own socket.
       const attachCmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
       const otherTerminal: SpriteSessionInfo = { id: 'sess-other', command: 'bash', isActive: true, tty: true };
-      const newShell: SpriteSessionInfo = { id: 'sess-new', command: 'bash', isActive: false, tty: true };
       const sprite = buildFakeSprite(freshCmd);
       sprite.attachSession.mockReturnValue(attachCmd);
       sprite.createSession.mockReturnValue(freshCmd);
-      sprite.listSessions
-        .mockResolvedValueOnce([otherTerminal])            // reconnect: our sess-dead is gone, but another terminal is live
-        .mockResolvedValueOnce([otherTerminal, newShell]); // after create: our new shell joins
+      // Our sess-dead is gone, but the sibling terminal's shell is live and active.
+      sprite.listSessions.mockResolvedValue([otherTerminal]);
       const onSessionId = vi.fn();
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput: vi.fn(), onExit, onSessionId });
       attachCmd._emitter.emit('error', new Error('lost connection to shell'));
       await vi.advanceTimersByTimeAsync(500);
+      freshCmd._emitter.emit('message', announces('sess-new'));
 
       expect(sprite.createSession).toHaveBeenCalledTimes(1);
+      expect(sprite.attachSession).not.toHaveBeenCalledWith('sess-other', expect.anything());
       expect(onSessionId).toHaveBeenCalledWith('sess-new');
       expect(onSessionId).not.toHaveBeenCalledWith('sess-other');
       expect(onExit).not.toHaveBeenCalled();
     });
 
-    it('given the fallback diff is ambiguous (no new session appeared), reports NO id rather than a wrong one', async () => {
+    it('given the fresh fallback session announces NO id, reports none rather than a wrong one', async () => {
       const attachCmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
       const otherTerminal: SpriteSessionInfo = { id: 'sess-other', command: 'bash', isActive: true, tty: true };
       const sprite = buildFakeSprite(freshCmd);
       sprite.attachSession.mockReturnValue(attachCmd);
       sprite.createSession.mockReturnValue(freshCmd);
-      sprite.listSessions
-        .mockResolvedValueOnce([otherTerminal])  // reconnect snapshot (before)
-        .mockResolvedValueOnce([otherTerminal]); // after create: diff yields nothing new
+      sprite.listSessions.mockResolvedValue([otherTerminal]);
       const onSessionId = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput: vi.fn(), onExit: vi.fn(), onSessionId });
       attachCmd._emitter.emit('error', new Error('lost connection to shell'));
       await vi.advanceTimersByTimeAsync(500);
+      // No session_info frame ever arrives (the socket dropped pre-announce).
 
       expect(sprite.createSession).toHaveBeenCalledTimes(1);
       expect(onSessionId).not.toHaveBeenCalled();
@@ -594,41 +654,32 @@ describe('openPtyShell', () => {
       expect(sprite.createSession).not.toHaveBeenCalled();
     });
 
-    it('given a superseding reconnect lands before the fresh-fallback background resolve, the stale resolve does NOT persist its id', async () => {
-      // Flapping Sprite: fallback A creates a session whose id-resolve is slow; a
-      // second reconnect attaches a different live session first. A's late resolve
-      // must not clobber currentSessionId / persist A's now-superseded id.
+    it('given a superseding reconnect lands before a LATE session_info from a superseded session, the stale frame does NOT persist its id', async () => {
+      // Flapping Sprite: fallback A creates a session, then drops before (or as)
+      // its session_info lands; a second reconnect creates session B. A's late
+      // frame must not clobber currentSessionId / persist A's superseded id.
       const initialAttach = buildFakeCommand();
-      const freshCmd = buildFakeCommand();
-      const secondAttach = buildFakeCommand();
-      const sprite = buildFakeSprite(freshCmd);
-      sprite.attachSession.mockReturnValueOnce(initialAttach).mockReturnValueOnce(secondAttach);
-      sprite.createSession.mockReturnValue(freshCmd);
-
-      const d1 = deferred<SpriteSessionInfo[]>();     // reconnect #1 planning
-      const dFresh = deferred<SpriteSessionInfo[]>(); // fallback A background resolve (stale)
-      const d2 = deferred<SpriteSessionInfo[]>();     // reconnect #2 planning
-      sprite.listSessions
-        .mockReturnValueOnce(d1.promise)
-        .mockReturnValueOnce(dFresh.promise)
-        .mockReturnValueOnce(d2.promise);
+      const freshA = buildFakeCommand();
+      const freshB = buildFakeCommand();
+      const sprite = buildFakeSprite(freshA);
+      sprite.attachSession.mockReturnValue(initialAttach);
+      sprite.createSession.mockReturnValueOnce(freshA).mockReturnValueOnce(freshB);
+      sprite.listSessions.mockResolvedValue([]); // sess-dead is gone on every check
       const onSessionId = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-dead', onOutput: vi.fn(), onExit: vi.fn(), onSessionId });
 
       initialAttach._emitter.emit('error', new Error('drop1'));
-      await vi.advanceTimersByTimeAsync(300);
-      d1.resolve([]);                    // sess-dead gone → create fallback A (gen 1)
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(300); // sess-dead gone → create fallback A (gen 1)
 
-      freshCmd._emitter.emit('error', new Error('drop2'));
-      await vi.advanceTimersByTimeAsync(600);
-      d2.resolve([{ id: 'sess-live', command: 'bash', isActive: true, tty: true }]); // attach sess-live (gen 2)
-      await vi.advanceTimersByTimeAsync(0);
+      freshA._emitter.emit('error', new Error('drop2'));
+      await vi.advanceTimersByTimeAsync(600); // → create fallback B (gen 2)
+      freshB._emitter.emit('message', announces('sess-b'));
 
-      dFresh.resolve([{ id: 'sess-a', command: 'bash', isActive: false, tty: true }]); // stale resolve
-      await vi.advanceTimersByTimeAsync(0);
+      // A's session_info arrives LATE, after B superseded it.
+      freshA._emitter.emit('message', announces('sess-a'));
 
+      expect(onSessionId).toHaveBeenCalledWith('sess-b');
       expect(onSessionId).not.toHaveBeenCalledWith('sess-a');
     });
 
@@ -667,24 +718,26 @@ describe('openPtyShell', () => {
       expect(onExit).not.toHaveBeenCalled();
     });
 
-    it('given the session id is unknown at reconnect, resolves the live session via listSessions and attaches', async () => {
-      // Background id-capture returns [] (id stays undefined); reconnect's own
-      // listSessions returns the live session → the pickShellSession()?.id branch.
+    it('given the session id is unknown at reconnect, creates a fresh session instead of attaching to a live shell it cannot prove is ours', async () => {
+      // The session never announced its id (socket died pre-session_info). A live
+      // tty session IS listed — but it may be a sibling terminal's, and the old
+      // pickShellSession path would have attached the user to it. We must not
+      // guess: create fresh and learn the new id authoritatively.
       const cmd = buildFakeCommand();
-      const attachCmd = buildFakeCommand();
-      const sprite = buildFakeSprite(cmd);
-      sprite.listSessions
-        .mockResolvedValueOnce([])             // create-path background capture
-        .mockResolvedValueOnce([liveSession]); // reconnect resolution
-      sprite.attachSession.mockImplementation(() => attachCmd);
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
       const onExit = vi.fn();
+      const onSessionId = vi.fn();
 
-      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
-      await vi.advanceTimersByTimeAsync(0); // flush background listSessions ([])
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit, onSessionId });
       cmd._emitter.emit('error', new Error('keepalive'));
       await vi.advanceTimersByTimeAsync(500);
+      freshCmd._emitter.emit('message', announces('sess-fresh'));
 
-      expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+      expect(sprite.attachSession).not.toHaveBeenCalled();
+      expect(sprite.createSession).toHaveBeenCalledTimes(2); // initial + fresh fallback
+      expect(onSessionId).toHaveBeenCalledWith('sess-fresh');
       expect(onExit).not.toHaveBeenCalled();
     });
   });

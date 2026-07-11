@@ -19,14 +19,16 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * resolved `cwd` instead of always `bash` at the bare sandbox root (see
  * `sprites-shell.ts`'s `openPtyShell`).
  *
- * Continuity across a realtime-process restart works the same way a human
- * terminal's used to (rediscover the live Sprite session), but because a
- * Sprite can now host MULTIPLE tty sessions at once, "any tty session" is no
- * longer unambiguous — so this bridge persists the Sprite's own exec-session
- * id back to `machine_agent_terminals.streamSessionId` (via
- * `persistStreamSessionId`) the first time it discovers one, and the sandbox
- * resolution hands that id back on the next COLD connect so THIS specific
- * session is reattached, not just any one.
+ * Continuity across a realtime-process restart is by EXACT session id, never by
+ * guesswork: a Sprite hosts every agent terminal on its machine, so "any tty
+ * session" could just as easily be a sibling terminal's shell. Each freshly
+ * created session announces its own id on its own socket (`session_info` — see
+ * `readSessionInfoId`), the shell reports it via `onSessionId`, and this bridge
+ * persists it to `machine_agent_terminals.streamSessionId` (via
+ * `persistStreamSessionId`). The sandbox resolution hands that id back on the
+ * next COLD connect, so THIS specific session is reattached — and if it is gone
+ * (exec sessions do not survive a pause), the shell creates a fresh one and
+ * persists the new authoritative id in its place.
  *
  * A restart is the only time that costs anything, though: while this process is
  * up, the session stays in `sessionMap` for the whole 30-min detached grace, so
@@ -191,30 +193,6 @@ export const MAX_INPUT_BYTES = 4096;
  * reservation never expires while its session is still accruing.
  */
 export const SETTLE_HEARTBEAT_MS = 10 * 60 * 1000;
-
-/**
- * Discover the NEWLY created session's id by diffing the Sprite's session list
- * against a snapshot taken before it was launched. Best-effort — an ambiguous or
- * failed lookup just means the next reconnect falls back to a fresh session,
- * exactly like a vanished session already does.
- *
- * ABSTAINS when more than one new tty session appeared. One Sprite hosts every
- * agent terminal on its machine, so a sibling terminal launching its own shell in
- * the same window is indistinguishable from ours — and guessing wrong persists
- * the SIBLING's id as this terminal's `streamSessionId`, pointing its next cold
- * connect at another terminal's PTY. `newTtySessionId` in `sprites-shell.ts`
- * already gets this right; this is the same rule.
- */
-async function discoverNewSessionId(sprite: SpriteInstanceLike, before: { id: string }[]): Promise<string | undefined> {
-  try {
-    const beforeIds = new Set(before.map((s) => s.id));
-    const after = await sprite.listSessions();
-    const created = after.filter((s) => s.tty && !beforeIds.has(s.id));
-    return created.length === 1 ? created[0].id : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Resolve WHAT to actually exec for a fresh session: a per-terminal `command`
@@ -593,15 +571,6 @@ export function buildAgentTerminalHandlers({
 
         const { sandboxId, sprite } = sandbox;
 
-        let sessionsBeforeLaunch: { id: string }[] = [];
-        if (sandbox.streamSessionId === null) {
-          try {
-            sessionsBeforeLaunch = await sprite.listSessions();
-          } catch {
-            sessionsBeforeLaunch = [];
-          }
-        }
-
         const session: TerminalSession = {
           command: null as unknown as PtyShell,
           sandboxId,
@@ -648,9 +617,13 @@ export function buildAgentTerminalHandlers({
               // Clears all of the session's timers (re-auth, settle heartbeat, idle).
               endAgentTerminalSession(billing, sessionMap, session, sessionKey);
             },
-            // The fresh-session fallback fired: the persisted streamSessionId was
-            // dangling (Sprite paused then cold-woke), so overwrite it with the new
-            // live session's id — otherwise the NEXT reconnect targets the dead id.
+            // A fresh Sprite session was created and announced its own id (on its
+            // own socket — see `readSessionInfoId`): this terminal's first shell,
+            // or a replacement for a streamSessionId left dangling by a pause.
+            // Persist it so the next cold connect reattaches to THIS session. The
+            // id is authoritative, so it can never name a sibling terminal's shell
+            // — which is precisely what the retired listSessions before/after diff
+            // could not guarantee on a Sprite with concurrent terminals.
             onSessionId: (sessionId) => {
               session.sessionId = sessionId;
               void persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }).catch((error) => {
@@ -670,18 +643,6 @@ export function buildAgentTerminalHandlers({
         session.command = shell;
         sessionMap.setNew(sessionKey, connectionId, session);
         activeConnectionIds.add(connectionId);
-
-        if (sandbox.streamSessionId === null) {
-          void discoverNewSessionId(sprite, sessionsBeforeLaunch).then((sessionId) => {
-            if (sessionId === undefined) return;
-            session.sessionId = sessionId;
-            void persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }).catch((error) => {
-              loggers.realtime.error('Failed to persist agent terminal session id', error instanceof Error ? error : new Error(String(error)), {
-                sessionKey,
-              });
-            });
-          });
-        }
 
         // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
         // re-hold on an interval so a realtime restart loses at most one interval

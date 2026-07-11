@@ -330,22 +330,21 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
-    it('given a FRESH session with no known streamSessionId, should discover and persist the new Sprite session id', async () => {
+    it('given a FRESH session whose shell reports its authoritative id, should persist that id', async () => {
+      // The shell learns the id from the created session's own socket and hands it
+      // up via onSessionId — the handler no longer discovers anything itself.
       const auth = makeAuthSuccess({ streamSessionId: null });
-      // Before launch: no sessions yet. After launch: the newly created one appears.
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ id: 'sess-new', command: 'pagespace-cli', isActive: true, tty: true }]);
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
+
+      openShell.mock.calls[0][0].onSessionId?.('sess-new');
       await vi.advanceTimersByTimeAsync(0);
 
       expect(persistStreamSessionId).toHaveBeenCalledWith({ agentTerminalId: 'agent-terminal-1', sessionId: 'sess-new' });
     });
 
-    it('given a fresh session where listSessions returns nothing new, should not call persistStreamSessionId', async () => {
+    it('given a FRESH session whose shell never reports an id, should not call persistStreamSessionId', async () => {
       const auth = makeAuthSuccess({ streamSessionId: null, sessions: [] });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
@@ -355,31 +354,30 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
-    it('given a FRESH session where the post-launch listSessions call rejects, should discover no new session id rather than throwing', async () => {
+    it('given a FRESH session, should NOT list the Sprite\'s sessions at all (identity comes from the create handle, not a diff)', async () => {
+      // The retired before/after listSessions diff added two control-plane round
+      // trips to every cold connect AND could not tell our new shell from a
+      // sibling terminal's. Both are gone: the connect path never lists.
       const auth = makeAuthSuccess({ streamSessionId: null });
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockRejectedValueOnce(new Error('sprite unreachable'));
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
 
-      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
-      expect(persistStreamSessionId).not.toHaveBeenCalled();
+      expect(auth.sprite.listSessions).not.toHaveBeenCalled();
+      expect(openShell).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
-    it('given the pre-launch listSessions snapshot rejects, should still open the shell (defaults to an empty snapshot)', async () => {
+    it('given a persist that rejects, should not throw out of the connect (best-effort persistence)', async () => {
       const auth = makeAuthSuccess({ streamSessionId: null });
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockRejectedValueOnce(new Error('sprite unreachable'))
-        .mockResolvedValueOnce([]);
+      persistStreamSessionId = vi.fn().mockRejectedValue(new Error('db unreachable'));
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
-      expect(openShell).toHaveBeenCalled();
+      openShell.mock.calls[0][0].onSessionId?.('sess-new');
+      await expect(vi.advanceTimersByTimeAsync(0)).resolves.not.toThrow();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
@@ -562,24 +560,28 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
-    it('given a fresh session where a SIBLING terminal opened a tty in the same window, should persist nothing rather than the sibling\'s id', async () => {
-      // One Sprite hosts every agent terminal on the machine. Two new tty sessions
-      // in the diff is ambiguous — guessing would point THIS terminal's next cold
-      // connect at another terminal's PTY.
-      const auth = makeAuthSuccess({ streamSessionId: null });
-      auth.sprite.listSessions = vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
+    it('given a fresh session where a SIBLING terminal opened a tty in the same window, should persist OUR id (never the sibling\'s)', async () => {
+      // One Sprite hosts every agent terminal on the machine. The retired diff saw
+      // two new tty sessions, could not tell which was ours, and had to abstain —
+      // persisting nothing precisely when the machine was busiest. Our shell now
+      // learns its id on its own socket, so a sibling is simply irrelevant: we
+      // persist the right id instead of abstaining.
+      const auth = makeAuthSuccess({
+        streamSessionId: null,
+        sessions: [
           { id: 'sess-ours', command: 'pagespace-cli', isActive: true, tty: true },
           { id: 'sess-sibling', command: 'claude', isActive: true, tty: true },
-        ]);
+        ],
+      });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
+
+      openShell.mock.calls[0][0].onSessionId?.('sess-ours');
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(persistStreamSessionId).not.toHaveBeenCalled();
+      expect(persistStreamSessionId).toHaveBeenCalledWith({ agentTerminalId: 'agent-terminal-1', sessionId: 'sess-ours' });
+      expect(persistStreamSessionId).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-sibling' }));
     });
 
     it('given two connects for the same key (double-mount remount), should not double-create — the second reattaches via getByKey', async () => {
