@@ -27,6 +27,10 @@ interface CustomDomain {
   status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
   isPrimary: boolean;
   createdAt: string;
+  /** Canvas page overriding this domain's root ('/'); null = use the drive-wide home page. */
+  publishLandingPageId: string | null;
+  /** Canvas page overriding this domain's 404.html; null = use the drive-wide 404 page. */
+  publishNotFoundPageId: string | null;
 }
 
 interface DomainsResponse {
@@ -61,6 +65,8 @@ export default function DomainsSettingsPage() {
   const [verifyReasons, setVerifyReasons] = useState<Record<string, string | undefined>>({});
   const [refreshingCertId, setRefreshingCertId] = useState<string | null>(null);
   const [settingPrimaryId, setSettingPrimaryId] = useState<string | null>(null);
+  const [savingLandingPageId, setSavingLandingPageId] = useState<string | null>(null);
+  const [savingNotFoundPageId, setSavingNotFoundPageId] = useState<string | null>(null);
   const [subdomainInput, setSubdomainInput] = useState('');
   const [isSavingSubdomain, setIsSavingSubdomain] = useState(false);
 
@@ -285,6 +291,52 @@ export default function DomainsSettingsPage() {
     }
   };
 
+  const handleSetDomainLandingPage = async (domainId: string, pageId: string | null) => {
+    if (savingLandingPageId) return;
+    setSavingLandingPageId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publishLandingPageId: pageId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to update landing page');
+        return;
+      }
+      await mutateDomains();
+      toast.success(pageId ? 'Landing page updated' : 'Landing page reset to the drive default');
+    } catch {
+      toast.error('Failed to update landing page');
+    } finally {
+      setSavingLandingPageId(null);
+    }
+  };
+
+  const handleSetDomainNotFoundPage = async (domainId: string, pageId: string | null) => {
+    if (savingNotFoundPageId) return;
+    setSavingNotFoundPageId(domainId);
+    try {
+      const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ publishNotFoundPageId: pageId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(data.error ?? 'Failed to update 404 page');
+        return;
+      }
+      await mutateDomains();
+      toast.success(pageId ? '404 page updated' : '404 page reset to the drive default');
+    } catch {
+      toast.error('Failed to update 404 page');
+    } finally {
+      setSavingNotFoundPageId(null);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
@@ -340,6 +392,7 @@ export default function DomainsSettingsPage() {
       />
 
       <CustomDomainsCard
+        driveId={driveId}
         domains={domainsData?.domains ?? []}
         limit={domainsData?.limit ?? null}
         newDomain={newDomain}
@@ -349,11 +402,15 @@ export default function DomainsSettingsPage() {
         onVerify={handleVerifyDomain}
         onRefreshCert={handleRefreshCert}
         onSetPrimary={handleSetPrimary}
+        onSetLandingPage={handleSetDomainLandingPage}
+        onSetNotFoundPage={handleSetDomainNotFoundPage}
         isAdding={isAddingDomain}
         removingId={removingDomainId}
         verifyingId={verifyingDomainId}
         refreshingCertId={refreshingCertId}
         settingPrimaryId={settingPrimaryId}
+        savingLandingPageId={savingLandingPageId}
+        savingNotFoundPageId={savingNotFoundPageId}
         verifyReasons={verifyReasons}
         isPlatformAdmin={isPlatformAdmin}
       />
@@ -666,6 +723,7 @@ function SubdomainCard({ subdomain, publishHost, canChange, inputValue, onInputC
 // ── Custom Domains Card ───────────────────────────────────────────────────────
 
 interface CustomDomainsCardProps {
+  driveId: string;
   domains: CustomDomain[];
   /** null = still loading; 0 = not available on plan; N = max allowed */
   limit: number | null;
@@ -676,11 +734,15 @@ interface CustomDomainsCardProps {
   onVerify: (id: string) => void;
   onRefreshCert: (id: string) => void;
   onSetPrimary: (id: string) => void;
+  onSetLandingPage: (domainId: string, pageId: string | null) => void;
+  onSetNotFoundPage: (domainId: string, pageId: string | null) => void;
   isAdding: boolean;
   removingId: string | null;
   verifyingId: string | null;
   refreshingCertId: string | null;
   settingPrimaryId: string | null;
+  savingLandingPageId: string | null;
+  savingNotFoundPageId: string | null;
   verifyReasons: Record<string, string | undefined>;
   isPlatformAdmin: boolean;
 }
@@ -689,7 +751,7 @@ const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
+function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, onSetLandingPage, onSetNotFoundPage, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, savingLandingPageId, savingNotFoundPageId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
   // A platform admin keeps the input usable regardless of the drive's plan tier
   // — the backend's platform-domain path skips the subscription cap, and a
   // non-platform hostname over cap still gets the server's 403 + toast.
@@ -698,10 +760,15 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
   const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
   // "Make primary" only matters once there's a choice to make between domains.
   const showPrimaryControls = domains.length > 1;
-  // Any in-flight mutation (add/verify/cert/primary/remove) locks every per-row
-  // action so concurrent requests can't race or produce stale toasts.
+  // Any in-flight mutation (add/verify/cert/primary/remove/page-override) locks
+  // every per-row action so concurrent requests can't race or produce stale toasts.
   const anyBusy =
-    removingId !== null || verifyingId !== null || refreshingCertId !== null || settingPrimaryId !== null;
+    removingId !== null ||
+    verifyingId !== null ||
+    refreshingCertId !== null ||
+    settingPrimaryId !== null ||
+    savingLandingPageId !== null ||
+    savingNotFoundPageId !== null;
   // The EFFECTIVE primary is what the published site actually serves — an
   // explicitly-flagged active domain, else the earliest-created active one. Badge
   // and "Make primary" key off this (not the raw `isPrimary` flag) so a migrated
@@ -780,11 +847,14 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
             {domains.map((domain) => (
               <DomainRow
                 key={domain.id}
+                driveId={driveId}
                 domain={domain}
                 onRemove={onRemove}
                 onVerify={onVerify}
                 onRefreshCert={onRefreshCert}
                 onSetPrimary={onSetPrimary}
+                onSetLandingPage={onSetLandingPage}
+                onSetNotFoundPage={onSetNotFoundPage}
                 showPrimaryControls={showPrimaryControls}
                 isEffectivePrimary={domain.id === effectivePrimaryId}
                 isRemoving={removingId === domain.id}
@@ -805,11 +875,14 @@ function CustomDomainsCard({ domains, limit, newDomain, onNewDomainChange, onAdd
 }
 
 function DomainRow({
+  driveId,
   domain,
   onRemove,
   onVerify,
   onRefreshCert,
   onSetPrimary,
+  onSetLandingPage,
+  onSetNotFoundPage,
   showPrimaryControls,
   isEffectivePrimary,
   isRemoving,
@@ -819,11 +892,14 @@ function DomainRow({
   anyBusy,
   verifyReason,
 }: {
+  driveId: string;
   domain: CustomDomain;
   onRemove: (id: string) => void;
   onVerify: (id: string) => void;
   onRefreshCert: (id: string) => void;
   onSetPrimary: (id: string) => void;
+  onSetLandingPage: (domainId: string, pageId: string | null) => void;
+  onSetNotFoundPage: (domainId: string, pageId: string | null) => void;
   showPrimaryControls: boolean;
   isEffectivePrimary: boolean;
   isRemoving: boolean;
@@ -1010,6 +1086,33 @@ function DomainRow({
           <p className="text-xs text-muted-foreground mt-2">
             Once records propagate, click Verify DNS to confirm setup and automatically provision SSL.
           </p>
+        </div>
+      )}
+
+      {domain.status === 'active' && (
+        <div className="grid gap-3 sm:grid-cols-2 pt-2 border-t">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Landing page</Label>
+            <PagePickerPopover
+              driveId={driveId}
+              value={domain.publishLandingPageId}
+              onChange={(pageId) => onSetLandingPage(domain.id, pageId)}
+              pageType={PageType.CANVAS}
+              placeholder="Using drive default"
+              disabled={anyBusy}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">404 page</Label>
+            <PagePickerPopover
+              driveId={driveId}
+              value={domain.publishNotFoundPageId}
+              onChange={(pageId) => onSetNotFoundPage(domain.id, pageId)}
+              pageType={PageType.CANVAS}
+              placeholder="Using drive default"
+              disabled={anyBusy}
+            />
+          </div>
         </div>
       )}
     </div>

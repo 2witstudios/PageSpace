@@ -1,7 +1,7 @@
 import { pgTable, text, timestamp, boolean, index, uniqueIndex, pgEnum } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { drives } from './core';
+import { drives, pages } from './core';
 
 export const customDomainStatus = pgEnum('custom_domain_status', ['pending', 'verified', 'failed', 'provisioning', 'active', 'dns_failed', 'cert_failed']);
 
@@ -23,6 +23,13 @@ export const customDomains = pgTable('custom_domains', {
   // custom-domain flow. Excluded from primary/canonical host selection so the
   // drive's pagespace.site subdomain stays the canonical SEO host.
   platformOwned: boolean('platform_owned').default(false).notNull(),
+  // Per-domain overrides of the drive-wide published root (path '') and 404
+  // page. Null means "use the drive default" — every domain on a drive is a
+  // byte-for-byte identical mirror unless one of these is set (see
+  // mirrorDriveToCustomHost). Distinct from drives.homePageId, which is the
+  // in-app workspace landing page, not the public published site's.
+  publishLandingPageId: text('publish_landing_page_id').references(() => pages.id, { onDelete: 'set null' }),
+  publishNotFoundPageId: text('publish_not_found_page_id').references(() => pages.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   hostnameKey: uniqueIndex('custom_domains_hostname_key').on(table.hostname),

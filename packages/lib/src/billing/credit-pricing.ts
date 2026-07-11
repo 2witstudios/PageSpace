@@ -237,12 +237,15 @@ export const TERMINAL_ASSUMED_MEMORY_GB = envFloat('TERMINAL_ASSUMED_MEMORY_GB',
 
 /**
  * Assumed persistent-storage rate, in USD per GB-month, for a Machine's persistent
- * filesystem (the thing that survives hibernation — see sandbox-options.ts's
- * `storageGB`). Unlike CPU/mem, Sprites' persistent volume is NOT free while
- * hibernating, so a Machine left idle-but-not-destroyed still accrues this cost —
- * consumed by the separate idle-storage cron (Epic 3), not by the active-runtime
- * charge in terminal-pricing.ts. Placeholder pending Sprites' published storage
- * rate; tune via env once confirmed.
+ * filesystem (the thing that survives hibernation). The platform bills for the
+ * bytes actually WRITTEN (TRIM-friendly — deleting files lowers the bill), not
+ * the provisioned volume size (docs.sprites.dev/concepts/lifecycle), so the
+ * quantity this rate multiplies is the machine's MEASURED footprint in GB-months
+ * (see terminal-storage-reconcile.ts), not its allocation. The HOT (NVMe cache)
+ * and COLD (durable object store) layers underneath the filesystem are infra,
+ * not separately-billed tiers — a single used-bytes figure is the right
+ * quantity; a per-tier split, if the API ever exposes one, is a follow-up.
+ * Placeholder pending Sprites' published storage rate; tune via env once confirmed.
  */
 export const TERMINAL_STORAGE_USD_PER_GB_MONTH = envFloat('TERMINAL_STORAGE_USD_PER_GB_MONTH', 0.15);
 

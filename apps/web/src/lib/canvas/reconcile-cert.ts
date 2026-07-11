@@ -8,7 +8,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
-import { regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
+import { regeneratePublishedSiteFiles, renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 
 const FLY_APP_NAME = process.env.FLY_PROXY_APP_NAME ?? 'pagespace-proxy';
 
@@ -116,7 +116,7 @@ export async function reconcileCustomDomainCert(
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    mirrorDriveToCustomHost(domain.driveId, domain.hostname).catch((err) => {
+    mirrorDriveToCustomHost(domain.driveId, domain.hostname, renderDomainNotFoundOverride).catch((err) => {
       loggers.api.warn('Failed to re-mirror artifacts after cert activation', {
         driveId: domain.driveId,
         hostname: domain.hostname,

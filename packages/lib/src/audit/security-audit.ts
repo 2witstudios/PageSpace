@@ -379,9 +379,20 @@ function buildBreakGlassAppendPath(binding: Extract<AuditDbBinding, { mode: 'bre
 }
 
 /**
- * Lazily resolve the default append path (#890 Phase 2, leaf 5 cutover).
- * Deferred (rather than built eagerly at module load) so module load order
- * never matters and env is read after late-loaded dotenv.
+ * Silent main-DB append path (#890 prod audit-write incident fix): the legacy
+ * advisory-lock chained append against the main DB — IDENTICAL backend to
+ * break-glass, but with NO observability. This is the pre-trust-plane default
+ * for deployments that never adopted the Admin PG: audit writes simply work
+ * against the main DB, exactly as before the epic, with no alert, no security
+ * event, and no banner. (Break-glass is the loud, explicit variant.)
+ */
+function buildMainDbAppendPath(binding: Extract<AuditDbBinding, { mode: 'main-db' }>): AuditAppendPath {
+  return createSecurityAuditRepository({ db: binding.db });
+}
+
+/**
+ * Build the append path for a resolved binding. Exhaustive over the three
+ * non-fail modes (fail is handled upstream by resolveAuditDbBinding throwing).
  *
  *   dedicated   → lock-free ingest writer on the Admin PG: pure emission
  *                 hash + ONE INSERT, no advisory lock, no head read, no
@@ -389,21 +400,34 @@ function buildBreakGlassAppendPath(binding: Extract<AuditDbBinding, { mode: 'bre
  *                 chainer worker.
  *   break-glass → the legacy chained append against the main DB, with loud
  *                 observability (see buildBreakGlassAppendPath).
- *   fail        → resolveAuditDbBinding throws; logEvent rejects per event
- *                 and the audit() wrapper surfaces it as a warn log.
+ *   main-db     → the same legacy chained append against the main DB, but
+ *                 SILENT (see buildMainDbAppendPath).
+ */
+function buildAppendPath(binding: AuditDbBinding): AuditAppendPath {
+  switch (binding.mode) {
+    case 'dedicated': {
+      const writer = createAuditIngestWriter({ db: binding.db });
+      return { appendEvent: (event, opts) => writer.writeToIngest(event, opts) };
+    }
+    case 'break-glass':
+      return buildBreakGlassAppendPath(binding);
+    case 'main-db':
+      return buildMainDbAppendPath(binding);
+  }
+}
+
+/**
+ * Lazily resolve the default append path (#890 Phase 2, leaf 5 cutover).
+ * Deferred (rather than built eagerly at module load) so module load order
+ * never matters and env is read after late-loaded dotenv.
+ *
+ *   fail → resolveAuditDbBinding throws; logEvent rejects per event and the
+ *          audit() wrapper surfaces it as a warn log.
  */
 let defaultAppendPath: AuditAppendPath | null = null;
 function getDefaultAppendPath(): AuditAppendPath {
   if (!defaultAppendPath) {
-    const binding = resolveAuditDbBinding();
-    if (binding.mode === 'dedicated') {
-      const writer = createAuditIngestWriter({ db: binding.db });
-      defaultAppendPath = {
-        appendEvent: (event, opts) => writer.writeToIngest(event, opts),
-      };
-    } else {
-      defaultAppendPath = buildBreakGlassAppendPath(binding);
-    }
+    defaultAppendPath = buildAppendPath(resolveAuditDbBinding());
   }
   return defaultAppendPath;
 }

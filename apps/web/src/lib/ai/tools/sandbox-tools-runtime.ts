@@ -33,6 +33,7 @@ import {
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
+import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/terminal-storage-billing';
 import { lookupPageOwnerId } from '@pagespace/lib/billing/terminal-payer';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
@@ -177,6 +178,15 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
     // Terminal Epic 3: meter this run's active-runtime cost against the machine's
     // payer (the drive owner by default — see resolveTerminalPayerId).
     billing: defaultSandboxBillingDeps,
+    // Sprites Platform Alignment 6-1: while the sprite is awake for this op,
+    // opportunistically (throttled, best-effort) measure its used storage bytes
+    // so the storage reconcile bills MEASURED usage — never waking a paused one.
+    // ExecutableSandbox.runCommand shares MachineHandle.exec's signature.
+    measureStorage: ({ sandbox, pageId }) =>
+      measureMachineStorageOpportunistically({
+        handle: { exec: (args) => sandbox.runCommand(args) },
+        pageId,
+      }),
   };
 }
 

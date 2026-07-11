@@ -1,6 +1,6 @@
 {
-  "id": "da6f8f05-0c4e-489f-9300-e35be547b01f",
-  "prevId": "f135010e-5d6e-4498-ab0a-2b55e177fa8f",
+  "id": "4d18b022-c07a-4af0-8381-6f522982dc27",
+  "prevId": "da6f8f05-0c4e-489f-9300-e35be547b01f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -17089,6 +17089,18 @@
           "notNull": true,
           "default": false
         },
+        "publish_landing_page_id": {
+          "name": "publish_landing_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "publish_not_found_page_id": {
+          "name": "publish_not_found_page_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -17157,6 +17169,32 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "custom_domains_publish_landing_page_id_pages_id_fk": {
+          "name": "custom_domains_publish_landing_page_id_pages_id_fk",
+          "tableFrom": "custom_domains",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "publish_landing_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "custom_domains_publish_not_found_page_id_pages_id_fk": {
+          "name": "custom_domains_publish_not_found_page_id_pages_id_fk",
+          "tableFrom": "custom_domains",
+          "tableTo": "pages",
+          "columnsFrom": [
+            "publish_not_found_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

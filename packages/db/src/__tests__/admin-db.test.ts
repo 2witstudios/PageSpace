@@ -18,6 +18,10 @@ const DEDICATED_ENV = {
   ADMIN_DATABASE_URL: 'postgresql://admin:pw@host:5432/pagespace_admin',
 };
 const BREAK_GLASS_ENV = { ADMIN_DB_BREAK_GLASS: 'true' };
+// Unconfigured trust plane, no enforcement flag → silent main-db default.
+const MAIN_DB_ENV = {};
+// Enforcement declared but not configured → fail-fast.
+const FAIL_ENV = { AUDIT_TRUST_PLANE_REQUIRED: 'true' };
 
 const makeFakePool = () => ({ on: vi.fn() }) as unknown as Pool;
 
@@ -135,34 +139,52 @@ describe('createAdminDbRegistry', () => {
     });
   });
 
-  describe('fail-fast mode (URL unset, no armed flag)', () => {
-    it('should throw an actionable error naming ADMIN_DATABASE_URL and the break-glass flag', () => {
-      const { deps } = makeDeps({ getEnv: () => ({}) });
+  describe('main-db mode (URL unset, no armed flag — THE incident fix)', () => {
+    it('should return the main db itself, SILENTLY (adminDb === db, no alert)', () => {
+      const { deps, fakeMainDb } = makeDeps({ getEnv: () => MAIN_DB_ENV });
+      const adminDb = createAdminDbRegistry(deps).getAdminDb();
+      expect(adminDb).toBe(fakeMainDb);
+      expect(deps.alert).not.toHaveBeenCalled();
+    });
+
+    it('should not throw and not construct a dedicated pool', () => {
+      const { deps } = makeDeps({ getEnv: () => MAIN_DB_ENV });
+      const registry = createAdminDbRegistry(deps);
+      expect(() => registry.getAdminDb()).not.toThrow();
+      expect(deps.createPool).not.toHaveBeenCalled();
+      expect(deps.registerPool).not.toHaveBeenCalled();
+    });
+
+    it("given a non-'true' break-glass value, should resolve main-db silently (flag not armed)", () => {
+      const { deps, fakeMainDb } = makeDeps({
+        getEnv: () => ({ ADMIN_DB_BREAK_GLASS: 'TRUE' }),
+      });
+      const adminDb = createAdminDbRegistry(deps).getAdminDb();
+      expect(adminDb).toBe(fakeMainDb);
+      expect(deps.alert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fail-fast mode (AUDIT_TRUST_PLANE_REQUIRED armed, no URL)', () => {
+    it('should throw an actionable error naming ADMIN_DATABASE_URL and AUDIT_TRUST_PLANE_REQUIRED', () => {
+      const { deps } = makeDeps({ getEnv: () => FAIL_ENV });
       const registry = createAdminDbRegistry(deps);
       expect(() => registry.getAdminDb()).toThrowError(/ADMIN_DATABASE_URL/);
-      expect(() => registry.getAdminDb()).toThrowError(/ADMIN_DB_BREAK_GLASS/);
+      expect(() => registry.getAdminDb()).toThrowError(/AUDIT_TRUST_PLANE_REQUIRED/);
     });
 
     it('should throw on every call, not just the first', () => {
-      const { deps } = makeDeps({ getEnv: () => ({}) });
+      const { deps } = makeDeps({ getEnv: () => FAIL_ENV });
       const registry = createAdminDbRegistry(deps);
       expect(() => registry.getAdminDb()).toThrow();
       expect(() => registry.getAdminDb()).toThrow();
     });
 
     it('should not touch the main db or any pool before throwing', () => {
-      const { deps } = makeDeps({ getEnv: () => ({}) });
+      const { deps } = makeDeps({ getEnv: () => FAIL_ENV });
       expect(() => createAdminDbRegistry(deps).getAdminDb()).toThrow();
       expect(deps.getMainDb).not.toHaveBeenCalled();
       expect(deps.createPool).not.toHaveBeenCalled();
-    });
-
-    it("given a non-'true' break-glass value, should still fail fast (fail-closed arming)", () => {
-      const { deps } = makeDeps({
-        getEnv: () => ({ ADMIN_DB_BREAK_GLASS: 'TRUE' }),
-      });
-      expect(() => createAdminDbRegistry(deps).getAdminDb()).toThrow();
-      expect(deps.alert).not.toHaveBeenCalled();
     });
   });
 
@@ -184,15 +206,23 @@ describe('createAdminDbRegistry', () => {
       expect(deps.getMainDb).not.toHaveBeenCalled();
     });
 
-    it('given a fail env, should report fail with the actionable reason instead of throwing', () => {
-      const { deps } = makeDeps({ getEnv: () => ({}) });
+    it('given a main-db env (unconfigured), should report main-db without alerting or touching the main db', () => {
+      const { deps } = makeDeps({ getEnv: () => MAIN_DB_ENV });
+      const decision = createAdminDbRegistry(deps).getMode();
+      expect(decision.mode).toBe('main-db');
+      expect(deps.alert).not.toHaveBeenCalled();
+      expect(deps.getMainDb).not.toHaveBeenCalled();
+    });
+
+    it('given a fail env (enforcement declared, unconfigured), should report fail with the actionable reason instead of throwing', () => {
+      const { deps } = makeDeps({ getEnv: () => FAIL_ENV });
       const decision = createAdminDbRegistry(deps).getMode();
       expect(decision.mode).toBe('fail');
       expect(decision.reason).toMatch(/ADMIN_DATABASE_URL/);
     });
 
     it('should re-read env on every call (late-loaded dotenv wins, no caching)', () => {
-      let env: Record<string, string> = {};
+      let env: Record<string, string> = { ...FAIL_ENV };
       const { deps } = makeDeps({ getEnv: () => env });
       const registry = createAdminDbRegistry(deps);
       expect(registry.getMode().mode).toBe('fail');

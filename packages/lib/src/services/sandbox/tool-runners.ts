@@ -144,6 +144,14 @@ export interface SandboxRunDeps {
    * cost against the machine's payer. Omitted -> unmetered (no hold, no charge).
    */
   billing?: SandboxBillingDeps;
+  /**
+   * Optional opportunistic storage-measurement seam (Sprites Platform Alignment
+   * 6-1): while this sprite is ALREADY awake for this real op, capture its used
+   * storage bytes (throttled, best-effort) so the storage reconcile can bill
+   * MEASURED usage without ever waking a paused sprite. Best-effort — a failure
+   * must never affect the tool result; omitting it disables measurement.
+   */
+  measureStorage?: (input: { sandbox: ExecutableSandbox; pageId: string }) => Promise<void>;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -423,7 +431,24 @@ async function openSession(
     return {
       ok: true,
       sandbox,
-      release: () => deps.quota.releaseSlot({ userId: ctx.userId }),
+      release: () => {
+        deps.quota.releaseSlot({ userId: ctx.userId });
+        // Opportunistic, throttled, best-effort storage measurement. Fired from
+        // `release` — which the runners call in `finally` AFTER the op — so it
+        // observes any bytes the op just wrote (measuring in openSession, before
+        // the op, would persist the pre-write footprint and let the throttle
+        // suppress the post-write one) and runs sequentially after the op rather
+        // than contending with it. Never blocks or fails the op.
+        if (acquired.pageId && deps.measureStorage) {
+          const pageId = acquired.pageId;
+          void deps.measureStorage({ sandbox, pageId }).catch((error) => {
+            safeLogWarn(deps.logger, 'Opportunistic storage measurement failed', {
+              pageId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+      },
       pageId: acquired.pageId,
     };
   } catch (error) {

@@ -22,6 +22,7 @@ import {
   deriveTerminalSessionKey,
 } from '@pagespace/lib/services/sandbox/terminal-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
+import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/terminal-storage-billing';
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, ensureSpriteAwake } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
@@ -159,6 +160,18 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
       }
 
       recordMachineActivity({ machineKey: machineId, now: nowMs });
+
+      // Opportunistic storage measurement (Sprites 6-1): this is the
+      // terminal-CONNECT wake — the reconcile relies on it to meter machines
+      // used only through the interactive PTY (no agent tool ops), which would
+      // otherwise stay never-measured and bill the 0 floor forever. Throttled +
+      // best-effort; the network `attach` is lazy, paid only when a measurement
+      // is actually due, and this never blocks or fails the PTY session.
+      void measureMachineStorageOpportunistically({
+        pageId: machineId,
+        resolveHandle: () => host.attach({ machineId: result.sandboxId }),
+      });
+
       return { ok: true, sandboxId: result.sandboxId };
     },
   };
