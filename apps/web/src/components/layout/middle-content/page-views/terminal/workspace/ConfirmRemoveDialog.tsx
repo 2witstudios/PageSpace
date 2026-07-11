@@ -54,7 +54,13 @@ export default function ConfirmRemoveDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={removing}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            onClick={handleConfirm}
+            // AlertDialogAction auto-closes the dialog on click; preventDefault
+            // keeps it open so the async removal can run — handleConfirm closes
+            // it on success, or leaves it open (with the error toast) to retry.
+            onClick={(e) => {
+              e.preventDefault();
+              handleConfirm();
+            }}
             disabled={removing}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
