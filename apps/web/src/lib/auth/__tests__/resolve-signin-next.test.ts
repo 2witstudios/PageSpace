@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { resolveSigninNext } from '../resolve-signin-next';
+import { resolveSigninNext, buildSigninRoute } from '../resolve-signin-next';
 
-// Logged-out /dashboard requests reach the signin page via a middleware REWRITE
-// rather than a redirect, because a redirect is cancelled and punted to Safari by
-// the iOS shell's navigation policy (see middleware.ts). Under a rewrite the
-// browser URL stays on the dashboard deep link, and useSearchParams reads the
-// browser URL — so `next=` on the rewrite destination never reaches the client and
-// the deep link has to be recovered from the path the page is sitting on.
+// Logged-out /dashboard requests reach the signin page via a middleware REWRITE rather
+// than a redirect, because a redirect is cancelled and punted to Safari by the iOS shell's
+// navigation policy (see middleware.ts). A rewrite leaves the browser URL alone, so the
+// browser is still sitting ON the dashboard deep link — which is why middleware sends the
+// rewrite to a BARE /auth/signin (no next=) and the deep link is recovered from the path
+// instead. Carrying it on the rewrite destination too would have the server render a value
+// the client cannot see, and it reaches the DOM: a hydration mismatch.
 describe('resolveSigninNext', () => {
   describe('redirect flow (a real /auth/signin?next=… URL)', () => {
     it('uses next= when present', () => {
@@ -104,5 +105,42 @@ describe('resolveSigninNext', () => {
     it('drops an unsafe browser path just as readily as an unsafe next=', () => {
       expect(resolveSigninNext({ paramNext: null, browserPath: '//evil.example/x' })).toBeUndefined();
     });
+  });
+});
+
+// A session that dies mid-use never passes through middleware as a page request — the
+// client notices the dead token and routes away itself — so this is the only place that
+// can attach `next=`. Without it the user is dropped on the default dashboard afterwards,
+// having lost their place. (useAuthStore's auth:expired handler is the caller.)
+describe('buildSigninRoute', () => {
+  it('carries the page the user was on, url-encoded', () => {
+    expect(buildSigninRoute('/dashboard/drv_abc/pg_xyz')).toBe(
+      '/auth/signin?next=%2Fdashboard%2Fdrv_abc%2Fpg_xyz',
+    );
+  });
+
+  it('keeps the query string of the page they were on', () => {
+    expect(buildSigninRoute('/dashboard/drv_abc?tab=chat')).toBe(
+      '/auth/signin?next=%2Fdashboard%2Fdrv_abc%3Ftab%3Dchat',
+    );
+  });
+
+  it('round-trips: what it encodes is what resolveSigninNext reads back out', () => {
+    const route = buildSigninRoute('/dashboard/drv_abc?tab=chat');
+    const params = new URL(route, 'https://pagespace.invalid').searchParams;
+
+    expect(resolveSigninNext({ paramNext: params.get('next'), browserPath: route })).toBe(
+      '/dashboard/drv_abc?tab=chat',
+    );
+  });
+
+  it.each([
+    ['a page outside the allowlist', '/settings/billing'],
+    ['an off-origin url', 'https://evil.example/x'],
+    ['a protocol-relative url', '//evil.example/x'],
+    ['signin itself (no self-referential loop)', '/auth/signin'],
+    ['nothing at all', null],
+  ])('degrades to a bare /auth/signin for %s', (_label, path) => {
+    expect(buildSigninRoute(path)).toBe('/auth/signin');
   });
 });

@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { navigateInApp } from '@/lib/navigation/app-navigator';
+import { buildSigninRoute } from '@/lib/auth/resolve-signin-next';
 
 interface User {
   id: string;
@@ -777,11 +778,14 @@ export const authStoreHelpers = {
       const state = useAuthStore.getState();
       state.endSession();
 
-      // Route to the login page. Deliberately NOT window.location: a hard
-      // navigation to /auth/signin is cancelled and punted to Safari by the iOS
-      // shell's navigation policy, blanking the WebView on session expiry (see
-      // lib/navigation/app-navigator.ts).
-      navigateInApp('/auth/signin');
+      // Route to the login page, carrying where the user was so signin can put them back:
+      // an expiry mid-session never reaches middleware as a page request, so nothing else
+      // gets the chance to attach `next=`.
+      //
+      // Deliberately NOT window.location: a hard navigation to /auth/signin is cancelled
+      // and punted to Safari by the iOS shell's navigation policy, blanking the WebView on
+      // session expiry (see lib/navigation/app-navigator.ts).
+      navigateInApp(buildSigninRoute(`${window.location.pathname}${window.location.search}`));
     };
 
     const handleAuthCleared = () => {

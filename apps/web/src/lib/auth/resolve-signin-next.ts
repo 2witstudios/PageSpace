@@ -66,3 +66,23 @@ export function resolveSigninNext(input: {
 
   return isAllowed(fallback) ? fallback : undefined;
 }
+
+/**
+ * The signin route to send a user to when their session dies under them, preserving where
+ * they were so signin can put them back.
+ *
+ * Unlike the logged-out cold start, an expiry mid-session never passes through middleware
+ * as a page request — the client notices the dead token and routes away on its own — so
+ * nothing else gets the chance to attach `next=`. Without this the user is dropped on the
+ * default dashboard afterwards, having lost their place.
+ *
+ * The destination is validated against the same allowlist as every other `next=`, so an
+ * unusable one degrades to a bare signin rather than travelling on to be rejected there.
+ */
+export function buildSigninRoute(currentPath: string | null | undefined): string {
+  const next = currentPath ? stripNextParam(currentPath) : undefined;
+
+  return isAllowed(next)
+    ? `/auth/signin?next=${encodeURIComponent(next as string)}`
+    : '/auth/signin';
+}
