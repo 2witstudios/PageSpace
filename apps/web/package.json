@@ -9,7 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch --yes",
-    "test": "for s in 1 2 3 4 5 6 7 8 9 10; do NODE_OPTIONS='--max-old-space-size=8192' bunx vitest run --shard=$s/10 || exit 1; done",
+    "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
