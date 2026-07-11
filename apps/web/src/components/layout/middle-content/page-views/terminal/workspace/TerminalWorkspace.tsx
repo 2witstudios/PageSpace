@@ -15,7 +15,7 @@ export default function TerminalWorkspace({ machineId }: TerminalWorkspaceProps)
   const ensureWorkspace = useTerminalWorkspaceStore((state) => state.ensureWorkspace);
   const disposeWorkspace = useTerminalWorkspaceStore((state) => state.disposeWorkspace);
 
-  // The Navigator (right sidebar) and TerminalPanes (here) share this
+  // The Machine tree sidebar (Terminal tab) and TerminalPanes (here) share this
   // workspace by composition through the store — no common parent to hold
   // local state now that they live in different parts of the layout.
   useEffect(() => {

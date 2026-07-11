@@ -113,6 +113,23 @@ describe('MachineTree', () => {
     });
   });
 
+  test('with no onSelectNode, clicking a node label toggles its expansion (row-click affordance)', async () => {
+    // The Terminal tab renders MachineTree without onSelectNode; the label must
+    // still expand the row on click (like the old Navigator), not be a dead button.
+    renderTree();
+
+    const projectRow = await waitFor(() => screen.getByText('my-repo'));
+    await userEvent.click(projectRow);
+
+    const branchRow = await waitFor(() => screen.getByText('main'));
+    assert({
+      given: 'no onSelectNode and a project label (not its chevron) clicked',
+      should: 'expand the row — its branch becomes visible',
+      actual: branchRow.textContent,
+      expected: 'main',
+    });
+  });
+
   test('renderNodeChildren injects caller content under an expanded node', async () => {
     renderTree({
       renderNodeChildren: (node: MachineTreeNode) =>

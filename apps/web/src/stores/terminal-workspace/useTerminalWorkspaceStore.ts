@@ -8,8 +8,8 @@
  * deterministic and trivially testable.
  *
  * This is the single source of truth shared, by composition, between the
- * Navigator (right sidebar) and TerminalPanes (middle content) — they no
- * longer need a common parent to share `columns`/`activePaneId` local state.
+ * Machine tree sidebar (Terminal tab) and TerminalPanes (its pane region) —
+ * they no longer need a common parent to share `columns`/`activePaneId` state.
  *
  * Navigation cleanup (dispose on unmount) is performed by the mounting
  * component via `useEffect`, not from inside the store — same pattern as
