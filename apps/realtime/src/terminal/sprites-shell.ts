@@ -126,11 +126,21 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 200;
 
 /**
- * How many sessions this shell may create-and-strand (see
- * `abandonedUnnamedSessions`) before it gives up rather than mint another
- * unreachable, still-billing Sprite session. One is tolerance for the genuinely
- * transient case — a socket that dies between 'spawn' and `session_info`. A
- * second means ids are not arriving at all, which no amount of retrying fixes.
+ * How many CONSECUTIVE unnamed sessions this shell may abandon (see
+ * `abandonedUnnamedSessions`) before it stops replacing them. One is tolerance
+ * for the genuinely transient case — a socket that dies in the sliver between
+ * 'spawn' and `session_info`. A second CONSECUTIVE one means ids are not
+ * arriving at all, which no amount of retrying fixes. The count resets the
+ * moment a session does announce itself, so a long-lived terminal is never torn
+ * down over two unrelated blips.
+ *
+ * Honest worst case: TWO stranded sessions, not one. The session we give up on
+ * is itself unnamed, so it is stranded too — `kill()` signals over its own dead
+ * socket and there is no id to kill it by. This bound stops the bleeding; it
+ * cannot undo it. (Reaping such orphans needs a kill-by-id call against the
+ * Sprite — leaf 2-3's territory, not this one's.) For the same reason a `kill()`
+ * that lands while an unnamed session is mid-reconnect strands that one too,
+ * uncounted: there is nothing the counter could do about it.
  */
 const MAX_UNNAMED_ABANDONS = 1;
 
@@ -223,7 +233,21 @@ export function openPtyShell({
       if (stale) return;
       fatal(code ?? -1);
     });
-    cmd.on('error', () => { stale = true; void reconnect(); });
+    // A single failed open emits 'error' more than once on the SAME command — the
+    // SDK fires it from the ws `error` listener, from a close-before-open, AND
+    // again from `spawn()`'s catch on the rejected `start()`. Only the FIRST is a
+    // real drop; the rest are echoes of it. `reconnecting` happens to absorb them
+    // today (it is set before reconnect's first await), but that is an incidental,
+    // load-bearing invariant: shorten the backoff or add an await ahead of it and
+    // the echoes would each count as a fresh drop — burning the retry budget and,
+    // worse, charging `abandonedUnnamedSessions` for a session that never dropped.
+    // Marking the command stale makes it structural, exactly as it already is for
+    // the trailing 'exit'.
+    cmd.on('error', () => {
+      if (stale) return;
+      stale = true;
+      void reconnect();
+    });
   }
 
   // Start a brand-new shell for the SAME command and take its id straight off the
@@ -262,6 +286,13 @@ export function openPtyShell({
       // the user is attached to.
       if (closed || gen !== sessionGeneration) return;
       currentSessionId = id;
+      // Ids ARE arriving. Clear the strand budget for the same reason 'spawn' and
+      // stdout clear the reconnect budget: it exists to catch a session identity
+      // that has stopped working, not to tally unrelated blips over a long-lived
+      // terminal. Without this the counter is a LIFETIME total, so two rare
+      // pre-announce drops hours apart — with perfectly healthy sessions in
+      // between — would tear down a working shell.
+      abandonedUnnamedSessions = 0;
       onSessionId?.(id);
     });
   }

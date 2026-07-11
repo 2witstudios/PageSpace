@@ -453,6 +453,66 @@ describe('openPtyShell', () => {
       expect(onOutput).toHaveBeenCalledWith(expect.stringContaining('could not be identified'));
     });
 
+    it('given two UNRELATED pre-announce drops with a healthy session in between, keeps the terminal alive (the strand budget is consecutive, not lifetime)', async () => {
+      // Ids are demonstrably arriving — the middle session announced itself. A
+      // lifetime counter would tear this healthy terminal down on the second rare
+      // blip; the budget must mean "consecutively unnameable".
+      const first = buildFakeCommand();
+      const healthy = buildFakeCommand();
+      const third = buildFakeCommand();
+      const fourth = buildFakeCommand();
+      const sprite = buildFakeSprite(first, { sessions: [] });
+      sprite.createSession
+        .mockReturnValueOnce(first)
+        .mockReturnValueOnce(healthy)
+        .mockReturnValueOnce(third)
+        .mockReturnValueOnce(fourth);
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit, onSessionId: vi.fn() });
+
+      // Blip #1: socket opened, died before announcing → one tolerated strand.
+      first._emitter.emit('spawn');
+      first._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      // The replacement is healthy and DOES announce itself → budget clears.
+      healthy._emitter.emit('spawn');
+      healthy._emitter.emit('message', announces('sess-healthy'));
+
+      // Its id is now known, so a later drop verifies + creates fresh (session gone).
+      healthy._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Blip #2, much later and unrelated: again opened-then-dropped pre-announce.
+      third._emitter.emit('spawn');
+      third._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      // Still alive: this is the FIRST consecutive strand, not the second ever.
+      expect(onExit).not.toHaveBeenCalled();
+      expect(sprite.createSession).toHaveBeenCalledTimes(4);
+    });
+
+    it('given the SDK emits `error` several times for ONE failed open, treats it as a single drop', async () => {
+      // @fly/sprites fires 'error' from the ws error listener, from a
+      // close-before-open, AND from spawn()'s catch on the rejected start() — up to
+      // three times for one failure. Counting the echoes would burn the retry
+      // budget and charge the strand budget for a session that never dropped.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('error', new Error('WebSocket error'));
+      cmd._emitter.emit('error', new Error('WebSocket closed before open')); // echo
+      cmd._emitter.emit('error', new Error('WebSocket closed before open')); // echo
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).toHaveBeenCalledTimes(1);
+    });
+
     it('given no announced id while a SIBLING terminal\'s shell is live, never attaches to it (it is not ours to take)', async () => {
       // The production shape: one Sprite hosts every terminal on the machine. The
       // retired pickShellSession would have handed this user the sibling's PTY.
@@ -588,17 +648,31 @@ describe('openPtyShell', () => {
       expect(onExit).not.toHaveBeenCalled();
     });
 
-    it('given a second error while a reconnect is already in flight, ignores the duplicate', async () => {
-      // The second error hits the `reconnecting` guard in reconnect() — only one reattach.
+    it('given a REPLACEMENT command that errors the instant it is wired, does not re-enter a reconnect already in flight', async () => {
+      // The `reconnecting` guard: reconnect() wires the new command BEFORE clearing
+      // the flag, so a command that fails synchronously on wire re-enters reconnect
+      // from inside itself. Without the guard that recurses; with it, the failure is
+      // simply picked up by the next drop.
       const cmd = buildFakeCommand();
-      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd: buildFakeCommand() });
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession.mockImplementation(() => {
+        const flapping = buildFakeCommand();
+        const register = flapping.on.bind(flapping);
+        // Fire 'error' the moment the shell subscribes — i.e. still inside reconnect().
+        flapping.on = ((event: string, listener: (...a: unknown[]) => void) => {
+          const result = register(event as 'error', listener as () => void);
+          if (event === 'error') listener(new Error('flapped on open'));
+          return result;
+        }) as typeof flapping.on;
+        return flapping;
+      });
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
       cmd._emitter.emit('message', announces('sess-1'));
       cmd._emitter.emit('error', new Error('keepalive'));
-      cmd._emitter.emit('error', new Error('keepalive again'));
       await vi.advanceTimersByTimeAsync(500);
 
+      // One reattach — the re-entrant call was absorbed, not stacked.
       expect(sprite.attachSession).toHaveBeenCalledTimes(1);
     });
 
