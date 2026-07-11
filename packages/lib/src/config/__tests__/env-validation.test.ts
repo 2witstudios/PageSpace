@@ -415,21 +415,22 @@ describe('env-validation', () => {
       expect(() => validateEnv()).toThrow(/Environment validation failed/);
     });
 
-    it('given a blank ADMIN_DATABASE_URL and no flags, validateEnv should PASS at boot AND the resolved mode is main-db (#890 incident: the two must agree)', async () => {
-      // The boot half: validateEnv() (called from instrumentation.ts) must not
-      // throw for the common `ADMIN_DATABASE_URL=` blank form.
+    it('given a blank ADMIN_DATABASE_URL and no flags, validateEnv should PASS at boot (the #890 incident-fix boot gate)', () => {
+      // The boot half of the incident fix: validateEnv() (called from
+      // apps/web/src/instrumentation.ts) must NOT throw for the common
+      // `ADMIN_DATABASE_URL=` blank form — otherwise the process exits before
+      // resolveAdminDbMode ever runs. The runtime half (blank '' → the silent
+      // 'main-db' default) is pinned in packages/db's admin-db-mode.test.ts
+      // ("given an empty-string URL and no flag, should resolve main-db"); it
+      // is NOT re-imported here on purpose — pulling in @pagespace/db/admin-db
+      // would construct its module-level DATABASE_URL pool against this test's
+      // placeholder connection string and poison sibling integration tests.
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
       process.env.CSRF_SECRET = 'b'.repeat(32);
       process.env.ENCRYPTION_KEY = 'c'.repeat(32);
       process.env.ADMIN_DATABASE_URL = '';
 
       expect(() => validateEnv()).not.toThrow();
-
-      // The runtime half: the same blank value resolves to the silent main-db
-      // default (resolveAdminDbMode reads an env object; '' → unset). Pinning
-      // both here guarantees the boot gate and the mode decision never diverge.
-      const { resolveAdminDbMode } = await import('@pagespace/db/admin-db');
-      expect(resolveAdminDbMode({ ADMIN_DATABASE_URL: '' }).mode).toBe('main-db');
     });
   });
 
