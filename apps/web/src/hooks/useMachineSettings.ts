@@ -37,6 +37,12 @@ import type {
  *  - Results for a machine we have since navigated away from are dropped, rather
  *    than written onto the machine now on screen.
  */
+/** The subset of the patch the access toggles are allowed to write. */
+export type MachineAccessPatch = Pick<
+  MachineSettingsPatch,
+  'visibleToGlobalAssistant' | 'allowPageAgents'
+>;
+
 export interface UseMachineSettings {
   settings: MachineSettings | null;
   /** True only while we have nothing to show for this machine (first load / retry). */
@@ -50,8 +56,13 @@ export interface UseMachineSettings {
   /** Blur handlers: normalize, skip a no-op, and persist. */
   commitName: () => void;
   commitDescription: () => void;
-  /** Persist an access toggle immediately. */
-  setAccess: (patch: MachineSettingsPatch) => void;
+  /**
+   * Persist an access toggle immediately. Deliberately NARROWER than the full
+   * patch: routing `name`/`description` through here would skip `commitName`'s
+   * trim + empty-name guard, so that bypass is made unrepresentable rather than
+   * merely discouraged.
+   */
+  setAccess: (patch: MachineAccessPatch) => void;
   reload: () => void;
 }
 
@@ -71,12 +82,17 @@ export function useMachineSettings(machineId: string): UseMachineSettings {
 
   // Last known SERVER value — lets a resync tell a clean draft from a dirty one.
   const serverSettings = useRef<MachineSettings | null>(null);
-  // Which machine we currently hold settings for.
-  const loadedFor = useRef<string | null>(null);
+  // The machine the tab is CURRENTLY showing — claimed the moment `machineId`
+  // changes, not when its load resolves. ("Do we have data yet?" is a separate
+  // question, answered by `serverSettings`.) If this only advanced on a successful
+  // load, a save from the machine we just left would still look current while the
+  // new one was in flight — toasting its error and writing its name into the new
+  // machine's draft.
+  const activeMachine = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const isNewMachine = loadedFor.current !== machineId;
+    const isNewMachine = activeMachine.current !== machineId;
     if (isNewMachine) {
       // Drop the previous machine's settings before loading a different one —
       // otherwise a FAILED load would fall through to rendering the old machine's
@@ -86,6 +102,7 @@ export function useMachineSettings(machineId: string): UseMachineSettings {
       setSettings(null);
       serverSettings.current = null;
       resyncWhenIdle.current = false;
+      activeMachine.current = machineId;
     }
     // Spinner whenever we have nothing to show for THIS machine. `serverSettings`
     // moves in exact lockstep with `settings`, so the ref answers that without
@@ -104,7 +121,6 @@ export function useMachineSettings(machineId: string): UseMachineSettings {
         if (cancelled) return;
         const next = json.settings;
         const previousServer = serverSettings.current;
-        loadedFor.current = machineId;
         serverSettings.current = next;
         setSettings(next);
         // Adopt the server value only for drafts the user has NOT touched since we
@@ -153,7 +169,7 @@ export function useMachineSettings(machineId: string): UseMachineSettings {
     // write below would land on that machine's form — reverting machine A's name
     // into machine B's input, where the next blur would rename B.
     const forMachine = machineId;
-    const isStale = () => loadedFor.current !== forMachine;
+    const isStale = () => activeMachine.current !== forMachine;
 
     setSettings((current) => (current ? { ...current, ...patch } : current));
     pendingSavesRef.current += 1;

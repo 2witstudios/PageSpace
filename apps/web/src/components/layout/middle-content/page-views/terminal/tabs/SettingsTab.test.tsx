@@ -508,6 +508,47 @@ describe('SettingsTab', () => {
     });
   });
 
+  test('a stale save is dropped even while the new machine is still loading', async () => {
+    // The window between switching machines and the new machine's GET resolving.
+    // The tab has already MOVED — a save from the machine we left must be dropped
+    // here too, not just after the new one has landed. (It previously wasn't: the
+    // guard keyed off the last machine *loaded* rather than the one being shown,
+    // so a failure in this window toasted and wrote its name into the new form.)
+    let resolveM2: (v: unknown) => void = () => {};
+    fetchWithAuth
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ settings: baseSettings }) })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveM2 = resolve; }));
+    let failRename: (e: Error) => void = () => {};
+    apiPatch.mockImplementation(() => new Promise((_r, reject) => { failRename = reject; }));
+
+    const { rerender } = render(<SettingsTab machineId="m1" />);
+    const name = await screen.findByLabelText('Name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed');
+    await userEvent.tab(); // m1's rename is in flight
+
+    rerender(<SettingsTab machineId="m2" />); // m2's GET is now hanging
+
+    failRename(new Error('too late'));
+    await act(async () => { await Promise.resolve(); });
+
+    assert({
+      given: "a save from the machine we left failing before the new machine has loaded",
+      should: 'be dropped silently — no toast for a machine the user is no longer on',
+      actual: (toast.error as ReturnType<typeof vi.fn>).mock.calls.length,
+      expected: 0,
+    });
+
+    // And m2 still loads cleanly on top of it.
+    resolveM2({ ok: true, json: async () => ({ settings: { ...baseSettings, name: 'Other Machine' } }) });
+    await waitFor(() => assert({
+      given: "the new machine's load resolving after the stale failure",
+      should: 'render the new machine, uncontaminated',
+      actual: (screen.getByLabelText('Name') as HTMLInputElement).value,
+      expected: 'Other Machine',
+    }));
+  });
+
   test('a first-load failure shows the error state and Retry refetches', async () => {
     fetchWithAuth
       .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
