@@ -168,10 +168,19 @@ describe('renderCanvasDocument — theme bridge', () => {
     expect(out).not.toContain('pagespace-theme');
   });
 
-  it('given injectThemeBridge: true, the bridge script should listen for postMessage and request the theme on load', () => {
+  it('given injectThemeBridge: true, the bridge should use prefers-color-scheme for standalone (published) dark mode', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
+    expect(out).toContain('prefers-color-scheme');
+    expect(out).toContain('matchMedia');
+    // Should apply on load...
+    expect(out).toContain('mq.matches');
+    // ...and listen for changes
+    expect(out).toContain("'change'");
+  });
+
+  it('given injectThemeBridge: true, the bridge should listen for postMessage (in-app override) and request the theme on load', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
     expect(out).toContain("e.data.type==='pagespace-theme'");
-    expect(out).toContain('classList.toggle');
     expect(out).toContain("postMessage({type:'pagespace-theme-request'}");
   });
 

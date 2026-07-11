@@ -154,19 +154,34 @@ export const BASELINE_CSP =
 export const BASELINE_RESET = 'html,body{margin:0;padding:0;}';
 
 /**
- * Inline script injected when `injectThemeBridge` is true. Listens for theme
- * messages from the parent window (postMessage works across opaque origins) and
- * toggles a `dark` class on `<html>`, matching the convention used by next-themes
- * (attribute="class") and the PageSpace ThemeProvider.
+ * Inline script injected when `injectThemeBridge` is true. Provides dark-mode
+ * support for canvas pages in BOTH contexts:
  *
- * On load, immediately requests the current theme from the parent so the
- * initial render matches before the parent's `resolvedTheme` effect fires.
+ * 1. **Published pages**: uses `prefers-color-scheme` media query to detect the
+ *    OS theme and toggles a `dark` class on `<html>`. Listens for changes so
+ *    toggling OS dark mode updates the page live.
+ *
+ * 2. **In-app iframe**: receives `{ type: 'pagespace-theme', isDark: boolean }`
+ *    postMessage from the parent (CanvasFrame), which overrides the OS preference
+ *    with the user's PageSpace app theme setting. Also sends a theme request on
+ *    load so the initial render matches before the parent's effect fires.
+ *
+ * The `dark` class matches the convention used by next-themes (attribute="class")
+ * and the PageSpace ThemeProvider, so authors write standard dark-mode CSS:
+ *   `:root { --bg: #fff; } .dark { --bg: #000; }`
  */
 export const THEME_BRIDGE_SCRIPT =
   "<script>(function(){" +
+  // prefers-color-scheme: works standalone (published) and as in-app fallback
+  "var mq=window.matchMedia('(prefers-color-scheme: dark)');" +
+  "document.documentElement.classList.toggle('dark',mq.matches);" +
+  "mq.addEventListener('change',function(e){" +
+  "document.documentElement.classList.toggle('dark',e.matches);});" +
+  // postMessage: in-app override from parent (takes precedence over OS preference)
   "window.addEventListener('message',function(e){" +
   "if(e.data&&e.data.type==='pagespace-theme'&&typeof e.data.isDark==='boolean'){" +
   "document.documentElement.classList.toggle('dark',e.data.isDark);}});" +
+  // Request current theme from parent on load (in-app only; harmless on published)
   "try{window.parent.postMessage({type:'pagespace-theme-request'},'*');}catch(e){}" +
   "})();</script>";
 

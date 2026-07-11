@@ -50,5 +50,5 @@ export interface RenderPublishedPageInput {
 export function renderPublishedPage(input: RenderPublishedPageInput): string {
   const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, ...rest } = input;
   const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
-  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots });
+  return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, injectThemeBridge: true });
 }
