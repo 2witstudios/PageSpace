@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/select';
 import { useAgentTerminals, type AgentTerminal } from '@/hooks/useAgentTerminals';
 import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
-import type { OpenTerminalScope } from '@/stores/terminal-workspace/useTerminalWorkspaceStore';
+import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton from './RemoveButton';
