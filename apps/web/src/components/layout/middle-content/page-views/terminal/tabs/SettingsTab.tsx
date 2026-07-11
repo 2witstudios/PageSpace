@@ -83,9 +83,12 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
     if (isNewMachine) {
       // Drop the previous machine's settings before loading a different one —
       // otherwise a FAILED load would fall through to rendering the old machine's
-      // name/toggles under the new machine's identity.
+      // name/toggles under the new machine's identity. A resync owed to the machine
+      // we're leaving is dropped with it, so it can't fire a spurious refetch once
+      // an unrelated save on the NEW machine drains.
       setSettings(null);
       serverSettings.current = null;
+      resyncWhenIdle.current = false;
     }
     // Spinner whenever we have nothing to show for THIS machine: a different
     // machine, or a retry after the error state. `serverSettings` moves in exact
