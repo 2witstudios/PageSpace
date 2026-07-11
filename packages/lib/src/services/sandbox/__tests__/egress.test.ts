@@ -432,4 +432,17 @@ describe('sanitizeEgressAllowlist', () => {
       expected: ['*.githubusercontent.com', '*.pkg.dev', '*.npmjs.org'],
     });
   });
+
+  it('drops bare single-label TLD wildcards uniformly (no per-TLD asymmetry)', () => {
+    // `*.com`/`*.dev`/`*.io` have a single-label base, which HOSTNAME_RE rejects
+    // before the internal-zone check — so all are dropped as invalid, whether or
+    // not a Fly internal zone happens to sit under that TLD. Only a MULTI-label
+    // wildcard reaches the ancestor-overlap rule (see the ancestor test above).
+    assert({
+      given: 'bare single-label TLD wildcards, with and without an internal zone under them',
+      should: 'drop all of them uniformly (a multi-label base is required)',
+      actual: sanitizeEgressAllowlist(['*.dev', '*.io', '*.com']),
+      expected: [],
+    });
+  });
 });

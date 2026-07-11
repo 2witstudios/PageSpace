@@ -100,6 +100,14 @@ const INTERNAL_SURFACE_ZONES: readonly string[] = Object.freeze(
  *    `*.tigrisfiles.io` matches `<bucket>.t3.tigrisfiles.io`), so the allow could
  *    reach into the internal surface.
  * A non-wildcard entry only matches itself, so only the first direction applies.
+ *
+ * Fail-closed by design. A bare single-label TLD wildcard (`*.dev`, `*.com`,
+ * `*.io`) never even reaches this check — HOSTNAME_RE requires a multi-label
+ * base, so those are dropped as invalid, uniformly (no per-TLD asymmetry). What
+ * this ancestor rule adds is dropping a MULTI-label wildcard that reaches an
+ * internal zone (e.g. `*.tigris.dev` matches `fly.storage.tigris.dev`). The
+ * builder stays pure, so a dropped entry is not logged here; surfacing drops to
+ * an operator is a shell-side concern for whenever a caller populates the list.
  */
 function targetsInternalSurface(base: string, isWildcard: boolean): boolean {
   return INTERNAL_SURFACE_ZONES.some((zone) => {
