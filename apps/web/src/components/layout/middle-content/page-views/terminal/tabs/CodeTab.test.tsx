@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { describe, test, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -30,14 +31,36 @@ vi.mock('../workspace/MachineTree', () => ({
   ),
 }));
 
-// Stub the file tree: a ready checkout renders it, and clicking its one file
-// exercises CodeTab's onSelectFile wiring.
+/**
+ * Every root listing the (stubbed) file tree performs, in order.
+ *
+ * The stub MUST model the one behaviour of the real MachineFileTree that this
+ * tab's correctness depends on: it self-keys on `${machineId}/${projectName}/
+ * ${branchName}`, so mounting it — or handing it a new branch — fetches that
+ * branch's root listing. A dumb stub that never fetches would let the "no wasted
+ * listing" test pass even with CodeTab's key deleted, which is exactly the hole
+ * a reviewer caught: the wasted listing came from the REAL tree, so a stub that
+ * doesn't list cannot witness it.
+ */
+const treeListings: string[] = [];
+
 vi.mock('../workspace/MachineFileTree', () => ({
-  default: ({ branchName, onSelectFile }: { branchName: string; onSelectFile?: (path: string) => void }) => (
-    <button type="button" data-testid="file-tree" onClick={() => onSelectFile?.('src/index.ts')}>
-      tree:{branchName}
-    </button>
-  ),
+  default: function MachineFileTreeStub({
+    branchName,
+    onSelectFile,
+  }: {
+    branchName: string;
+    onSelectFile?: (path: string) => void;
+  }) {
+    useEffect(() => {
+      treeListings.push(branchName);
+    }, [branchName]);
+    return (
+      <button type="button" data-testid="file-tree" onClick={() => onSelectFile?.('src/index.ts')}>
+        tree:{branchName}
+      </button>
+    );
+  },
 }));
 
 // Stub the main pane so CodeTab's composition (which file, which branch) is what's asserted.
@@ -63,7 +86,10 @@ const cannedFetch = (perBranch: Record<string, () => Promise<Response>>) =>
   });
 
 describe('CodeTab', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    treeListings.length = 0;
+  });
 
   test('shows the branch prompt before any branch is picked', () => {
     cannedFetch({});
@@ -116,7 +142,7 @@ describe('CodeTab', () => {
     });
   });
 
-  test('switching branches probes the new branch once — no wasted listing from a stale ready state', async () => {
+  test('switching branches never mounts the file tree against a stale ready state', async () => {
     cannedFetch({
       main: async () => jsonResponse({ entries: [] }),
       dev: async () => jsonResponse({ entries: [] }),
@@ -134,9 +160,10 @@ describe('CodeTab', () => {
 
     assert({
       given: 'a branch switch after the first branch was already ready',
-      should: 'probe each branch exactly once — BranchFiles is keyed, so it never renders the old ready state at the new branch',
-      actual: branchesProbed,
-      expected: ['main', 'dev'],
+      should:
+        'list each branch root exactly once — BranchFiles is keyed by branch, so the tree is never mounted at the new branch under the old ready state (unkeyed, dev is listed twice: once thrown away)',
+      actual: { probed: branchesProbed, listed: treeListings },
+      expected: { probed: ['main', 'dev'], listed: ['main', 'dev'] },
     });
   });
 
@@ -188,6 +215,57 @@ describe('CodeTab', () => {
       should: 'distinguish a reclaimed sandbox from a never-cloned branch',
       actual: gone.textContent,
       expected: 'This branch checkout is gone',
+    });
+  });
+
+  test('a real failure (403) stays an error — it is NOT dressed up as an empty state', async () => {
+    // The invariant behind the absent/error split: "no checkout" is a state of
+    // the world; a permission failure is not, and must never be shown as one.
+    cannedFetch({
+      main: async () => jsonResponse({ error: 'You do not have access to this machine' }, 403),
+    });
+    render(<CodeTab machineId="machine-1" />);
+
+    await userEvent.click(screen.getByText('pick-main'));
+    await waitFor(() => screen.getByTestId('checkout-error'));
+
+    assert({
+      given: 'a checkout probe rejected with 403 (no `reason` in the body)',
+      should: "surface it as an error with the API's message, not as a not-checked-out empty state",
+      actual: {
+        error: screen.queryByText('You do not have access to this machine') !== null,
+        absent: screen.queryByTestId('checkout-absent'),
+        tree: screen.queryByTestId('file-tree'),
+      },
+      expected: { error: true, absent: null, tree: null },
+    });
+  });
+
+  test('“Check again” re-probes a branch that has since been cloned', async () => {
+    let cloned = false;
+    cannedFetch({
+      main: async () =>
+        cloned
+          ? jsonResponse({ entries: [] })
+          : jsonResponse({ error: 'This branch checkout is unavailable', reason: 'not_found' }, 404),
+    });
+    render(<CodeTab machineId="machine-1" />);
+
+    await userEvent.click(screen.getByText('pick-main'));
+    await waitFor(() => screen.getByTestId('checkout-absent'));
+
+    cloned = true; // the user opened a terminal on the branch and cloned it
+    await userEvent.click(screen.getByText('Check again'));
+    await waitFor(() => screen.getByTestId('file-tree'));
+
+    assert({
+      given: 'a not-yet-cloned branch that gets cloned, then “Check again” clicked',
+      should: 're-probe and mount the file tree without needing a branch re-pick',
+      actual: {
+        tree: screen.getByTestId('file-tree').textContent,
+        absent: screen.queryByTestId('checkout-absent'),
+      },
+      expected: { tree: 'tree:main', absent: null },
     });
   });
 

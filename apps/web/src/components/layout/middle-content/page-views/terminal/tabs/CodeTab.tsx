@@ -118,11 +118,12 @@ export default function CodeTab({ machineId }: CodeTabProps) {
       </aside>
       <div className="min-w-0 flex-1">
         {branch && path ? (
-          // Keyed on the file for the same reason: a fresh pane per file, so it
-          // can never paint the previous file's content under the new file's
-          // name, and Monaco starts clean rather than inheriting scroll/undo.
+          // NOT keyed by path: Monaco is expensive to tear down and recreate on
+          // every file click, and the pane already refuses to render a state
+          // belonging to a different file. Keyed by BRANCH, so a branch switch
+          // still starts the pane clean.
           <CodeFilePane
-            key={`${branchKey(branch)}:${path}`}
+            key={branchKey(branch)}
             machineId={machineId}
             projectName={branch.projectName}
             branchName={branch.branchName}

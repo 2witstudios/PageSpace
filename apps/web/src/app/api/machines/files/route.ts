@@ -6,6 +6,16 @@
  *   mode=list (default) → { entries: [{ name, type }] } for the directory `path`
  *   mode=read           → { content, encoding, truncated } for the file `path`
  *
+ * FAILURES are `{ error, reason }`. `reason` is the machine-readable fact and is
+ * what clients switch on; `error` is a sentence fit to show a human, never an
+ * internal token. The reasons are disjoint on purpose:
+ *   not_found      (404) — this branch has no checkout (no row, or never cloned)
+ *   vanished       (503) — the branch's Sprite is gone
+ *   file_not_found (404) — the checkout is there; that one file is not
+ *   exec_failed    (502) — the exec itself failed; `error` carries its stderr
+ * "no checkout" and "no such file" are DIFFERENT facts — a client that conflates
+ * them tells the reader a file vanished when in truth the whole branch did.
+ *
  * `path` is RELATIVE to the branch checkout root (`/workspace/repo`) and is
  * confined under it before the machine filesystem is touched — an absolute path
  * or a `..` escape is rejected (400), so a viewer cannot read `/etc/passwd` or
@@ -86,8 +96,12 @@ export async function GET(request: Request) {
     branchName: branchName.value,
   });
   if (!resolved.ok) {
+    // `error` is user-facing: clients switch on `reason`, and at least one (the
+    // Code tab's file tree) renders `error` straight into the UI — so it must
+    // never be the internal token. "Branch machine vanished" is a sentence about
+    // our internals, not about anything the reader did or can act on.
     return NextResponse.json(
-      { error: `Branch machine ${resolved.reason}`, reason: resolved.reason },
+      { error: 'This branch checkout is unavailable', reason: resolved.reason },
       { status: resolved.reason === 'not_found' ? 404 : 503 },
     );
   }
@@ -95,7 +109,11 @@ export async function GET(request: Request) {
   if (mode === 'read') {
     const result = await readMachineFile({ handle: resolved.handle, path });
     if (!result.ok) {
-      return NextResponse.json({ error: 'File not found', reason: result.reason }, { status: 404 });
+      // Deliberately NOT `not_found`: that reason already means "this branch has
+      // no checkout" (above), and a client that cannot tell the two apart shows
+      // "this file is gone" when the whole checkout is gone. Distinct token,
+      // distinct fact.
+      return NextResponse.json({ error: 'File not found', reason: 'file_not_found' }, { status: 404 });
     }
     const truncated = result.content.length > MAX_FILE_READ_BYTES;
     const bytes = truncated ? result.content.subarray(0, MAX_FILE_READ_BYTES) : result.content;
@@ -108,8 +126,11 @@ export async function GET(request: Request) {
 
   const result = await listMachineDirectory({ handle: resolved.handle, path });
   if (!result.ok) {
+    // `detail` is the exec's stderr, which is genuinely useful when it exists —
+    // but an exec that dies with empty stderr (127, OOM-kill) would otherwise
+    // fall back to the raw reason token and print "exec_failed" at a person.
     return NextResponse.json(
-      { error: result.detail ?? result.reason, reason: result.reason },
+      { error: result.detail ?? 'Failed to list the checkout directory', reason: result.reason },
       { status: LIST_DENIAL_STATUS[result.reason] ?? 500 },
     );
   }

@@ -37,8 +37,16 @@ vi.mock('@/lib/machines/machine-files-runtime', () => ({
   resolveBranchMachineHandle: (...args: unknown[]) => resolveBranchMachineHandle(...(args as [])),
 }));
 
-const listMachineDirectory = vi.fn(async () => ({ ok: true, entries: [] }));
-const readMachineFile = vi.fn(async () => ({ ok: true, content: Buffer.from('hi', 'utf8') }));
+// Mirrors the real machine-fs result unions, so a test can drive the FAILURE
+// arms (which is where the user-facing `error`/`reason` contract lives) — not
+// just the success arms the mocks default to.
+type ListResult =
+  | { ok: true; entries: { name: string; type: 'file' | 'directory' }[] }
+  | { ok: false; reason: 'not_found' | 'exec_failed'; detail?: string };
+type ReadResult = { ok: true; content: Buffer } | { ok: false; reason: 'not_found' };
+
+const listMachineDirectory = vi.fn(async (): Promise<ListResult> => ({ ok: true, entries: [] }));
+const readMachineFile = vi.fn(async (): Promise<ReadResult> => ({ ok: true, content: Buffer.from('hi', 'utf8') }));
 vi.mock('@pagespace/lib/services/sandbox/machine-fs', () => ({
   listMachineDirectory: (...args: unknown[]) => listMachineDirectory(...(args as [])),
   readMachineFile: (...args: unknown[]) => readMachineFile(...(args as [])),
@@ -148,5 +156,36 @@ describe('/api/machines/files request contract', () => {
     resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'vanished' });
     const res = await GET(get({ path: 'src' }));
     expect(res.status).toBe(503);
+  });
+
+  // `error` is rendered straight into the UI by at least one client (the Code
+  // tab's file tree), so it must read as a sentence to a person — never as the
+  // internal token, and never as a bare `exec_failed`.
+  it('never puts an internal token in the user-facing `error`', async () => {
+    resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'vanished' });
+    const body = await (await GET(get({ path: 'src' }))).json();
+    expect(body.reason).toBe('vanished'); // machine-readable fact: unchanged
+    expect(body.error).toBe('This branch checkout is unavailable');
+    expect(body.error).not.toMatch(/vanished|not_found|Branch machine/);
+  });
+
+  it('falls back to a readable message when a failed exec produced no stderr', async () => {
+    listMachineDirectory.mockResolvedValue({ ok: false, reason: 'exec_failed', detail: undefined });
+    const body = await (await GET(get({ path: 'src' }))).json();
+    expect(body.reason).toBe('exec_failed');
+    expect(body.error).toBe('Failed to list the checkout directory');
+  });
+
+  // "this branch has no checkout" and "that one file is gone" are BOTH 404s, so
+  // a client that cannot tell them apart tells the reader a file vanished when
+  // in truth the whole branch did. Distinct reason tokens are what prevent that.
+  it('distinguishes a missing FILE from a missing CHECKOUT', async () => {
+    readMachineFile.mockResolvedValue({ ok: false, reason: 'not_found' });
+    const fileMiss = await (await GET(get({ path: 'src/gone.ts', mode: 'read' }))).json();
+    expect(fileMiss.reason).toBe('file_not_found');
+
+    resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'not_found' });
+    const checkoutMiss = await (await GET(get({ path: 'src/gone.ts', mode: 'read' }))).json();
+    expect(checkoutMiss.reason).toBe('not_found');
   });
 });

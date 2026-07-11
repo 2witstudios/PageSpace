@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 
@@ -7,14 +7,29 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
+/**
+ * Every (language, value) pair Monaco has been handed, across ALL renders.
+ *
+ * The final DOM is not enough to police "never show one file's content under
+ * another file's name": React flushes the pane's effect before paint, so a bad
+ * intermediate render is gone by the time a DOM assertion runs — but Monaco has
+ * already been handed the wrong content by then, and in production that is a
+ * real setValue against its model. Recording renders is what makes that window
+ * observable.
+ */
+const monacoRenders: { language: string | undefined; value: string }[] = [];
+
 // Monaco is next/dynamic(ssr:false); stub it so the pane's fetch/state logic and
 // the props it hands the editor (value, language, readOnly) are what's asserted.
 vi.mock('@/components/editors/MonacoEditor', () => ({
-  default: ({ value, language, readOnly }: { value: string; language?: string; readOnly?: boolean }) => (
-    <div data-testid="monaco" data-language={language} data-readonly={String(readOnly)}>
-      {value}
-    </div>
-  ),
+  default: ({ value, language, readOnly }: { value: string; language?: string; readOnly?: boolean }) => {
+    monacoRenders.push({ language, value });
+    return (
+      <div data-testid="monaco" data-language={language} data-readonly={String(readOnly)}>
+        {value}
+      </div>
+    );
+  },
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -29,8 +44,20 @@ const renderPane = (path = 'src/index.ts') =>
 const requested = (call: unknown[], param: string): string | null =>
   new URL(String(call[0]), 'http://test').searchParams.get(param);
 
+/** A response the test resolves by hand, to hold one read in flight. */
+const deferredResponse = () => {
+  let resolve!: (r: Response) => void;
+  const promise = new Promise<Response>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+};
+
 describe('CodeFilePane', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monacoRenders.length = 0;
+  });
 
   test('reads the selected file and shows it read-only with a detected language', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'export const x = 1;', encoding: 'utf8', truncated: false }));
@@ -99,7 +126,7 @@ describe('CodeFilePane', () => {
 
   test("a missing file reads as plain english, not the route's phrasing", async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(
-      jsonResponse({ error: 'File not found', reason: 'not_found' }, 404),
+      jsonResponse({ error: 'File not found', reason: 'file_not_found' }, 404),
     );
     renderPane('src/deleted.ts');
 
@@ -172,6 +199,37 @@ describe('CodeFilePane', () => {
     });
   });
 
+  test('a slow read that lands AFTER the selection moved on is discarded', async () => {
+    // The scenario the `cancelled` flag exists for: the user clicks a big file,
+    // then clicks another before the first read comes back. The first read must
+    // not overwrite the file the user is actually looking at now.
+    const slow = deferredResponse();
+    vi.mocked(fetchWithAuth)
+      .mockReturnValueOnce(slow.promise)
+      .mockResolvedValueOnce(jsonResponse({ content: 'the file I clicked second', encoding: 'utf8', truncated: false }));
+
+    const { rerender } = renderPane('slow.ts');
+    rerender(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path="quick.ts" />);
+    await waitFor(() => screen.getByTestId('monaco'));
+
+    // Only NOW does the abandoned first read resolve. Flush inside act() so any
+    // state update it (wrongly) triggers is applied to the DOM before we look —
+    // without this, the assertion reads a pre-render snapshot and passes even
+    // when the guard is gone. Verified by mutation: deleting the `cancelled`
+    // checks makes this test fail.
+    await act(async () => {
+      slow.resolve(jsonResponse({ content: 'STALE - the file I clicked first', encoding: 'utf8', truncated: false }));
+      await Promise.resolve();
+    });
+
+    assert({
+      given: 'a read for the previous file resolving after the current file already rendered',
+      should: "discard the stale response rather than clobber the user's current file",
+      actual: screen.getByTestId('monaco').textContent,
+      expected: 'the file I clicked second',
+    });
+  });
+
   test('a binary file shows a no-preview state and is never read', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'PNG', encoding: 'utf8', truncated: false }));
     renderPane('assets/logo.png');
@@ -202,6 +260,94 @@ describe('CodeFilePane', () => {
       should: 'leave the no-preview state and read the newly selected file',
       actual: { value: monaco.textContent, fetches: vi.mocked(fetchWithAuth).mock.calls.length },
       expected: { value: 'after', fetches: 1 },
+    });
+  });
+
+  test('a short legacy-encoded text file is NOT declared binary', async () => {
+    // "Café Résumé" as Latin-1: 3 undecodable bytes in 11 chars = 27%, over any
+    // sane ratio. A ratio with no absolute floor would hide this file entirely.
+    const REPLACEMENT = String.fromCharCode(0xfffd);
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      jsonResponse({ content: `Caf${REPLACEMENT} R${REPLACEMENT}sum${REPLACEMENT}`, encoding: 'utf8', truncated: false }),
+    );
+    renderPane('notes.txt');
+
+    const monaco = await waitFor(() => screen.getByTestId('monaco'));
+
+    assert({
+      given: 'a short Latin-1 text file with a high RATIO but a low COUNT of undecodable bytes',
+      should: 'still render it as text (mojibake glyphs and all) rather than hiding it as binary',
+      actual: { rendered: monaco.textContent !== null, binary: screen.queryByTestId('binary-file') },
+      expected: { rendered: true, binary: null },
+    });
+  });
+
+  test('a checkout that vanished is reported as such even on a 404 read', async () => {
+    // The route now distinguishes `not_found` (no checkout) from `file_not_found`
+    // (checkout fine, file gone) — both 404. Without that split, removing the
+    // branch-terminal under an open file said "this file is no longer in the
+    // checkout", which is a lie about which thing disappeared.
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      jsonResponse({ error: 'This branch checkout is unavailable', reason: 'not_found' }, 404),
+    );
+    renderPane();
+
+    await waitFor(() => screen.getByTestId('checkout-absent-pane'));
+
+    assert({
+      given: 'an open file whose branch-terminal was removed (404 + reason not_found)',
+      should: 'say the BRANCH has no checkout, not that the file is missing',
+      actual: {
+        checkoutCopy: screen.queryByText("This branch hasn't been checked out yet") !== null,
+        fileCopy: screen.queryByText('This file is no longer in the checkout.') !== null,
+      },
+      expected: { checkoutCopy: true, fileCopy: false },
+    });
+  });
+
+  test('the header reload re-reads the open file (the working tree is live)', async () => {
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+      .mockResolvedValueOnce(jsonResponse({ content: 'after the agent edited it', encoding: 'utf8', truncated: false }));
+    renderPane();
+
+    await waitFor(() => screen.getByText('before'));
+    await userEvent.click(screen.getByTitle('Reload file'));
+    await waitFor(() => screen.getByText('after the agent edited it'));
+
+    assert({
+      given: 'an open file rewritten by an agent terminal, then the header reload clicked',
+      should: 're-read it — re-clicking the same tree row is a no-op, so this is the only way',
+      actual: {
+        value: screen.getByTestId('monaco').textContent,
+        reads: vi.mocked(fetchWithAuth).mock.calls.length,
+      },
+      expected: { value: 'after the agent edited it', reads: 2 },
+    });
+  });
+
+  test("never hands Monaco one file's content under another file's language", async () => {
+    // a.ts is typescript, b.py is python. If the pane ever renders the TS file's
+    // content while already being asked for the Python file, Monaco is handed
+    // ('python', 'contents of a.ts') — the exact pair this test forbids. The bad
+    // render is pre-paint (React flushes the effect first), so it is invisible in
+    // the final DOM; only the render log can see it.
+    const slow = deferredResponse();
+    vi.mocked(fetchWithAuth)
+      .mockResolvedValueOnce(jsonResponse({ content: 'contents of a.ts', encoding: 'utf8', truncated: false }))
+      .mockReturnValueOnce(slow.promise);
+
+    const { rerender } = renderPane('a.ts');
+    await waitFor(() => screen.getByText('contents of a.ts'));
+
+    rerender(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.py" />);
+    await waitFor(() => screen.getByText('Loading file…'));
+
+    assert({
+      given: "a switch to a file whose read hasn't come back yet",
+      should: "never hand Monaco the previous file's content under the new file's language",
+      actual: monacoRenders.filter((r) => r.language === 'python' && r.value === 'contents of a.ts'),
+      expected: [],
     });
   });
 

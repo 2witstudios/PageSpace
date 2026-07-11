@@ -14,7 +14,14 @@
  * state of the world, not an error message.
  */
 
-/** The route's absence reasons — a branch we cannot reach a checkout for. */
+/**
+ * The route's absence reasons — a branch we cannot reach a checkout for.
+ *
+ * Note what is NOT here: `file_not_found`. A missing FILE is a fact about one
+ * path inside a checkout that exists; these two are facts about the checkout
+ * itself. The route keeps the tokens distinct precisely so a client cannot tell
+ * a reader "this file is gone" when the whole branch is.
+ */
 export type CheckoutAbsentReason = 'not_found' | 'vanished';
 
 export const CHECKOUT_ABSENT_COPY: Record<CheckoutAbsentReason, { title: string; description: string }> = {
