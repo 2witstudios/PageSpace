@@ -56,6 +56,15 @@ vi.mock('@pagespace/db/db', () => ({
     }),
   },
 }));
+// Phase 2 (leaf 5): default readers resolve the adminDb binding; dedicated
+// mode returns getAdminDb(), pointed at the same default-db mock above.
+vi.mock('@pagespace/db/admin-db', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+    getAdminDb: vi.fn(() => db),
+  };
+});
 vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: {},
 }));

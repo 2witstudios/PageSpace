@@ -120,8 +120,8 @@ function getMachineProjectStore() {
 function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, 'branchStore' | 'store'> {
   return {
     branchStore: {
-      findByName: async (terminalId, projectName, branchName) =>
-        (await getMachineBranchStore()).findByName(terminalId, projectName, branchName),
+      findByName: async (machineId, projectName, branchName) =>
+        (await getMachineBranchStore()).findByName(machineId, projectName, branchName),
       findById: async (id) => (await getMachineBranchStore()).findById(id),
     },
     store: {
@@ -137,29 +137,29 @@ function buildBaseDeps(): Pick<SpawnAgentTerminalDeps & KillAgentTerminalDeps, '
 
 function buildProjectStoreLookup(): AgentTerminalProjectLookup {
   return {
-    findByName: async (terminalId, name) => (await getMachineProjectStore()).findByName(terminalId, name),
+    findByName: async (machineId, name) => (await getMachineProjectStore()).findByName(machineId, name),
   };
 }
 
 /** Acquires the OWNING Machine's persistent Sprite, re-authorizing `actorUserId` (resume re-authz) on every call — see module doc. */
 function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
   return {
-    acquire: async (terminalId) => {
-      const page = await db.query.pages.findFirst({ where: eq(pages.id, terminalId), columns: { driveId: true } });
+    acquire: async (machineId) => {
+      const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { driveId: true } });
       if (!page) return { ok: false, reason: 'not_found' };
       const drive = await db.query.drives.findFirst({ where: eq(drives.id, page.driveId), columns: { ownerId: true } });
       if (!drive) return { ok: false, reason: 'error' };
 
-      const canRun = isCodeExecutionEnabled() && (await canAccessMachine(actorUserId, terminalId));
+      const canRun = isCodeExecutionEnabled() && (await canAccessMachine(actorUserId, machineId));
 
       const nowMs = Date.now();
       if (canRun) {
-        const guardrail = checkMachineRuntimeGuardrail({ machineKey: terminalId, now: nowMs });
+        const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
         if (!guardrail.allowed) return { ok: false, reason: guardrail.reason };
       }
 
       const result = await acquireTerminalSandbox({
-        pageId: terminalId,
+        pageId: machineId,
         driveId: page.driveId,
         tenantId: drive.ownerId,
         userId: actorUserId,
@@ -193,7 +193,7 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
         }
       }
 
-      recordMachineActivity({ machineKey: terminalId, now: nowMs });
+      recordMachineActivity({ machineKey: machineId, now: nowMs });
       return { ok: true, sandboxId: result.sandboxId };
     },
   };

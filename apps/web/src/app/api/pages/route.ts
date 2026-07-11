@@ -16,7 +16,7 @@ import { isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth/principal-perm
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const creatablePageTypes = [
   ...getCreatablePageTypes(),
-  PageType.TERMINAL,
+  PageType.MACHINE,
 ] as unknown as [string, ...string[]];
 
 // Zod schema for page creation request
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     }
 
     const validatedData = parseResult.data;
-    if (validatedData.type === PageType.TERMINAL && auth.role !== 'admin') {
+    if (validatedData.type === PageType.MACHINE && auth.role !== 'admin') {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page', resourceId: validatedData.driveId, details: { reason: 'app_admin_required', type: validatedData.type, method: 'POST' }, riskScore: 0.5 });
       return NextResponse.json({ error: 'Terminal pages require administrator privileges' }, { status: 403 });
     }

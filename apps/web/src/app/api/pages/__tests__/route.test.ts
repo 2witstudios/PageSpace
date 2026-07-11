@@ -325,10 +325,10 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns 403 when a non-admin creates a TERMINAL page', async () => {
+    it('returns 403 when a non-admin creates a MACHINE page', async () => {
       const response = await POST(createRequest({
         title: 'Prod Shell',
-        type: 'TERMINAL',
+        type: 'MACHINE',
         driveId: mockDriveId,
       }));
       const body = await response.json();
@@ -338,28 +338,28 @@ describe('POST /api/pages', () => {
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
-    it('allows an admin to create a TERMINAL page', async () => {
+    it('allows an admin to create a MACHINE page', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
         ...mockWebAuth(mockUserId),
         role: 'admin',
       });
       vi.mocked(pageService.createPage).mockResolvedValue({
         ...successResult,
-        page: { ...mockPage, type: 'TERMINAL' },
+        page: { ...mockPage, type: 'MACHINE' },
       });
 
       const response = await POST(createRequest({
         title: 'Prod Shell',
-        type: 'TERMINAL',
+        type: 'MACHINE',
         driveId: mockDriveId,
       }));
       const body = await response.json();
 
       expect(response.status).toBe(201);
-      expect(body.type).toBe('TERMINAL');
+      expect(body.type).toBe('MACHINE');
       expect(pageService.createPage).toHaveBeenCalledWith(
         mockUserId,
-        expect.objectContaining({ type: 'TERMINAL' }),
+        expect.objectContaining({ type: 'MACHINE' }),
         expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });

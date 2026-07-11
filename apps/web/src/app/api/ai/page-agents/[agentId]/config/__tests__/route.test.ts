@@ -136,7 +136,7 @@ const mockAgent = (overrides: Partial<{
   toolExposureMode: 'upfront' | 'search' | null;
   isTrashed: boolean;
   terminalAccess: boolean;
-  machines: Array<{ kind: 'own' } | { kind: 'existing'; terminalId: string }>;
+  machines: Array<{ kind: 'own' } | { kind: 'existing'; machineId: string }>;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
   type: overrides.type ?? 'AI_CHAT',

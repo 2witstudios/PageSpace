@@ -1,12 +1,16 @@
 import { describe, it } from 'vitest';
 import { computeLogHash } from '@pagespace/lib/monitoring/activity-logger';
 import { computeSecurityEventHash, type AuditEvent } from '@pagespace/lib/audit/security-audit';
+import { computeEmissionHash } from '@pagespace/lib/audit/emission-hash';
+import { computeChainHash } from '@pagespace/lib/audit/chain-step';
 import { assert } from '../../__tests__/riteway';
 import {
   recomputeActivityLogHash,
   recomputeSecurityAuditHash,
+  recomputeSecurityAuditHashEraAware,
   type ActivityLogHashableFields,
   type SecurityAuditHashableFields,
+  type SecurityAuditEraFields,
 } from '../siem-chain-hashers';
 
 // Round-trip tests prove the preflight hasher byte-exactly matches the
@@ -195,6 +199,90 @@ describe('recomputeSecurityAuditHash', () => {
       should: 'recompute to the write-side hash (null → undefined in hash input)',
       actual: preflightHash,
       expected: writeSideHash,
+    });
+  });
+});
+
+describe('recomputeSecurityAuditHashEraAware', () => {
+  // Post-cutover (#890 Phase 2) the admin store holds TWO hash eras in one
+  // chain: legacy rows (emission_hash NULL, event_hash = computeSecurityEventHash)
+  // and chainer rows (emission_hash set, event_hash = H(emission, prev)).
+  // The era-aware recompute mirrors verifyStoredEntryHash in packages/lib —
+  // presence of emission_hash selects the formula.
+
+  const timestamp = new Date('2026-04-10T09:15:00.000Z');
+  const event: AuditEvent = {
+    eventType: 'auth.login.success',
+    serviceId: 'auth',
+    resourceType: 'user',
+    resourceId: 'u1',
+    details: { method: 'password', mfa: true },
+    riskScore: 0.3,
+    anomalyFlags: ['new_device'],
+  };
+  const fields = (emissionHash: string | null): SecurityAuditEraFields => ({
+    eventType: event.eventType,
+    serviceId: event.serviceId ?? null,
+    resourceType: event.resourceType ?? null,
+    resourceId: event.resourceId ?? null,
+    details: event.details ?? null,
+    riskScore: event.riskScore ?? null,
+    anomalyFlags: event.anomalyFlags ?? null,
+    timestamp,
+    emissionHash,
+  });
+
+  it('given a chainer-era row (emission_hash present), should recompute event_hash as H(emission(data), prev) — byte-exact against the lib pure core', () => {
+    const emission = computeEmissionHash(event, timestamp);
+    const writeSideEventHash = computeChainHash(emission, 'PREV_CHAIN');
+
+    assert({
+      given: 'a chainer-era row',
+      should: 'match the chainer write-side chain hash',
+      actual: recomputeSecurityAuditHashEraAware(fields(emission), 'PREV_CHAIN'),
+      expected: writeSideEventHash,
+    });
+  });
+
+  it('given a legacy-era row (emission_hash NULL), should fall back to the legacy computeSecurityEventHash formula', () => {
+    assert({
+      given: 'a legacy row in the admin store',
+      should: 'recompute with the pre-cutover formula',
+      actual: recomputeSecurityAuditHashEraAware(fields(null), 'PREV_SEC'),
+      expected: recomputeSecurityAuditHash(fields(null), 'PREV_SEC'),
+    });
+  });
+
+  it('given tampered row data on a chainer-era row, should produce a hash that no longer matches the stored event_hash', () => {
+    const emission = computeEmissionHash(event, timestamp);
+    const storedEventHash = computeChainHash(emission, 'PREV_CHAIN');
+    const tampered: SecurityAuditEraFields = {
+      ...fields(emission),
+      details: { method: 'password', mfa: false },
+    };
+
+    assert({
+      given: 'a chainer-era row whose details were modified after chaining',
+      should: 'recompute to a different hash (tamper detectable)',
+      actual: recomputeSecurityAuditHashEraAware(tampered, 'PREV_CHAIN') === storedEventHash,
+      expected: false,
+    });
+  });
+
+  it('given a chainer-era row with a corrupted STORED emission value, should still recompute the true chain hash from row data', () => {
+    // The stored emission_hash is only the ERA discriminator here — the
+    // recompute derives the emission from row data, so an emission-column-only
+    // tamper does not corrupt delivery-time chain verification. Stored-emission
+    // equality is enforced by the cron verifier (verifyStoredEntryHash), not
+    // by the delivery preflight.
+    const emission = computeEmissionHash(event, timestamp);
+    const trueEventHash = computeChainHash(emission, 'PREV_CHAIN');
+
+    assert({
+      given: 'a chainer-era row whose emission_hash column was overwritten',
+      should: 'recompute the data-derived chain hash regardless',
+      actual: recomputeSecurityAuditHashEraAware(fields('f'.repeat(64)), 'PREV_CHAIN'),
+      expected: trueEventHash,
     });
   });
 });

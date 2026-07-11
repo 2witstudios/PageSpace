@@ -11,11 +11,15 @@
  * - 'genesis' as the chain start (no chainSeed concept)
  */
 
-import { db as defaultDb } from '@pagespace/db/db';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { asc, count, and, gte, lte, type SQL } from 'drizzle-orm';
 import { loggers } from '../logging/logger-config';
 import { computeSecurityEventHash, type AuditEvent } from './security-audit';
+import { computeEmissionHash } from './emission-hash';
+import { computeChainHash } from './chain-step';
+import type { AdminDatabase } from '@pagespace/db/admin-db';
+import type { SecurityAuditDatabase } from './security-audit-repository';
+import { resolveAuditDbBinding } from './audit-db-binding';
 
 export interface SecurityChainBreakPoint {
   entryId: string;
@@ -50,8 +54,14 @@ export interface VerifySecurityChainOptions {
 }
 
 export interface VerifySecurityChainDeps {
-  /** Drizzle client to read from. Defaults to the main app db. */
-  db?: typeof defaultDb;
+  /**
+   * Drizzle client to read from — the main app db or the Admin PG client.
+   * Defaults to the resolved audit binding (#890 Phase 2, leaf 5): the
+   * Admin PG when dedicated, the main db under break-glass. Until the
+   * backfill leaf migrates legacy rows, the default in dedicated mode
+   * verifies only the post-cutover chain.
+   */
+  db?: SecurityAuditDatabase;
 }
 
 /**
@@ -74,6 +84,75 @@ interface StoredSecurityEntry {
   timestamp: Date;
   previousHash: string;
   eventHash: string;
+  /**
+   * Chainer-era rows (#890 Phase 2) carry the emission hash; legacy rows
+   * read as null (admin plane) or undefined (main plane, no such column).
+   */
+  emissionHash?: string | null;
+}
+
+export interface StoredEntryHashCheck {
+  hashValid: boolean;
+  /** The event hash this entry SHOULD carry — reported on break points. */
+  computedHash: string;
+  /** Human description of the mismatch; null when valid. */
+  reason: string | null;
+}
+
+/**
+ * Era-aware per-row hash verification (#890 Phase 2, leaf 5). Pure.
+ *
+ * Chainer-era rows (emission_hash present) are verified with chain-step
+ * semantics: the emission hash is RECOMPUTED from the stored payload
+ * (payload tamper detection), compared to the stored emission_hash (witness
+ * column tamper detection), and event_hash must equal
+ * H(emission_hash, previous_hash). Legacy rows (no emission_hash) keep the
+ * original computeSecurityEventHash check. Chain LINKAGE (previousHash vs
+ * the prior row's eventHash) is era-independent and stays with the caller.
+ */
+export function verifyStoredEntryHash(entry: StoredSecurityEntry): StoredEntryHashCheck {
+  // Reconstruct the hashed event from stored fields (PII excluded per #541)
+  const event: AuditEvent = {
+    eventType: entry.eventType as AuditEvent['eventType'],
+    serviceId: entry.serviceId ?? undefined,
+    resourceType: entry.resourceType ?? undefined,
+    resourceId: entry.resourceId ?? undefined,
+    details: entry.details ?? undefined,
+    riskScore: entry.riskScore ?? undefined,
+    anomalyFlags: entry.anomalyFlags ?? undefined,
+  };
+
+  if (entry.emissionHash !== null && entry.emissionHash !== undefined) {
+    const recomputedEmission = computeEmissionHash(event, entry.timestamp);
+    const expectedEventHash = computeChainHash(recomputedEmission, entry.previousHash);
+
+    if (recomputedEmission !== entry.emissionHash) {
+      return {
+        hashValid: false,
+        computedHash: expectedEventHash,
+        reason:
+          'Emission hash mismatch - entry data or the stored emission_hash may have been modified',
+      };
+    }
+    if (expectedEventHash !== entry.eventHash) {
+      return {
+        hashValid: false,
+        computedHash: expectedEventHash,
+        reason:
+          'Chain hash mismatch - event_hash does not equal H(emission_hash, previous_hash)',
+      };
+    }
+    return { hashValid: true, computedHash: expectedEventHash, reason: null };
+  }
+
+  const computedHash = computeSecurityEventHash(event, entry.previousHash, entry.timestamp);
+  return computedHash === entry.eventHash
+    ? { hashValid: true, computedHash, reason: null }
+    : {
+        hashValid: false,
+        computedHash,
+        reason: 'Hash mismatch - entry data may have been modified',
+      };
 }
 
 /**
@@ -94,7 +173,7 @@ export async function verifySecurityAuditChain(
     stopOnFirstBreak = true,
     batchSize = 1000,
   } = options;
-  const db = deps.db ?? defaultDb;
+  const db = deps.db ?? resolveAuditDbBinding().db;
 
   const verificationStartedAt = new Date();
   let totalEntries = 0;
@@ -152,7 +231,12 @@ export async function verifySecurityAuditChain(
 
       if (currentBatchSize <= 0) break;
 
-      const entries = await db.query.securityAuditLog.findMany({
+      // Both union members expose query.securityAuditLog over the same table,
+      // but their .d.ts signatures don't unify into a callable union when lib
+      // builds against packages/db/dist. Narrow to the AdminDatabase view —
+      // the least capable of the two (no relations) — which cannot widen what
+      // this call can do.
+      const entries = await (db as AdminDatabase).query.securityAuditLog.findMany({
         where: conditions.length > 0 ? and(...conditions) : undefined,
         orderBy: [asc(securityAuditLog.chainSeq)],
         offset,
@@ -169,26 +253,11 @@ export async function verifySecurityAuditChain(
         }
         lastEntryId = entry.id;
 
-        // Reconstruct AuditEvent from stored fields (PII excluded from hash per #541)
-        const event: AuditEvent = {
-          eventType: entry.eventType as AuditEvent['eventType'],
-          serviceId: entry.serviceId ?? undefined,
-          resourceType: entry.resourceType ?? undefined,
-          resourceId: entry.resourceId ?? undefined,
-          details: entry.details ?? undefined,
-          riskScore: entry.riskScore ?? undefined,
-          anomalyFlags: entry.anomalyFlags ?? undefined,
-        };
-
-        // Recompute hash
-        const computedHash = computeSecurityEventHash(
-          event,
-          entry.previousHash,
-          entry.timestamp
-        );
-
-        // Check hash validity
-        const hashValid = computedHash === entry.eventHash;
+        // Era-aware hash check: chain-step semantics for chainer-era rows,
+        // computeSecurityEventHash for legacy rows (#890 Phase 2, leaf 5).
+        const hashCheck = verifyStoredEntryHash(entry);
+        const computedHash = hashCheck.computedHash;
+        const hashValid = hashCheck.hashValid;
 
         // Check chain-link validity (previousHash should match prior entry's eventHash)
         const chainLinkValid = previousEntryHash === null
@@ -204,7 +273,7 @@ export async function verifySecurityAuditChain(
 
           if (!breakPoint) {
             const reason = !hashValid
-              ? 'Hash mismatch - entry data may have been modified'
+              ? hashCheck.reason ?? 'Hash mismatch - entry data may have been modified'
               : 'Chain link broken - previousHash does not match prior entry eventHash';
 
             breakPoint = {

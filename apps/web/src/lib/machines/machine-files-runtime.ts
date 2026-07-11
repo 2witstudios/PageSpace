@@ -5,8 +5,8 @@
  * Resolves a branch-terminal's LIVE `MachineHandle` (its own Sprite) so the
  * route can drive the provider-neutral `listMachineDirectory`/`readMachineFile`
  * primitives against it. Reuses the branch store + the `MachineHost` seam and
- * the shared view-access check from machine-branches-runtime — no bespoke authz
- * and no direct Sprites-SDK import.
+ * the shared view-access check from the canonical `machine-access-runtime` — no
+ * bespoke authz and no direct Sprites-SDK import.
  *
  * Branch scope only: a branch-terminal holds its own Sprite addressed by a
  * stored `sandboxId`, so `host.attach` reconnects to exactly the machine whose
@@ -17,7 +17,8 @@
 
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import type { MachineHandle } from '@pagespace/lib/services/sandbox/machine-host';
-import { canViewMachine, getMachineHostForBranches } from './machine-branches-runtime';
+import { getMachineHostForBranches } from './machine-branches-runtime';
+import { canViewMachine } from './machine-access-runtime';
 
 export { canViewMachine };
 
@@ -31,16 +32,16 @@ export type ResolveBranchMachineHandleResult =
  * `vanished` = the row exists but the Sprite is gone.
  */
 export async function resolveBranchMachineHandle({
-  terminalId,
+  machineId,
   projectName,
   branchName,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
 }): Promise<ResolveBranchMachineHandleResult> {
   const store = await createDbMachineBranchStore();
-  const existing = await store.findByName(terminalId, projectName, branchName);
+  const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   const host = await getMachineHostForBranches();

@@ -8,9 +8,9 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{js,ts}'],
     exclude: [
       // Integration tests that require a running PostgreSQL database.
-      // Run via ./scripts/test-with-db.sh, or:
-      //   bun run --filter '@pagespace/db' test -- src/__tests__/accessible-page-ids.integration.test.ts
-      'src/__tests__/accessible-page-ids.integration.test.ts',
+      // Run via ./scripts/test-with-db.sh or vitest.integration.config.ts
+      // (admin-migrate additionally needs ADMIN_DATABASE_URL → scratch DB).
+      'src/**/*.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions

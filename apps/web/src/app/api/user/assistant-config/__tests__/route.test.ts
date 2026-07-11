@@ -110,13 +110,13 @@ describe('GET /api/user/assistant-config terminal access', () => {
     mockGetOrCreateConfig.mockResolvedValue({
       ...mockConfig,
       terminalAccess: true,
-      machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }],
+      machines: [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
     });
     const request = new Request('http://localhost/api/user/assistant-config');
     const response = await GET(request);
     const body = await response.json();
     expect(body.config.terminalAccess).toBe(true);
-    expect(body.config.machines).toEqual([{ kind: 'own' }, { kind: 'existing', terminalId: 't1' }]);
+    expect(body.config.machines).toEqual([{ kind: 'own' }, { kind: 'existing', machineId: 't1' }]);
     expect(body.config.availableTerminals).toEqual([{ id: 't1', title: 'Shared Terminal' }]);
   });
 });
@@ -176,12 +176,12 @@ describe('PUT /api/user/assistant-config terminal access', () => {
     expect(body.config.machines).toEqual([{ kind: 'own' }]);
   });
 
-  it('given an existing terminalId outside the user\'s Home drive, should reject with 400 and not persist', async () => {
+  it('given an existing machineId outside the user\'s Home drive, should reject with 400 and not persist', async () => {
     mockValidateMachines.mockResolvedValue({ ok: false, invalidIds: ['not-mine'] });
     const request = new Request('http://localhost/api/user/assistant-config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machines: [{ kind: 'existing', terminalId: 'not-mine' }] }),
+      body: JSON.stringify({ machines: [{ kind: 'existing', machineId: 'not-mine' }] }),
     });
 
     const response = await PUT(request);

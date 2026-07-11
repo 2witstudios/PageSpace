@@ -54,6 +54,10 @@ const STEP_DEFS: ErasureStep[] = [
   { id: 'delete-avatar', fatal: false, cloudOnly: false },
   { id: 'log-account-deletion', fatal: false, cloudOnly: false },
   { id: 'anonymize-activity-logs', fatal: false, cloudOnly: false },
+  // fatal is recomputed in buildErasurePlan: with ClickHouse in play the CH
+  // analytics store is part of the subject's data (error_logs has no TTL —
+  // erasure is its ONLY eraser), so a purge failure must abort the run for a
+  // durable retry, never leave it "completed" with rows retained.
   { id: 'purge-monitoring', fatal: false, cloudOnly: false },
   { id: 'revoke-integrations', fatal: false, cloudOnly: false },
   { id: 'email-suppression', fatal: false, cloudOnly: true },
@@ -69,11 +73,19 @@ const STEP_DEFS: ErasureStep[] = [
 
 export interface BuildErasurePlanInput {
   deploymentMode: DeploymentMode;
+  /**
+   * Whether the ClickHouse analytics store is (or could be) holding subject
+   * rows — callers pass isClickHouseAnalyticsInPlay() from the observability
+   * client shell. Flag-independent by design: a rollback window still counts.
+   */
+  clickHouseInPlay: boolean;
 }
 
 export function buildErasurePlan(input: BuildErasurePlanInput): ErasureStep[] {
   const cloudLike = input.deploymentMode === 'cloud' || input.deploymentMode === 'tenant';
-  return STEP_DEFS.filter((step) => (step.cloudOnly ? cloudLike : true));
+  return STEP_DEFS.filter((step) => (step.cloudOnly ? cloudLike : true)).map((step) =>
+    step.id === 'purge-monitoring' && input.clickHouseInPlay ? { ...step, fatal: true } : step,
+  );
 }
 
 // ---------------------------------------------------------------------------

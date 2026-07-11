@@ -20,8 +20,8 @@ const fetcher = (url: string) =>
     return res.json() as Promise<{ agentTerminals: AgentTerminal[] }>;
   });
 
-function buildQuery(terminalId: string, projectName?: string | null, branchName?: string | null): string {
-  const params = new URLSearchParams({ terminalId });
+function buildQuery(machineId: string, projectName?: string | null, branchName?: string | null): string {
+  const params = new URLSearchParams({ machineId });
   if (projectName) params.set('projectName', projectName);
   if (branchName) params.set('branchName', branchName);
   return params.toString();
@@ -32,10 +32,10 @@ function buildQuery(terminalId: string, projectName?: string | null, branchName?
  * typed PTY sessions at ANY of the three universal Terminal scopes: neither
  * `projectName` nor `branchName` set targets machine scope, `projectName`
  * alone targets project scope, both set targets branch scope. Pass a `null`
- * `terminalId` to disable fetching entirely (e.g. a collapsed navigator node).
+ * `machineId` to disable fetching entirely (e.g. a collapsed navigator node).
  */
-export function useAgentTerminals(terminalId: string | null, projectName?: string | null, branchName?: string | null) {
-  const key = terminalId ? `/api/machines/agent-terminals?${buildQuery(terminalId, projectName, branchName)}` : null;
+export function useAgentTerminals(machineId: string | null, projectName?: string | null, branchName?: string | null) {
+  const key = machineId ? `/api/machines/agent-terminals?${buildQuery(machineId, projectName, branchName)}` : null;
 
   const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
     revalidateOnFocus: false,
@@ -43,24 +43,24 @@ export function useAgentTerminals(terminalId: string | null, projectName?: strin
 
   const addAgentTerminal = useCallback(
     async (name: string, agentType: AgentRuntimeType) => {
-      if (!terminalId) throw new Error('No active machine');
+      if (!machineId) throw new Error('No active machine');
       const result = await post<{ agentTerminal: { name: string; agentType: AgentRuntimeType; resumed: boolean } }>(
         '/api/machines/agent-terminals',
-        { terminalId, projectName: projectName ?? undefined, branchName: branchName ?? undefined, name, agentType },
+        { machineId, projectName: projectName ?? undefined, branchName: branchName ?? undefined, name, agentType },
       );
       await mutate();
       return result.agentTerminal;
     },
-    [terminalId, projectName, branchName, mutate],
+    [machineId, projectName, branchName, mutate],
   );
 
   const removeAgentTerminal = useCallback(
     async (name: string) => {
-      if (!terminalId) throw new Error('No active machine');
-      await del(`/api/machines/agent-terminals?${buildQuery(terminalId, projectName, branchName)}&name=${encodeURIComponent(name)}`);
+      if (!machineId) throw new Error('No active machine');
+      await del(`/api/machines/agent-terminals?${buildQuery(machineId, projectName, branchName)}&name=${encodeURIComponent(name)}`);
       await mutate();
     },
-    [terminalId, projectName, branchName, mutate],
+    [machineId, projectName, branchName, mutate],
   );
 
   return {

@@ -45,7 +45,7 @@ import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { isTerminalPage } from '@pagespace/lib/content/page-types.config';
+import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
@@ -355,7 +355,7 @@ async function resolveGlobalConfiguredMachines(
   return Promise.all(
     configured.map(async (m) =>
       m.kind === 'own'
-        ? { kind: 'existing' as const, terminalId: await deps.getOrCreateOwnMachinePageId(userId) }
+        ? { kind: 'existing' as const, machineId: await deps.getOrCreateOwnMachinePageId(userId) }
         : m,
     ),
   );
@@ -398,24 +398,24 @@ export function createMachineDirectory(
       resolveConfiguredMachines(activeMachineAgentPageId(rawContext), rawContext?.userId, deps),
     describeMachine: async (_rawContext, machine) => {
       if (machine.kind === 'own') return { name: 'My Machine' };
-      const page = await deps.findPage(machine.terminalId);
+      const page = await deps.findPage(machine.machineId);
       return { name: page?.title ?? 'Terminal' };
     },
     isMachineAccessible: async (rawContext, machine) => {
       if (machine.kind === 'own') return true;
       if (!rawContext) return false;
-      const page = await deps.findPage(machine.terminalId);
-      if (!page || !isTerminalPage(page.type as PageType)) return false;
-      return deps.canViewPage(rawContext, machine.terminalId);
+      const page = await deps.findPage(machine.machineId);
+      if (!page || !isMachinePage(page.type as PageType)) return false;
+      return deps.canViewPage(rawContext, machine.machineId);
     },
     resolveDriveId: async (_rawContext, machine, ambientDriveId) => {
       if (machine.kind === 'own') return ambientDriveId;
-      const page = await deps.findPage(machine.terminalId);
+      const page = await deps.findPage(machine.machineId);
       return page?.driveId ?? ambientDriveId;
     },
     resolveTenantId: async (_rawContext, machine, ambientTenantId) => {
       if (machine.kind === 'own') return ambientTenantId;
-      const ownerId = await deps.lookupPageOwnerId(machine.terminalId);
+      const ownerId = await deps.lookupPageOwnerId(machine.machineId);
       return ownerId ?? ambientTenantId;
     },
   };

@@ -2,11 +2,11 @@
  * Machine Projects API — the navigator UI's surface onto a Machine's git
  * repos (Terminal — Workspace, Projects tier).
  *
- * GET    ?terminalId=<id>                        → list
- * POST   { terminalId, name, repoUrl }            → add (clones)
- * DELETE ?terminalId=&name=                       → remove
+ * GET    ?machineId=<id>                        → list
+ * POST   { machineId, name, repoUrl }            → add (clones)
+ * DELETE ?machineId=&name=                       → remove
  *
- * A Machine's identity is its backing Terminal page (`terminalId`) — the
+ * A Machine's identity is its backing Terminal page (`machineId`) — the
  * SAME persistent Sprite session a live Terminal shell already uses.
  * Session-only (no MCP/agent tokens) — this is a human/UI surface; the agent
  * has its own `git_clone` tool. Every request re-checks access for the named
@@ -27,11 +27,11 @@ import { isAuthError } from '@/lib/auth/auth-core';
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
-function requireTerminalId(terminalId: unknown): { ok: true; terminalId: string } | { ok: false; error: NextResponse } {
-  if (typeof terminalId !== 'string' || terminalId.length === 0) {
-    return { ok: false, error: NextResponse.json({ error: 'terminalId is required' }, { status: 400 }) };
+function requireMachineId(machineId: unknown): { ok: true; machineId: string } | { ok: false; error: NextResponse } {
+  if (typeof machineId !== 'string' || machineId.length === 0) {
+    return { ok: false, error: NextResponse.json({ error: 'machineId is required' }, { status: 400 }) };
   }
-  return { ok: true, terminalId };
+  return { ok: true, machineId };
 }
 
 const ADD_PROJECT_DENIAL_STATUS: Record<string, number> = {
@@ -48,15 +48,15 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const parsed = requireTerminalId(url.searchParams.get('terminalId'));
+  const parsed = requireMachineId(url.searchParams.get('machineId'));
   if (!parsed.ok) return parsed.error;
 
-  if (!(await canViewMachine(auth.userId, parsed.terminalId))) {
+  if (!(await canViewMachine(auth.userId, parsed.machineId))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const deps = buildMachineProjectsDeps({ actorUserId: auth.userId });
-  const projects = await listProjects({ terminalId: parsed.terminalId, store: deps.store });
+  const projects = await listProjects({ machineId: parsed.machineId, store: deps.store });
   return NextResponse.json({
     projects: projects.map((p) => ({ name: p.name, repoUrl: p.repoUrl, path: p.path, createdAt: p.createdAt })),
   });
@@ -66,21 +66,21 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  let body: { terminalId?: unknown; name?: unknown; repoUrl?: unknown };
+  let body: { machineId?: unknown; name?: unknown; repoUrl?: unknown };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const parsed = requireTerminalId(body.terminalId);
+  const parsed = requireMachineId(body.machineId);
   if (!parsed.ok) return parsed.error;
 
   if (typeof body.name !== 'string' || typeof body.repoUrl !== 'string') {
     return NextResponse.json({ error: 'name and repoUrl are required strings' }, { status: 400 });
   }
 
-  if (!(await canAccessMachine(auth.userId, parsed.terminalId))) {
+  if (!(await canAccessMachine(auth.userId, parsed.machineId))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
@@ -89,7 +89,7 @@ export async function POST(request: Request) {
     buildMachineProjectsDeps({ actorUserId: auth.userId }),
   ];
 
-  const result = await addProject({ terminalId: parsed.terminalId, actor, name: body.name, repoUrl: body.repoUrl, deps });
+  const result = await addProject({ machineId: parsed.machineId, actor, name: body.name, repoUrl: body.repoUrl, deps });
   if (!result.ok) {
     return NextResponse.json(
       { error: result.detail ?? result.reason, reason: result.reason },
@@ -107,7 +107,7 @@ export async function DELETE(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const parsed = requireTerminalId(url.searchParams.get('terminalId'));
+  const parsed = requireMachineId(url.searchParams.get('machineId'));
   if (!parsed.ok) return parsed.error;
 
   const name = url.searchParams.get('name');
@@ -115,12 +115,12 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: 'name is required' }, { status: 400 });
   }
 
-  if (!(await canAccessMachine(auth.userId, parsed.terminalId))) {
+  if (!(await canAccessMachine(auth.userId, parsed.machineId))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
   const deps = buildMachineProjectsDeps({ actorUserId: auth.userId });
-  const result = await removeProject({ terminalId: parsed.terminalId, name, deps });
+  const result = await removeProject({ machineId: parsed.machineId, name, deps });
   if (!result.ok) {
     return NextResponse.json({ error: result.reason }, { status: result.reason === 'not_found' ? 404 : 500 });
   }

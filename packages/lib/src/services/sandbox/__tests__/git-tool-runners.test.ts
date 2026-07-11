@@ -108,11 +108,11 @@ describe('runGitInSandbox', () => {
     await runGitInSandbox({
       cmd: 'git',
       args: ['status'],
-      ctx: makeCtx({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      ctx: makeCtx({ activeMachine: { kind: 'existing', machineId: 't1' } }),
       deps,
     });
     expect(seen).toEqual([
-      expect.objectContaining({ activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 't1' } }),
     ]);
   });
 

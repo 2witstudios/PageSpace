@@ -16,7 +16,7 @@ export type AgentTerminalScope = 'machine' | 'project' | 'branch';
 export interface MachineAgentTerminalRecord {
   id: string;
   ownerId: string;
-  terminalId: string;
+  machineId: string;
   scope: AgentTerminalScope;
   projectName: string | null;
   machineBranchId: string | null;
@@ -30,7 +30,7 @@ export interface MachineAgentTerminalRecord {
 
 export interface NewMachineAgentTerminalInput {
   ownerId: string;
-  terminalId: string;
+  machineId: string;
   scope: AgentTerminalScope;
   projectName: string | null;
   machineBranchId: string | null;
@@ -42,7 +42,7 @@ export interface NewMachineAgentTerminalInput {
 
 /** Identifies WHICH machine/project/branch scope a row (or a lookup) belongs to — the store's addressing key for spawn/list. */
 export interface AgentTerminalScopeKey {
-  terminalId: string;
+  machineId: string;
   projectName: string | null;
   machineBranchId: string | null;
 }
@@ -69,7 +69,7 @@ export interface MachineAgentTerminalStore {
   /**
    * Level-agnostic lookup by the row's OWN id — no scope path required
    * (mirrors PurePoint's `Attach{agent_id}`). Performs no access check; a
-   * caller learns the row's `terminalId` only from the returned record, so it
+   * caller learns the row's `machineId` only from the returned record, so it
    * must authorize against that before trusting or acting on the result.
    */
   findById(id: string): Promise<MachineAgentTerminalRecord | null>;
@@ -98,7 +98,7 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
   // match other NULLs, not just itself — plain `eq` never matches NULL in SQL.
   function scopeCondition(scope: AgentTerminalScopeKey) {
     return and(
-      eq(machineAgentTerminals.terminalId, scope.terminalId),
+      eq(machineAgentTerminals.machineId, scope.machineId),
       scope.projectName === null
         ? isNull(machineAgentTerminals.projectName)
         : eq(machineAgentTerminals.projectName, scope.projectName),
@@ -133,7 +133,7 @@ export async function createDbMachineAgentTerminalStore(): Promise<MachineAgentT
         .insert(machineAgentTerminals)
         .values({
           ownerId: input.ownerId,
-          terminalId: input.terminalId,
+          machineId: input.machineId,
           scope: input.scope,
           projectName: input.projectName,
           machineBranchId: input.machineBranchId,

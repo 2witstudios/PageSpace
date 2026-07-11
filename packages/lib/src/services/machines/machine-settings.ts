@@ -2,14 +2,14 @@
  * Machine Settings — the provider-agnostic orchestration behind the Machine
  * page's Settings tab (Terminal — GA, Machine page rebuild).
  *
- * A "Machine" is its backing `PageType.TERMINAL` page. Its settings live on
+ * A "Machine" is its backing `PageType.MACHINE` page. Its settings live on
  * that page row: `name` is the page title, `description`/`allowPageAgents` are
  * dedicated Machine columns, and `visibleToGlobalAssistant` reuses the existing
  * page column.
  *
  * NOTE ON THE TWO ACCESS TOGGLES: this route only PERSISTS `visibleToGlobalAssistant`
  * and `allowPageAgents` for a Machine. Their ENFORCEMENT is a separate consumer,
- * not wired yet (and not this node's scope) — for TERMINAL pages nothing reads
+ * not wired yet (and not this node's scope) — for MACHINE pages nothing reads
  * either flag today: `visibleToGlobalAssistant` is consulted only for `AI_CHAT`
  * agents (agent-awareness.ts), and `allowPageAgents` has no reader at all. The
  * follow-up nodes wire `visibleToGlobalAssistant` into the global-assistant
@@ -48,9 +48,9 @@ export interface MachineSettingsPatch {
  * `trashPage` soft-deletes it (reversible via the normal restore path).
  */
 export interface MachineSettingsStore {
-  getSettings(terminalId: string): Promise<MachineSettings | null>;
-  updateSettings(terminalId: string, patch: MachineSettingsPatch): Promise<MachineSettings | null>;
-  trashPage(terminalId: string): Promise<void>;
+  getSettings(machineId: string): Promise<MachineSettings | null>;
+  updateSettings(machineId: string, patch: MachineSettingsPatch): Promise<MachineSettings | null>;
+  trashPage(machineId: string): Promise<void>;
 }
 
 /**
@@ -60,11 +60,11 @@ export interface MachineSettingsStore {
  * the delete as a whole (the page is already trashed by then).
  */
 export interface MachineSpriteTeardown {
-  teardown(terminalId: string): Promise<void>;
+  teardown(machineId: string): Promise<void>;
 }
 
 export interface DeleteMachineDeps {
-  terminalId: string;
+  machineId: string;
   store: MachineSettingsStore;
   sprite: MachineSpriteTeardown;
 }
@@ -74,18 +74,18 @@ export type DeleteMachineResult =
   | { ok: false; reason: 'not_found' };
 
 export async function getMachineSettings(input: {
-  terminalId: string;
+  machineId: string;
   store: MachineSettingsStore;
 }): Promise<MachineSettings | null> {
-  return input.store.getSettings(input.terminalId);
+  return input.store.getSettings(input.machineId);
 }
 
 export async function updateMachineSettings(input: {
-  terminalId: string;
+  machineId: string;
   patch: MachineSettingsPatch;
   store: MachineSettingsStore;
 }): Promise<MachineSettings | null> {
-  return input.store.updateSettings(input.terminalId, input.patch);
+  return input.store.updateSettings(input.machineId, input.patch);
 }
 
 /**
@@ -110,18 +110,18 @@ export async function updateMachineSettings(input: {
  * on next use). An earlier revision hard-deleted these rows and was reverted:
  * destroying config during a reversible delete is data loss.
  */
-export async function deleteMachine({ terminalId, store, sprite }: DeleteMachineDeps): Promise<DeleteMachineResult> {
-  const settings = await store.getSettings(terminalId);
+export async function deleteMachine({ machineId, store, sprite }: DeleteMachineDeps): Promise<DeleteMachineResult> {
+  const settings = await store.getSettings(machineId);
   if (!settings) return { ok: false, reason: 'not_found' };
 
   // 1. Trash the page first — reversible, and hides the Machine immediately.
-  await store.trashPage(terminalId);
+  await store.trashPage(machineId);
 
   // 2. Then tear down the Machine's own Sprite. A failure here is recoverable
   //    (orphaned Sprite), so it never fails the delete — we just report it.
   let spriteTornDown = true;
   try {
-    await sprite.teardown(terminalId);
+    await sprite.teardown(machineId);
   } catch {
     spriteTornDown = false;
   }

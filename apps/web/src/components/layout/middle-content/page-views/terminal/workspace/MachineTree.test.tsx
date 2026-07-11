@@ -48,7 +48,7 @@ const cannedFetch = () =>
 const renderTree = (props: Partial<Parameters<typeof MachineTree>[0]> = {}) =>
   render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <MachineTree terminalId={TERMINAL_ID} {...props} />
+      <MachineTree machineId={TERMINAL_ID} {...props} />
     </SWRConfig>,
   );
 

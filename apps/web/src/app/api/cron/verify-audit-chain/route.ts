@@ -1,4 +1,4 @@
-import { verifyAndAlert } from '@pagespace/lib/audit/security-audit-alerting';
+import { runFullAuditVerification } from '@pagespace/lib/audit/full-audit-verification';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
@@ -7,8 +7,13 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 /**
  * Cron endpoint to verify the security audit log hash chain integrity.
  *
- * Detects tampering in the security audit log by recomputing each entry's
- * hash and verifying chain links. Fires the registered alert handler on failure.
+ * Post-cutover (#890 Phase 2, leaf 5) this consults the FULL trust-plane
+ * verification: chain consistency (recompute + linkage, era-aware) AND
+ * anchor-vs-chain matching where anchoring is configured AND co-stream
+ * reconciliation where collector records are supplied (none here — the
+ * tamper drill passes them explicitly). Skipped checks are reported with a
+ * reason, never silent. Alerts fire inside the lib layer (verifyAndAlert /
+ * notifyAnchorVerificationFailure).
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
@@ -19,32 +24,42 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await verifyAndAlert('periodic', { stopOnFirstBreak: true });
+    const { chain, anchors, coStream, isValid } = await runFullAuditVerification({
+      source: 'periodic',
+      chain: { stopOnFirstBreak: true },
+    });
 
-    if (!result.isValid) {
+    if (!chain.isValid) {
       loggers.security.error(
         '[SECURITY ALERT] Security audit hash chain integrity check FAILED.',
         {
-          breakPoint: result.breakPoint,
-          entriesVerified: result.entriesVerified,
-          invalidEntries: result.invalidEntries,
+          breakPoint: chain.breakPoint,
+          entriesVerified: chain.entriesVerified,
+          invalidEntries: chain.invalidEntries,
         }
       );
     } else {
       loggers.api.info(
-        `[Cron] Security audit chain verified: ${result.validEntries} entries valid`
+        `[Cron] Security audit chain verified: ${chain.validEntries} entries valid`
       );
     }
 
-    audit({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid: result.isValid, entriesVerified: result.entriesVerified } });
+    audit({ eventType: 'data.read', resourceType: 'cron_job', resourceId: 'verify_audit_chain', details: { isValid, entriesVerified: chain.entriesVerified } });
 
     return NextResponse.json({
       success: true,
-      isValid: result.isValid,
-      totalEntries: result.totalEntries,
-      entriesVerified: result.entriesVerified,
-      validEntries: result.validEntries,
-      invalidEntries: result.invalidEntries,
+      isValid,
+      chainValid: chain.isValid,
+      totalEntries: chain.totalEntries,
+      entriesVerified: chain.entriesVerified,
+      validEntries: chain.validEntries,
+      invalidEntries: chain.invalidEntries,
+      anchors: anchors.configured
+        ? { configured: true, allMatch: anchors.report.allMatch, counts: anchors.report.counts }
+        : { configured: false, skippedReason: anchors.skippedReason },
+      coStream: coStream.configured
+        ? { configured: true, verified: coStream.report.verified, counts: coStream.report.counts }
+        : { configured: false, skippedReason: coStream.skippedReason },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

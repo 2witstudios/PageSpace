@@ -1,8 +1,9 @@
 import type { AuditLogSource } from '../services/siem-adapter';
 import type {
   ActivityLogHashableFields,
-  SecurityAuditHashableFields,
+  SecurityAuditEraFields,
 } from '../services/siem-chain-hashers';
+import type { SiemStorePlane } from '../services/siem-pool-routing';
 import { CURSOR_INIT_SENTINEL } from '../services/siem-sources';
 
 /**
@@ -33,14 +34,21 @@ interface PgClient {
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
 }
 
+// pg parses timestamptz to Date under node, but string-typed rows appear in
+// some runtimes — same defensive coercion as the SIEM entry mappers. Hash
+// recomputation calls .toISOString(), so the coercion is load-bearing here.
+function toDate(value: Date | string): Date {
+  return value instanceof Date ? value : new Date(value);
+}
+
 /**
  * Load the anchor hash for a source — the logHash of the row identified
  * by cursor.lastDeliveredId. Returns null when:
  *   - lastDeliveredId is the CURSOR_INIT_SENTINEL (fresh cursor, nothing
  *     was ever delivered for this source → the caller skips verification)
- *   - the anchor row can no longer be found (pruned? deleted?) — we log a
- *     warn so an operator notices, but we don't halt delivery; a null
- *     anchor is treated the same as fresh init so the next batch ships.
+ *   - the anchor row can no longer be found — we log a warn so an operator
+ *     notices; the PREFLIGHT decides what a missing anchor means (backfill
+ *     lag → defer the source; genuine loss → halt fail-closed).
  */
 export async function loadAnchorHash(
   client: PgClient,
@@ -65,7 +73,7 @@ export async function loadAnchorHash(
   const row = result.rows[0] as { logHash: string | null } | undefined;
   if (!row) {
     console.warn(
-      `[siem-delivery] Anchor row not found source=${source} id=${lastDeliveredId} — treating as fresh init`
+      `[siem-delivery] Anchor row not found source=${source} id=${lastDeliveredId} — deferring to preflight (backfill lag vs anchor loss)`
     );
     return null;
   }
@@ -113,7 +121,7 @@ export async function loadActivityLogHashableFields(
     };
     map.set(row.id, {
       id: row.id,
-      timestamp: row.timestamp,
+      timestamp: toDate(row.timestamp),
       operation: row.operation,
       resourceType: row.resourceType,
       resourceId: row.resourceId,
@@ -137,14 +145,23 @@ export async function loadActivityLogHashableFields(
  * and folds fields into metadata, both of which would corrupt hash
  * recomputation. This loader stays coupled to the DB column names so the
  * formula in siem-chain-hashers.ts can mirror the write side byte-exactly.
+ *
+ * `plane` selects the store shape (#890 Phase 2): the admin table carries the
+ * nullable emission_hash era discriminator (NULL = backfilled legacy row,
+ * set = chainer-era row) and the SELECT must include it; the legacy main
+ * table has no such column, so main-plane rows are pinned to the legacy era.
  */
 export async function loadSecurityAuditHashableFields(
   client: PgClient,
-  ids: string[]
-): Promise<Map<string, SecurityAuditHashableFields>> {
+  ids: string[],
+  opts: { plane: SiemStorePlane }
+): Promise<Map<string, SecurityAuditEraFields>> {
   if (ids.length === 0) {
     return new Map();
   }
+
+  const emissionColumn =
+    opts.plane === 'admin' ? ',\n            emission_hash AS "emissionHash"' : '';
 
   const result = await client.query(
     `SELECT id,
@@ -155,13 +172,13 @@ export async function loadSecurityAuditHashableFields(
             details,
             risk_score AS "riskScore",
             anomaly_flags AS "anomalyFlags",
-            timestamp
+            timestamp${emissionColumn}
      FROM security_audit_log
      WHERE id = ANY($1)`,
     [ids]
   );
 
-  const map = new Map<string, SecurityAuditHashableFields>();
+  const map = new Map<string, SecurityAuditEraFields>();
   for (const raw of result.rows) {
     const row = raw as {
       id: string;
@@ -173,6 +190,7 @@ export async function loadSecurityAuditHashableFields(
       riskScore: number | null;
       anomalyFlags: string[] | null;
       timestamp: Date;
+      emissionHash?: string | null;
     };
     map.set(row.id, {
       eventType: row.eventType,
@@ -182,7 +200,8 @@ export async function loadSecurityAuditHashableFields(
       details: row.details,
       riskScore: row.riskScore,
       anomalyFlags: row.anomalyFlags,
-      timestamp: row.timestamp,
+      timestamp: toDate(row.timestamp),
+      emissionHash: opts.plane === 'admin' ? (row.emissionHash ?? null) : null,
     });
   }
 

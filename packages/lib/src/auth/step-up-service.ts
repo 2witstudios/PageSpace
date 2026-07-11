@@ -37,6 +37,7 @@ import {
   type AuthenticatorTransportFuture,
 } from '@simplewebauthn/server';
 import { hashToken, generateToken } from './token-utils';
+import { decryptField } from '../encryption/field-crypto';
 import { PASSKEY_CONFIG, type AuthenticationOptionsWithHints } from './passkey-service';
 import {
   STEP_UP_CHALLENGE_EXPIRY_MINUTES,
@@ -308,7 +309,7 @@ export async function requestMagicLinkStepUp(input: unknown): Promise<RequestMag
 
   const confirmUrl = `${resolveAppUrl()}/api/auth/step-up/magic-link/verify?token=${encodeURIComponent(token)}`;
   await sendEmail({
-    to: user.email,
+    to: await decryptField(user.email),
     subject: 'Confirm this action in PageSpace',
     react: React.createElement(StepUpConfirmationEmail, { confirmUrl }),
   });

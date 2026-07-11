@@ -75,36 +75,36 @@ beforeEach(() => {
 describe('GET /api/machines/branches', () => {
   it('given no auth, returns the auth error', async () => {
     mockAuthenticateRequest.mockResolvedValue(AUTH_DENIED);
-    const res = await GET(new Request('https://x.test/api/machines/branches?terminalId=term-1&projectName=repo'));
+    const res = await GET(new Request('https://x.test/api/machines/branches?machineId=term-1&projectName=repo'));
     expect(res.status).toBe(401);
   });
 
   it('given view access to the machine, lists its branches', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListBranches.mockResolvedValue([{ branchName: 'main', createdAt: new Date('2026-01-01') }]);
-    const res = await GET(new Request('https://x.test/api/machines/branches?terminalId=term-1&projectName=repo'));
+    const res = await GET(new Request('https://x.test/api/machines/branches?machineId=term-1&projectName=repo'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.branches).toHaveLength(1);
     expect(mockCanViewMachine).toHaveBeenCalledWith('user-1', 'term-1');
     expect(mockListBranches).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 'term-1', projectName: 'repo' }),
+      expect.objectContaining({ machineId: 'term-1', projectName: 'repo' }),
     );
   });
 
-  it('given no terminalId, returns 400', async () => {
+  it('given no machineId, returns 400', async () => {
     const res = await GET(new Request('https://x.test/api/machines/branches?projectName=repo'));
     expect(res.status).toBe(400);
   });
 
   it('given no projectName, returns 400', async () => {
-    const res = await GET(new Request('https://x.test/api/machines/branches?terminalId=term-1'));
+    const res = await GET(new Request('https://x.test/api/machines/branches?machineId=term-1'));
     expect(res.status).toBe(400);
   });
 
   it('given no view access, returns 403 without listing', async () => {
     mockCanViewMachine.mockResolvedValue(false);
-    const res = await GET(new Request('https://x.test/api/machines/branches?terminalId=term-1&projectName=repo'));
+    const res = await GET(new Request('https://x.test/api/machines/branches?machineId=term-1&projectName=repo'));
     expect(res.status).toBe(403);
     expect(mockListBranches).not.toHaveBeenCalled();
   });
@@ -121,7 +121,7 @@ describe('POST /api/machines/branches', () => {
 
   it('given no edit access to the machine, returns 403 without spawning', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
-    const res = await POST(req({ terminalId: 't1', projectName: 'repo', branchName: 'main' }));
+    const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(403);
     expect(mockSpawnBranch).not.toHaveBeenCalled();
   });
@@ -129,43 +129,43 @@ describe('POST /api/machines/branches', () => {
   it('given a fresh spawn, returns 201', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false });
-    const res = await POST(req({ terminalId: 't1', projectName: 'repo', branchName: 'main' }));
+    const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.branch).toMatchObject({ branchName: 'main', resumed: false });
     expect(mockSpawnBranch).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: 'repo', branchName: 'main' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main' }),
     );
   });
 
   it('given a resumed spawn, returns 200', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true });
-    const res = await POST(req({ terminalId: 't1', projectName: 'repo', branchName: 'main' }));
+    const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(200);
   });
 
   it('given no such project, returns 404', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockSpawnBranch.mockResolvedValue({ ok: false, reason: 'project_not_found' });
-    const res = await POST(req({ terminalId: 't1', projectName: 'nope', branchName: 'main' }));
+    const res = await POST(req({ machineId: 't1', projectName: 'nope', branchName: 'main' }));
     expect(res.status).toBe(404);
   });
 
   it('given a clone failure, returns 502', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockSpawnBranch.mockResolvedValue({ ok: false, reason: 'clone_failed', detail: 'fatal: repository not found' });
-    const res = await POST(req({ terminalId: 't1', projectName: 'repo', branchName: 'main' }));
+    const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(502);
   });
 
   it('given a missing branchName, returns 400 without checking access', async () => {
-    const res = await POST(req({ terminalId: 't1', projectName: 'repo' }));
+    const res = await POST(req({ machineId: 't1', projectName: 'repo' }));
     expect(res.status).toBe(400);
     expect(mockCanAccessMachine).not.toHaveBeenCalled();
   });
 
-  it('given no terminalId, returns 400', async () => {
+  it('given no machineId, returns 400', async () => {
     const res = await POST(req({ projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(400);
   });
@@ -175,7 +175,7 @@ describe('DELETE /api/machines/branches', () => {
   it('given no edit access, returns 403 without killing', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await DELETE(
-      new Request('https://x.test/api/machines/branches?terminalId=t1&projectName=repo&branchName=main', { method: 'DELETE' }),
+      new Request('https://x.test/api/machines/branches?machineId=t1&projectName=repo&branchName=main', { method: 'DELETE' }),
     );
     expect(res.status).toBe(403);
     expect(mockKillBranch).not.toHaveBeenCalled();
@@ -185,7 +185,7 @@ describe('DELETE /api/machines/branches', () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockKillBranch.mockResolvedValue({ ok: false, reason: 'not_found' });
     const res = await DELETE(
-      new Request('https://x.test/api/machines/branches?terminalId=t1&projectName=repo&branchName=main', { method: 'DELETE' }),
+      new Request('https://x.test/api/machines/branches?machineId=t1&projectName=repo&branchName=main', { method: 'DELETE' }),
     );
     expect(res.status).toBe(404);
   });
@@ -194,20 +194,20 @@ describe('DELETE /api/machines/branches', () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockKillBranch.mockResolvedValue({ ok: true });
     const res = await DELETE(
-      new Request('https://x.test/api/machines/branches?terminalId=t1&projectName=repo&branchName=main', { method: 'DELETE' }),
+      new Request('https://x.test/api/machines/branches?machineId=t1&projectName=repo&branchName=main', { method: 'DELETE' }),
     );
     expect(res.status).toBe(200);
     expect(mockKillBranch).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: 'repo', branchName: 'main' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main' }),
     );
   });
 
   it('given no branchName, returns 400', async () => {
-    const res = await DELETE(new Request('https://x.test/api/machines/branches?terminalId=t1&projectName=repo', { method: 'DELETE' }));
+    const res = await DELETE(new Request('https://x.test/api/machines/branches?machineId=t1&projectName=repo', { method: 'DELETE' }));
     expect(res.status).toBe(400);
   });
 
-  it('given no terminalId, returns 400', async () => {
+  it('given no machineId, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/branches?projectName=repo&branchName=main', { method: 'DELETE' }));
     expect(res.status).toBe(400);
   });

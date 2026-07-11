@@ -136,6 +136,15 @@ export const nextConfig: NextConfig = {
         process: false,
         os: false,
       };
+      // The ClickHouse analytics client (#890 Phase 3) is server-only and
+      // imports node:os/node:http at module scope, which resolve.fallback
+      // does not cover (node: prefix). Client bundles reach it transitively
+      // through @pagespace/lib's logging writers (dead code in the browser,
+      // same as pg above) — stub the whole package out.
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        '@clickhouse/client': false,
+      };
       const outputPath = config.output.path ?? path.join(__dirname, ".next");
 
       config.plugins.push(

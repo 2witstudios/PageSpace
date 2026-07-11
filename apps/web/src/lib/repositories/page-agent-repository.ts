@@ -221,13 +221,13 @@ export interface AgentConfigUpdate {
  */
 export type MachineRef =
   | { kind: 'own' }
-  | { kind: 'existing'; terminalId: string };
+  | { kind: 'existing'; machineId: string };
 
 export function isMachineRef(value: unknown): value is MachineRef {
   if (typeof value !== 'object' || value === null) return false;
-  const { kind, terminalId } = value as { kind?: unknown; terminalId?: unknown };
+  const { kind, machineId } = value as { kind?: unknown; machineId?: unknown };
   if (kind === 'own') return true;
-  if (kind === 'existing') return typeof terminalId === 'string' && terminalId.length > 0;
+  if (kind === 'existing') return typeof machineId === 'string' && machineId.length > 0;
   return false;
 }
 

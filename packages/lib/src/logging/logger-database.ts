@@ -9,6 +9,21 @@ import type { LogEntry, LogContext } from './logger';
 import type { LogInput, HttpMethod } from './logger-types';
 import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '../deployment-mode';
+import { isClickHouseEnabled } from '../observability/clickhouse-client';
+import {
+  insertApiMetric,
+  insertError,
+  insertSystemLog,
+  insertUserActivity,
+} from '../observability/analytics-inserts';
+
+// #890 Phase 3: when CLICKHOUSE_ENABLED='true', the 4 analytics tables
+// (system_logs, api_metrics, user_activities, error_logs) write to ClickHouse
+// via the buffered insert adapters and the main-PG write retires. Off (the
+// default) leaves the PG path byte-identical. aiUsageLogs stays PG in both
+// modes — billing joins + cost-reconcile UPDATEs (Phase 4 replicates via CDC).
+// Readers stay on PG until leaf 3, so enabled mode has a transitional window
+// where the admin UI shows only pre-cutover rows.
 
 interface DatabaseLogEntry {
   id: string;
@@ -104,6 +119,14 @@ function convertToDbFormat(entry: LogEntry): DatabaseLogEntry {
 export async function writeLogsToDatabase(entries: LogEntry[]): Promise<void> {
   if (entries.length === 0) return;
 
+  if (isClickHouseEnabled()) {
+    // Same field extraction as the PG path, then (row) → void into the buffer.
+    for (const entry of entries) {
+      insertSystemLog(convertToDbFormat(entry));
+    }
+    return;
+  }
+
   try {
     const dbEntries = entries.map(convertToDbFormat);
     
@@ -136,6 +159,11 @@ export async function writeApiMetrics(metrics: {
   cacheKey?: string;
   timestamp?: Date;
 }): Promise<void> {
+  if (isClickHouseEnabled()) {
+    insertApiMetric(metrics);
+    return;
+  }
+
   try {
     await db.insert(apiMetrics).values({
       id: createId(),
@@ -261,6 +289,11 @@ export async function writeUserActivity(activity: {
   userAgent?: string;
   metadata?: LogInput;
 }): Promise<void> {
+  if (isClickHouseEnabled()) {
+    insertUserActivity(activity);
+    return;
+  }
+
   try {
     await db.insert(userActivities).values({
       id: createId(),
@@ -300,6 +333,11 @@ export async function writeError(error: {
   userAgent?: string;
   metadata?: LogInput;
 }): Promise<void> {
+  if (isClickHouseEnabled()) {
+    insertError(error);
+    return;
+  }
+
   try {
     await db.insert(errorLogs).values({
       id: createId(),

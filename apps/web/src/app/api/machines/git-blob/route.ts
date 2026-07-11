@@ -4,7 +4,7 @@
  * the working tree — that's `/api/machines/files`; see `machine-git-blob.ts`'s
  * scope-boundary note for why these stay separate primitives).
  *
- * GET ?terminalId=&projectName=&branchName=&ref=&path=
+ * GET ?machineId=&projectName=&branchName=&ref=&path=
  *   → { content, truncated }
  *
  * `ref` is a resolved commit-ish (a branch, tag, SHA, or a merge-base the
@@ -55,8 +55,8 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const terminalId = requireString(url.searchParams.get('terminalId'), 'terminalId');
-  if (!terminalId.ok) return terminalId.error;
+  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  if (!machineId.ok) return machineId.error;
   const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
   const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
@@ -64,7 +64,7 @@ export async function GET(request: Request) {
 
   // Authorize BEFORE parsing ref/path, so a user without view access gets a
   // uniform 403 and can never probe ref/path handling.
-  if (!(await canViewMachine(auth.userId, terminalId.value))) {
+  if (!(await canViewMachine(auth.userId, machineId.value))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
@@ -74,7 +74,7 @@ export async function GET(request: Request) {
   if (!path.ok) return path.error;
 
   const resolved = await resolveBranchMachineHandle({
-    terminalId: terminalId.value,
+    machineId: machineId.value,
     projectName: projectName.value,
     branchName: branchName.value,
   });
@@ -86,7 +86,7 @@ export async function GET(request: Request) {
   }
 
   const actor = await resolveMachineActorContext(auth.userId);
-  const scopeKey = `${terminalId.value}:${projectName.value}:${branchName.value}:git-blob`;
+  const scopeKey = `${machineId.value}:${projectName.value}:${branchName.value}:git-blob`;
   const ctx = buildGitBlobActorContext(scopeKey, actor);
   const deps = buildGitBlobDepsForHandle(resolved.handle);
 

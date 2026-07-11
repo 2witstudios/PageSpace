@@ -10,17 +10,25 @@
  * - Convenience methods for common events
  * - Query interface for forensic analysis
  *
- * Concurrency: logEvent() uses pg_advisory_xact_lock to serialize
- * hash chain writes. The previous hash is always read from the database
- * inside the advisory lock, so multi-instance deployments are safe.
+ * Concurrency (#890 Phase 2, leaf 5 cutover): with a dedicated Admin PG,
+ * logEvent() is LOCK-FREE — pure emission hash + one INSERT into the ingest
+ * queue; the single-writer chainer assigns chain_seq/chainHash out of band.
+ * Under break-glass only, the legacy pg_advisory_xact_lock append against
+ * the main DB remains, with the previous hash read inside the lock.
  */
 
 import { createHash } from 'crypto';
-import { db } from '@pagespace/db/db';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
-import { createSecurityAuditRepository, type SecurityAuditRepository } from './security-audit-repository';
+import {
+  createSecurityAuditRepository,
+  type AppendEventOptions,
+} from './security-audit-repository';
+import { createAuditIngestWriter } from './audit-ingest-writer';
+import { resolveAuditDbBinding, type AuditDbBinding } from './audit-db-binding';
+import { notifyAdminDbBreakGlass } from './security-audit-alerting';
+import { loggers } from '../logging/logger-config';
 
 /**
  * Audit event input structure
@@ -100,8 +108,18 @@ export function computeSecurityEventHash(
  */
 export { SECURITY_AUDIT_CHAIN_LOCK_KEY as CHAIN_LOCK_KEY } from './security-audit-repository';
 
+/**
+ * The one write capability the service needs. Satisfied by BOTH append
+ * backends of the cutover (#890 Phase 2, leaf 5): the legacy advisory-lock
+ * repository (SecurityAuditRepository) and the lock-free ingest writer
+ * adapter built in getDefaultAppendPath().
+ */
+export interface AuditAppendPath {
+  appendEvent(event: AuditEvent, opts?: AppendEventOptions): Promise<void>;
+}
+
 export interface SecurityAuditServiceDeps {
-  repository: SecurityAuditRepository;
+  repository: AuditAppendPath;
 }
 
 export interface SecurityAuditService {
@@ -320,24 +338,102 @@ export function createSecurityAuditService({ repository }: SecurityAuditServiceD
 }
 
 /**
- * Lazily build the default repository instance. Deferred (rather than built
- * eagerly at module load) so module load order between security-audit.ts
- * and security-audit-repository.ts never matters.
+ * Break-glass append path (#890 Phase 2, leaf 5 + folded break-glass
+ * observability task): the OLD advisory-lock chained append against the
+ * main DB, made LOUD at the moment it is chosen. Emitted exactly once per
+ * process, at the resolved-mode call site:
+ *   1. a structured security-category error (the log-plane banner),
+ *   2. a real alert through the security-audit-alerting channel,
+ *   3. a self-recorded security event in the (degraded) chain itself, so
+ *      the degrade is visible in forensic queries and SIEM deliveries.
+ * The event goes through the repository directly — not audit() — so the
+ * emission can never recurse into this bind point.
  */
-let defaultRepository: SecurityAuditRepository | null = null;
-function getDefaultRepository(): SecurityAuditRepository {
-  if (!defaultRepository) {
-    defaultRepository = createSecurityAuditRepository({ db });
-  }
-  return defaultRepository;
+function buildBreakGlassAppendPath(binding: Extract<AuditDbBinding, { mode: 'break-glass' }>): AuditAppendPath {
+  const repository = createSecurityAuditRepository({ db: binding.db });
+
+  loggers.security.error(
+    '[SecurityAudit] ADMIN DB BREAK-GLASS ACTIVE — audit writes are degraded to the main application database',
+    { reason: binding.reason },
+  );
+
+  void notifyAdminDbBreakGlass({ reason: binding.reason });
+
+  repository
+    .appendEvent({
+      eventType: 'security.suspicious.activity',
+      serviceId: 'security-audit',
+      resourceType: 'trust_plane',
+      resourceId: 'admin_db',
+      riskScore: 0.9,
+      anomalyFlags: ['admin_db_break_glass'],
+      details: { breakGlass: true, reason: binding.reason },
+    })
+    .catch((error: unknown) => {
+      loggers.security.error('[SecurityAudit] failed to record the break-glass security event', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
+
+  return repository;
 }
+
+/**
+ * Lazily resolve the default append path (#890 Phase 2, leaf 5 cutover).
+ * Deferred (rather than built eagerly at module load) so module load order
+ * never matters and env is read after late-loaded dotenv.
+ *
+ *   dedicated   → lock-free ingest writer on the Admin PG: pure emission
+ *                 hash + ONE INSERT, no advisory lock, no head read, no
+ *                 transaction. Chaining belongs to the single-writer
+ *                 chainer worker.
+ *   break-glass → the legacy chained append against the main DB, with loud
+ *                 observability (see buildBreakGlassAppendPath).
+ *   fail        → resolveAuditDbBinding throws; logEvent rejects per event
+ *                 and the audit() wrapper surfaces it as a warn log.
+ */
+let defaultAppendPath: AuditAppendPath | null = null;
+function getDefaultAppendPath(): AuditAppendPath {
+  if (!defaultAppendPath) {
+    const binding = resolveAuditDbBinding();
+    if (binding.mode === 'dedicated') {
+      const writer = createAuditIngestWriter({ db: binding.db });
+      defaultAppendPath = {
+        appendEvent: (event, opts) => writer.writeToIngest(event, opts),
+      };
+    } else {
+      defaultAppendPath = buildBreakGlassAppendPath(binding);
+    }
+  }
+  return defaultAppendPath;
+}
+
+/**
+ * Lazy async proxy over the resolved append path. Resolution happens INSIDE
+ * the async appendEvent so a fail-mode throw becomes a rejection — the
+ * fire-and-forget audit() wrapper attaches .catch() and must never see a
+ * synchronous throw from logEvent.
+ */
+const lazyDefaultAppendPath: AuditAppendPath = {
+  appendEvent: async (event, opts) => getDefaultAppendPath().appendEvent(event, opts),
+};
 
 let defaultService: SecurityAuditService | null = null;
 function getDefaultService(): SecurityAuditService {
   if (!defaultService) {
-    defaultService = createSecurityAuditService({ repository: getDefaultRepository() });
+    defaultService = createSecurityAuditService({ repository: lazyDefaultAppendPath });
   }
   return defaultService;
+}
+
+/**
+ * Test hook: drop the cached default append path + service so a test can
+ * re-resolve under a different admin-db mode (pair with
+ * resetAuditDbBindingForTests).
+ */
+export function resetDefaultSecurityAuditForTests(): void {
+  defaultAppendPath = null;
+  defaultService = null;
 }
 
 /**

@@ -3,7 +3,7 @@ import { deriveBranchSessionKey, isValidBranchName } from '../branch-session';
 
 const base = {
   tenantId: 'tenant-1',
-  terminalId: 'terminal-1',
+  machineId: 'terminal-1',
   projectName: 'my-repo',
   branchName: 'main',
   secret: 'a'.repeat(32),
@@ -27,8 +27,8 @@ describe('deriveBranchSessionKey', () => {
   });
 
   it('given two different machines, should derive two different session keys', () => {
-    const a = deriveBranchSessionKey({ ...base, terminalId: 'terminal-1' });
-    const b = deriveBranchSessionKey({ ...base, terminalId: 'terminal-2' });
+    const a = deriveBranchSessionKey({ ...base, machineId: 'terminal-1' });
+    const b = deriveBranchSessionKey({ ...base, machineId: 'terminal-2' });
     expect(a).not.toBe(b);
   });
 

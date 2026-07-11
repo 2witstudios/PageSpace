@@ -14,7 +14,7 @@ import { isUniqueViolation } from '../subdomain-allocation';
 export interface MachineBranchRecord {
   id: string;
   ownerId: string;
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   sessionKey: string;
@@ -25,7 +25,7 @@ export interface MachineBranchRecord {
 
 export interface NewMachineBranchInput {
   ownerId: string;
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   sessionKey: string;
@@ -34,11 +34,11 @@ export interface NewMachineBranchInput {
 }
 
 export interface MachineBranchStore {
-  list(terminalId: string, projectName: string): Promise<MachineBranchRecord[]>;
-  findByName(terminalId: string, projectName: string, branchName: string): Promise<MachineBranchRecord | null>;
+  list(machineId: string, projectName: string): Promise<MachineBranchRecord[]>;
+  findByName(machineId: string, projectName: string, branchName: string): Promise<MachineBranchRecord | null>;
   /** Level-agnostic lookup by the branch-terminal's own row id — no project/branch name path required (mirrors PurePoint's `Attach{agent_id}`). */
   findById(id: string): Promise<MachineBranchRecord | null>;
-  /** Throws a unique-violation error (see `isUniqueViolation`) if this (terminalId, projectName, branchName) already exists. */
+  /** Throws a unique-violation error (see `isUniqueViolation`) if this (machineId, projectName, branchName) already exists. */
   create(input: NewMachineBranchInput): Promise<MachineBranchRecord>;
   /**
    * Conditional update — only writes if the row's CURRENT `sandboxId` still
@@ -49,7 +49,7 @@ export interface MachineBranchStore {
    * untracked) — the loser instead sees `updated: false` and can react.
    */
   updateSandboxId(input: { id: string; previousSandboxId: string; sandboxId: string; now: Date }): Promise<boolean>;
-  remove(terminalId: string, projectName: string, branchName: string): Promise<void>;
+  remove(machineId: string, projectName: string, branchName: string): Promise<void>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -68,21 +68,21 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
   ]);
 
   return {
-    async list(terminalId, projectName) {
+    async list(machineId, projectName) {
       const rows = await db
         .select()
         .from(machineBranches)
-        .where(and(eq(machineBranches.terminalId, terminalId), eq(machineBranches.projectName, projectName)));
+        .where(and(eq(machineBranches.machineId, machineId), eq(machineBranches.projectName, projectName)));
       return rows;
     },
 
-    async findByName(terminalId, projectName, branchName) {
+    async findByName(machineId, projectName, branchName) {
       const [row] = await db
         .select()
         .from(machineBranches)
         .where(
           and(
-            eq(machineBranches.terminalId, terminalId),
+            eq(machineBranches.machineId, machineId),
             eq(machineBranches.projectName, projectName),
             eq(machineBranches.branchName, branchName),
           ),
@@ -101,7 +101,7 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
         .insert(machineBranches)
         .values({
           ownerId: input.ownerId,
-          terminalId: input.terminalId,
+          machineId: input.machineId,
           projectName: input.projectName,
           branchName: input.branchName,
           sessionKey: input.sessionKey,
@@ -122,12 +122,12 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
       return updated.length > 0;
     },
 
-    async remove(terminalId, projectName, branchName) {
+    async remove(machineId, projectName, branchName) {
       await db
         .delete(machineBranches)
         .where(
           and(
-            eq(machineBranches.terminalId, terminalId),
+            eq(machineBranches.machineId, machineId),
             eq(machineBranches.projectName, projectName),
             eq(machineBranches.branchName, branchName),
           ),

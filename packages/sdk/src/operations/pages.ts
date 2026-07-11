@@ -26,7 +26,7 @@ export const pageTypeSchema = z.enum([
   'SHEET',
   'TASK_LIST',
   'CODE',
-  'TERMINAL',
+  'MACHINE',
 ]);
 
 const pageDataSchema = z.object({
@@ -151,7 +151,7 @@ export const listTrash = defineOperation({
 /**
  * `create_page` tool parity — POST `/api/pages` (`pages/route.ts:32`).
  * D9 resolution: the type enum is the full creatable set (route accepts
- * FILE, CODE, and admin-gated TERMINAL beyond the old tool's narrower list;
+ * FILE, CODE, and admin-gated MACHINE beyond the old tool's narrower list;
  * `packages/lib/src/content/page-types.config.ts:306-308`).
  */
 export const createPage = defineOperation({

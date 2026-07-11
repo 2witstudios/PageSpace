@@ -21,6 +21,19 @@ describe('pool-stats', () => {
     });
   });
 
+  describe('named pools', () => {
+    it('given an admin pool registered under its own name, should not clobber the default pool stats', () => {
+      registerPool(makePool(5, 3, 1));
+      registerPool(makePool(2, 2, 0), 'admin');
+      expect(getPoolStats()).toEqual({ total: 5, idle: 3, waiting: 1 });
+      expect(getPoolStats('admin')).toEqual({ total: 2, idle: 2, waiting: 0 });
+    });
+
+    it('given an unknown pool name, should return zeros', () => {
+      expect(getPoolStats('nonexistent')).toEqual({ total: 0, idle: 0, waiting: 0 });
+    });
+  });
+
   describe('registerPool', () => {
     it('returns total from pool.totalCount', () => {
       registerPool(makePool(7, 3, 2));

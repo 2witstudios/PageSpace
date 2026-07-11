@@ -842,12 +842,17 @@ describe('Logger startFlushTimer signal handlers', () => {
     // Trigger startFlushTimer to register handlers
     anyLogger.startFlushTimer();
 
-    // Call the SIGINT handler if registered
+    // Call the SIGINT handler if registered. Shutdown is now async
+    // (flush → drain analytics → exit, #890 Phase 3), so wait for the exit
+    // rather than asserting synchronously — and keep the spies installed
+    // until it lands so the real process.exit can never fire.
     if (handlers['SIGINT'] && handlers['SIGINT'].length > 0) {
       const handler = handlers['SIGINT'][handlers['SIGINT'].length - 1];
       handler();
-      expect(flushSpy).toHaveBeenCalled();
-      expect(exitSpy).toHaveBeenCalledWith(0);
+      await vi.waitFor(() => {
+        expect(flushSpy).toHaveBeenCalled();
+        expect(exitSpy).toHaveBeenCalledWith(0);
+      });
     }
 
     onSpy.mockRestore();
@@ -870,8 +875,10 @@ describe('Logger startFlushTimer signal handlers', () => {
     if (handlers['SIGTERM'] && handlers['SIGTERM'].length > 0) {
       const handler = handlers['SIGTERM'][handlers['SIGTERM'].length - 1];
       handler();
-      expect(flushSpy).toHaveBeenCalled();
-      expect(exitSpy).toHaveBeenCalledWith(0);
+      await vi.waitFor(() => {
+        expect(flushSpy).toHaveBeenCalled();
+        expect(exitSpy).toHaveBeenCalledWith(0);
+      });
     }
 
     onSpy.mockRestore();

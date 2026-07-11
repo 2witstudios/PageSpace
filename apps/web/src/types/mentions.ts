@@ -9,7 +9,7 @@ export interface BaseMention {
 }
 
 export interface PageMentionData {
-  pageType: 'DOCUMENT' | 'FOLDER' | 'AI_CHAT' | 'CHANNEL' | 'SHEET' | 'CANVAS' | 'FILE' | 'TASK_LIST' | 'CODE' | 'TERMINAL';
+  pageType: 'DOCUMENT' | 'FOLDER' | 'AI_CHAT' | 'CHANNEL' | 'SHEET' | 'CANVAS' | 'FILE' | 'TASK_LIST' | 'CODE' | 'MACHINE';
   driveId: string;
   /** Present for FILE pages; lets image-only pickers filter/preview without a second lookup. */
   mimeType?: string | null;
