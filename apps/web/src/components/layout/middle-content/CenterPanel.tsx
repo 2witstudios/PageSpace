@@ -15,7 +15,7 @@ import FileViewer from './page-views/file/FileViewer';
 import SheetView from './page-views/sheet/SheetView';
 import TaskListView from './page-views/task-list/TaskListView';
 import CodePageView from './page-views/code/CodePageView';
-import TerminalView from './page-views/terminal/TerminalView';
+import TerminalKeepAliveHost from './TerminalKeepAliveHost';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { getPageTypeComponent } from '@pagespace/lib/content/page-types.config';
@@ -169,7 +169,6 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
     SheetView,
     TaskListView,
     CodePageView,
-    TerminalView,
   };
 
   const componentName = getPageTypeComponent(page.type);
@@ -178,7 +177,13 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   // DocumentView uses pageId-only pattern for stability
   // Other components still use full page object (to be migrated)
   let pageComponent: React.ReactNode;
-  if (!ViewComponent) {
+  if (componentName === 'TerminalView') {
+    // Terminals are rendered by TerminalKeepAliveHost (kept mounted across
+    // navigation, CSS-hidden when inactive), NOT inline here — rendering one
+    // here too would mount a second, competing terminal subtree. Render
+    // nothing; the host draws over this content region for the active page.
+    pageComponent = null;
+  } else if (!ViewComponent) {
     pageComponent = (
       <div className="p-4 text-center text-muted-foreground">
         This page type is not supported.
@@ -190,9 +195,6 @@ const PageContent = memo(({ pageId }: { pageId: string | null }) => {
   } else if (componentName === 'CodePageView') {
     // CodePageView accepts only pageId (new pattern)
     pageComponent = <CodePageView key={`code-${page.id}`} pageId={page.id} />;
-  } else if (componentName === 'TerminalView') {
-    // TerminalView accepts only pageId (new pattern)
-    pageComponent = <TerminalView key={`terminal-${page.id}`} pageId={page.id} />;
   } else if (componentName === 'CanvasPageView') {
     // CanvasPageView accepts only pageId (new pattern) — fetches content from API
     pageComponent = <CanvasPageView key={`canvas-${page.id}`} pageId={page.id} />;
@@ -372,6 +374,10 @@ export default function CenterPanel() {
               <PageContent pageId={activePageId} />
             </CustomScrollArea>
           </PullToRefresh>
+          {/* Terminals live here, not inside PageContent: kept mounted across
+              navigation (bounded LRU) and CSS-hidden when inactive, so tab-back
+              is instant with the xterm buffer and socket listeners intact. */}
+          <TerminalKeepAliveHost driveId={activeDriveId} activePageId={activePageId} />
         </div>
       </div>
     </div>

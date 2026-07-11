@@ -31,7 +31,7 @@ import { machineBranches } from './machine-branches';
  * row's project — the same denormalization `machine_branches` itself uses
  * against `machine_projects`.
  *
- * Addressed by (terminalId, projectName, machineBranchId, name) for
+ * Addressed by (machineId, projectName, machineBranchId, name) for
  * spawn/list, or by the row's OWN `id` alone for attach/kill — level-agnostic,
  * exactly like PurePoint's `Attach{agent_id}` (no scope path required to
  * resolve an existing agent terminal's Sprite once you have its id). A
@@ -60,7 +60,7 @@ export const machineAgentTerminals = pgTable('machine_agent_terminals', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
 
-  terminalId: text('terminalId')
+  machineId: text('machineId')
     .notNull()
     .references(() => pages.id, { onDelete: 'cascade' }),
 
@@ -76,10 +76,10 @@ export const machineAgentTerminals = pgTable('machine_agent_terminals', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
-  terminalIdIdx: index('machine_agent_terminals_terminal_id_idx').on(table.terminalId),
+  machineIdIdx: index('machine_agent_terminals_machine_id_idx').on(table.machineId),
   machineBranchIdIdx: index('machine_agent_terminals_branch_id_idx').on(table.machineBranchId),
   scopeNameUnique: uniqueIndex('machine_agent_terminals_scope_name_idx').on(
-    table.terminalId,
+    table.machineId,
     sql`coalesce(${table.projectName}, '')`,
     sql`coalesce(${table.machineBranchId}, '')`,
     table.name,
@@ -91,8 +91,8 @@ export const machineAgentTerminalsRelations = relations(machineAgentTerminals, (
     fields: [machineAgentTerminals.ownerId],
     references: [users.id],
   }),
-  terminal: one(pages, {
-    fields: [machineAgentTerminals.terminalId],
+  machine: one(pages, {
+    fields: [machineAgentTerminals.machineId],
     references: [pages.id],
   }),
   branch: one(machineBranches, {

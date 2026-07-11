@@ -19,6 +19,7 @@ import {
   jsonb,
   index,
   bigserial,
+  type ExtraConfigColumn,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
@@ -74,21 +75,28 @@ export type SecurityEventType =
   | 'security.incident.created';
 
 /**
- * Security Audit Log table - tamper-evident security event tracking.
+ * Single source of truth for the security_audit_log table shape (#890 Phase 1).
  *
- * Uses a hash chain to ensure audit trail integrity:
- * - Each entry includes the hash of the previous entry
- * - Any modification breaks the chain and is detectable
- * - First entry in chain uses 'genesis' as previousHash
+ * The table exists in two planes during the trust-plane migration: the main
+ * app DB (current writer, FK to users intact) and the Admin PG trust plane
+ * (src/admin-schema.ts), where a FK to `users` is impossible — cross-database
+ * foreign keys don't exist, and the admin DB deliberately holds no app tables.
+ * drizzle-kit serializes inline FKs unconditionally, so the admin variant
+ * cannot be a plain re-export; this factory keeps columns and indexes defined
+ * exactly once so the two instances can never drift. Only `crossPlaneUserFk`
+ * differs between them.
  */
-export const securityAuditLog = pgTable('security_audit_log', {
+const securityAuditLogColumns = (opts: { crossPlaneUserFk: boolean }) => ({
   id: text('id').primaryKey().$defaultFn(() => createId()),
 
   // Event classification
   eventType: text('event_type').notNull().$type<SecurityEventType>(),
 
-  // Actor (who triggered the event)
-  userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+  // Actor (who triggered the event). The FK exists only in the app plane —
+  // the Admin PG has no users table to reference.
+  userId: opts.crossPlaneUserFk
+    ? text('user_id').references(() => users.id, { onDelete: 'set null' })
+    : text('user_id'),
   sessionId: text('session_id'),
   serviceId: text('service_id'),
 
@@ -124,7 +132,25 @@ export const securityAuditLog = pgTable('security_audit_log', {
   // Hash chain integrity
   previousHash: text('previous_hash').notNull(),
   eventHash: text('event_hash').notNull(),
-}, (table) => ({
+});
+
+/** The columns the shared index set touches — structural so both planes' tables fit. */
+type SecurityAuditLogIndexColumns = Record<
+  | 'timestamp'
+  | 'userId'
+  | 'eventType'
+  | 'resourceType'
+  | 'resourceId'
+  | 'ipAddress'
+  | 'ipBidx'
+  | 'eventHash'
+  | 'chainSeq'
+  | 'riskScore'
+  | 'sessionId',
+  Partial<ExtraConfigColumn>
+>;
+
+const securityAuditLogIndexes = (table: SecurityAuditLogIndexColumns) => ({
   // Time-based queries (most common access pattern)
   timestampIdx: index('idx_security_audit_timestamp').on(table.timestamp),
   // User activity forensics
@@ -145,7 +171,50 @@ export const securityAuditLog = pgTable('security_audit_log', {
   riskScoreIdx: index('idx_security_audit_risk_score').on(table.riskScore),
   // Session tracking
   sessionIdx: index('idx_security_audit_session').on(table.sessionId, table.timestamp),
-}));
+});
+
+export const defineSecurityAuditLogTable = (opts: { crossPlaneUserFk: boolean }) =>
+  pgTable('security_audit_log', securityAuditLogColumns(opts), securityAuditLogIndexes);
+
+/**
+ * Trust-plane (Admin PG) instance of security_audit_log (#890 Phase 2).
+ *
+ * Identical to the app-plane shape (columns + indexes come from the same
+ * builders above, so the planes cannot drift) with two deliberate deltas the
+ * shared factory cannot express:
+ *   - no cross-plane FK to `users` (the admin DB holds no app tables), and
+ *   - an extra NULLABLE `emission_hash` column: the chainer copies each
+ *     drained ingest row's emission hash here so verify-on-append can
+ *     recompute chainHash = H(emissionHash, prevHash) from storage. NULL
+ *     marks a legacy-era row (pre-cutover / backfilled) whose event_hash was
+ *     computed by the advisory-lock path. Verification reads walk chain_seq
+ *     (already indexed), so the column itself needs no index.
+ *
+ * This exists ONLY in src/admin-schema.ts / the drizzle-admin pipeline — the
+ * main-plane table above keeps its shape and main db:generate stays no-drift.
+ */
+export const defineAdminSecurityAuditLogTable = () =>
+  pgTable(
+    'security_audit_log',
+    {
+      ...securityAuditLogColumns({ crossPlaneUserFk: false }),
+      emissionHash: text('emission_hash'),
+    },
+    securityAuditLogIndexes,
+  );
+
+/**
+ * Security Audit Log table - tamper-evident security event tracking.
+ *
+ * Uses a hash chain to ensure audit trail integrity:
+ * - Each entry includes the hash of the previous entry
+ * - Any modification breaks the chain and is detectable
+ * - First entry in chain uses 'genesis' as previousHash
+ *
+ * This is the APP-PLANE instance (main DB, FK to users). The trust-plane
+ * instance lives in src/admin-schema.ts. Dropping the FK here is Phase 2+.
+ */
+export const securityAuditLog = defineSecurityAuditLogTable({ crossPlaneUserFk: true });
 
 /**
  * Relations for security audit log

@@ -145,7 +145,7 @@ const TOAST_LEVEL_OPTIONS: Array<{ value: ToastNotificationLevel; label: string;
   {
     value: 'all',
     label: 'All notifications',
-    description: 'Show a pop-up for every notification (mentions, tasks, DMs, permissions, and more).',
+    description: 'Show a pop-up for every notification (mentions, tasks, DMs, permissions, and more). On the desktop app, this also governs native system notifications when the window is unfocused.',
   },
   {
     value: 'mentions',

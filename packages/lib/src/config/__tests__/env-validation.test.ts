@@ -75,6 +75,52 @@ describe('env-validation', () => {
       }
     });
 
+    it('given CLICKHOUSE_* vars absent, should parse successfully (analytics tier is off by default, #890 Phase 3)', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.CLICKHOUSE_ENABLED).toBeUndefined();
+      }
+    });
+
+    it('given a stray CLICKHOUSE_ENABLED value (e.g. "0"), should still parse — the exact-match gate lives in clickhouse-env, not app-wide validation', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        CLICKHOUSE_ENABLED: '0',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given full CLICKHOUSE_* connection config, should parse and pass the values through', () => {
+      const env = {
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        CLICKHOUSE_ENABLED: 'true',
+        CLICKHOUSE_HOST: 'https://my-cluster.clickhouse.cloud:8443',
+        CLICKHOUSE_USER: 'default',
+        CLICKHOUSE_PASSWORD: 'secret',
+        CLICKHOUSE_DATABASE: 'pagespace_analytics',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.CLICKHOUSE_HOST).toBe('https://my-cluster.clickhouse.cloud:8443');
+        expect(result.data.CLICKHOUSE_DATABASE).toBe('pagespace_analytics');
+      }
+    });
+
     it('given invalid DATABASE_URL format, should fail validation', () => {
       const invalidEnv = {
         DATABASE_URL: 'not-a-valid-url',
@@ -144,6 +190,199 @@ describe('env-validation', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues.some((i) => i.path.includes('CSRF_SECRET'))).toBe(true);
+      }
+    });
+  });
+
+  describe('Admin Postgres (trust plane) config', () => {
+    const baseEnv = {
+      NODE_ENV: 'test',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+    };
+
+    it('given a valid postgresql:// ADMIN_DATABASE_URL, should parse and expose it (connect path)', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_DATABASE_URL: 'postgresql://user:pass@postgres-admin:5432/pagespace_admin',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DATABASE_URL).toBe(
+          'postgresql://user:pass@postgres-admin:5432/pagespace_admin',
+        );
+      }
+    });
+
+    it('given a valid postgres:// ADMIN_DATABASE_URL, should parse successfully', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_DATABASE_URL: 'postgres://user:pass@postgres-admin:5432/pagespace_admin',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given a non-postgres ADMIN_DATABASE_URL (http://), should fail with a clear message', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_DATABASE_URL: 'http://postgres-admin:5432/pagespace_admin',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const issue = result.error.issues.find((i) => i.path.includes('ADMIN_DATABASE_URL'));
+        expect(issue).toBeDefined();
+        expect(issue?.message).toMatch(/PostgreSQL connection string/);
+      }
+    });
+
+    it('given an empty-string ADMIN_DATABASE_URL, should fail validation', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_DATABASE_URL: '',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(
+          result.error.issues.some((i) => i.path.includes('ADMIN_DATABASE_URL')),
+        ).toBe(true);
+      }
+    });
+
+    it('given a valid ADMIN_ERASER_DATABASE_URL, should parse and expose it (GDPR eraser identity, #890 leaf 6)', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_ERASER_DATABASE_URL:
+          'postgresql://admin_gdpr_eraser_user:pw@postgres-admin:5432/pagespace_admin',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_ERASER_DATABASE_URL).toBe(env.ADMIN_ERASER_DATABASE_URL);
+      }
+    });
+
+    it('given a non-postgres ADMIN_ERASER_DATABASE_URL, should fail; unset should parse (route-level refusal, not boot-level)', () => {
+      const bad = serverEnvSchema.safeParse({
+        ...baseEnv,
+        ADMIN_ERASER_DATABASE_URL: 'http://nope',
+      });
+      expect(bad.success).toBe(false);
+
+      const unset = serverEnvSchema.safeParse(baseEnv);
+      expect(unset.success).toBe(true);
+    });
+
+    it('given ADMIN_DATABASE_URL unset with ADMIN_DB_BREAK_GLASS=true, should parse and expose the flag (degrade-loudly path)', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_DB_BREAK_GLASS: 'true',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DATABASE_URL).toBeUndefined();
+        expect(result.data.ADMIN_DB_BREAK_GLASS).toBe('true');
+      }
+    });
+
+    it('given ADMIN_DATABASE_URL unset and no break-glass flag, should parse at the schema level with both undefined (fail-fast lives in adminDb init)', () => {
+      const result = serverEnvSchema.safeParse(baseEnv);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DATABASE_URL).toBeUndefined();
+        expect(result.data.ADMIN_DB_BREAK_GLASS).toBeUndefined();
+      }
+    });
+
+    it('given a stray ADMIN_DB_BREAK_GLASS value (e.g. "1"), should still parse — only the exact value "true" arms break-glass downstream', () => {
+      const env = {
+        ...baseEnv,
+        ADMIN_DB_BREAK_GLASS: '1',
+      };
+
+      const result = serverEnvSchema.safeParse(env);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DB_BREAK_GLASS).toBe('1');
+      }
+    });
+
+    it('given ADMIN_DATABASE_SSL=true or false, should parse successfully', () => {
+      for (const value of ['true', 'false']) {
+        const result = serverEnvSchema.safeParse({
+          ...baseEnv,
+          ADMIN_DATABASE_SSL: value,
+        });
+
+        expect(result.success).toBe(true);
+      }
+    });
+
+    it('given an invalid ADMIN_DATABASE_SSL value, should fail validation', () => {
+      const result = serverEnvSchema.safeParse({
+        ...baseEnv,
+        ADMIN_DATABASE_SSL: 'maybe',
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(
+          result.error.issues.some((i) => i.path.includes('ADMIN_DATABASE_SSL')),
+        ).toBe(true);
+      }
+    });
+
+    it('given a numeric ADMIN_DB_POOL_MAX, should coerce it to a positive integer', () => {
+      const result = serverEnvSchema.safeParse({
+        ...baseEnv,
+        ADMIN_DB_POOL_MAX: '10',
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DB_POOL_MAX).toBe(10);
+      }
+    });
+
+    it('given a non-numeric or non-positive ADMIN_DB_POOL_MAX, should fail validation', () => {
+      for (const value of ['abc', '0', '-5', '2.5']) {
+        const result = serverEnvSchema.safeParse({
+          ...baseEnv,
+          ADMIN_DB_POOL_MAX: value,
+        });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(
+            result.error.issues.some((i) => i.path.includes('ADMIN_DB_POOL_MAX')),
+          ).toBe(true);
+        }
+      }
+    });
+
+    it('given ADMIN_DB_POOL_MAX unset, should parse with it undefined', () => {
+      const result = serverEnvSchema.safeParse(baseEnv);
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.ADMIN_DB_POOL_MAX).toBeUndefined();
       }
     });
   });

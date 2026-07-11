@@ -1,0 +1,20 @@
+-- emission_hash on the chained table (#890 Phase 2, leaf 2 — chainer).
+--
+-- The single-writer chainer copies each drained ingest row's emission_hash
+-- onto the security_audit_log row it appends, alongside the chain columns it
+-- assigns (previous_hash, event_hash = H(emission_hash, previous_hash)).
+-- Storing it makes verification recomputable from storage alone:
+-- verify-on-append re-derives every event_hash from stored emission_hash +
+-- linkage right after each batch commits.
+--
+-- NULLABLE by design: NULL marks a legacy-era row — written by the
+-- advisory-lock path pre-cutover, or backfilled — whose event_hash was
+-- computed over the full event payload (computeSecurityEventHash). The
+-- dual-era full verifier that walks both eras is the backfill leaf's scope.
+--
+-- ADMIN PLANE ONLY: the app-plane security_audit_log keeps its shape; the
+-- main db:generate pipeline stays no-drift. No index: verification reads walk
+-- chain_seq, which is already indexed. No grant changes: existing table-level
+-- SELECT/INSERT grants (0001, re-applied by 0002) cover new columns, and
+-- admin_gdpr_eraser's column-scoped UPDATE deliberately excludes it.
+ALTER TABLE "security_audit_log" ADD COLUMN "emission_hash" text;

@@ -15,11 +15,72 @@ import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/cr
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import type { SubscriptionTier } from '@/lib/subscription/plans';
+import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
+import {
+  getLogsByLevel as chGetLogsByLevel,
+  getRecentErrors as chGetRecentErrors,
+  getVolumeOverTime as chGetVolumeOverTime,
+  getTopEndpoints as chGetTopEndpoints,
+  getRequestErrorCounts as chGetRequestErrorCounts,
+  getErrorTrends as chGetErrorTrends,
+  getErrorPatterns as chGetErrorPatterns,
+  getFailedLogins as chGetFailedLogins,
+  getActivityHeatmap as chGetActivityHeatmap,
+  getMostActiveUsers as chGetMostActiveUsers,
+  getFeatureUsage as chGetFeatureUsage,
+  getActiveUserCount as chGetActiveUserCount,
+  getResponseTimes as chGetResponseTimes,
+  getSlowQueries as chGetSlowQueries,
+  getEndpointPerformance as chGetEndpointPerformance,
+} from '@pagespace/lib/observability/analytics-reads';
+import type { ClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
+
+/**
+ * Post-cutover (#890 Phase 3) new analytics rows land only in ClickHouse, so
+ * the readers over the 4 moved tables (apiMetrics, systemLogs,
+ * userActivities, errorLogs) query CH when the flag is on — server-side
+ * only (never from a browser bundle; next.config aliases '@clickhouse/client'
+ * to false for browser builds), aggregations in CH SQL — and hit PG exactly
+ * as before when the flag is off. Returns null when the tier is off so
+ * callers fall through to the PG path. Anything that JOINed the moved tables
+ * to users converts to a two-step lookup (fetch CH rows → fetch users by id
+ * from PG → merge in app code); CH and PG are never SQL-joined.
+ */
+function clickHouseClientIfEnabled(): ClickHouseClient | null {
+  return isClickHouseEnabled() ? getClickHouseClient() : null;
+}
+
+/**
+ * Over-fetch factor for the two-step most-active-users lookup: activity rows
+ * whose user has since been deleted have no users row — the PG path's INNER
+ * JOIN silently drops them, so the CH path fetches extra ranks and drops
+ * misses after the lookup to keep the top-10 comparable.
+ */
+const MOST_ACTIVE_USERS_OVERFETCH = 100;
 
 /**
  * Get system health overview
  */
 export async function getSystemHealth(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    const [logsByLevel, recentErrors, activeUserCount] = await Promise.all([
+      chGetLogsByLevel(chClient, window),
+      chGetRecentErrors(chClient, window, 20),
+      chGetActiveUserCount(chClient, fifteenMinutesAgo),
+    ]);
+    return {
+      logsByLevel,
+      recentErrors: recentErrors.map((entry) => ({
+        ...entry,
+        errorMessage: entry.errorMessage || entry.message,
+      })),
+      activeUserCount,
+    };
+  }
+
   const logConditions: SQL[] = [];
 
   if (startDate) {
@@ -83,8 +144,24 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
  * Get API metrics
  */
 export async function getApiMetrics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [volumeOverTime, topEndpoints, requestCounts] = await Promise.all([
+      chGetVolumeOverTime(chClient, window),
+      chGetTopEndpoints(chClient, window),
+      chGetRequestErrorCounts(chClient, window),
+    ]);
+    return {
+      volumeOverTime,
+      topEndpoints,
+      errorRate: requestCounts.total > 0 ? (requestCounts.errors / requestCounts.total) * 100 : 0,
+      totalRequests: requestCounts.total,
+    };
+  }
+
   const conditions = [];
-  
+
   if (startDate) {
     conditions.push(gte(apiMetrics.timestamp, startDate));
   }
@@ -148,8 +225,42 @@ export async function getApiMetrics(startDate?: Date, endDate?: Date) {
  * Get user activity data
  */
 export async function getUserActivity(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [heatmapData, activeUserCounts, featureUsage] = await Promise.all([
+      chGetActivityHeatmap(chClient, window),
+      chGetMostActiveUsers(chClient, window, MOST_ACTIVE_USERS_OVERFETCH),
+      chGetFeatureUsage(chClient, window),
+    ]);
+
+    // Two-step cross-store join: user names come from main PG by id.
+    const userIds = activeUserCounts.map((row) => row.userId);
+    const userRows = userIds.length > 0
+      ? await db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : [];
+    const nameById = new Map(userRows.map((u) => [u.id, u.name]));
+    const mostActiveUsers = activeUserCounts
+      .filter((row) => nameById.has(row.userId))
+      .slice(0, 10)
+      .map((row) => ({
+        userId: row.userId,
+        userName: nameById.get(row.userId) ?? null,
+        actionCount: row.actionCount,
+      }));
+
+    return {
+      heatmapData,
+      mostActiveUsers: await decryptUserDisplayFields(mostActiveUsers),
+      featureUsage,
+    };
+  }
+
   const conditions = [];
-  
+
   if (startDate) {
     conditions.push(gte(userActivities.timestamp, startDate));
   }
@@ -300,6 +411,33 @@ export async function getAiUsageMetrics(startDate?: Date, endDate?: Date) {
  * Get error analytics
  */
 export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [errorTrendsRaw, errorPatternsRaw, failedLogins] = await Promise.all([
+      chGetErrorTrends(chClient, window),
+      chGetErrorPatterns(chClient, window),
+      chGetFailedLogins(chClient, window),
+    ]);
+    return {
+      errorTrends: errorTrendsRaw.map((item) => ({
+        hour: item.hour,
+        category: item.category ?? 'other',
+        count: item.count.toString(),
+      })),
+      errorPatterns: errorPatternsRaw.map((pattern) => ({
+        name: pattern.name ?? 'Unknown Error',
+        category: pattern.endpoint ?? 'general',
+        count: pattern.count,
+      })),
+      failedLogins: failedLogins.map((login) => ({
+        timestamp: login.timestamp,
+        ip: login.ip,
+        metadata: login.metadata,
+      })),
+    };
+  }
+
   const errorLevelConditions: SQL[] = [eq(systemLogs.level, 'error' as const)];
 
   if (startDate) {
@@ -391,8 +529,19 @@ export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
  * Get performance metrics
  */
 export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [responseTimes, slowQueries, metricTypes] = await Promise.all([
+      chGetResponseTimes(chClient, window),
+      chGetSlowQueries(chClient, window),
+      chGetEndpointPerformance(chClient, window),
+    ]);
+    return { responseTimes, slowQueries, metricTypes };
+  }
+
   const conditions = [];
-  
+
   if (startDate) {
     conditions.push(gte(apiMetrics.timestamp, startDate));
   }

@@ -10,7 +10,7 @@ import { getCssVar } from '@/lib/theme/css-color-resolution';
 const FALLBACK_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace";
 
 export interface AgentTerminalConnectPayload {
-  terminalId: string;
+  machineId: string;
   /** Neither set → machine scope, projectName alone → project scope, both → branch scope (see `agent-terminals.ts`). */
   projectName?: string;
   branchName?: string;
@@ -117,6 +117,17 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
         socket.on('agent-terminal:closed', handleClosed);
         socket.on('agent-terminal:error', handleError);
 
+        // A kept-alive terminal is CSS-hidden (display:none) when its page is
+        // not the active tab. While hidden the container has zero size, so any
+        // fit() would compute garbage cols/rows and emit a bogus 0-wide resize
+        // to the PTY. Gate on real visibility: the ResizeObserver still fires
+        // when the container goes from display:none back to a real size, so
+        // re-showing a hidden terminal triggers exactly one correct refit.
+        const isVisible = () => {
+          const el = containerRef.current;
+          return !!el && el.offsetParent !== null && el.clientWidth > 0 && el.clientHeight > 0;
+        };
+
         const resize: { observer?: ResizeObserver } = {};
         teardown = () => {
           resize.observer?.disconnect();
@@ -144,6 +155,9 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
         socket.emit('agent-terminal:connect', { ...connectPayload, connectionId, cols: terminal.cols, rows: terminal.rows });
 
         resize.observer = new ResizeObserver(() => {
+          // Skip while hidden (0×0) — avoids garbage fits and 0-wide resizes.
+          // Fires again with correct dims when the pane is re-shown.
+          if (!isVisible()) return;
           fitAddon.fit();
           socket.emit('agent-terminal:resize', { cols: terminal.cols, rows: terminal.rows, connectionId });
         });

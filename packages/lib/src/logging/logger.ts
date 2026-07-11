@@ -8,6 +8,7 @@ import { createId } from '@paralleldrive/cuid2';
 import type { LogInput } from './logger-types';
 import { scrubPII } from '../compliance/pii-scrubber';
 import { fireSiemErrorHook, type SiemErrorPayload } from './siem-error-hook';
+import { createShutdownHandler } from './graceful-shutdown';
 
 export enum LogLevel {
   TRACE = 0,
@@ -361,15 +362,26 @@ class Logger {
       });
     }, this.config.flushInterval);
 
-    // Ensure flush on process exit
+    // Ensure flush on process exit. flush() feeds rows into the ClickHouse
+    // insert buffers (writeLogsToDatabase → analytics-inserts), so shutdown
+    // must sequence flush → drain → exit; exiting synchronously here loses
+    // up to 500 buffered CH rows per table on every deploy (#890 Phase 3).
     process.on('beforeExit', () => this.flush());
+    const shutdown = createShutdownHandler({
+      flushLogs: () => this.flush(),
+      drainAnalytics: async () => {
+        // Dynamic import to keep @clickhouse/client out of this module's
+        // static graph (same reason writeToDatabase imports lazily).
+        const { drainAnalyticsInserts } = await import('../observability/analytics-inserts');
+        await drainAnalyticsInserts();
+      },
+      exit: (code) => process.exit(code),
+    });
     process.on('SIGINT', () => {
-      this.flush();
-      process.exit(0);
+      void shutdown();
     });
     process.on('SIGTERM', () => {
-      this.flush();
-      process.exit(0);
+      void shutdown();
     });
   }
 

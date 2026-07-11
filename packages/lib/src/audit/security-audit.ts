@@ -10,29 +10,25 @@
  * - Convenience methods for common events
  * - Query interface for forensic analysis
  *
- * Concurrency: logEvent() uses pg_advisory_xact_lock to serialize
- * hash chain writes. The previous hash is always read from the database
- * inside the advisory lock, so multi-instance deployments are safe.
+ * Concurrency (#890 Phase 2, leaf 5 cutover): with a dedicated Admin PG,
+ * logEvent() is LOCK-FREE — pure emission hash + one INSERT into the ingest
+ * queue; the single-writer chainer assigns chain_seq/chainHash out of band.
+ * Under break-glass only, the legacy pg_advisory_xact_lock append against
+ * the main DB remains, with the previous hash read inside the lock.
  */
 
 import { createHash } from 'crypto';
-import { db } from '@pagespace/db/db';
-import { sql } from '@pagespace/db/operators';
-import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import type { SecurityEventType, SelectSecurityAuditLog } from '@pagespace/db/schema/security-audit';
 import { queryAuditEvents } from './audit-query';
 import { stableStringify } from '../utils/stable-stringify';
-import { deriveIndexKey } from '../encryption/blind-index';
-import { encryptAuditIp } from '../encryption/audit-ip-crypto';
-
-/**
- * Derive the blind-index key from ENCRYPTION_KEY, or null when no usable key is
- * configured (e.g. dev/test) so audit IPs fall back to plaintext storage.
- */
-function auditIndexKey(): Buffer | null {
-  const master = process.env.ENCRYPTION_KEY ?? '';
-  return master.length >= 32 ? deriveIndexKey(master) : null;
-}
+import {
+  createSecurityAuditRepository,
+  type AppendEventOptions,
+} from './security-audit-repository';
+import { createAuditIngestWriter } from './audit-ingest-writer';
+import { resolveAuditDbBinding, type AuditDbBinding } from './audit-db-binding';
+import { notifyAdminDbBreakGlass } from './security-audit-alerting';
+import { loggers } from '../logging/logger-config';
 
 /**
  * Audit event input structure
@@ -107,295 +103,356 @@ export function computeSecurityEventHash(
 }
 
 /**
- * Security Audit Service with hash chain integrity.
- *
- * Must be initialized before first use by calling initialize().
- * Each logEvent() reads the previous hash from the DB inside an advisory lock,
- * so multi-instance deployments are safe without any in-memory state.
+ * Advisory lock key for serializing hash chain writes. Re-exported from the
+ * repository (single source of truth) under the name existing tests expect.
  */
-export class SecurityAuditService {
-  private initialized = false;
+export { SECURITY_AUDIT_CHAIN_LOCK_KEY as CHAIN_LOCK_KEY } from './security-audit-repository';
 
+/**
+ * The one write capability the service needs. Satisfied by BOTH append
+ * backends of the cutover (#890 Phase 2, leaf 5): the legacy advisory-lock
+ * repository (SecurityAuditRepository) and the lock-free ingest writer
+ * adapter built in getDefaultAppendPath().
+ */
+export interface AuditAppendPath {
+  appendEvent(event: AuditEvent, opts?: AppendEventOptions): Promise<void>;
+}
+
+export interface SecurityAuditServiceDeps {
+  repository: AuditAppendPath;
+}
+
+export interface SecurityAuditService {
   /**
    * Mark the service as initialized. Retained for callers that invoke it at
    * app startup; logEvent() also self-initializes. Idempotent.
    */
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async initialize(): Promise<void> {
-    this.initialized = true;
-  }
-
-  /**
-   * Advisory lock key for serializing hash chain writes.
-   * Uses a fixed bigint derived from the string 'security_audit_chain'.
-   * pg_advisory_xact_lock holds the lock until the transaction commits/rolls back.
-   */
-  static readonly CHAIN_LOCK_KEY = 8370291546;
-
-  /**
-   * Log a security event with hash chain integrity.
-   *
-   * Uses a PostgreSQL advisory lock to serialize concurrent writes and prevent
-   * hash chain forking. Advisory locks work even when the table is empty (genesis),
-   * unlike FOR UPDATE which requires an existing row to lock.
-   *
-   * @param event - The security event to log
-   */
-  async logEvent(event: AuditEvent): Promise<void> {
-    if (!this.initialized) {
-      await this.initialize();
-    }
-
-    const timestamp = new Date();
-
-    await db.transaction(async (tx) => {
-      // Acquire advisory lock scoped to this transaction.
-      // Blocks concurrent writers until this transaction completes.
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(${SecurityAuditService.CHAIN_LOCK_KEY})`);
-
-      // Read the latest hash — safe from races under the advisory lock
-      const lastRecord = await tx.execute(sql`
-        SELECT event_hash
-        FROM security_audit_log
-        ORDER BY chain_seq DESC
-        LIMIT 1
-      `);
-
-      const previousHash = (lastRecord.rows[0] as { event_hash: string } | undefined)?.event_hash ?? 'genesis';
-
-      const eventHash = computeSecurityEventHash(event, previousHash, timestamp);
-
-      // GDPR #965/#969: encrypt the IP at rest + populate its blind index.
-      // ipAddress is excluded from the event hash, so this is chain-safe.
-      const { ipAddress: storedIp, ipBidx } = await encryptAuditIp(event.ipAddress, auditIndexKey());
-
-      await tx.insert(securityAuditLog).values({
-        eventType: event.eventType,
-        userId: event.userId,
-        sessionId: event.sessionId,
-        serviceId: event.serviceId,
-        resourceType: event.resourceType,
-        resourceId: event.resourceId,
-        ipAddress: storedIp,
-        ipBidx,
-        userAgent: event.userAgent,
-        geoLocation: event.geoLocation,
-        details: event.details,
-        riskScore: event.riskScore,
-        anomalyFlags: event.anomalyFlags,
-        timestamp,
-        previousHash,
-        eventHash,
-      });
-
-    });
-  }
-
-  // ==========================================================================
-  // Convenience Methods
-  // ==========================================================================
-
-  /**
-   * Log successful authentication.
-   */
-  async logAuthSuccess(
-    userId: string,
-    sessionId: string,
-    ipAddress: string,
-    userAgent: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'auth.login.success',
-      userId,
-      sessionId,
-      ipAddress,
-      userAgent,
-    });
-  }
-
-  /**
-   * Log failed authentication attempt.
-   */
-  async logAuthFailure(
-    attemptedUser: string,
-    ipAddress: string,
-    reason: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'auth.login.failure',
-      ipAddress,
-      details: { attemptedUser, reason },
-      riskScore: 0.3,
-    });
-  }
-
-  /**
-   * Log access denied event.
-   */
-  async logAccessDenied(
-    userId: string,
-    resourceType: string,
-    resourceId: string,
-    reason: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'authz.access.denied',
-      userId,
-      resourceType,
-      resourceId,
-      details: { reason },
-      riskScore: 0.5,
-    });
-  }
-
-  /**
-   * Log token creation event.
-   */
-  async logTokenCreated(
-    userId: string,
-    tokenType: string,
-    ipAddress?: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'auth.token.created',
-      userId,
-      ipAddress,
-      details: { tokenType },
-    });
-  }
-
-  /**
-   * Log token revocation event.
-   */
-  async logTokenRevoked(
-    userId: string,
-    tokenType: string,
-    reason: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'auth.token.revoked',
-      userId,
-      details: { tokenType, reason },
-    });
-  }
-
-  /**
-   * Log security anomaly detection.
-   */
-  async logAnomalyDetected(
-    userId: string,
-    ipAddress: string,
-    riskScore: number,
-    anomalyFlags: string[]
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'security.anomaly.detected',
-      userId,
-      ipAddress,
-      riskScore,
-      anomalyFlags,
-    });
-  }
-
-  /**
-   * Log data access event.
-   */
-  async logDataAccess(
+  initialize(): Promise<void>;
+  isInitialized(): boolean;
+  logEvent(event: AuditEvent): Promise<void>;
+  logAuthSuccess(userId: string, sessionId: string, ipAddress: string, userAgent: string): Promise<void>;
+  logAuthFailure(attemptedUser: string, ipAddress: string, reason: string): Promise<void>;
+  logAccessDenied(userId: string, resourceType: string, resourceId: string, reason: string): Promise<void>;
+  logTokenCreated(userId: string, tokenType: string, ipAddress?: string): Promise<void>;
+  logTokenRevoked(userId: string, tokenType: string, reason: string): Promise<void>;
+  logAnomalyDetected(userId: string, ipAddress: string, riskScore: number, anomalyFlags: string[]): Promise<void>;
+  logDataAccess(
     userId: string,
     operation: 'read' | 'write' | 'delete' | 'export' | 'share',
     resourceType: string,
     resourceId: string,
     details?: Record<string, unknown>
-  ): Promise<void> {
-    const eventTypeMap: Record<string, SecurityEventType> = {
-      read: 'data.read',
-      write: 'data.write',
-      delete: 'data.delete',
-      export: 'data.export',
-      share: 'data.share',
-    };
+  ): Promise<void>;
+  logLogout(userId: string, sessionId: string, ipAddress?: string): Promise<void>;
+  logRateLimited(ipAddress: string, endpoint: string, userId?: string): Promise<void>;
+  logBruteForceDetected(ipAddress: string, attemptCount: number, targetUser?: string): Promise<void>;
+  /** Query audit events with filtering options. Delegates to queryAuditEvents(). */
+  queryEvents(options: QueryEventsOptions): Promise<SelectSecurityAuditLog[]>;
+}
 
-    return this.logEvent({
-      eventType: eventTypeMap[operation],
-      userId,
-      resourceType,
-      resourceId,
-      details,
+/**
+ * Build a Security Audit Service with hash chain integrity from an injected
+ * repository. Must be initialized before first use by calling initialize().
+ * Each logEvent() reads the previous hash from the DB inside an advisory lock
+ * (see the repository), so multi-instance deployments are safe without any
+ * in-memory state beyond the `initialized` flag.
+ */
+export function createSecurityAuditService({ repository }: SecurityAuditServiceDeps): SecurityAuditService {
+  let initialized = false;
+
+  // Convenience methods call `api.logEvent(...)` (not a bare closure reference)
+  // so that replacing `api.logEvent` — e.g. via a test spy — is observed by
+  // every wrapper, matching the previous class's `this.logEvent` semantics.
+  const api: SecurityAuditService = {
+    async initialize(): Promise<void> {
+      initialized = true;
+    },
+
+    isInitialized(): boolean {
+      return initialized;
+    },
+
+    async logEvent(event: AuditEvent): Promise<void> {
+      if (!initialized) {
+        await api.initialize();
+      }
+
+      return repository.appendEvent(event);
+    },
+
+    async logAuthSuccess(
+      userId: string,
+      sessionId: string,
+      ipAddress: string,
+      userAgent: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'auth.login.success',
+        userId,
+        sessionId,
+        ipAddress,
+        userAgent,
+      });
+    },
+
+    async logAuthFailure(
+      attemptedUser: string,
+      ipAddress: string,
+      reason: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'auth.login.failure',
+        ipAddress,
+        details: { attemptedUser, reason },
+        riskScore: 0.3,
+      });
+    },
+
+    async logAccessDenied(
+      userId: string,
+      resourceType: string,
+      resourceId: string,
+      reason: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'authz.access.denied',
+        userId,
+        resourceType,
+        resourceId,
+        details: { reason },
+        riskScore: 0.5,
+      });
+    },
+
+    async logTokenCreated(
+      userId: string,
+      tokenType: string,
+      ipAddress?: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'auth.token.created',
+        userId,
+        ipAddress,
+        details: { tokenType },
+      });
+    },
+
+    async logTokenRevoked(
+      userId: string,
+      tokenType: string,
+      reason: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'auth.token.revoked',
+        userId,
+        details: { tokenType, reason },
+      });
+    },
+
+    async logAnomalyDetected(
+      userId: string,
+      ipAddress: string,
+      riskScore: number,
+      anomalyFlags: string[]
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'security.anomaly.detected',
+        userId,
+        ipAddress,
+        riskScore,
+        anomalyFlags,
+      });
+    },
+
+    async logDataAccess(
+      userId: string,
+      operation: 'read' | 'write' | 'delete' | 'export' | 'share',
+      resourceType: string,
+      resourceId: string,
+      details?: Record<string, unknown>
+    ): Promise<void> {
+      const eventTypeMap: Record<string, SecurityEventType> = {
+        read: 'data.read',
+        write: 'data.write',
+        delete: 'data.delete',
+        export: 'data.export',
+        share: 'data.share',
+      };
+
+      return api.logEvent({
+        eventType: eventTypeMap[operation],
+        userId,
+        resourceType,
+        resourceId,
+        details,
+      });
+    },
+
+    async logLogout(
+      userId: string,
+      sessionId: string,
+      ipAddress?: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'auth.logout',
+        userId,
+        sessionId,
+        ipAddress,
+      });
+    },
+
+    async logRateLimited(
+      ipAddress: string,
+      endpoint: string,
+      userId?: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'security.rate.limited',
+        userId,
+        ipAddress,
+        details: { endpoint },
+        riskScore: 0.4,
+      });
+    },
+
+    async logBruteForceDetected(
+      ipAddress: string,
+      attemptCount: number,
+      targetUser?: string
+    ): Promise<void> {
+      return api.logEvent({
+        eventType: 'security.brute.force.detected',
+        ipAddress,
+        details: { attemptCount, targetUser },
+        riskScore: 0.8,
+        anomalyFlags: ['brute_force'],
+      });
+    },
+
+    async queryEvents(options: QueryEventsOptions): Promise<SelectSecurityAuditLog[]> {
+      return queryAuditEvents(options);
+    },
+  };
+
+  return api;
+}
+
+/**
+ * Break-glass append path (#890 Phase 2, leaf 5 + folded break-glass
+ * observability task): the OLD advisory-lock chained append against the
+ * main DB, made LOUD at the moment it is chosen. Emitted exactly once per
+ * process, at the resolved-mode call site:
+ *   1. a structured security-category error (the log-plane banner),
+ *   2. a real alert through the security-audit-alerting channel,
+ *   3. a self-recorded security event in the (degraded) chain itself, so
+ *      the degrade is visible in forensic queries and SIEM deliveries.
+ * The event goes through the repository directly — not audit() — so the
+ * emission can never recurse into this bind point.
+ */
+function buildBreakGlassAppendPath(binding: Extract<AuditDbBinding, { mode: 'break-glass' }>): AuditAppendPath {
+  const repository = createSecurityAuditRepository({ db: binding.db });
+
+  loggers.security.error(
+    '[SecurityAudit] ADMIN DB BREAK-GLASS ACTIVE — audit writes are degraded to the main application database',
+    { reason: binding.reason },
+  );
+
+  void notifyAdminDbBreakGlass({ reason: binding.reason });
+
+  repository
+    .appendEvent({
+      eventType: 'security.suspicious.activity',
+      serviceId: 'security-audit',
+      resourceType: 'trust_plane',
+      resourceId: 'admin_db',
+      riskScore: 0.9,
+      anomalyFlags: ['admin_db_break_glass'],
+      details: { breakGlass: true, reason: binding.reason },
+    })
+    .catch((error: unknown) => {
+      loggers.security.error('[SecurityAudit] failed to record the break-glass security event', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
     });
-  }
 
-  /**
-   * Log logout event.
-   */
-  async logLogout(
-    userId: string,
-    sessionId: string,
-    ipAddress?: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'auth.logout',
-      userId,
-      sessionId,
-      ipAddress,
-    });
-  }
+  return repository;
+}
 
-  /**
-   * Log rate limiting event.
-   */
-  async logRateLimited(
-    ipAddress: string,
-    endpoint: string,
-    userId?: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'security.rate.limited',
-      userId,
-      ipAddress,
-      details: { endpoint },
-      riskScore: 0.4,
-    });
+/**
+ * Lazily resolve the default append path (#890 Phase 2, leaf 5 cutover).
+ * Deferred (rather than built eagerly at module load) so module load order
+ * never matters and env is read after late-loaded dotenv.
+ *
+ *   dedicated   → lock-free ingest writer on the Admin PG: pure emission
+ *                 hash + ONE INSERT, no advisory lock, no head read, no
+ *                 transaction. Chaining belongs to the single-writer
+ *                 chainer worker.
+ *   break-glass → the legacy chained append against the main DB, with loud
+ *                 observability (see buildBreakGlassAppendPath).
+ *   fail        → resolveAuditDbBinding throws; logEvent rejects per event
+ *                 and the audit() wrapper surfaces it as a warn log.
+ */
+let defaultAppendPath: AuditAppendPath | null = null;
+function getDefaultAppendPath(): AuditAppendPath {
+  if (!defaultAppendPath) {
+    const binding = resolveAuditDbBinding();
+    if (binding.mode === 'dedicated') {
+      const writer = createAuditIngestWriter({ db: binding.db });
+      defaultAppendPath = {
+        appendEvent: (event, opts) => writer.writeToIngest(event, opts),
+      };
+    } else {
+      defaultAppendPath = buildBreakGlassAppendPath(binding);
+    }
   }
+  return defaultAppendPath;
+}
 
-  /**
-   * Log brute force detection.
-   */
-  async logBruteForceDetected(
-    ipAddress: string,
-    attemptCount: number,
-    targetUser?: string
-  ): Promise<void> {
-    return this.logEvent({
-      eventType: 'security.brute.force.detected',
-      ipAddress,
-      details: { attemptCount, targetUser },
-      riskScore: 0.8,
-      anomalyFlags: ['brute_force'],
-    });
+/**
+ * Lazy async proxy over the resolved append path. Resolution happens INSIDE
+ * the async appendEvent so a fail-mode throw becomes a rejection — the
+ * fire-and-forget audit() wrapper attaches .catch() and must never see a
+ * synchronous throw from logEvent.
+ */
+const lazyDefaultAppendPath: AuditAppendPath = {
+  appendEvent: async (event, opts) => getDefaultAppendPath().appendEvent(event, opts),
+};
+
+let defaultService: SecurityAuditService | null = null;
+function getDefaultService(): SecurityAuditService {
+  if (!defaultService) {
+    defaultService = createSecurityAuditService({ repository: lazyDefaultAppendPath });
   }
+  return defaultService;
+}
 
-  // ==========================================================================
-  // Query Methods
-  // ==========================================================================
-
-  /**
-   * Query audit events with filtering options.
-   * Delegates to the standalone queryAuditEvents() function.
-   */
-  async queryEvents(options: QueryEventsOptions): Promise<SelectSecurityAuditLog[]> {
-    return queryAuditEvents(options);
-  }
-
-  /**
-   * Check if the service is initialized.
-   */
-  isInitialized(): boolean {
-    return this.initialized;
-  }
+/**
+ * Test hook: drop the cached default append path + service so a test can
+ * re-resolve under a different admin-db mode (pair with
+ * resetAuditDbBindingForTests).
+ */
+export function resetDefaultSecurityAuditForTests(): void {
+  defaultAppendPath = null;
+  defaultService = null;
 }
 
 /**
  * Singleton instance for application-wide use.
  * Call securityAudit.initialize() during app startup.
  */
-export const securityAudit = new SecurityAuditService();
+export const securityAudit: SecurityAuditService = {
+  initialize: () => getDefaultService().initialize(),
+  isInitialized: () => getDefaultService().isInitialized(),
+  logEvent: (event) => getDefaultService().logEvent(event),
+  logAuthSuccess: (...args) => getDefaultService().logAuthSuccess(...args),
+  logAuthFailure: (...args) => getDefaultService().logAuthFailure(...args),
+  logAccessDenied: (...args) => getDefaultService().logAccessDenied(...args),
+  logTokenCreated: (...args) => getDefaultService().logTokenCreated(...args),
+  logTokenRevoked: (...args) => getDefaultService().logTokenRevoked(...args),
+  logAnomalyDetected: (...args) => getDefaultService().logAnomalyDetected(...args),
+  logDataAccess: (...args) => getDefaultService().logDataAccess(...args),
+  logLogout: (...args) => getDefaultService().logLogout(...args),
+  logRateLimited: (...args) => getDefaultService().logRateLimited(...args),
+  logBruteForceDetected: (...args) => getDefaultService().logBruteForceDetected(...args),
+  queryEvents: (options) => getDefaultService().queryEvents(options),
+};

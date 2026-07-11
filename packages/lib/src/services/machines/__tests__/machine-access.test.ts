@@ -7,7 +7,7 @@ const ACTOR_USER_ID = 'user-1';
 
 function makeDeps(overrides: Partial<MachineAccessDeps> = {}): MachineAccessDeps {
   return {
-    findPageType: async () => PageType.TERMINAL,
+    findPageType: async () => PageType.MACHINE,
     canUserViewPage: async () => true,
     canUserEditPage: async () => true,
     ...overrides,

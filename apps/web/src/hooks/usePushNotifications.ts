@@ -50,8 +50,15 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   const hasRegisteredRef = useRef(false);
   const pushNotificationsRef = useRef<typeof import('@capacitor/push-notifications').PushNotifications | null>(null);
   const registerTokenWithServerRef = useRef<(token: string) => Promise<void>>(async () => { });
+  const listenersRef = useRef<(() => void)[]>([]);
 
-  // Check if push notifications are supported
+  // Check support and set up event listeners BEFORE marking supported.
+  // isSupported unlocks the permission-check effect and, from consumers like
+  // PushNotificationManager, an immediate registerToken()/register() call —
+  // if that raced ahead of the 'registration' listener being attached, the
+  // APNs token event could fire with no listener present to catch it.
+  // Registering listeners first guarantees they exist by the time anything
+  // downstream can trigger a native registration.
   useEffect(() => {
     if (!isReady) return;
 
@@ -61,6 +68,51 @@ export function usePushNotifications(): PushNotificationState & PushNotification
         try {
           const { PushNotifications } = await import('@capacitor/push-notifications');
           pushNotificationsRef.current = PushNotifications;
+
+          // Four independent listeners — register concurrently rather than
+          // sequentially awaiting each native-bridge round trip.
+          const [registrationListener, registrationErrorListener, receivedListener, actionListener] =
+            await Promise.all([
+              PushNotifications.addListener('registration', (token: { value: string }) => {
+                console.log('[PushNotifications] Registered with token:', token.value.substring(0, 20) + '...');
+                tokenRef.current = token.value;
+                registerTokenWithServerRef.current(token.value);
+              }),
+              PushNotifications.addListener('registrationError', (error: { error: string }) => {
+                console.error('[PushNotifications] Registration error:', error);
+                setState(prev => ({
+                  ...prev,
+                  error: error.error,
+                  isLoading: false,
+                }));
+              }),
+              // Notification received while app is in foreground
+              PushNotifications.addListener('pushNotificationReceived', (notification: PushNotificationSchema) => {
+                console.log('[PushNotifications] Received:', notification);
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('push:received', {
+                    detail: notification,
+                  }));
+                }
+              }),
+              // Notification tapped
+              PushNotifications.addListener('pushNotificationActionPerformed', (action: ActionPerformed) => {
+                console.log('[PushNotifications] Action performed:', action);
+                if (typeof window !== 'undefined') {
+                  window.dispatchEvent(new CustomEvent('push:action', {
+                    detail: action,
+                  }));
+                }
+              }),
+            ]);
+
+          listenersRef.current.push(
+            () => registrationListener.remove(),
+            () => registrationErrorListener.remove(),
+            () => receivedListener.remove(),
+            () => actionListener.remove(),
+          );
+
           setState(prev => ({ ...prev, isSupported: true }));
         } catch {
           setState(prev => ({ ...prev, isSupported: false }));
@@ -71,6 +123,11 @@ export function usePushNotifications(): PushNotificationState & PushNotification
     };
 
     checkSupport();
+
+    return () => {
+      listenersRef.current.forEach(remove => remove());
+      listenersRef.current = [];
+    };
   }, [isNative, platform, isReady]);
 
   // Check permission status
@@ -93,78 +150,6 @@ export function usePushNotifications(): PushNotificationState & PushNotification
     };
 
     checkPermission();
-  }, [state.isSupported]);
-
-  // Set up listeners for push notification events
-  useEffect(() => {
-    if (!state.isSupported || !pushNotificationsRef.current) return;
-
-    const PushNotifications = pushNotificationsRef.current;
-    const listeners: (() => void)[] = [];
-
-    const setupListeners = async () => {
-      // Registration success
-      const registrationListener = await PushNotifications.addListener(
-        'registration',
-        (token: { value: string }) => {
-          console.log('[PushNotifications] Registered with token:', token.value.substring(0, 20) + '...');
-          tokenRef.current = token.value;
-          registerTokenWithServerRef.current(token.value);
-        }
-      );
-      listeners.push(() => registrationListener.remove());
-
-      // Registration error
-      const registrationErrorListener = await PushNotifications.addListener(
-        'registrationError',
-        (error: { error: string }) => {
-          console.error('[PushNotifications] Registration error:', error);
-          setState(prev => ({
-            ...prev,
-            error: error.error,
-            isLoading: false,
-          }));
-        }
-      );
-      listeners.push(() => registrationErrorListener.remove());
-
-      // Notification received while app is in foreground
-      const receivedListener = await PushNotifications.addListener(
-        'pushNotificationReceived',
-        (notification: PushNotificationSchema) => {
-          console.log('[PushNotifications] Received:', notification);
-          // Handle foreground notification
-          // Could dispatch an event or update state here
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('push:received', {
-              detail: notification,
-            }));
-          }
-        }
-      );
-      listeners.push(() => receivedListener.remove());
-
-      // Notification tapped
-      const actionListener = await PushNotifications.addListener(
-        'pushNotificationActionPerformed',
-        (action: ActionPerformed) => {
-          console.log('[PushNotifications] Action performed:', action);
-          // Handle notification tap
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('push:action', {
-              detail: action,
-            }));
-          }
-        }
-      );
-      listeners.push(() => actionListener.remove());
-    };
-
-    setupListeners();
-
-    return () => {
-      listeners.forEach(remove => remove());
-    };
   }, [state.isSupported]);
 
   // Register token with server

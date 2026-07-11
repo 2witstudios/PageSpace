@@ -44,7 +44,7 @@ describe('Tenant docker-compose configuration', () => {
 
   describe('services', () => {
     const requiredServices = [
-      'postgres', 'migrate',
+      'postgres', 'postgres-admin', 'migrate',
       'web', 'processor', 'realtime', 'cron',
     ];
 
@@ -95,6 +95,10 @@ describe('Tenant docker-compose configuration', () => {
       expect(compose.services.postgres.image).toBe('postgres:17.5-alpine');
     });
 
+    it('given the postgres-admin service, should pin the SAME image as the main postgres service', () => {
+      expect(compose.services['postgres-admin'].image).toBe(compose.services.postgres.image);
+    });
+
     it('given the raw YAML, should not contain any redis image references', () => {
       expect(getRawYaml()).not.toMatch(/redis:/i);
     });
@@ -103,6 +107,7 @@ describe('Tenant docker-compose configuration', () => {
   describe('resource limits', () => {
     const limits: [string, string][] = [
       ['postgres', '200M'],
+      ['postgres-admin', '200M'],
       ['web', '768M'],
       ['processor', '1280M'],
       ['realtime', '256M'],
@@ -122,6 +127,17 @@ describe('Tenant docker-compose configuration', () => {
     it('given the migrate service, should depend on postgres being healthy', () => {
       const deps = compose.services.migrate.depends_on;
       expect(deps?.postgres?.condition).toBe('service_healthy');
+    });
+
+    it('given the migrate service, should depend on postgres-admin being healthy', () => {
+      const deps = compose.services.migrate.depends_on;
+      expect(deps?.['postgres-admin']?.condition).toBe('service_healthy');
+    });
+
+    it('given the migrate service, should run db:migrate:admin after db:migrate', () => {
+      const command = String(compose.services.migrate.command);
+      expect(command).toContain('db:migrate:admin');
+      expect(command.indexOf('db:migrate')).toBeLessThan(command.indexOf('db:migrate:admin'));
     });
 
     it('given the web service, should depend on migrate completed and processor healthy only', () => {
@@ -231,7 +247,7 @@ describe('Tenant docker-compose configuration', () => {
       }
     });
 
-    const internalOnly = ['postgres', 'migrate', 'processor', 'cron'];
+    const internalOnly = ['postgres', 'postgres-admin', 'migrate', 'processor', 'cron'];
 
     it.each(internalOnly)(
       'given the %s service, should only join the internal network',
@@ -301,7 +317,7 @@ describe('Tenant docker-compose configuration', () => {
 
     it('given the raw YAML, all secret references should use variable interpolation', () => {
       const raw = getRawYaml();
-      const secretVars = ['ENCRYPTION_KEY', 'CSRF_SECRET', 'POSTGRES_PASSWORD'];
+      const secretVars = ['ENCRYPTION_KEY', 'CSRF_SECRET', 'POSTGRES_PASSWORD', 'ADMIN_POSTGRES_PASSWORD'];
       for (const v of secretVars) {
         const lines = raw.split('\n').filter(l => !l.trim().startsWith('#'));
         for (const line of lines) {
@@ -355,6 +371,114 @@ describe('Tenant docker-compose configuration', () => {
       expect(dbUrl).toContain('${POSTGRES_PASSWORD');
     });
 
+    it('given the migrate service, ADMIN_DATABASE_URL should reference internal postgres-admin with interpolated credentials', () => {
+      const url = getEnv('migrate').ADMIN_DATABASE_URL;
+      expect(url).toContain('@postgres-admin:');
+      expect(url).toContain('${ADMIN_POSTGRES_PASSWORD');
+    });
+
+    // Owner/bootstrap credentials would bypass the drizzle-admin/0001
+    // zero-trust grants (the owner can DELETE/TRUNCATE its own tables), so
+    // runtime services never receive them. Phase 2 (#890): each runtime
+    // service connects as its own least-privilege LOGIN user — web →
+    // admin_app_user (admin_app), processor → admin_processor_user
+    // (admin_chainer + admin_siem). The tenant stack has no admin app.
+    const serviceLogins: [string, string, string][] = [
+      ['web', 'admin_app_user', 'ADMIN_APP_PASSWORD'],
+      ['processor', 'admin_processor_user', 'ADMIN_PROCESSOR_PASSWORD'],
+    ];
+
+    it.each(serviceLogins)(
+      'given the %s runtime service, ADMIN_DATABASE_URL should connect as %s with a required-var %s',
+      (svc, loginUser, passwordVar) => {
+        const url = getEnv(svc).ADMIN_DATABASE_URL;
+        expect(url).toContain(`://${loginUser}:`);
+        expect(url).toContain(`\${${passwordVar}:?`);
+        expect(url).toContain('@postgres-admin:');
+      },
+    );
+
+    it.each(serviceLogins.map(([svc]) => svc))(
+      'given the %s runtime service, ADMIN_DATABASE_URL should NOT interpolate the owner credentials',
+      (svc) => {
+        const url = getEnv(svc).ADMIN_DATABASE_URL;
+        expect(url).not.toContain('ADMIN_POSTGRES_USER');
+        expect(url).not.toContain('ADMIN_POSTGRES_PASSWORD');
+      },
+    );
+
+    it('given the processor service, should pass AUDIT_CHAINER_ALLOW_GENESIS through from .env (fresh installs set it true; upgrades leave it unset — era-fork guard)', () => {
+      const value = String(getEnv('processor').AUDIT_CHAINER_ALLOW_GENESIS ?? '');
+      expect(value).toContain('${AUDIT_CHAINER_ALLOW_GENESIS');
+      // Optional on purpose: an unset var must not fail compose interpolation
+      // on upgraded stacks whose .env predates the flag.
+      expect(value).toContain(':-');
+    });
+
+    it('given the realtime service, should NOT receive ADMIN_DATABASE_URL (no audit path in realtime)', () => {
+      expect(getEnv('realtime')).not.toHaveProperty('ADMIN_DATABASE_URL');
+    });
+
+    it('given the raw YAML, owner credentials (ADMIN_POSTGRES_USER/PASSWORD) should be interpolated ONLY by postgres-admin and migrate', () => {
+      const raw = getRawYaml();
+      const serviceNames = Object.keys(compose.services);
+      const lines = raw.split('\n');
+      let currentService: string | null = null;
+      const offenders: string[] = [];
+      for (const line of lines) {
+        const svcMatch = line.match(/^ {2}([a-z-]+):\s*$/);
+        if (svcMatch && serviceNames.includes(svcMatch[1])) {
+          currentService = svcMatch[1];
+          continue;
+        }
+        if (line.trim().startsWith('#')) continue;
+        if (/\$\{ADMIN_POSTGRES_(USER|PASSWORD)/.test(line)) {
+          if (currentService !== 'postgres-admin' && currentService !== 'migrate') {
+            offenders.push(`${currentService}: ${line.trim()}`);
+          }
+        }
+      }
+      expect(offenders).toEqual([]);
+    });
+
+    it('given the migrate service, should receive the four per-service login passwords with required-var guards', () => {
+      const env = getEnv('migrate');
+      for (const v of [
+        'ADMIN_APP_PASSWORD',
+        'ADMIN_PROCESSOR_PASSWORD',
+        'ADMIN_READER_PASSWORD',
+        'ADMIN_ERASER_PASSWORD',
+      ]) {
+        expect(env[v]).toContain(`\${${v}:?`);
+      }
+    });
+
+    // #890 Phase 2 leaf 6: the GDPR pseudonymization route (web) erases PII
+    // on the trust plane as its own column-scoped identity.
+    it('given the web service, ADMIN_ERASER_DATABASE_URL should connect as admin_gdpr_eraser_user with a required-var password, never owner creds', () => {
+      const url = getEnv('web').ADMIN_ERASER_DATABASE_URL;
+      expect(url).toContain('://admin_gdpr_eraser_user:');
+      expect(url).toContain('${ADMIN_ERASER_PASSWORD:?');
+      expect(url).toContain('@postgres-admin:');
+      expect(url).not.toContain('ADMIN_POSTGRES_USER');
+      expect(url).not.toContain('ADMIN_POSTGRES_PASSWORD');
+    });
+
+    it.each(['processor', 'realtime'])(
+      'given the %s service, should NOT wire ADMIN_ERASER_DATABASE_URL (only the web GDPR route erases)',
+      (svc) => {
+        expect(getEnv(svc)).not.toHaveProperty('ADMIN_ERASER_DATABASE_URL');
+      },
+    );
+
+    it('given the migrate service, should run db:provision:admin-users after db:migrate:admin', () => {
+      const command = String(compose.services.migrate.command);
+      expect(command).toContain('db:provision:admin-users');
+      expect(command.indexOf('db:migrate:admin')).toBeLessThan(
+        command.indexOf('db:provision:admin-users'),
+      );
+    });
+
     const redisEnvVars = ['REDIS_URL', 'REDIS_SESSION_URL', 'REDIS_RATE_LIMIT_URL', 'REDIS_PASSWORD'];
     const jwtEnvVars = ['JWT_SECRET', 'JWT_ISSUER', 'JWT_AUDIENCE'];
     const servicesWithEnv = Object.keys(compose.services).filter(
@@ -376,9 +500,55 @@ describe('Tenant docker-compose configuration', () => {
     );
   });
 
+  describe('upgrade fail-fast for pre-Phase-1 .env files (admin DB credentials)', () => {
+    // A tenant .env generated before Phase 1 has no ADMIN_POSTGRES_* vars.
+    // Plain ${ADMIN_POSTGRES_PASSWORD} renders as "" (only a soft compose
+    // warning) and postgres-admin never becomes healthy, silently wedging the
+    // whole stack behind depends_on. The ${VAR:?message} required-var syntax
+    // makes `docker compose` abort immediately with a message naming the
+    // cause and the upgrade note instead.
+    it('given the postgres-admin service, POSTGRES_PASSWORD should use required-var syntax pointing at infrastructure/UPGRADE.md', () => {
+      const raw = getRawYaml();
+      expect(raw).toMatch(
+        /POSTGRES_PASSWORD: \$\{ADMIN_POSTGRES_PASSWORD:\?[^}]*infrastructure\/UPGRADE\.md[^}]*\}/,
+      );
+    });
+
+    it('given every ADMIN_DATABASE_URL derivation, should use required-var syntax on its password', () => {
+      const lines = getRawYaml()
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('#') && l.includes('ADMIN_DATABASE_URL:'));
+      // migrate (owner) + web (admin_app_user) + processor (admin_processor_user)
+      expect(lines.length).toBe(3);
+      for (const line of lines) {
+        expect(line).toMatch(/\$\{ADMIN_(POSTGRES|APP|PROCESSOR)_PASSWORD:\?/);
+      }
+    });
+
+    it('given the comment block above the postgres-admin service, should link infrastructure/UPGRADE.md', () => {
+      const lines = getRawYaml().split('\n');
+      const svcIdx = lines.findIndex((l) => l.startsWith('  postgres-admin:'));
+      expect(svcIdx).toBeGreaterThan(-1);
+      const commentBlock: string[] = [];
+      for (let i = svcIdx - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith('#')) commentBlock.push(line);
+        else if (line === '') continue;
+        else break;
+      }
+      expect(commentBlock.join('\n')).toContain('infrastructure/UPGRADE.md');
+    });
+  });
+
   describe('healthchecks', () => {
     it('given the postgres service, should use pg_isready', () => {
       const test = compose.services.postgres.healthcheck?.test;
+      const testStr = Array.isArray(test) ? test.join(' ') : test;
+      expect(testStr).toContain('pg_isready');
+    });
+
+    it('given the postgres-admin service, should use pg_isready', () => {
+      const test = compose.services['postgres-admin'].healthcheck?.test;
       const testStr = Array.isArray(test) ? test.join(' ') : test;
       expect(testStr).toContain('pg_isready');
     });
@@ -393,6 +563,7 @@ describe('Tenant docker-compose configuration', () => {
   describe('volumes', () => {
     const requiredVolumes = [
       'postgres_data',
+      'postgres_admin_data',
       'file_storage',
       'cache_storage',
     ];

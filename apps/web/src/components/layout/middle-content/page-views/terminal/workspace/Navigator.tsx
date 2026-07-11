@@ -77,14 +77,14 @@ export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url
 export type { OpenTerminalScope };
 
 interface NavigatorProps {
-  terminalId: string;
+  machineId: string;
 }
 
-export default function Navigator({ terminalId }: NavigatorProps) {
+export default function Navigator({ machineId }: NavigatorProps) {
   const openTerminal = useTerminalWorkspaceStore((state) => state.openTerminal);
   const onOpenTerminal = useCallback(
-    (scope: OpenTerminalScope) => openTerminal(terminalId, scope),
-    [openTerminal, terminalId],
+    (scope: OpenTerminalScope) => openTerminal(machineId, scope),
+    [openTerminal, machineId],
   );
 
   return (
@@ -94,27 +94,27 @@ export default function Navigator({ terminalId }: NavigatorProps) {
       </div>
       <ScrollArea className="flex-1">
         <div className="p-1 text-sm">
-          <MachineNode terminalId={terminalId} onOpenTerminal={onOpenTerminal} />
+          <MachineNode machineId={machineId} onOpenTerminal={onOpenTerminal} />
         </div>
       </ScrollArea>
     </div>
   );
 }
 
-function MachineNode({ terminalId, onOpenTerminal }: { terminalId: string; onOpenTerminal(scope: OpenTerminalScope): void }) {
+function MachineNode({ machineId, onOpenTerminal }: { machineId: string; onOpenTerminal(scope: OpenTerminalScope): void }) {
   const [expanded, setExpanded] = useState(true);
   const {
     agentTerminals,
     isLoading: terminalsLoading,
     addAgentTerminal,
     removeAgentTerminal,
-  } = useAgentTerminals(expanded ? terminalId : null, null, null);
+  } = useAgentTerminals(expanded ? machineId : null, null, null);
   const {
     projects,
     isLoading: projectsLoading,
     addProject,
     removeProject,
-  } = useMachineProjects(expanded ? terminalId : null);
+  } = useMachineProjects(expanded ? machineId : null);
 
   return (
     <div>
@@ -153,7 +153,7 @@ function MachineNode({ terminalId, onOpenTerminal }: { terminalId: string; onOpe
           {projects.map((project) => (
             <ProjectNode
               key={project.name}
-              terminalId={terminalId}
+              machineId={machineId}
               projectName={project.name}
               onOpenTerminal={onOpenTerminal}
               onRemoveProject={() => removeProject(project.name)}
@@ -166,12 +166,12 @@ function MachineNode({ terminalId, onOpenTerminal }: { terminalId: string; onOpe
 }
 
 function ProjectNode({
-  terminalId,
+  machineId,
   projectName,
   onOpenTerminal,
   onRemoveProject,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   onOpenTerminal(scope: OpenTerminalScope): void;
   onRemoveProject(): Promise<unknown>;
@@ -183,13 +183,13 @@ function ProjectNode({
     isLoading: terminalsLoading,
     addAgentTerminal,
     removeAgentTerminal,
-  } = useAgentTerminals(expanded ? terminalId : null, projectName, null);
+  } = useAgentTerminals(expanded ? machineId : null, projectName, null);
   const {
     branches,
     isLoading: branchesLoading,
     addBranch,
     removeBranch,
-  } = useMachineBranches(expanded ? terminalId : null, projectName);
+  } = useMachineBranches(expanded ? machineId : null, projectName);
 
   return (
     <div>
@@ -240,7 +240,7 @@ function ProjectNode({
           {branches.map((branch) => (
             <BranchNode
               key={branch.branchName}
-              terminalId={terminalId}
+              machineId={machineId}
               projectName={projectName}
               branchName={branch.branchName}
               onOpenTerminal={onOpenTerminal}
@@ -254,13 +254,13 @@ function ProjectNode({
 }
 
 function BranchNode({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   onOpenTerminal,
   onRemoveBranch,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   onOpenTerminal(scope: OpenTerminalScope): void;
@@ -273,7 +273,7 @@ function BranchNode({
     isLoading: terminalsLoading,
     addAgentTerminal,
     removeAgentTerminal,
-  } = useAgentTerminals(expanded ? terminalId : null, projectName, branchName);
+  } = useAgentTerminals(expanded ? machineId : null, projectName, branchName);
 
   return (
     <div>

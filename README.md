@@ -129,7 +129,7 @@ PageSpace includes an MCP server that lets Claude Desktop and other AI tools dir
 ## Core Features
 
 ### AI Agent Infrastructure
-- **37 workspace tools** for AI to manipulate content directly
+- **75 workspace tools** for AI to manipulate content directly
 - **Tool permissions**: Control what each AI can do in your workspace
 - **MCP protocol support**: Connect external AI tools like Claude Desktop and Cursor
 

@@ -502,6 +502,20 @@ export async function findUserIdByCredentialId(credentialId: string): Promise<st
   return passkey?.userId ?? null;
 }
 
+/**
+ * True if the user has at least one registered passkey. A light existence check
+ * (single-row lookup, no crypto) used to decide whether to funnel a freshly
+ * signed-in on-prem user into first-run passkey enrollment.
+ */
+export async function userHasPasskey(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  const passkey = await db.query.passkeys.findFirst({
+    where: eq(passkeys.userId, userId),
+    columns: { id: true },
+  });
+  return passkey !== undefined;
+}
+
 export async function verifyAuthentication(input: unknown): Promise<VerifyAuthResult> {
   const parsed = verifyAuthSchema.safeParse(input);
   if (!parsed.success) {

@@ -49,6 +49,7 @@ describe('Tenant env template', () => {
     'ENCRYPTION_KEY',
     'CSRF_SECRET',
     'POSTGRES_PASSWORD',
+    'ADMIN_POSTGRES_PASSWORD',
     'CRON_SECRET',
     'REALTIME_BROADCAST_SECRET',
   ];
@@ -80,6 +81,10 @@ describe('Tenant env template', () => {
 
   it('given DEPLOYMENT_MODE, should default to tenant', () => {
     expect(templateVars.get('DEPLOYMENT_MODE')).toBe('tenant');
+  });
+
+  it('given AUDIT_CHAINER_ALLOW_GENESIS, should be true — the template provisions FRESH installs (empty admin chain, genesis link is correct); upgrades must never carry it (#890 Phase 2 era-fork guard)', () => {
+    expect(templateVars.get('AUDIT_CHAINER_ALLOW_GENESIS')).toBe('true');
   });
 
   it('given IMAGE_TAG, should default to latest', () => {

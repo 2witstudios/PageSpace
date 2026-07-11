@@ -19,10 +19,10 @@ const fetcher = (url: string) =>
   });
 
 /** Branches tier of the Terminal workspace navigator — one isolated Sprite per branch-terminal. */
-export function useMachineBranches(terminalId: string | null, projectName: string | null) {
+export function useMachineBranches(machineId: string | null, projectName: string | null) {
   const key =
-    terminalId && projectName
-      ? `/api/machines/branches?terminalId=${encodeURIComponent(terminalId)}&projectName=${encodeURIComponent(projectName)}`
+    machineId && projectName
+      ? `/api/machines/branches?machineId=${encodeURIComponent(machineId)}&projectName=${encodeURIComponent(projectName)}`
       : null;
 
   const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
@@ -31,27 +31,27 @@ export function useMachineBranches(terminalId: string | null, projectName: strin
 
   const addBranch = useCallback(
     async (branchName: string) => {
-      if (!terminalId || !projectName) throw new Error('No active project');
+      if (!machineId || !projectName) throw new Error('No active project');
       const result = await post<{ branch: { branchName: string; resumed: boolean } }>('/api/machines/branches', {
-        terminalId,
+        machineId,
         projectName,
         branchName,
       });
       await mutate();
       return result.branch;
     },
-    [terminalId, projectName, mutate],
+    [machineId, projectName, mutate],
   );
 
   const removeBranch = useCallback(
     async (branchName: string) => {
-      if (!terminalId || !projectName) throw new Error('No active project');
+      if (!machineId || !projectName) throw new Error('No active project');
       await del(
-        `/api/machines/branches?terminalId=${encodeURIComponent(terminalId)}&projectName=${encodeURIComponent(projectName)}&branchName=${encodeURIComponent(branchName)}`,
+        `/api/machines/branches?machineId=${encodeURIComponent(machineId)}&projectName=${encodeURIComponent(projectName)}&branchName=${encodeURIComponent(branchName)}`,
       );
       await mutate();
     },
-    [terminalId, projectName, mutate],
+    [machineId, projectName, mutate],
   );
 
   return {

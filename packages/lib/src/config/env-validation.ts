@@ -16,6 +16,58 @@ export const serverEnvSchema = z
         'DATABASE_URL must be a valid PostgreSQL connection string'
       ),
 
+    // Admin Postgres (trust plane) — dedicated database for the tamper-evident
+    // security audit chain and related admin/audit tables, isolated from the app
+    // DB in every deployment mode. Optional at the schema level: the hard
+    // fail-fast when unset (and no break-glass flag) is enforced by the adminDb
+    // client at init, not here, so non-audit code paths can still validate env.
+    ADMIN_DATABASE_URL: z
+      .string()
+      .min(1, 'ADMIN_DATABASE_URL must not be empty when set')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'ADMIN_DATABASE_URL must be a valid PostgreSQL connection string'
+      )
+      .optional(),
+    ADMIN_DATABASE_SSL: z.enum(['true', 'false']).optional(),
+    ADMIN_DB_POOL_MAX: z.coerce.number().int().positive().optional(),
+
+    // GDPR eraser identity (#890 Phase 2, leaf 6): the web pseudonymization
+    // route connects to the Admin PG as admin_gdpr_eraser_user through this
+    // URL. Optional at the schema level — when unset, the pseudonymize route
+    // refuses (503) via the eraser client, never at app boot.
+    ADMIN_ERASER_DATABASE_URL: z
+      .string()
+      .min(1, 'ADMIN_ERASER_DATABASE_URL must not be empty when set')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'ADMIN_ERASER_DATABASE_URL must be a valid PostgreSQL connection string'
+      )
+      .optional(),
+
+    // Break-glass rollback ONLY: arms the fallback that permits audit writes to
+    // the main DB (which must alert loudly) when the Admin PG is unavailable.
+    // Never a supported steady state. Accept any string so a stray value (e.g.
+    // ADMIN_DB_BREAK_GLASS=1) never fails app-wide env validation; consumers
+    // arm break-glass only on the exact value 'true' (fail-closed otherwise).
+    ADMIN_DB_BREAK_GLASS: z.string().optional(),
+
+    // ClickHouse analytics tier (#890 Phase 3) — off by default. Only the
+    // exact value CLICKHOUSE_ENABLED='true' turns it on (accept any string so
+    // a stray value never fails app-wide env validation; the exact-match gate
+    // lives in observability/clickhouse-env.ts). All connection vars are
+    // optional at the schema level: the three-state fail-fast (off → no CH /
+    // on+configured → client / on+misconfigured → throw) is enforced by the
+    // client shell at init, not here, so non-analytics code paths still
+    // validate env. Credentials are server-side secrets — never NEXT_PUBLIC_,
+    // placeholders only in .env.example.
+    CLICKHOUSE_ENABLED: z.string().optional(),
+    CLICKHOUSE_URL: z.string().optional(),
+    CLICKHOUSE_HOST: z.string().optional(),
+    CLICKHOUSE_USER: z.string().optional(),
+    CLICKHOUSE_PASSWORD: z.string().optional(),
+    CLICKHOUSE_DATABASE: z.string().optional(),
+
     // CSRF Protection (required in production/development, optional in test)
     CSRF_SECRET: z.string().optional(),
 

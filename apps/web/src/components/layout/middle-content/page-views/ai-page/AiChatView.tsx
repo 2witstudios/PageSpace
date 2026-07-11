@@ -231,7 +231,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       const ownStream = usePendingStreamsStore.getState().getOwnStreams(page.id)[0];
       const merged =
         ownStream?.conversationId === conversationId && ownStream.messageId
-          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId)
+          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
           : serverMessages;
 
       setMessages(merged);
@@ -648,7 +648,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         setMessages((prev) =>
           prev.some((m) => m.id === messageId)
             ? prev
-            : [...prev, synthesizeAssistantMessage(messageId, stream.parts)],
+            : [...prev, synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt)],
         );
         return;
       }
@@ -661,7 +661,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       if (!stream || stream.parts.length === 0) return;
 
       if (isPlaceholderConversationId(currentConversationId, page.id)) {
-        const { parts, conversationId: streamConvId } = stream;
+        const { parts, conversationId: streamConvId, startedAt } = stream;
         fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations?pageSize=1`)
           .then(async (res) => {
             if (pageIdRef.current !== page.id) return;
@@ -679,7 +679,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             setMessages((prev) =>
               prev.some((m) => m.id === messageId)
                 ? prev
-                : [...prev, synthesizeAssistantMessage(messageId, parts)],
+                : [...prev, synthesizeAssistantMessage(messageId, parts, startedAt)],
             );
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));

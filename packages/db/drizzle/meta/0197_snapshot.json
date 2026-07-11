@@ -1,6 +1,6 @@
 {
-  "id": "265ab556-83e6-41a6-9299-1b915fb52942",
-  "prevId": "33140f80-a7a7-4bb1-839b-77d66f240a88",
+  "id": "acdbe01a-0bb3-4e9e-9c00-dfe9f0cbaa8b",
+  "prevId": "f135010e-5d6e-4498-ab0a-2b55e177fa8f",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2237,6 +2237,19 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "allowPageAgents": {
+          "name": "allowPageAgents",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
         },
         "fileSize": {
           "name": "fileSize",
@@ -6772,6 +6785,48 @@
           "with": {}
         }
       },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
+    },
+    "public.error_resolutions": {
+      "name": "error_resolutions",
+      "schema": "",
+      "columns": {
+        "error_id": {
+          "name": "error_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "resolved": {
+          "name": "resolved",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "resolved_by": {
+          "name": "resolved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolution": {
+          "name": "resolution",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
@@ -18698,8 +18753,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "terminalId": {
-          "name": "terminalId",
+        "machineId": {
+          "name": "machineId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -18737,11 +18792,11 @@
         }
       },
       "indexes": {
-        "machine_projects_terminal_id_idx": {
-          "name": "machine_projects_terminal_id_idx",
+        "machine_projects_machine_id_idx": {
+          "name": "machine_projects_machine_id_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "machineId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -18752,11 +18807,11 @@
           "method": "btree",
           "with": {}
         },
-        "machine_projects_terminal_id_name_idx": {
-          "name": "machine_projects_terminal_id_name_idx",
+        "machine_projects_machine_id_name_idx": {
+          "name": "machine_projects_machine_id_name_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "machineId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -18788,12 +18843,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "machine_projects_terminalId_pages_id_fk": {
-          "name": "machine_projects_terminalId_pages_id_fk",
+        "machine_projects_machineId_pages_id_fk": {
+          "name": "machine_projects_machineId_pages_id_fk",
           "tableFrom": "machine_projects",
           "tableTo": "pages",
           "columnsFrom": [
-            "terminalId"
+            "machineId"
           ],
           "columnsTo": [
             "id"
@@ -18821,8 +18876,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "terminalId": {
-          "name": "terminalId",
+        "machineId": {
+          "name": "machineId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -18866,11 +18921,11 @@
         }
       },
       "indexes": {
-        "machine_branches_terminal_id_idx": {
-          "name": "machine_branches_terminal_id_idx",
+        "machine_branches_machine_id_idx": {
+          "name": "machine_branches_machine_id_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "machineId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -18881,11 +18936,11 @@
           "method": "btree",
           "with": {}
         },
-        "machine_branches_terminal_project_branch_idx": {
-          "name": "machine_branches_terminal_project_branch_idx",
+        "machine_branches_machine_project_branch_idx": {
+          "name": "machine_branches_machine_project_branch_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "machineId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -18923,12 +18978,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "machine_branches_terminalId_pages_id_fk": {
-          "name": "machine_branches_terminalId_pages_id_fk",
+        "machine_branches_machineId_pages_id_fk": {
+          "name": "machine_branches_machineId_pages_id_fk",
           "tableFrom": "machine_branches",
           "tableTo": "pages",
           "columnsFrom": [
-            "terminalId"
+            "machineId"
           ],
           "columnsTo": [
             "id"
@@ -18964,8 +19019,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "terminalId": {
-          "name": "terminalId",
+        "machineId": {
+          "name": "machineId",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -19027,11 +19082,11 @@
         }
       },
       "indexes": {
-        "machine_agent_terminals_terminal_id_idx": {
-          "name": "machine_agent_terminals_terminal_id_idx",
+        "machine_agent_terminals_machine_id_idx": {
+          "name": "machine_agent_terminals_machine_id_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "machineId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -19061,7 +19116,7 @@
           "name": "machine_agent_terminals_scope_name_idx",
           "columns": [
             {
-              "expression": "terminalId",
+              "expression": "machineId",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -19105,12 +19160,12 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "machine_agent_terminals_terminalId_pages_id_fk": {
-          "name": "machine_agent_terminals_terminalId_pages_id_fk",
+        "machine_agent_terminals_machineId_pages_id_fk": {
+          "name": "machine_agent_terminals_machineId_pages_id_fk",
           "tableFrom": "machine_agent_terminals",
           "tableTo": "pages",
           "columnsFrom": [
-            "terminalId"
+            "machineId"
           ],
           "columnsTo": [
             "id"
@@ -19193,7 +19248,7 @@
         "SHEET",
         "TASK_LIST",
         "CODE",
-        "TERMINAL"
+        "MACHINE"
       ]
     },
     "public.PermissionAction": {

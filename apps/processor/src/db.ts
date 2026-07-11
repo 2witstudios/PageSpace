@@ -11,7 +11,10 @@ interface PgPool {
 
 // @ts-expect-error -- pg has no bundled types; runtime cast below handles type safety
 import pg from 'pg';
-const { Pool } = pg as unknown as { Pool: new (config: { connectionString: string; max: number }) => PgPool };
+import { buildAdminPgTypes, type PgTypesConfig } from './admin-pg-types';
+const { Pool } = pg as unknown as {
+  Pool: new (config: { connectionString: string; max: number; types?: PgTypesConfig }) => PgPool;
+};
 
 let pool: PgPool | null = null;
 
@@ -28,6 +31,26 @@ function getPool(): PgPool {
 
 export function getPoolForWorker(): PgPool {
   return getPool();
+}
+
+// Admin PG (trust plane) pool — separate server, separate identity: the
+// processor connects as admin_processor_user (admin_chainer + admin_siem)
+// via its service-scoped ADMIN_DATABASE_URL (#890 Phase 2). Small max: the
+// only consumer is the single-writer audit chainer.
+// timestamp-without-tz columns parse as UTC (buildAdminPgTypes): raw-pg
+// reads on this pool feed hash recomputation, which must match drizzle's
+// UTC wall-clock storage regardless of process TZ.
+let adminPool: PgPool | null = null;
+
+export function getAdminPoolForWorker(): PgPool {
+  if (!adminPool) {
+    const connectionString = process.env.ADMIN_DATABASE_URL;
+    if (!connectionString) {
+      throw new Error('ADMIN_DATABASE_URL is not configured');
+    }
+    adminPool = new Pool({ connectionString, max: 2, types: buildAdminPgTypes() });
+  }
+  return adminPool;
 }
 
 export async function setPageProcessing(pageId: string): Promise<void> {

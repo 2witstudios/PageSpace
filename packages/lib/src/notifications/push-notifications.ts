@@ -3,6 +3,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pushNotificationTokens } from '@pagespace/db/schema/push-notifications';
 import { createId } from '@paralleldrive/cuid2';
 import * as crypto from 'crypto';
+import * as http2 from 'node:http2';
 
 type PushPlatform = 'ios' | 'android' | 'web';
 
@@ -121,6 +122,102 @@ function getApnsJwtToken(): string {
   return apnsJwtToken;
 }
 
+// APNs is HTTP/2-only. Node's global fetch (undici) speaks HTTP/1.1 and does not
+// upgrade, so a POST to api.push.apple.com fails with an opaque "fetch failed".
+// We use node:http2 with a long-lived, multiplexed session per host — APNs
+// strongly prefers reusing a single connection across many sends. A failed
+// session is evicted and closed so the next send transparently reconnects.
+const apnsSessions = new Map<string, http2.ClientHttp2Session>();
+
+function getApnsSession(host: string): http2.ClientHttp2Session {
+  const existing = apnsSessions.get(host);
+  if (existing && !existing.closed && !existing.destroyed) return existing;
+
+  const session = http2.connect(`https://${host}`);
+  // Only drop this session from the cache if it's still the cached one — a newer
+  // session may have replaced it, and we must not evict that healthy replacement.
+  const evictIfCurrent = () => {
+    if (apnsSessions.get(host) === session) apnsSessions.delete(host);
+  };
+  session.on('error', evictIfCurrent);
+  session.on('close', evictIfCurrent);
+  session.on('goaway', () => {
+    try { session.close(); } catch { /* noop */ }
+    evictIfCurrent();
+  });
+  // Don't let the pooled connection keep the process alive / block shutdown.
+  session.socket?.unref?.();
+
+  apnsSessions.set(host, session);
+  return session;
+}
+
+// Evict a session after a transport failure AND gracefully close it. req.close()
+// only cancels the stream; without this the underlying HTTP/2 socket stays open,
+// so repeated APNs stalls/outages would leak connections/FDs as each retry opens
+// a fresh session. close() lets any other in-flight streams drain, then releases
+// the socket; the next send transparently reconnects.
+function evictApnsSession(host: string, session: http2.ClientHttp2Session): void {
+  if (apnsSessions.get(host) === session) apnsSessions.delete(host);
+  try { session.close(); } catch { /* noop */ }
+}
+
+interface ApnsTransportResult {
+  status: number;
+  apnsId: string | null;
+  body: string;
+}
+
+function performApnsRequest(
+  session: http2.ClientHttp2Session,
+  requestHeaders: http2.OutgoingHttpHeaders,
+  body: string
+): Promise<ApnsTransportResult> {
+  return new Promise<ApnsTransportResult>((resolve, reject) => {
+    const req = session.request(requestHeaders);
+
+    let status = 0;
+    let apnsId: string | null = null;
+    let responseBody = '';
+    let settled = false;
+
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    req.on('response', (headers) => {
+      status = headers[':status'] ?? 0;
+      const rawApnsId = headers['apns-id'];
+      apnsId = Array.isArray(rawApnsId) ? (rawApnsId[0] ?? null) : (rawApnsId ?? null);
+    });
+
+    req.on('data', (chunk: Buffer | string) => {
+      responseBody += chunk.toString();
+    });
+
+    req.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve({ status, apnsId, body: responseBody });
+    });
+
+    req.on('error', (error) => {
+      fail(error);
+    });
+
+    // A hung stream must not wedge the caller — cancel and surface as an error.
+    req.setTimeout(10000, () => {
+      req.close(http2.constants.NGHTTP2_CANCEL);
+      fail(new Error('APNs request timed out after 10000ms'));
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
 async function sendToApns(
   deviceToken: string,
   payload: PushNotificationPayload,
@@ -131,6 +228,10 @@ async function sendToApns(
   const apnsHost = isProduction
     ? 'api.push.apple.com'
     : 'api.sandbox.push.apple.com';
+
+  // Only set once a session is actually opened, so a JWT-signing failure (which
+  // happens before any connection) never evicts/closes a healthy cached session.
+  let usedSession: http2.ClientHttp2Session | null = null;
 
   try {
     const jwtToken = getApnsJwtToken();
@@ -166,33 +267,40 @@ async function sendToApns(
       isSilent,
     });
 
-    const response = await fetch(
-      `https://${apnsHost}/3/device/${deviceToken}`,
-      {
-        method: 'POST',
-        headers: {
-          'authorization': `bearer ${jwtToken}`,
-          'apns-topic': bundleId,
-          'apns-push-type': isSilent ? 'background' : 'alert',
-          'apns-priority': isSilent ? '5' : '10',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(apnsPayload),
-      }
+    const session = getApnsSession(apnsHost);
+    usedSession = session;
+    const requestHeaders: http2.OutgoingHttpHeaders = {
+      ':method': 'POST',
+      ':path': `/3/device/${deviceToken}`,
+      'authorization': `bearer ${jwtToken}`,
+      'apns-topic': bundleId,
+      'apns-push-type': isSilent ? 'background' : 'alert',
+      'apns-priority': isSilent ? '5' : '10',
+      'content-type': 'application/json',
+    };
+
+    const { status, apnsId, body } = await performApnsRequest(
+      session,
+      requestHeaders,
+      JSON.stringify(apnsPayload)
     );
 
-    const apnsId = response.headers?.get?.('apns-id') ?? null;
-
-    if (response.ok) {
+    if (status === 200) {
       console.log('[APNs] accepted', { tokenId, apnsId });
       return { success: true, tokenId };
     }
 
-    const errorBody = await response.json().catch(() => ({}));
-    const reason = (errorBody as { reason?: string }).reason || 'Unknown error';
+    let reason = 'Unknown error';
+    if (body) {
+      try {
+        reason = (JSON.parse(body) as { reason?: string }).reason || 'Unknown error';
+      } catch {
+        // Non-JSON body — keep the default reason.
+      }
+    }
 
     console.error('[APNs] reject', {
-      status: response.status,
+      status,
       reason,
       apnsId,
       host: apnsHost,
@@ -215,11 +323,20 @@ async function sendToApns(
       shouldRemoveToken: invalidTokenReasons.includes(reason),
     };
   } catch (error) {
+    // A transport failure (stream error/timeout) may have poisoned the session,
+    // and req.close() only cancels the stream — evict AND close the specific
+    // session used so its socket is released and the next send reconnects.
+    if (usedSession) evictApnsSession(apnsHost, usedSession);
+
+    // The original `fetch failed` bug was opaque because only error.message was
+    // logged — surface the stack and any transport error code for legibility.
+    const code = (error as { code?: string }).code;
     console.error('[APNs] send error', {
       tokenId,
       host: apnsHost,
       bundleId,
-      error: error instanceof Error ? error.message : error,
+      error: error instanceof Error ? (error.stack ?? error.message) : error,
+      ...(code ? { code } : {}),
     });
     return {
       success: false,

@@ -63,7 +63,7 @@ beforeEach(() => {
 describe('GET /api/machines/agent-terminals', () => {
   it('given no auth, returns the auth error', async () => {
     mockAuthenticateRequest.mockResolvedValue(AUTH_DENIED);
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1&projectName=repo&branchName=main'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(401);
   });
 
@@ -73,19 +73,19 @@ describe('GET /api/machines/agent-terminals', () => {
       ok: true,
       terminals: [{ name: 'cli', agentType: 'pagespace-cli', createdAt: new Date('2026-07-01') }],
     });
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1&projectName=repo&branchName=main'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.agentTerminals).toHaveLength(1);
     expect(mockCanViewMachine).toHaveBeenCalledWith('user-1', 't1');
     expect(mockListAgentTerminals).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: 'repo', branchName: 'main' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main' }),
     );
   });
 
   it('given no view access, returns 403 without listing', async () => {
     mockCanViewMachine.mockResolvedValue(false);
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1&projectName=repo&branchName=main'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(403);
     expect(mockListAgentTerminals).not.toHaveBeenCalled();
   });
@@ -93,34 +93,34 @@ describe('GET /api/machines/agent-terminals', () => {
   it('given the branch does not exist, returns 404', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({ ok: false, reason: 'branch_not_found' });
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1&projectName=repo&branchName=main'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(404);
   });
 
   it('given no branchName (project scope), lists without error', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({ ok: true, terminals: [] });
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1&projectName=repo'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo'));
     expect(res.status).toBe(200);
     expect(mockListAgentTerminals).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: 'repo', branchName: undefined }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: undefined }),
     );
   });
 
   it('given neither projectName nor branchName (machine scope), lists without error', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({ ok: true, terminals: [] });
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1'));
     expect(res.status).toBe(200);
     expect(mockListAgentTerminals).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: undefined, branchName: undefined }),
+      expect.objectContaining({ machineId: 't1', projectName: undefined, branchName: undefined }),
     );
   });
 
   it('given branchName without projectName, returns 400 (invalid_target) without listing', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({ ok: false, reason: 'invalid_target' });
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?terminalId=t1&branchName=main'));
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&branchName=main'));
     expect(res.status).toBe(400);
   });
 });
@@ -133,7 +133,7 @@ describe('POST /api/machines/agent-terminals', () => {
       headers: { 'content-type': 'application/json' },
     });
   }
-  const VALID_BODY = { terminalId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'pagespace-cli' };
+  const VALID_BODY = { machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'pagespace-cli' };
 
   it('given no edit access, returns 403 without spawning', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
@@ -150,7 +150,7 @@ describe('POST /api/machines/agent-terminals', () => {
     const body = await res.json();
     expect(body.agentTerminal).toMatchObject({ name: 'cli', agentType: 'pagespace-cli', resumed: false });
     expect(mockSpawnAgentTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'pagespace-cli' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'pagespace-cli' }),
     );
   });
 
@@ -211,7 +211,7 @@ describe('POST /api/machines/agent-terminals', () => {
     const res = await POST(req({ ...machineBody, name: 'shell', agentType: 'shell' }));
     expect(res.status).toBe(201);
     expect(mockSpawnAgentTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: undefined, branchName: undefined, name: 'shell', agentType: 'shell' }),
+      expect.objectContaining({ machineId: 't1', projectName: undefined, branchName: undefined, name: 'shell', agentType: 'shell' }),
     );
   });
 
@@ -246,7 +246,7 @@ describe('DELETE /api/machines/agent-terminals', () => {
 
   it('given no edit access, returns 403 without killing', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
-    const res = await DELETE(url('terminalId=t1&projectName=repo&branchName=main&name=cli'));
+    const res = await DELETE(url('machineId=t1&projectName=repo&branchName=main&name=cli'));
     expect(res.status).toBe(403);
     expect(mockKillAgentTerminal).not.toHaveBeenCalled();
   });
@@ -254,32 +254,32 @@ describe('DELETE /api/machines/agent-terminals', () => {
   it('given the agent terminal does not exist, returns 404', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockKillAgentTerminal.mockResolvedValue({ ok: false, reason: 'not_found' });
-    const res = await DELETE(url('terminalId=t1&projectName=repo&branchName=main&name=cli'));
+    const res = await DELETE(url('machineId=t1&projectName=repo&branchName=main&name=cli'));
     expect(res.status).toBe(404);
   });
 
   it('given a successful kill, returns 200', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockKillAgentTerminal.mockResolvedValue({ ok: true });
-    const res = await DELETE(url('terminalId=t1&projectName=repo&branchName=main&name=cli'));
+    const res = await DELETE(url('machineId=t1&projectName=repo&branchName=main&name=cli'));
     expect(res.status).toBe(200);
     expect(mockKillAgentTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: 'repo', branchName: 'main', name: 'cli' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli' }),
     );
   });
 
   it('given no name, returns 400', async () => {
-    const res = await DELETE(url('terminalId=t1&projectName=repo&branchName=main'));
+    const res = await DELETE(url('machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(400);
   });
 
   it('given neither projectName nor branchName (machine scope), kills without error and passes the actor to buildKillAgentTerminalDeps', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockKillAgentTerminal.mockResolvedValue({ ok: true });
-    const res = await DELETE(url('terminalId=t1&name=shell'));
+    const res = await DELETE(url('machineId=t1&name=shell'));
     expect(res.status).toBe(200);
     expect(mockKillAgentTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ terminalId: 't1', projectName: undefined, branchName: undefined, name: 'shell' }),
+      expect.objectContaining({ machineId: 't1', projectName: undefined, branchName: undefined, name: 'shell' }),
     );
     expect(mockBuildKillAgentTerminalDeps).toHaveBeenCalledWith('user-1');
   });
@@ -287,7 +287,7 @@ describe('DELETE /api/machines/agent-terminals', () => {
   it('given branchName without projectName, returns 400 (invalid_target)', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockKillAgentTerminal.mockResolvedValue({ ok: false, reason: 'invalid_target' });
-    const res = await DELETE(url('terminalId=t1&branchName=main&name=cli'));
+    const res = await DELETE(url('machineId=t1&branchName=main&name=cli'));
     expect(res.status).toBe(400);
   });
 });

@@ -124,6 +124,30 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
     expect(synthesizedCalls[1].message.parts).toEqual([]);
   });
 
+  it('given a remote stream carrying a startedAt, stamps the synthesized message with a createdAt so the timestamp footer renders', () => {
+    const remoteStreams = [
+      makeStream({
+        messageId: 'remote-ts',
+        parts: [textPart('partial')],
+        startedAt: '2024-01-01T00:00:00.000Z',
+      }),
+    ];
+
+    render(
+      <ChatMessagesArea
+        messages={[]}
+        isLoading={false}
+        isStreaming={false}
+        remoteStreams={remoteStreams}
+      />
+    );
+
+    const [call] = remoteRendererCalls();
+    expect((call.message as { createdAt?: Date }).createdAt).toEqual(
+      new Date('2024-01-01T00:00:00.000Z'),
+    );
+  });
+
   it('given a remote stream whose parts include a tool part, forwards the full tool shape to MessageRenderer (no flattening to text)', () => {
     const toolPart = {
       type: 'tool-list_pages',

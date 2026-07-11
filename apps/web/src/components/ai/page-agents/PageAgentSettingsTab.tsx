@@ -401,7 +401,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
     [config]
   );
   const usedTerminalIds = useMemo(
-    () => new Set(machineFields.filter((m) => m.kind === 'existing').map((m) => m.terminalId)),
+    () => new Set(machineFields.filter((m) => m.kind === 'existing').map((m) => m.machineId)),
     [machineFields]
   );
   const hasOwnMachine = machineFields.some((m) => m.kind === 'own');
@@ -696,7 +696,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                     {machineFields.map((field, index) => {
                       const label = field.kind === 'own'
                         ? 'Own machine'
-                        : availableTerminalsById.get(field.terminalId)?.title ?? 'Unknown terminal';
+                        : availableTerminalsById.get(field.machineId)?.title ?? 'Unknown terminal';
                       return (
                         <div
                           key={field.id}
@@ -770,7 +770,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                   size="sm"
                   disabled={!selectedTerminalId}
                   onClick={() => {
-                    appendMachine({ kind: 'existing', terminalId: selectedTerminalId });
+                    appendMachine({ kind: 'existing', machineId: selectedTerminalId });
                     setSelectedTerminalId('');
                   }}
                 >

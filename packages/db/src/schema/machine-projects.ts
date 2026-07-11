@@ -9,17 +9,17 @@ import { pages } from './core';
  *
  * A git repo checked out on a Machine's persistent filesystem — the
  * "Projects" tier of the Terminal workspace navigator (Machine → Projects →
- * Branches). A Machine's identity IS its backing page (`terminalId`): the
+ * Branches). A Machine's identity IS its backing page (`machineId`): the
  * page's persistent Sprite session (`terminal_sessions`, services/sandbox/
  * terminal-session-manager.ts) is the same one a live Terminal shell or a
  * page-agent's "own machine" tool calls already reconnect to — Projects are
  * cloned onto that SAME filesystem, not a separate one. `ownerId` is the
  * actor who added the project, kept for audit only — resource-level access is
- * governed by page permissions on `terminalId`.
+ * governed by page permissions on `machineId`.
  *
  * `path` is the absolute directory on the Sprite's filesystem the repo was
  * cloned into (always under services/machines/project-paths.ts#PROJECTS_ROOT).
- * One row per (terminalId, name) — a machine cannot have two projects with
+ * One row per (machineId, name) — a machine cannot have two projects with
  * the same directory name.
  */
 export const machineProjects = pgTable('machine_projects', {
@@ -29,7 +29,7 @@ export const machineProjects = pgTable('machine_projects', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
 
-  terminalId: text('terminalId')
+  machineId: text('machineId')
     .notNull()
     .references(() => pages.id, { onDelete: 'cascade' }),
 
@@ -40,8 +40,8 @@ export const machineProjects = pgTable('machine_projects', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
-  terminalIdIdx: index('machine_projects_terminal_id_idx').on(table.terminalId),
-  terminalIdNameUnique: uniqueIndex('machine_projects_terminal_id_name_idx').on(table.terminalId, table.name),
+  machineIdIdx: index('machine_projects_machine_id_idx').on(table.machineId),
+  machineIdNameUnique: uniqueIndex('machine_projects_machine_id_name_idx').on(table.machineId, table.name),
 }));
 
 export const machineProjectsRelations = relations(machineProjects, ({ one }) => ({
@@ -49,8 +49,8 @@ export const machineProjectsRelations = relations(machineProjects, ({ one }) => 
     fields: [machineProjects.ownerId],
     references: [users.id],
   }),
-  terminal: one(pages, {
-    fields: [machineProjects.terminalId],
+  machine: one(pages, {
+    fields: [machineProjects.machineId],
     references: [pages.id],
   }),
 }));

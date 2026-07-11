@@ -81,7 +81,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
   // where a freshly-opened Terminal page's tab hasn't resolved its type yet.
   const activeTabItem = useTabsStore((state) => state.selectActiveTab(state));
   const activeTabMeta = useTabMeta(activeTabItem ?? NO_ACTIVE_TAB);
-  const showTerminalTab = isAdmin && activeTabMeta.pageType === PageType.TERMINAL;
+  const showTerminalTab = isAdmin && activeTabMeta.pageType === PageType.MACHINE;
   const activeTerminalPageId = showTerminalTab ? (params.pageId as string | undefined) : undefined;
 
   // Local tab state for page context (independent from dashboard)
@@ -297,7 +297,7 @@ function RightPanel({ className, variant }: RightPanelProps) {
                 activeTab === "terminal" ? "flex flex-col" : "hidden"
               )}
             >
-              <TerminalNavigatorTab terminalId={activeTerminalPageId} />
+              <TerminalNavigatorTab machineId={activeTerminalPageId} />
             </TabsContent>
           )}
         </div>

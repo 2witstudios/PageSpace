@@ -216,4 +216,26 @@ describe('useNotificationToasts', () => {
 
     expect(mockToastCustom).toHaveBeenCalledTimes(1);
   });
+
+  it('regression: does not re-toast a notification that resurfaces at the top after the newer one on top of it is dismissed', () => {
+    renderHook(() => useNotificationToasts());
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build({ id: 'notif-a' }));
+    });
+    expect(mockToastCustom).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useNotificationStore.getState().addNotification(build({ id: 'notif-b' }));
+    });
+    expect(mockToastCustom).toHaveBeenCalledTimes(2);
+
+    // Dismissing/deleting the top notification ('notif-b') makes 'notif-a'
+    // the top again, unchanged — it must not be treated as new.
+    act(() => {
+      useNotificationStore.getState().removeNotification('notif-b');
+    });
+
+    expect(mockToastCustom).toHaveBeenCalledTimes(2);
+  });
 });

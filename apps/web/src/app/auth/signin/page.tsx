@@ -143,12 +143,13 @@ function SignInForm() {
           </motion.div>
         )}
 
-        <AuthDivider delay={0.3} />
-
-        <MagicLinkForm
-          {...(nextPath && { nextPath })}
-          {...(inviteToken && { inviteToken })}
-        />
+        {/* On-prem has no outbound email and no self-registration, so magic-link
+            sign-in can't be delivered. Passkeys are the only credential; a new
+            user's first passkey is enrolled from a one-time admin-issued setup
+            link (see the admin user-creation flow). */}
+        <p className="mt-6 text-center text-sm text-muted-foreground">
+          No passkey yet? Ask your administrator for a one-time setup link.
+        </p>
       </AuthShell>
     );
   }

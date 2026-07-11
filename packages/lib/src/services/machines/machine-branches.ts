@@ -5,7 +5,7 @@
  * "A terminal IS a worktree — an isolated checked-out branch — and each runs
  * in its OWN isolated container" (tasks/terminal.md). On Sprites the
  * container IS the Sprite, so a branch-terminal is a SEPARATE Sprite from the
- * one its owning Machine (`terminalId`) or any other branch of the same
+ * one its owning Machine (`machineId`) or any other branch of the same
  * Project uses — never a shared filesystem, never a git worktree on a shared
  * checkout. `spawnBranch` provisions that Sprite directly through the
  * `MachineHost` seam (`../sandbox/machine-host.ts`), under a name derived by
@@ -63,7 +63,7 @@ export interface MachineActorContext {
 
 /** The minimal slice of the Projects store Branches needs — just enough to resolve a project's `repoUrl`. */
 export interface MachineBranchProjectLookup {
-  findByName(terminalId: string, name: string): Promise<{ repoUrl: string } | null>;
+  findByName(machineId: string, name: string): Promise<{ repoUrl: string } | null>;
 }
 
 export interface MachineBranchesDeps {
@@ -90,7 +90,13 @@ export type SpawnBranchResult =
   | { ok: true; sandboxId: string; resumed: boolean }
   | { ok: false; reason: SpawnBranchDenialReason | FullEgressDenialReason; detail?: string };
 
-function buildActorCtx(scopeKey: string, actor: MachineActorContext): SandboxActorContext {
+/**
+ * Exported so other Machine-scope callers that build a `SandboxActorContext`
+ * for a branch-terminal op (e.g. `machine-git-blob-runtime.ts`) share this one
+ * definition instead of re-typing the same literal — a future required field
+ * on `SandboxActorContext` then only needs fixing here.
+ */
+export function buildActorCtx(scopeKey: string, actor: MachineActorContext): SandboxActorContext {
   return {
     userId: actor.userId,
     tenantId: actor.tenantId,
@@ -195,18 +201,18 @@ async function safeKillSprite(host: MachineHost, machineId: string): Promise<voi
  */
 async function reconcileProvisionCollision({
   deps,
-  terminalId,
+  machineId,
   projectName,
   branchName,
   handle,
 }: {
   deps: MachineBranchesDeps;
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   handle: MachineHandle;
 }): Promise<{ ok: true; sandboxId: string; resumed: true } | { row: MachineBranchRecord | null }> {
-  const row = await deps.store.findByName(terminalId, projectName, branchName);
+  const row = await deps.store.findByName(machineId, projectName, branchName);
   if (row && row.sandboxId === handle.machineId) {
     return { ok: true, sandboxId: row.sandboxId, resumed: true };
   }
@@ -216,19 +222,19 @@ async function reconcileProvisionCollision({
 
 /**
  * Spawn (or resume) a branch-terminal: an isolated Sprite with `branchName`
- * checked out from the named Project. Idempotent by (terminalId,
+ * checked out from the named Project. Idempotent by (machineId,
  * projectName, branchName) — a second call reattaches to the same Sprite
  * (or transparently re-provisions under the same name if it has since
  * vanished) instead of creating a duplicate.
  */
 export async function spawnBranch({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   actor,
   deps,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   actor: MachineActorContext;
@@ -239,14 +245,14 @@ export async function spawnBranch({
   const plan = planSpawnBranch({ branchName });
   if (!plan.ok) return plan;
 
-  const project = await deps.projectStore.findByName(terminalId, projectName);
+  const project = await deps.projectStore.findByName(machineId, projectName);
   if (!project) return { ok: false, reason: 'project_not_found' };
 
   const enablement = await deps.checkFullEgressEnablement();
   if (!enablement.ok) return enablement;
 
-  const existing = await deps.store.findByName(terminalId, projectName, branchName);
-  const scopeKey = `${terminalId}:${projectName}:${branchName}`;
+  const existing = await deps.store.findByName(machineId, projectName, branchName);
+  const scopeKey = `${machineId}:${projectName}:${branchName}`;
 
   if (existing) {
     const handle = await deps.host.attach({ machineId: existing.sandboxId });
@@ -256,7 +262,7 @@ export async function spawnBranch({
 
   const sessionKey =
     existing?.sessionKey ??
-    deriveBranchSessionKey({ tenantId: actor.tenantId, terminalId, projectName, branchName, secret: deps.secret });
+    deriveBranchSessionKey({ tenantId: actor.tenantId, machineId, projectName, branchName, secret: deps.secret });
 
   let handle: MachineHandle;
   try {
@@ -271,7 +277,7 @@ export async function spawnBranch({
     // (and may be sharing our exact Sprite — provision is name-keyed/idempotent),
     // in which case our redundant clone/checkout failing (e.g. "dir already
     // exists") doesn't mean the branch-terminal is broken.
-    const reconciled = await reconcileProvisionCollision({ deps, terminalId, projectName, branchName, handle });
+    const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
     if ('ok' in reconciled) return reconciled;
     return { ok: false, reason: cloned.reason, detail: cloned.detail };
   }
@@ -286,7 +292,7 @@ export async function spawnBranch({
     if (!updated) {
       // Lost a race against a concurrent re-provision of the same vanished
       // branch — do not silently overwrite; the winner already wrote its own.
-      const reconciled = await reconcileProvisionCollision({ deps, terminalId, projectName, branchName, handle });
+      const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
       if ('ok' in reconciled) return reconciled;
       if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
       return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
@@ -297,7 +303,7 @@ export async function spawnBranch({
   try {
     await deps.store.create({
       ownerId: actor.userId,
-      terminalId,
+      machineId,
       projectName,
       branchName,
       sessionKey,
@@ -307,7 +313,7 @@ export async function spawnBranch({
   } catch (error) {
     if (isUniqueViolation(error)) {
       // Lost a race against a concurrent spawn of the same branch.
-      const reconciled = await reconcileProvisionCollision({ deps, terminalId, projectName, branchName, handle });
+      const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
       if ('ok' in reconciled) return reconciled;
       if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
     }
@@ -323,19 +329,19 @@ export type AttachBranchResult =
 
 /** Reconnect to a branch-terminal's existing Sprite without provisioning a new one. */
 export async function attachBranch({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   store,
   host,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<AttachBranchResult> {
-  const existing = await store.findByName(terminalId, projectName, branchName);
+  const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   const handle = await host.attach({ machineId: existing.sandboxId });
@@ -344,34 +350,34 @@ export async function attachBranch({
 }
 
 export async function listBranches({
-  terminalId,
+  machineId,
   projectName,
   store,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   store: MachineBranchStore;
 }): Promise<MachineBranchRecord[]> {
-  return store.list(terminalId, projectName);
+  return store.list(machineId, projectName);
 }
 
 export type KillBranchResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
 
 /** Tear down a branch-terminal: DELETE its Sprite through the MachineHost seam and drop the tracking row. */
 export async function killBranch({
-  terminalId,
+  machineId,
   projectName,
   branchName,
   store,
   host,
 }: {
-  terminalId: string;
+  machineId: string;
   projectName: string;
   branchName: string;
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<KillBranchResult> {
-  const existing = await store.findByName(terminalId, projectName, branchName);
+  const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
@@ -383,6 +389,6 @@ export async function killBranch({
     return { ok: false, reason: 'error' };
   }
 
-  await store.remove(terminalId, projectName, branchName);
+  await store.remove(machineId, projectName, branchName);
   return { ok: true };
 }

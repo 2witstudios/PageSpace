@@ -28,8 +28,8 @@ import type { PageType } from '@pagespace/lib/utils/enums';
 
 function buildMachineAccessDeps(): MachineAccessDeps {
   return {
-    findPageType: async (terminalId) => {
-      const page = await db.query.pages.findFirst({ where: eq(pages.id, terminalId), columns: { type: true } });
+    findPageType: async (machineId) => {
+      const page = await db.query.pages.findFirst({ where: eq(pages.id, machineId), columns: { type: true } });
       return (page?.type as PageType | undefined) ?? null;
     },
     canUserViewPage,
@@ -38,11 +38,11 @@ function buildMachineAccessDeps(): MachineAccessDeps {
 }
 
 /** View-level access (e.g. read files/diff/settings) for a Machine page. */
-export async function canViewMachine(actorUserId: string, terminalId: string): Promise<boolean> {
-  return canViewMachineCore(buildMachineAccessDeps(), actorUserId, terminalId);
+export async function canViewMachine(actorUserId: string, machineId: string): Promise<boolean> {
+  return canViewMachineCore(buildMachineAccessDeps(), actorUserId, machineId);
 }
 
 /** Edit-level access (e.g. mutate settings, write files) for a Machine page — re-checked on every call, never cached. */
-export async function canEditMachine(actorUserId: string, terminalId: string): Promise<boolean> {
-  return canEditMachineCore(buildMachineAccessDeps(), actorUserId, terminalId);
+export async function canEditMachine(actorUserId: string, machineId: string): Promise<boolean> {
+  return canEditMachineCore(buildMachineAccessDeps(), actorUserId, machineId);
 }

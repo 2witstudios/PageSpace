@@ -4,7 +4,7 @@
  * Resolves the ACTIVE machine for an agent tool call onto a persistent,
  * page-keyed Sprite session — the same lifecycle a human Terminal page uses
  * (`terminal-session-manager.ts`) — instead of a throwaway per-conversation
- * one (the old `session-manager.ts`, deleted). `{ kind: 'existing', terminalId }`
+ * one (the old `session-manager.ts`, deleted). `{ kind: 'existing', machineId }`
  * addresses that Terminal page's machine directly; `{ kind: 'own' }` (the
  * default when unset) addresses the agent's OWN page as its dedicated
  * machine — lazily provisioned on first use, and reconnected (same sandboxId,
@@ -27,7 +27,7 @@ import type { MachineRuntimeGuardrailDecision } from './quota';
  * imports from apps/web, so this is a duck-typed copy of the same two-variant
  * shape — any value satisfying the web type satisfies this one too.
  */
-export type MachineRefLike = { kind: 'own' } | { kind: 'existing'; terminalId: string };
+export type MachineRefLike = { kind: 'own' } | { kind: 'existing'; machineId: string };
 
 /**
  * Resolves which page identifies the ACTIVE machine's persistent session:
@@ -42,7 +42,7 @@ export function resolveMachinePageId(input: {
   activeMachine?: MachineRefLike;
 }): string | undefined {
   const machine = input.activeMachine ?? { kind: 'own' as const };
-  return machine.kind === 'existing' ? machine.terminalId : input.agentPageId;
+  return machine.kind === 'existing' ? machine.machineId : input.agentPageId;
 }
 
 export interface AcquireMachineSandboxDeps {

@@ -17,11 +17,66 @@ import { stripe } from './stripe/client';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
+import {
+  getLogsByLevel as chGetLogsByLevel,
+  getRecentErrors as chGetRecentErrors,
+  getVolumeOverTime as chGetVolumeOverTime,
+  getTopEndpoints as chGetTopEndpoints,
+  getRequestErrorCounts as chGetRequestErrorCounts,
+  getErrorTrends as chGetErrorTrends,
+  getErrorPatterns as chGetErrorPatterns,
+  getFailedLogins as chGetFailedLogins,
+} from '@pagespace/lib/observability/analytics-reads';
+import type { ClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
+
+/**
+ * Post-cutover (#890 Phase 3) new analytics rows land only in ClickHouse, so
+ * the readers over the 4 moved tables (apiMetrics, systemLogs,
+ * userActivities, errorLogs) query CH when the flag is on — server-side
+ * only, aggregations in CH SQL — and hit PG exactly as before when it is
+ * off. Returns null when the tier is off so callers fall through to PG.
+ * NOTE: getUserActivity is NOT gated — it reads activityLogs (Phase 5), not
+ * one of the moved tables; the sessions-based active-user count stays PG too.
+ */
+function clickHouseClientIfEnabled(): ClickHouseClient | null {
+  return isClickHouseEnabled() ? getClickHouseClient() : null;
+}
+
+/** Active users: distinct sessions touched in the last 15 minutes (main PG in both modes). */
+async function getActiveSessionUserCount(): Promise<number> {
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+  const activeUsers = await db
+    .select({
+      count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int`,
+    })
+    .from(sessions)
+    .where(and(gte(sessions.lastUsedAt, fifteenMinutesAgo), isNull(sessions.revokedAt)));
+  return activeUsers[0]?.count || 0;
+}
 
 /**
  * Get system health overview
  */
 export async function getSystemHealth(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [logsByLevel, recentErrors, activeUserCount] = await Promise.all([
+      chGetLogsByLevel(chClient, window),
+      chGetRecentErrors(chClient, window, 20),
+      getActiveSessionUserCount(),
+    ]);
+    return {
+      logsByLevel,
+      recentErrors: recentErrors.map((entry) => ({
+        ...entry,
+        errorMessage: entry.errorMessage || entry.message,
+      })),
+      activeUserCount,
+    };
+  }
+
   const logConditions: SQL[] = [];
 
   if (startDate) {
@@ -61,13 +116,7 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
 
   // Active users: distinct sessions touched in last 15 minutes (sessions.lastUsedAt is
   // updated non-blocking on every authenticated request — reliable signal)
-  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-  const activeUsers = await db
-    .select({
-      count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int`,
-    })
-    .from(sessions)
-    .where(and(gte(sessions.lastUsedAt, fifteenMinutesAgo), isNull(sessions.revokedAt)));
+  const activeUserCount = await getActiveSessionUserCount();
 
   return {
     logsByLevel: logsByLevel.map((entry) => ({
@@ -78,7 +127,7 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
       ...entry,
       errorMessage: entry.errorMessage || entry.message,
     })),
-    activeUserCount: activeUsers[0]?.count || 0,
+    activeUserCount,
   };
 }
 
@@ -86,8 +135,24 @@ export async function getSystemHealth(startDate?: Date, endDate?: Date) {
  * Get API metrics
  */
 export async function getApiMetrics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [volumeOverTime, topEndpoints, requestCounts] = await Promise.all([
+      chGetVolumeOverTime(chClient, window),
+      chGetTopEndpoints(chClient, window),
+      chGetRequestErrorCounts(chClient, window),
+    ]);
+    return {
+      volumeOverTime,
+      topEndpoints,
+      errorRate: requestCounts.total > 0 ? (requestCounts.errors / requestCounts.total) * 100 : 0,
+      totalRequests: requestCounts.total,
+    };
+  }
+
   const conditions = [];
-  
+
   if (startDate) {
     conditions.push(gte(apiMetrics.timestamp, startDate));
   }
@@ -241,6 +306,33 @@ function maskEmailsInMetadata(metadata: unknown): Record<string, unknown> | null
  * Get error analytics
  */
 export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [errorTrendsRaw, errorPatternsRaw, failedLogins] = await Promise.all([
+      chGetErrorTrends(chClient, window),
+      chGetErrorPatterns(chClient, window),
+      chGetFailedLogins(chClient, window),
+    ]);
+    return {
+      errorTrends: errorTrendsRaw.map((item) => ({
+        hour: item.hour,
+        category: item.category ?? 'other',
+        count: item.count.toString(),
+      })),
+      errorPatterns: errorPatternsRaw.map((pattern) => ({
+        name: pattern.name ?? 'Unknown Error',
+        category: pattern.endpoint ?? 'general',
+        count: pattern.count,
+      })),
+      failedLogins: failedLogins.map((login) => ({
+        timestamp: login.timestamp,
+        ip: login.ip,
+        metadata: maskEmailsInMetadata(login.metadata),
+      })),
+    };
+  }
+
   const errorLevelConditions: SQL[] = [eq(systemLogs.level, 'error' as const)];
 
   if (startDate) {

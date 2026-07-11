@@ -403,7 +403,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.machines).toEqual([{ kind: 'own' }]);
     });
 
-    it('returns availableTerminals filtered to TERMINAL pages the user can access', async () => {
+    it('returns availableTerminals filtered to MACHINE pages the user can access', async () => {
       mockGetUserAccessiblePagesInDrive.mockResolvedValue(['term_1', 'term_2']);
       let callCount = 0;
       mockDbSelect.mockImplementation(() => ({
@@ -719,7 +719,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
 
     it('updates machines with a valid MachineRef array', async () => {
-      // Own-machine entries only — the "existing" terminalId path (which also
+      // Own-machine entries only — the "existing" machineId path (which also
       // needs an accessibility check) is covered in "machines validation" below.
       const machines = [{ kind: 'own' }];
       await PATCH(createPatchRequest({ machines }), mockParams);
@@ -921,7 +921,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       );
     });
 
-    it('updates machines when an existing terminalId resolves to a TERMINAL page the user can access', async () => {
+    it('updates machines when an existing machineId resolves to a MACHINE page the user can access', async () => {
       mockGetUserAccessiblePagesInDrive.mockResolvedValue(['term_1']);
       let callCount = 0;
       mockDbSelect.mockImplementation(() => ({
@@ -930,13 +930,13 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
             callCount++;
             if (callCount === 1) return Promise.resolve([mockPage]); // page fetch
             if (callCount === 2) return Promise.resolve([{ id: 'term_1' }]); // terminal validation
-            return { limit: () => Promise.resolve([{ ...mockPage, machines: [{ kind: 'existing', terminalId: 'term_1' }] }]) }; // refetch
+            return { limit: () => Promise.resolve([{ ...mockPage, machines: [{ kind: 'existing', machineId: 'term_1' }] }]) }; // refetch
           },
         }),
       }));
 
       const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 'term_1' }] }),
+        createPatchRequest({ machines: [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }] }),
         mockParams
       );
 
@@ -944,7 +944,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           updates: expect.objectContaining({
-            machines: [{ kind: 'own' }, { kind: 'existing', terminalId: 'term_1' }],
+            machines: [{ kind: 'own' }, { kind: 'existing', machineId: 'term_1' }],
           }),
         })
       );
@@ -964,7 +964,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       }));
 
       const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'existing', terminalId: 'missing_term' }] }),
+        createPatchRequest({ machines: [{ kind: 'existing', machineId: 'missing_term' }] }),
         mockParams
       );
       const body = await response.json();
@@ -974,8 +974,8 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
 
-    it('returns 400 when an existing machine references a real TERMINAL page the user cannot access', async () => {
-      // getUserAccessiblePagesInDrive resolves without this terminalId — the page
+    it('returns 400 when an existing machine references a real MACHINE page the user cannot access', async () => {
+      // getUserAccessiblePagesInDrive resolves without this machineId — the page
       // exists (and the DB query would find it) but is outside the user's access.
       mockGetUserAccessiblePagesInDrive.mockResolvedValue([]);
       let callCount = 0;
@@ -990,7 +990,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       }));
 
       const response = await PATCH(
-        createPatchRequest({ machines: [{ kind: 'existing', terminalId: 'other_drive_term' }] }),
+        createPatchRequest({ machines: [{ kind: 'existing', machineId: 'other_drive_term' }] }),
         mockParams
       );
       const body = await response.json();
@@ -1125,7 +1125,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
 
     it('round-trips terminalAccess and machines in the response', async () => {
-      // Own-machine entries only — the "existing" terminalId path is covered
+      // Own-machine entries only — the "existing" machineId path is covered
       // in "machines validation" below.
       const machines = [{ kind: 'own' }];
       setupPatchSelectChain(

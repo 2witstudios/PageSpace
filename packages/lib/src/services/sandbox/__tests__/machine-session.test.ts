@@ -87,9 +87,9 @@ function makeDeps(over: Partial<AcquireMachineSandboxDeps> = {}): AcquireMachine
 }
 
 describe('resolveMachinePageId', () => {
-  it('given an "existing" machine, resolves to its terminalId regardless of agentPageId', () => {
+  it('given an "existing" machine, resolves to its machineId regardless of agentPageId', () => {
     expect(
-      resolveMachinePageId({ agentPageId: 'agent-1', activeMachine: { kind: 'existing', terminalId: 't1' } }),
+      resolveMachinePageId({ agentPageId: 'agent-1', activeMachine: { kind: 'existing', machineId: 't1' } }),
     ).toBe('t1');
   });
 
@@ -144,7 +144,7 @@ describe('acquireMachineSandbox', () => {
     const { client } = makeClient();
     const result = await acquireMachineSandbox({
       ...base,
-      activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' },
+      activeMachine: { kind: 'existing', machineId: 'terminal-page-1' },
       deps: makeDeps({ store, client }),
     });
     expect(result).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: false, pageId: 'terminal-page-1' });
@@ -158,7 +158,7 @@ describe('acquireMachineSandbox', () => {
       driveId: 'd1',
       userId: 'u1',
       agentPageId: 'a-different-agent',
-      activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' },
+      activeMachine: { kind: 'existing', machineId: 'terminal-page-1' },
       deps: makeDeps({ store, client }),
     });
     expect(second).toEqual({ ok: true, sandboxId: 'sbx-1', resumed: true, pageId: 'terminal-page-1' });
@@ -268,7 +268,7 @@ describe('acquireMachineSandbox', () => {
     const seenRecord: Array<{ machineKey: string; now: number }> = [];
     const result = await acquireMachineSandbox({
       ...base,
-      activeMachine: { kind: 'existing', terminalId: 'terminal-page-1' },
+      activeMachine: { kind: 'existing', machineId: 'terminal-page-1' },
       deps: makeDeps({
         checkMachineRuntimeGuardrail: (input) => {
           seenCheck.push(input);

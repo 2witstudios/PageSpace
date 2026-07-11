@@ -27,6 +27,13 @@ const { mockDb, mockSecurityAuditLog } = vi.hoisted(() => {
 vi.mock('@pagespace/db/db', () => ({
   db: mockDb,
 }));
+// Default binding (#890 Phase 2, leaf 5): dedicated mode resolves the Admin
+// PG client. Point it at the same mockDb so the "default db" expectations
+// below exercise the post-cutover default.
+vi.mock('@pagespace/db/admin-db', () => ({
+  getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+  getAdminDb: vi.fn(() => mockDb),
+}));
 vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: mockSecurityAuditLog,
 }));
@@ -39,7 +46,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((col: string, val: unknown) => ({ eq: [col, val] })),
 }));
 
-import { queryAuditEvents } from '../audit-query';
+import { queryAuditEvents, type AuditQueryDeps } from '../audit-query';
 import { eq, or, gte, lte } from '@pagespace/db/operators';
 
 describe('queryAuditEvents()', () => {
@@ -176,5 +183,53 @@ describe('queryAuditEvents()', () => {
     await expect(queryAuditEvents({ limit: 1.5 })).rejects.toThrow(
       'limit must be a non-negative integer'
     );
+  });
+
+  describe('given an injected db client', () => {
+    function createInjectedDb(rows: unknown[]) {
+      const limit = vi.fn().mockResolvedValue(rows);
+      const orderBy = vi.fn().mockReturnValue({ limit, then: (resolve: (v: unknown) => void) => resolve(rows) });
+      const where = vi.fn().mockReturnValue({ orderBy });
+      const from = vi.fn().mockReturnValue({ where });
+      const select = vi.fn().mockReturnValue({ from });
+      return { select, _chain: { select, from, where, orderBy, limit } };
+    }
+
+    it('should use the injected client exclusively, never the module-level singleton', async () => {
+      const injectedEvents = [{ id: 'injected-1', eventType: 'auth.logout', userId: 'user-9' }];
+      const injectedDb = createInjectedDb(injectedEvents);
+
+      const deps: AuditQueryDeps = { db: injectedDb as unknown as AuditQueryDeps['db'] };
+      const result = await queryAuditEvents({}, deps);
+
+      expect(injectedDb.select).toHaveBeenCalled();
+      expect(mockDb.select).not.toHaveBeenCalled();
+      expect(result).toEqual(injectedEvents);
+    });
+
+    it('given no injected client, should fall back to the resolved audit binding (Admin PG in dedicated mode)', async () => {
+      const result = await queryAuditEvents({});
+
+      expect(mockDb.select).toHaveBeenCalled();
+      expect(result).toEqual(mockEvents);
+    });
+
+    it('PARITY: identical filters against the injected admin client and the default binding produce identical results', async () => {
+      const rows = [
+        { id: 'evt-a', eventType: 'auth.login.success', userId: 'user-1', ipAddress: null },
+        { id: 'evt-b', eventType: 'auth.login.success', userId: 'user-1', ipAddress: null },
+      ];
+      const injectedAdminDb = createInjectedDb(rows);
+      mockDb._chain.orderBy.mockResolvedValue(rows);
+
+      const viaInjected = await queryAuditEvents(
+        { userId: 'user-1', eventType: 'auth.login.success' },
+        { db: injectedAdminDb as unknown as AuditQueryDeps['db'] },
+      );
+      const viaDefault = await queryAuditEvents({ userId: 'user-1', eventType: 'auth.login.success' });
+
+      expect(viaInjected).toEqual(viaDefault);
+      expect(viaInjected).toEqual(rows);
+    });
   });
 });

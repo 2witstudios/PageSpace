@@ -1,4 +1,4 @@
-import type { AuditLogSource, SiemType } from './siem-adapter';
+import { SAFE_DELIVERY_ERROR_CLASSES, type AuditLogSource, type SiemType } from './siem-adapter';
 
 export interface CursorSnapshot {
   id: AuditLogSource;
@@ -92,10 +92,23 @@ function cursorToPerSource(
     status: deriveStatus(cursor, cursorInitSentinel),
     lastDeliveredAt: toIsoOrNull(cursor.lastDeliveredAt),
     lastErrorAt: toIsoOrNull(cursor.lastErrorAt),
-    lastError: cursor.lastError,
+    lastError: toSafeErrorClass(cursor.lastError),
     deliveryCount: cursor.deliveryCount,
     updatedAt: cursor.updatedAt.toISOString(),
   };
+}
+
+// Read-time zero-trust guard for the unauthenticated /health surface. The write
+// path (siem-delivery-worker.recordError) only ever persists a DeliveryErrorClass,
+// but this endpoint must not trust the DB row: a legacy row written before #989
+// may still hold a raw webhook response body. Any value that is not a recognized
+// safe class is collapsed to 'unclassified_error'. `null` is preserved as `null`
+// (no error) so deriveStatus continues to report 'error' only when one occurred.
+function toSafeErrorClass(lastError: string | null): string | null {
+  if (lastError === null) {
+    return null;
+  }
+  return SAFE_DELIVERY_ERROR_CLASSES.has(lastError) ? lastError : 'unclassified_error';
 }
 
 function missingPerSource(): SiemHealthPerSource {
