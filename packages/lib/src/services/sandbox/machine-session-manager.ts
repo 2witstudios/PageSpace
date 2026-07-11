@@ -354,7 +354,7 @@ export async function acquireMachineSession(
       if (!enablement.ok) {
         return { ok: false, reason: enablement.reason };
       }
-      const options = terminalSandboxOptions();
+      const options = machineSandboxOptions();
       const desiredPolicyHash = hashSandboxEgressPolicy(options);
       const appliedPolicyHash = existing?.egressPolicyHash ?? null;
       try {

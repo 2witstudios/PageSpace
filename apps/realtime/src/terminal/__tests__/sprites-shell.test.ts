@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { openPtyShell, planReconnect, sessionIds } from '../sprites-shell';
+import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -227,21 +228,55 @@ describe('openPtyShell session identity (from create, not list-diffing)', () => 
   });
 });
 
+describe('spawnWithSelfHealingCwd', () => {
+  assert({
+    given: 'a command, its args, and a cwd',
+    should: 'wrap them in an sh that recreates + enters the cwd, then execs the command',
+    actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace' }),
+    expected: [
+      'sh',
+      ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', '/workspace', 'bash'],
+    ],
+  });
+
+  assert({
+    given: 'a command with args',
+    should: 'pass them as positional DATA after the command (never interpolated into the script)',
+    actual: spawnWithSelfHealingCwd({ command: 'claude', args: ['--flag', 'v'], cwd: '/workspace' })[1].slice(3),
+    expected: ['/workspace', 'claude', '--flag', 'v'],
+  });
+
+  assert({
+    given: 'a cwd containing shell metacharacters',
+    should: 'keep it a single positional arg, so it can never be evaluated as script',
+    actual: spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace; rm -rf /' })[1],
+    expected: [
+      '-c',
+      'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"',
+      'sh',
+      '/workspace; rm -rf /',
+      'bash',
+    ],
+  });
+});
+
 describe('openPtyShell', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('given a sprite and dimensions, should create a detachable session with bash + tty + dims + cwd + terminal env', () => {
+  it('given a sprite and dimensions, should create a detachable session running bash in a self-healing cwd, with tty + dims + terminal env', () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd);
 
     openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
 
-    expect(sprite.createSession).toHaveBeenCalledWith('bash', [], {
+    // The cwd is NOT a createSession option: the server chdirs into it and fails
+    // the open if it is gone, and a sandbox command can delete /workspace. It is
+    // recreated + entered by the wrapper, which then execs bash — see ensureCwdSession.
+    expect(sprite.createSession).toHaveBeenCalledWith(...spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace' }), {
       tty: true,
       cols: 80,
       rows: 24,
-      cwd: '/workspace',
       env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
     });
   });
@@ -252,13 +287,15 @@ describe('openPtyShell', () => {
 
     openPtyShell({ sprite, cols: 80, rows: 24, command: 'claude', args: ['--dangerously-skip-permissions'], onOutput: vi.fn(), onExit: vi.fn() });
 
-    expect(sprite.createSession).toHaveBeenCalledWith('claude', ['--dangerously-skip-permissions'], {
-      tty: true,
-      cols: 80,
-      rows: 24,
-      cwd: '/workspace',
-      env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
-    });
+    expect(sprite.createSession).toHaveBeenCalledWith(
+      ...spawnWithSelfHealingCwd({ command: 'claude', args: ['--dangerously-skip-permissions'], cwd: '/workspace' }),
+      {
+        tty: true,
+        cols: 80,
+        rows: 24,
+        env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+      },
+    );
   });
 
   it('given a custom cwd, should create the session there instead of the default sandbox root', () => {
@@ -267,7 +304,9 @@ describe('openPtyShell', () => {
 
     openPtyShell({ sprite, cols: 80, rows: 24, command: 'pagespace-cli', cwd: '/workspace/repo', onOutput: vi.fn(), onExit: vi.fn() });
 
-    expect(sprite.createSession).toHaveBeenCalledWith('pagespace-cli', [], expect.objectContaining({ cwd: '/workspace/repo' }));
+    const [file, args] = sprite.createSession.mock.calls[0] as [string, string[]];
+    expect([file, args]).toEqual(spawnWithSelfHealingCwd({ command: 'pagespace-cli', args: [], cwd: '/workspace/repo' }));
+    expect(args).toContain('/workspace/repo');
   });
 
   it('given a sessionId, should attach to the existing session instead of creating one', () => {

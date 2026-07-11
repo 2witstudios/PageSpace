@@ -24,7 +24,14 @@ import {
   type MachineStreamSessionInfo,
 } from '../machine-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
-import { withWakeRetry, asPreOpenDrop, type SpriteCommandLike, type SpritesSdk } from './sprites';
+import {
+  withWakeRetry,
+  asPreOpenDrop,
+  spawnWithSelfHealingCwd,
+  type SpriteCommandLike,
+  type SpritesSdk,
+} from './sprites';
+import { SANDBOX_ROOT } from '../sandbox-paths';
 
 function toBuffer(chunk: Buffer | string): Buffer {
   return typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
@@ -159,13 +166,25 @@ function wrapSpriteHandle({
         const command =
           args.sessionId !== undefined
             ? sprite.attachSession(args.sessionId, { cwd: args.cwd, env: args.env, cols: args.cols, rows: args.rows })
-            : sprite.createSession(args.command ?? 'bash', args.args ?? [], {
-                tty: true,
-                cwd: args.cwd,
-                env: args.env,
-                cols: args.cols,
-                rows: args.rows,
-              });
+            : sprite.createSession(
+                // Self-healing cwd, for the same reason the batch `runCommand`
+                // path uses one: the server chdirs into `cwd` before spawning, so
+                // a deleted SANDBOX_ROOT (a sandbox command can `rm -rf` it) would
+                // fail the session open outright. Recreate + enter it, then exec
+                // the real command — cwd/command/args stay positional data args,
+                // never interpolated into the script.
+                ...spawnWithSelfHealingCwd({
+                  command: args.command ?? 'bash',
+                  args: args.args ?? [],
+                  cwd: args.cwd ?? SANDBOX_ROOT,
+                }),
+                {
+                  tty: true,
+                  env: args.env,
+                  cols: args.cols,
+                  rows: args.rows,
+                },
+              );
         await awaitStreamOpen(command, streamOpenTimeoutMs);
         return wrapSpriteStream(command);
       };

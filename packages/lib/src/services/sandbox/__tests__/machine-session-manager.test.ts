@@ -101,7 +101,7 @@ function seedRecord(over: Partial<MachineSessionRecord> = {}): MachineSessionRec
 }
 
 /** The hash the manager will derive for the machine's own (open-egress) policy. */
-const terminalPolicyHash = hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'terminal' }));
+const machinePolicyHash = hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'machine' }));
 
 describe('deriveMachineSessionKey', () => {
   it('given the same inputs, returns the same key every time', () => {
@@ -416,7 +416,7 @@ describe('acquireMachineSession — egress policy record', () => {
       given: 'a fresh provision',
       should: 'persist the hash of the policy the driver confirmed applied',
       actual: rows.get(keyFor())?.egressPolicyHash,
-      expected: terminalPolicyHash,
+      expected: machinePolicyHash,
     });
   });
 
@@ -437,14 +437,14 @@ describe('acquireMachineSession — egress policy record', () => {
   });
 
   it('hands the recorded hash to the driver on reconnect', async () => {
-    const { store } = makeStore(seedRecord({ egressPolicyHash: terminalPolicyHash }));
+    const { store } = makeStore(seedRecord({ egressPolicyHash: machinePolicyHash }));
     const { client, calls } = makeClient();
     await acquire(store, client);
     assert({
       given: 'a reconnect to a session whose policy is already recorded',
       should: 'pass that hash to getOrCreate so an unchanged policy is not re-applied',
       actual: calls.getOrCreate.map((c) => c.appliedPolicyHash),
-      expected: [terminalPolicyHash],
+      expected: [machinePolicyHash],
     });
   });
 
@@ -468,7 +468,7 @@ describe('acquireMachineSession — egress policy record', () => {
       given: 'a reconnect whose desired policy differs from the recorded one',
       should: 'record the newly applied hash so the NEXT hand-back can skip the re-apply',
       actual: rows.get(keyFor())?.egressPolicyHash,
-      expected: terminalPolicyHash,
+      expected: machinePolicyHash,
     });
   });
 });

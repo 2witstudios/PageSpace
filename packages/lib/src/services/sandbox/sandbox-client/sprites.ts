@@ -128,6 +128,43 @@ export interface SpriteCommandLike {
   resize?(cols: number, rows: number): void;
 }
 
+/**
+ * Pure: the `(file, args[])` to spawn `command` with a SELF-HEALING working
+ * directory, instead of handing `cwd` to the SDK as an immutable precondition.
+ *
+ * The server `chdir`s into `cwd` before spawning, so a missing directory fails
+ * the spawn outright — and `SANDBOX_ROOT` is persistent but NOT immutable: an
+ * agent that `rm -rf`s `/workspace` would otherwise brick every later command
+ * and every later PTY open. So route through a tiny `sh` that recreates + enters
+ * the directory and then `exec`s the real command (`exec` preserves the PTY, the
+ * signals, and the real exit code).
+ *
+ * cwd/command/args are passed as positional DATA args (`$0`=sh, `$1`=cwd;
+ * `shift` drops it so `"$@"` is the command and its args) — never interpolated
+ * into the script — so the no-shell-injection invariant of the arg-array form
+ * holds even for a cwd full of shell metacharacters.
+ *
+ * This is the one place that self-heal is defined: the batch path
+ * ({@link wrap}'s `runCommand`), the `MachineHost` PTY (`sprite-machine-host`),
+ * and the realtime terminal (`apps/realtime/src/terminal/sprites-shell.ts`) all
+ * spawn through it. It is also why the egress lockdown's `mkdir` no longer needs
+ * to run on every hand-back — see `../egress-lockdown.ts`.
+ */
+export function spawnWithSelfHealingCwd({
+  command,
+  args = [],
+  cwd,
+}: {
+  command: string;
+  args?: readonly string[];
+  cwd: string;
+}): [string, string[]] {
+  return [
+    'sh',
+    ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', cwd, command, ...args],
+  ];
+}
+
 /** Options for spawning a command, including PTY support. */
 export interface SpriteSpawnOptions {
   cwd?: string;
@@ -571,22 +608,12 @@ function wrap(sprite: SpriteInstanceLike): ExecutableSandbox {
       // runs under the Sprite's own `sh -c`, contained by the VM. Re-spawned per
       // attempt so a cold-start wake drop reconnects on a fresh WebSocket.
       //
-      // Self-healing cwd: when a cwd is given, don't hand it to spawn as an
-      // immutable precondition (a deleted cwd makes spawn fail outright — an agent
-      // that `rm -rf`s `/workspace` would otherwise brick the sandbox for the rest
-      // of the conversation). Instead route through a tiny `sh` wrapper that
-      // recreates + enters the cwd first, so it self-heals on the next command.
-      // cwd/cmd/args are passed as positional DATA args (`$1`=cwd; `shift` drops it
-      // so `"$@"` = cmd args…; `exec` preserves the real exit code) — never
-      // interpolated into the script, preserving the arg-array no-injection
-      // invariant. With no cwd, spawn directly as before.
+      // Self-healing cwd (see `spawnWithSelfHealingCwd`): a given cwd is never a
+      // precondition — the wrapper recreates and enters it. With no cwd, spawn
+      // directly as before.
       const spawnFn = cwd === undefined
         ? () => sprite.spawn(cmd, args, { env })
-        : () => sprite.spawn(
-            'sh',
-            ['-c', 'mkdir -p "$1" 2>/dev/null; cd "$1" || exit 1; shift; exec "$@"', 'sh', cwd, cmd, ...args],
-            { env },
-          );
+        : () => sprite.spawn(...spawnWithSelfHealingCwd({ command: cmd, args, cwd }), { env });
       return runSpawnedWithWakeRetry(spawnFn, maxBytes ?? 0, timeoutMs);
     },
 

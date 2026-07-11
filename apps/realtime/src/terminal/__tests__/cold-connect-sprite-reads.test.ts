@@ -37,8 +37,8 @@ import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/ne
 import { resolveMachineSandbox } from '../agent-terminal-access';
 
 const SECRET = 'test-secret';
-/** The hash the terminal acquire derives for its own (open-egress) policy. */
-const TERMINAL_POLICY_HASH = hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'terminal' }));
+/** The hash the machine acquire derives for its own (open-egress) policy. */
+const MACHINE_POLICY_HASH = hashSandboxEgressPolicy(resolveSandboxNetworkOptions({ surface: 'machine' }));
 const MACHINE_ID = 'machine-page-1';
 const DRIVE_ID = 'drive-1';
 const TENANT_ID = 'tenant-1';
@@ -173,7 +173,7 @@ async function runColdConnect({
           // The policy this session was last locked down with — recorded by the
           // acquire that provisioned it. Unchanged since, so this connect must
           // NOT re-push it (the Sprite's policy file is persistent).
-          egressPolicyHash: TERMINAL_POLICY_HASH,
+          egressPolicyHash: MACHINE_POLICY_HASH,
         }
       : null,
   );
