@@ -236,29 +236,31 @@ describe('buildSpriteNetworkPolicy — open mode', () => {
 
 describe('buildInternalSurfaceDenyRules', () => {
   it('emits deny rules for the Fly internal surface', () => {
-    const denied = buildInternalSurfaceDenyRules().map((r) => r.domain);
+    // Exact-membership set over our own built rules (not URL substring matching).
+    const denied = new Set(buildInternalSurfaceDenyRules().map((r) => r.domain));
     assert({
       given: 'no input',
       should: 'deny the core internal-surface names',
       actual: {
-        api: denied.includes('_api.internal'),
-        internal: denied.includes('*.internal'),
-        flycast: denied.includes('*.flycast'),
-        tigris: denied.some((d) => d?.includes('tigris')),
+        api: denied.has('_api.internal'),
+        internal: denied.has('*.internal'),
+        flycast: denied.has('*.flycast'),
+        tigris: denied.has('fly.storage.tigris.dev') && denied.has('t3.tigrisfiles.io'),
       },
       expected: { api: true, internal: true, flycast: true, tigris: true },
     });
   });
 
   it('denies exact apex hostnames as well as wildcard children', () => {
-    const denied = buildInternalSurfaceDenyRules().map((r) => r.domain);
+    // Exact-membership set over our own built rules (not URL substring matching).
+    const denied = new Set(buildInternalSurfaceDenyRules().map((r) => r.domain));
     assert({
       given: 'apex hosts a subdomain wildcard would not match',
       should: 'deny the exact apex hostnames too',
       actual: {
-        flycast: denied.includes('flycast'),
-        tigrisApex: denied.includes('fly.storage.tigris.dev'),
-        tigrisFiles: denied.includes('t3.tigrisfiles.io'),
+        flycast: denied.has('flycast'),
+        tigrisApex: denied.has('fly.storage.tigris.dev'),
+        tigrisFiles: denied.has('t3.tigrisfiles.io'),
       },
       expected: { flycast: true, tigrisApex: true, tigrisFiles: true },
     });
