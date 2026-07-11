@@ -14,6 +14,57 @@ const GITHUB_CREDENTIAL_HELPER =
   '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f';
 
 /**
+ * Where `gh` keeps its durable config (hosts.yml, prefs, cached auth state).
+ *
+ * MUST live on the persistent sandbox disk under SANDBOX_ROOT — NOT `/tmp`,
+ * which the Sprites platform wipes on ANY pause
+ * (https://docs.sprites.dev/concepts/lifecycle/ — "Lost on any pause: /tmp
+ * scratch files"). Durable state belongs on the persistent disk
+ * (https://docs.sprites.dev/working-with-sprites/). Deliberately kept at the
+ * sandbox root, outside `${SANDBOX_ROOT}/repo` and agent project dirs where
+ * git/gh operations run, so it can never collide with a checked-out repo.
+ */
+export const GH_CONFIG_DIR = `${SANDBOX_ROOT}/.gh-config`;
+
+/**
+ * Pure builder for the environment passed to a single in-sprite git/gh
+ * invocation.
+ *
+ * Given the base sandbox env and (optionally) a resolved GitHub token, returns
+ * the full env map. Invariants:
+ * - GH_CONFIG_DIR is rooted on the persistent disk so gh config survives
+ *   pause/wake; no value references `/tmp`.
+ * - GIT_TERMINAL_PROMPT/GIT_CONFIG_NOSYSTEM are always set.
+ * - Token vars (GH_TOKEN, GITHUB_TOKEN) and the one-shot credential-helper git
+ *   config are added ONLY when a token is present. The token is injected per
+ *   command (never persisted to the config dir), which keeps auth pause-proof
+ *   by construction.
+ */
+export function buildGitToolEnv({
+  baseEnv,
+  token,
+}: {
+  baseEnv: Record<string, string>;
+  token: string | null;
+}): Record<string, string> {
+  return {
+    ...baseEnv,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GH_CONFIG_DIR,
+    ...(token
+      ? {
+          GH_TOKEN: token,
+          GITHUB_TOKEN: token,
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: 'credential.helper',
+          GIT_CONFIG_VALUE_0: GITHUB_CREDENTIAL_HELPER,
+        }
+      : {}),
+  };
+}
+
+/**
  * Runs a git or gh command inside a sandbox.
  *
  * Security invariants:
@@ -24,7 +75,8 @@ const GITHUB_CREDENTIAL_HELPER =
  * - Git receives the token through a one-shot credential helper configured via
  *   env-only git config, so HTTPS remotes work without putting the token in argv.
  * - GIT_CONFIG_NOSYSTEM prevents system gitconfig credential caching.
- * - GH_CONFIG_DIR isolates gh config from the persistent sandbox home dir.
+ * - GH_CONFIG_DIR points at the persistent sandbox disk (not /tmp, which is
+ *   wiped on any pause) so gh config survives pause/wake — see GH_CONFIG_DIR.
  * - GIT_TERMINAL_PROMPT=0 prevents git from blocking on a credential prompt.
  */
 export async function runGitInSandbox({
@@ -104,21 +156,7 @@ export async function runGitInSandbox({
         cmd,
         args,
         cwd: resolvedCwd,
-        env: {
-          ...deps.buildEnv(),
-          GIT_TERMINAL_PROMPT: '0',
-          GIT_CONFIG_NOSYSTEM: '1',
-          GH_CONFIG_DIR: '/tmp/gh-config',
-          ...(token
-            ? {
-                GH_TOKEN: token,
-                GITHUB_TOKEN: token,
-                GIT_CONFIG_COUNT: '1',
-                GIT_CONFIG_KEY_0: 'credential.helper',
-                GIT_CONFIG_VALUE_0: GITHUB_CREDENTIAL_HELPER,
-              }
-            : {}),
-        },
+        env: buildGitToolEnv({ baseEnv: deps.buildEnv(), token }),
         timeoutMs: SANDBOX_TIMEOUT_MS,
         maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
       });

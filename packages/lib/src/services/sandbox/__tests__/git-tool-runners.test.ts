@@ -1,11 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runGitInSandbox,
+  buildGitToolEnv,
+  GH_CONFIG_DIR,
   type GitSandboxRunDeps,
 } from '../git-tool-runners';
 import type { SandboxActorContext } from '../tool-runners';
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import { SANDBOX_ROOT } from '../sandbox-paths';
+import { assert } from './riteway';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -166,10 +169,12 @@ describe('runGitInSandbox', () => {
     expect(runCommandCalls[0].env).toMatchObject({ GIT_CONFIG_NOSYSTEM: '1' });
   });
 
-  it('always injects GH_CONFIG_DIR=/tmp/gh-config', async () => {
+  it('always injects GH_CONFIG_DIR pointed at the persistent sandbox disk (not /tmp)', async () => {
     const { deps, runCommandCalls } = makeDepsWithSpy();
     await runGitInSandbox({ cmd: 'gh', args: ['auth', 'status'], ctx: makeCtx(), deps });
-    expect(runCommandCalls[0].env).toMatchObject({ GH_CONFIG_DIR: '/tmp/gh-config' });
+    expect(runCommandCalls[0].env).toMatchObject({ GH_CONFIG_DIR });
+    expect(runCommandCalls[0].env?.GH_CONFIG_DIR).toMatch(new RegExp(`^${SANDBOX_ROOT}/`));
+    expect(runCommandCalls[0].env?.GH_CONFIG_DIR).not.toContain('/tmp');
   });
 
   it('returns success result with stdout, stderr, exitCode, truncated', async () => {
@@ -249,5 +254,97 @@ describe('runGitInSandbox — injection seam (screenOutput, fail-open)', () => {
     const { deps } = makeDeps({ reconnect: async () => sandbox });
     const result = await runGitInSandbox({ cmd: 'git', args: ['log'], ctx: makeCtx(), deps });
     if (result.success) expect(result.stdout).toBe('plain');
+  });
+});
+
+describe('buildGitToolEnv (pure)', () => {
+  const base = { NODE_ENV: 'test' };
+
+  it('given the tool env, should point GH_CONFIG_DIR under the persistent SANDBOX_ROOT', () => {
+    const env = buildGitToolEnv({ baseEnv: base, token: 'ghp_x' });
+    assert({
+      given: 'a git/gh tool env',
+      should: 'root GH_CONFIG_DIR at the persistent sandbox disk',
+      actual: env.GH_CONFIG_DIR.startsWith(`${SANDBOX_ROOT}/`),
+      expected: true,
+    });
+  });
+
+  it('given any token state, should never reference /tmp in any env value', () => {
+    const withToken = buildGitToolEnv({ baseEnv: base, token: 'ghp_x' });
+    const withoutToken = buildGitToolEnv({ baseEnv: base, token: null });
+    const referencesTmp = (env: Record<string, string>) =>
+      Object.values(env).some((v) => v.includes('/tmp'));
+    assert({
+      given: 'the tool env with and without a token',
+      should: 'contain no /tmp path in any value',
+      actual: referencesTmp(withToken) || referencesTmp(withoutToken),
+      expected: false,
+    });
+  });
+
+  it('given the GH_CONFIG_DIR path, should sit outside the repo working dir', () => {
+    assert({
+      given: 'the persistent gh config dir',
+      should: 'not live under the agent repo dir where git operations run',
+      actual: GH_CONFIG_DIR.startsWith(`${SANDBOX_ROOT}/repo`),
+      expected: false,
+    });
+  });
+
+  it('given a token, should inject GH_TOKEN, GITHUB_TOKEN and the credential helper', () => {
+    const env = buildGitToolEnv({ baseEnv: base, token: 'ghp_abc' });
+    assert({
+      given: 'a resolved GitHub token',
+      should: 'expose both token env vars plus the one-shot credential-helper config',
+      actual: {
+        GH_TOKEN: env.GH_TOKEN,
+        GITHUB_TOKEN: env.GITHUB_TOKEN,
+        GIT_CONFIG_COUNT: env.GIT_CONFIG_COUNT,
+        GIT_CONFIG_KEY_0: env.GIT_CONFIG_KEY_0,
+        hasHelper: typeof env.GIT_CONFIG_VALUE_0 === 'string',
+      },
+      expected: {
+        GH_TOKEN: 'ghp_abc',
+        GITHUB_TOKEN: 'ghp_abc',
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'credential.helper',
+        hasHelper: true,
+      },
+    });
+  });
+
+  it('given no token, should omit token env vars but keep the pause-proof config dir', () => {
+    const env = buildGitToolEnv({ baseEnv: base, token: null });
+    assert({
+      given: 'a null token',
+      should: 'omit token vars yet still root GH_CONFIG_DIR on the persistent disk',
+      actual: {
+        hasGhToken: 'GH_TOKEN' in env,
+        hasGithubToken: 'GITHUB_TOKEN' in env,
+        hasHelper: 'GIT_CONFIG_VALUE_0' in env,
+        ghConfigDir: env.GH_CONFIG_DIR,
+      },
+      expected: {
+        hasGhToken: false,
+        hasGithubToken: false,
+        hasHelper: false,
+        ghConfigDir: GH_CONFIG_DIR,
+      },
+    });
+  });
+
+  it('given a base env, should preserve base vars and the always-on git safety flags', () => {
+    const env = buildGitToolEnv({ baseEnv: base, token: null });
+    assert({
+      given: 'a base sandbox env',
+      should: 'carry base vars through alongside the git safety flags',
+      actual: {
+        NODE_ENV: env.NODE_ENV,
+        GIT_TERMINAL_PROMPT: env.GIT_TERMINAL_PROMPT,
+        GIT_CONFIG_NOSYSTEM: env.GIT_CONFIG_NOSYSTEM,
+      },
+      expected: { NODE_ENV: 'test', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' },
+    });
   });
 });
