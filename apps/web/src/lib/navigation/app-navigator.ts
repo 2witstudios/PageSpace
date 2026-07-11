@@ -22,8 +22,9 @@ export function setAppNavigator(navigate: Navigate | null): void {
  * loaded. Use this for every in-app target; leave genuinely external URLs
  * (Stripe, OAuth providers, deep links) on `window.location`.
  *
- * The `window.location` fallback only fires before useAuth() has mounted, when
- * there is no router to route through anyway.
+ * The `window.location` fallback is a backstop, not the expected path: useAuth()
+ * registers the `auth:expired` listener and this navigator in the same hook, so the
+ * only caller can never fire without a router registered.
  */
 export function navigateInApp(path: string): void {
   if (routerNavigate) {
