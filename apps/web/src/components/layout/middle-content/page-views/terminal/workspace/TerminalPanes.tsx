@@ -40,11 +40,15 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   const panes = columns.flatMap((column) => column.panes);
   const canClose = panes.length > 1;
 
-  const paneProps = (pane: TerminalPaneState) => ({
+  /** `activeId` is a parameter rather than read from the closure so the narrow
+   * branch's fallback (below) drives the focus accent and the pane strip from the
+   * SAME id — otherwise a stale activePaneId would show the visible pane as
+   * unfocused while the strip highlighted it. */
+  const paneProps = (pane: TerminalPaneState, activeId: string | null) => ({
     socket,
     machineId,
     pane,
-    isActive: pane.id === activePaneId,
+    isActive: pane.id === activeId,
     canClose,
     onSelect: () => selectPane(machineId, pane.id),
     onSplitRight: () => splitRight(machineId, pane.id),
@@ -63,12 +67,22 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // emits `agent-terminal:disconnect`, which nulls the session's `closedFn` and
   // arms the idle reap — so an agent that finished while its pane was off-screen
   // would lose its final output and exit code, and coming back to that pane would
-  // cold-start a fresh PTY instead of showing the completed run. A display:none
-  // terminal keeps its socket connection and is already an explicitly supported
-  // state: XtermTerminal skips fits while the container is 0x0 and its
-  // ResizeObserver refits exactly once when the pane is shown again.
+  // cold-start a fresh PTY instead of showing the completed run.
+  //
+  // `invisible` (visibility:hidden), NOT `hidden` (display:none). Every pane here
+  // is stacked at inset-0, so a hidden one still has the container's real size —
+  // which it must, because a pane can MOUNT while inactive. xterm measures its
+  // character cell from the DOM at `open()`, and in a display:none box that
+  // measurement is 0; FitAddon then proposes no dimensions, so even the refit on
+  // re-show is a no-op and the pane stays blank for good. (The keep-alive path can
+  // use display:none safely only because it hides terminals that were already
+  // opened at a real size.) visibility:hidden also keeps `offsetParent` and
+  // `clientWidth` truthy, which is exactly what XtermTerminal's own visibility
+  // gate checks before it fits.
   if (isMobile) {
     if (panes.length === 0) return null;
+    // The store always points activePaneId at a live pane; fall back anyway rather
+    // than render a workspace where nothing is visible.
     const activeId = panes.some((pane) => pane.id === activePaneId) ? activePaneId : panes[0].id;
     return (
       <div className="flex h-full flex-col bg-background">
@@ -79,11 +93,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
           {panes.map((pane) => (
             <div
               key={pane.id}
-              className={cn('absolute inset-0', pane.id !== activeId && 'hidden')}
+              className={cn('absolute inset-0', pane.id !== activeId && 'invisible')}
               data-testid="mobile-pane"
               data-hidden={pane.id !== activeId ? 'true' : undefined}
             >
-              <TerminalPane {...paneProps(pane)} canSplit={false} />
+              <TerminalPane {...paneProps(pane, activeId)} canSplit={false} />
             </div>
           ))}
         </div>
@@ -103,7 +117,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
                   <Fragment key={pane.id}>
                     {paneIndex > 0 && <ResizableHandle variant="chrome-free" />}
                     <ResizablePanel defaultSize={100 / column.panes.length} minSize={15}>
-                      <TerminalPane {...paneProps(pane)} canSplit />
+                      <TerminalPane {...paneProps(pane, activePaneId)} canSplit />
                     </ResizablePanel>
                   </Fragment>
                 ))}

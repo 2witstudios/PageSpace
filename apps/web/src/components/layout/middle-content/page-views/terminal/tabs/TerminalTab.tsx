@@ -55,32 +55,32 @@ interface TerminalTabProps {
  * and it is behind the sheet.
  */
 export default function TerminalTab({ machineId }: TerminalTabProps) {
-  const openTerminal = useTerminalWorkspaceStore((state) => state.openTerminal);
-
   return (
     <TabSidebar title="Sessions" pane={<TerminalWorkspace machineId={machineId} />}>
-      {({ close }) => (
-        <SessionTree
-          machineId={machineId}
-          onOpenTerminal={(scope) => {
-            openTerminal(machineId, scope);
-            close();
-          }}
-        />
-      )}
+      {({ close }) => <SessionTree machineId={machineId} onOpened={close} />}
     </TabSidebar>
   );
 }
 
-/** The session tree itself, split out so `renderNodeChildren` can be memoised
- * against the sidebar's per-render `close` binding rather than rebuilt inline. */
-function SessionTree({
-  machineId,
-  onOpenTerminal,
-}: {
-  machineId: string;
-  onOpenTerminal(scope: OpenTerminalScope): void;
-}) {
+/**
+ * The session tree. A component rather than inline JSX so the open handler — and
+ * through it `renderNodeChildren` — can be built with `useCallback` in a scope
+ * that has stable inputs: `TabSidebar` hands out a stable `close`, so this memo
+ * genuinely holds instead of being invalidated by a fresh closure every render.
+ */
+function SessionTree({ machineId, onOpened }: { machineId: string; onOpened: () => void }) {
+  const openTerminal = useTerminalWorkspaceStore((state) => state.openTerminal);
+
+  const onOpenTerminal = useCallback(
+    (scope: OpenTerminalScope) => {
+      openTerminal(machineId, scope);
+      // On a narrow viewport the tree is in a sheet, and the terminal the user
+      // just asked for is behind it. A no-op on desktop.
+      onOpened();
+    },
+    [openTerminal, machineId, onOpened],
+  );
+
   const renderNodeChildren = useCallback(
     (node: MachineTreeNode) => (
       <SessionLeaves machineId={machineId} node={node} onOpenTerminal={onOpenTerminal} />

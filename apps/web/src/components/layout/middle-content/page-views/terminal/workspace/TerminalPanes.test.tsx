@@ -94,6 +94,7 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     const terminals = await screen.findAllByTestId('xterm');
+    const hiddenPanes = screen.getAllByTestId('mobile-pane').filter((pane) => pane.dataset.hidden === 'true');
 
     assert({
       given: 'a pane hidden by the narrow-viewport collapse',
@@ -101,9 +102,28 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
         'keep its terminal mounted — unmounting emits agent-terminal:disconnect, which loses a finished agent\'s exit code and cold-starts a fresh PTY on return',
       actual: {
         mountedTerminals: terminals.length,
-        hidden: screen.getAllByTestId('mobile-pane').filter((pane) => pane.dataset.hidden === 'true').length,
+        hidden: hiddenPanes.length,
       },
       expected: { mountedTerminals: 2, hidden: 1 },
+    });
+  });
+
+  test('a hidden pane is hidden by VISIBILITY, never by display', async () => {
+    onMobile();
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findAllByTestId('xterm');
+
+    const hidden = screen.getAllByTestId('mobile-pane').filter((pane) => pane.dataset.hidden === 'true');
+
+    assert({
+      given: 'a pane that mounts while inactive',
+      should:
+        'hide it with visibility:hidden — a display:none box measures 0, so xterm would read a zero-width character cell at open() and FitAddon would propose no dimensions, leaving the pane blank even after it is shown',
+      actual: {
+        invisible: hidden.every((pane) => pane.classList.contains('invisible')),
+        displayNone: hidden.some((pane) => pane.classList.contains('hidden')),
+      },
+      expected: { invisible: true, displayNone: false },
     });
   });
 

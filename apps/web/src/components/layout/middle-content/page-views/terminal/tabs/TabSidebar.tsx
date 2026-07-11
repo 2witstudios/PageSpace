@@ -20,7 +20,7 @@
  * callers wire it unconditionally.
  */
 
-import { useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { PanelLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -57,6 +57,13 @@ export default function TabSidebar({ title, children, pane }: TabSidebarProps) {
   const isMobile = useMobile();
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  // Stable across renders, so a caller CAN usefully memoise a handler built from
+  // it (the Terminal tab's tree does exactly that). Rebuilt per render, this
+  // object would invalidate every such memo on every render and quietly make them
+  // dead weight.
+  const closeSheet = useCallback(() => setSheetOpen(false), []);
+  const sheetApi = useMemo<TabSidebarApi>(() => ({ close: closeSheet }), [closeSheet]);
+
   // The pane stays the SECOND child of the same outer div in both layouts, so
   // crossing the breakpoint reconciles it in place rather than remounting it —
   // a rotation mid-session must not tear down a live xterm or a mounted Monaco.
@@ -80,7 +87,7 @@ export default function TabSidebar({ title, children, pane }: TabSidebarProps) {
                   {title} navigation for this Machine.
                 </SheetDescription>
               </SheetHeader>
-              <ScrollArea className="min-h-0 flex-1">{children({ close: () => setSheetOpen(false) })}</ScrollArea>
+              <ScrollArea className="min-h-0 flex-1">{children(sheetApi)}</ScrollArea>
             </SheetContent>
           </Sheet>
         </div>
