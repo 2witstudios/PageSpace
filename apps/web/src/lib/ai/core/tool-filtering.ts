@@ -64,6 +64,8 @@ export const WRITE_TOOLS = new Set([
   'create_command',
   'update_command',
   'delete_command',
+  // Image generation — creates a FILE page in the drive
+  'generate_image',
   // Sandbox / code-execution operations — all mutate the persistent sandbox
   // filesystem or a remote. bash can run arbitrary mutations, so it is excluded
   // in read-only mode too. Read-only sandbox tools (readFile, git_status,
