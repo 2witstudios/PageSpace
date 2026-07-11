@@ -387,7 +387,8 @@ function GithubRepoPicker({
   );
 }
 
-function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
+/** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
+export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
   const segments = repo.full_name.split('/');
   return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
 }
