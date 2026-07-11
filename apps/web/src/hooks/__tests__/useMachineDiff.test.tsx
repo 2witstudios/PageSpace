@@ -9,7 +9,13 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: (...args: unknown[]) => fetchWithAuth(...args),
 }));
 
-import { useMachineDiffFiles, useMachineDiffPair, machineDiffKeyFilter } from '../useMachineDiff';
+import {
+  useMachineDiffFiles,
+  useMachineDiffPair,
+  machineDiffKeyFilter,
+  machineDiffListKey,
+  machineDiffPairKey,
+} from '../useMachineDiff';
 
 const ok = (body: unknown) => ({ ok: true, json: async () => body });
 
@@ -191,23 +197,27 @@ describe('useMachineDiffPair', () => {
 });
 
 describe('machineDiffKeyFilter', () => {
-  const key = (params: Record<string, string>) =>
-    `/api/machines/diff?${new URLSearchParams(params).toString()}`;
+  const file = { path: 'src/a.ts', status: 'modified' as const };
 
-  test("matches every key of ONE branch's diff — its lists and its open file pairs", () => {
+  test("matches the REAL keys the hooks build for one branch — lists and open file pairs", () => {
     const matches = machineDiffKeyFilter('m1', 'repo', 'feat/x');
 
+    // Built with the SAME exported builders the hooks use, not hand-written
+    // look-alikes: the filter is a string-prefix test, so its correctness is
+    // coupled to the key's param ORDER. A hand-rolled expectation would keep
+    // passing after a reorder while Refresh silently matched nothing in the app.
     assert({
-      given: "the refresh filter for one branch, and that branch's own SWR keys",
+      given: "the refresh filter for one branch, and the actual keys the hooks produce for it",
       should: 'match its scope lists AND its per-file pair keys — an open card owns a separate key that must revalidate too',
       actual: {
-        uncommittedList: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/x', scope: 'uncommitted' })),
-        committedList: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/x', scope: 'committed' })),
-        pair: matches(
-          key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/x', scope: 'branch', path: 'src/a.ts', status: 'modified' }),
+        uncommittedList: matches(machineDiffListKey('m1', 'repo', 'feat/x', 'uncommitted')),
+        committedList: matches(machineDiffListKey('m1', 'repo', 'feat/x', 'committed')),
+        pair: matches(machineDiffPairKey('m1', 'repo', 'feat/x', 'branch', file)),
+        renamedPair: matches(
+          machineDiffPairKey('m1', 'repo', 'feat/x', 'branch', { ...file, status: 'renamed', previousPath: 'src/old.ts' }),
         ),
       },
-      expected: { uncommittedList: true, committedList: true, pair: true },
+      expected: { uncommittedList: true, committedList: true, pair: true, renamedPair: true },
     });
   });
 
@@ -221,26 +231,48 @@ describe('machineDiffKeyFilter', () => {
       given: 'SWR keys belonging to other machines/projects/branches, and unrelated routes',
       should: 'reject them all — a refresh must never trigger sandbox git on a machine the user is not viewing',
       actual: {
-        otherMachine: matches(key({ machineId: 'm2', projectName: 'repo', branchName: 'feat/x', scope: 'uncommitted' })),
-        otherProject: matches(key({ machineId: 'm1', projectName: 'other', branchName: 'feat/x', scope: 'uncommitted' })),
-        otherBranch: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feat/y', scope: 'uncommitted' })),
+        otherMachine: matches(machineDiffListKey('m2', 'repo', 'feat/x', 'uncommitted')),
+        otherProject: matches(machineDiffListKey('m1', 'other', 'feat/x', 'uncommitted')),
+        otherBranch: matches(machineDiffListKey('m1', 'repo', 'feat/y', 'uncommitted')),
+        otherMachinePair: matches(machineDiffPairKey('m2', 'repo', 'feat/x', 'uncommitted', file)),
         otherRoute: matches('/api/machines/files?machineId=m1'),
         nonString: matches(null),
       },
-      expected: { otherMachine: false, otherProject: false, otherBranch: false, otherRoute: false, nonString: false },
+      expected: {
+        otherMachine: false,
+        otherProject: false,
+        otherBranch: false,
+        otherMachinePair: false,
+        otherRoute: false,
+        nonString: false,
+      },
     });
   });
 
   test('a branch name that PREFIXES another does not match it', () => {
-    const matches = machineDiffKeyFilter('m1', 'repo', 'feat');
-
     // The filter is a string prefix test, so the trailing '&' after branchName is
     // load-bearing: without it, the filter for 'feat' would also swallow 'feature'.
     assert({
-      given: "the filter for branch 'feat' and a key for branch 'feature'",
+      given: "the filter for branch 'feat' and a real key for branch 'feature'",
       should: "not match — 'feat' must not swallow 'feature'",
-      actual: matches(key({ machineId: 'm1', projectName: 'repo', branchName: 'feature', scope: 'uncommitted' })),
+      actual: machineDiffKeyFilter('m1', 'repo', 'feat')(machineDiffListKey('m1', 'repo', 'feature', 'uncommitted')),
       expected: false,
+    });
+  });
+
+  test('a branch name containing & or = cannot forge the key boundary', () => {
+    // URLSearchParams percent-encodes them, so a value can never look like a
+    // delimiter and cross-match another branch's keys.
+    const matches = machineDiffKeyFilter('m1', 'repo', 'feat&branchName=other');
+
+    assert({
+      given: 'a branch name carrying the key format\'s own delimiters',
+      should: 'still match only its own keys, and not the branch it tries to impersonate',
+      actual: {
+        own: matches(machineDiffListKey('m1', 'repo', 'feat&branchName=other', 'uncommitted')),
+        impersonated: matches(machineDiffListKey('m1', 'repo', 'other', 'uncommitted')),
+      },
+      expected: { own: true, impersonated: false },
     });
   });
 });

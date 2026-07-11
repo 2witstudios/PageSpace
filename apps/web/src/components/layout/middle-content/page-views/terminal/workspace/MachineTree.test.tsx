@@ -31,8 +31,16 @@ const cannedFetch = () =>
   vi.mocked(fetchWithAuth).mockImplementation(async (...args: unknown[]) => {
     const url = String(args[0]);
     if (url.includes('/api/machines/projects')) {
+      // TWO projects, each with an identically-named branch: nearly every repo has
+      // a 'main', so a node-identity check that ignored projectName would highlight
+      // the 'main' row under EVERY project while only one is being diffed.
       return new Response(
-        JSON.stringify({ projects: [{ name: 'my-repo', repoUrl: 'https://github.com/org/my-repo.git', path: '/repo', createdAt: '2026-01-01' }] }),
+        JSON.stringify({
+          projects: [
+            { name: 'my-repo', repoUrl: 'https://github.com/org/my-repo.git', path: '/repo', createdAt: '2026-01-01' },
+            { name: 'other-repo', repoUrl: 'https://github.com/org/other-repo.git', path: '/other', createdAt: '2026-01-01' },
+          ],
+        }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     }
@@ -133,25 +141,50 @@ describe('MachineTree', () => {
     });
   });
 
-  test('the selected node is highlighted and marked aria-current', async () => {
+  /** The row's LABEL button — the interactive element, which is where aria-current has to live. */
+  const labelButtonIn = (row: HTMLElement) => within(row).getAllByRole('button')[row.querySelector('[data-testid="expand-chevron"]') ? 1 : 0];
+
+  test('the selected branch is marked aria-current — under ITS project only', async () => {
+    // Both projects have a 'main'. Only my-repo/main is selected, so a
+    // node-identity check that ignored projectName would light up both.
     renderTree({
       onSelectNode: vi.fn(),
+      isNodeSelectable: (node: MachineTreeNode) => node.level === 'branch',
       selectedNode: { level: 'branch', projectName: 'my-repo', branchName: 'main' },
     });
 
     await expandRowFor('my-repo');
-    const branchRow = (await waitFor(() => screen.getByText('main'))).closest('.group') as HTMLElement;
-    const projectRow = screen.getByText('my-repo').closest('.group') as HTMLElement;
+    await expandRowFor('other-repo');
+    const mainRows = await waitFor(() => {
+      const rows = screen.getAllByText('main');
+      if (rows.length < 2) throw new Error('waiting for both projects to list their branches');
+      return rows;
+    });
 
-    // Without this the Diff tab gives no sign of which branch it is diffing.
+    // aria-current must be on the interactive label button: the row wrapper has no
+    // role and isn't focusable, so AT never reaches it.
+    const current = mainRows.map((label) => {
+      const row = label.closest('.group') as HTMLElement;
+      return labelButtonIn(row).getAttribute('aria-current');
+    });
+
     assert({
-      given: 'a selectedNode naming one branch',
-      should: 'mark THAT row current (and not its siblings/ancestors)',
-      actual: {
-        branch: branchRow.getAttribute('aria-current'),
-        project: projectRow.getAttribute('aria-current'),
-      },
-      expected: { branch: 'true', project: null },
+      given: "two projects that each have a 'main' branch, with only my-repo/main selected",
+      should: 'mark exactly ONE of them current — the one under the selected project',
+      actual: { currentCount: current.filter((c) => c === 'true').length, total: current.length },
+      expected: { currentCount: 1, total: 2 },
+    });
+  });
+
+  test('no selectedNode leaves every row uncurrent (the Terminal tab has no persistent selection)', async () => {
+    renderTree();
+
+    const projectRow = (await waitFor(() => screen.getByText('my-repo'))).closest('.group') as HTMLElement;
+    assert({
+      given: 'a tree rendered without selectedNode',
+      should: 'mark nothing current',
+      actual: labelButtonIn(projectRow).getAttribute('aria-current'),
+      expected: null,
     });
   });
 
@@ -207,14 +240,17 @@ describe('MachineTree', () => {
     renderTree();
 
     await expandRowFor('my-repo');
-    await waitFor(() => screen.getByText('main'));
+    const branchLabel = await waitFor(() => screen.getAllByText('main')[0]);
+    const branchRow = branchLabel.closest('.group') as HTMLElement;
 
-    // Machine and Project rows each have a chevron; a bare branch row (no renderNodeChildren) should not add a third.
+    // Asserted on the BRANCH ROW itself rather than by counting chevrons across the
+    // whole tree — a global count silently depends on how many projects the fixture
+    // happens to have.
     assert({
       given: 'no renderNodeChildren slot passed',
-      should: 'not offer an expand/collapse control on branch rows (they render as flat, selectable leaves)',
-      actual: screen.getAllByTestId('expand-chevron').length,
-      expected: 2,
+      should: 'not offer an expand/collapse control on the branch row (it renders as a flat, selectable leaf)',
+      actual: within(branchRow).queryByTestId('expand-chevron'),
+      expected: null,
     });
   });
 });

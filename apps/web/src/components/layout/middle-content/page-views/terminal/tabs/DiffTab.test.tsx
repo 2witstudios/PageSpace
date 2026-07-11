@@ -13,20 +13,43 @@ const NUL = '\u0000';
 // The tree is exercised by its own suite; here we only need a way to fire
 // onSelectNode, so stub it to a set of select buttons — including a PROJECT node,
 // which DiffTab must ignore.
+//
+// The stub CAPTURES the props it receives. Dropping `isNodeSelectable` or
+// `selectedNode` from DiffTab's <MachineTree> would otherwise leave the suite
+// green while, in the real app, every Machine/Project label became a dead button
+// (a select handler wins over expand-on-label-click) and the selected branch lost
+// its highlight.
+const treeProps: {
+  isNodeSelectable?: (node: MachineTreeNode) => boolean;
+  selectedNode?: MachineTreeNode | null;
+} = {};
+
 vi.mock('../workspace/MachineTree', () => ({
-  default: ({ onSelectNode }: { onSelectNode?: (node: MachineTreeNode) => void }) => (
-    <div>
-      <button type="button" onClick={() => onSelectNode?.({ level: 'branch', projectName: 'repo', branchName: 'feature' })}>
-        select-feature
-      </button>
-      <button type="button" onClick={() => onSelectNode?.({ level: 'branch', projectName: 'repo', branchName: 'main' })}>
-        select-main
-      </button>
-      <button type="button" onClick={() => onSelectNode?.({ level: 'project', projectName: 'repo' })}>
-        select-project
-      </button>
-    </div>
-  ),
+  default: ({
+    onSelectNode,
+    isNodeSelectable,
+    selectedNode,
+  }: {
+    onSelectNode?: (node: MachineTreeNode) => void;
+    isNodeSelectable?: (node: MachineTreeNode) => boolean;
+    selectedNode?: MachineTreeNode | null;
+  }) => {
+    treeProps.isNodeSelectable = isNodeSelectable;
+    treeProps.selectedNode = selectedNode;
+    return (
+      <div>
+        <button type="button" onClick={() => onSelectNode?.({ level: 'branch', projectName: 'repo', branchName: 'feature' })}>
+          select-feature
+        </button>
+        <button type="button" onClick={() => onSelectNode?.({ level: 'branch', projectName: 'repo', branchName: 'main' })}>
+          select-main
+        </button>
+        <button type="button" onClick={() => onSelectNode?.({ level: 'project', projectName: 'repo' })}>
+          select-project
+        </button>
+      </div>
+    );
+  },
 }));
 
 // Monaco must never mount under jsdom; the card only needs to prove it renders.
@@ -110,9 +133,11 @@ vi.mock('swr', async (importOriginal) => {
 vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks/useMachineDiff')>();
   return {
-    // Keep the REAL key filter — the refresh path's correctness depends on it,
-    // and a stubbed one would let a machine-agnostic predicate slip through.
+    // Keep the REAL key builders and filter — the refresh path's correctness
+    // depends on them agreeing, and stubs would let a mismatch slip through.
     machineDiffKeyFilter: actual.machineDiffKeyFilter,
+    machineDiffListKey: actual.machineDiffListKey,
+    machineDiffPairKey: actual.machineDiffPairKey,
     useMachineDiffFiles: (
       _machineId: string,
       projectName: string | null,
@@ -160,6 +185,7 @@ vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
 });
 
 import DiffTab from './DiffTab';
+import { machineDiffListKey, machineDiffPairKey } from '@/hooks/useMachineDiff';
 
 const scopeOptions = () => ({
   uncommitted: screen.queryByText('Uncommitted') !== null,
@@ -188,6 +214,45 @@ describe('DiffTab', () => {
         toggle: screen.queryByText('Committed') !== null,
       },
       expected: { prompt: true, toggle: false },
+    });
+  });
+
+  test('the tree is told that ONLY branch rows are selectable', () => {
+    render(<DiffTab machineId="m1" />);
+
+    // Load-bearing: a row WITH a select handler uses it instead of
+    // expand-on-label-click, and DiffTab's handler ignores non-branch nodes — so
+    // marking Machine/Project selectable turns their labels into dead buttons.
+    assert({
+      given: 'the Diff tab rendering the shared tree',
+      should: 'pass isNodeSelectable so Machine/Project rows keep expand-on-label-click',
+      actual: {
+        wired: typeof treeProps.isNodeSelectable === 'function',
+        branch: treeProps.isNodeSelectable?.({ level: 'branch', projectName: 'repo', branchName: 'x' }),
+        project: treeProps.isNodeSelectable?.({ level: 'project', projectName: 'repo' }),
+        machine: treeProps.isNodeSelectable?.({ level: 'machine' }),
+      },
+      expected: { wired: true, branch: true, project: false, machine: false },
+    });
+  });
+
+  test('the tree is told which branch is selected, so the sidebar can show it', async () => {
+    render(<DiffTab machineId="m1" />);
+    assert({
+      given: 'no branch picked yet',
+      should: 'report no selection',
+      actual: treeProps.selectedNode ?? null,
+      expected: null,
+    });
+
+    await userEvent.click(screen.getByText('select-feature'));
+    await waitFor(() => screen.getByText('Uncommitted'));
+
+    assert({
+      given: 'a branch selected',
+      should: 'thread that branch back to the tree as selectedNode — otherwise nothing shows which branch is being diffed',
+      actual: treeProps.selectedNode,
+      expected: { level: 'branch', projectName: 'repo', branchName: 'feature' },
     });
   });
 
@@ -356,20 +421,20 @@ describe('DiffTab', () => {
     // keep-alive LRU, so a machine-agnostic predicate would re-fire another
     // machine's git execs (list + merge-base + every open pair) on every refresh.
     const predicate = swrMutate.mock.calls[0]?.[0] as ((key: unknown) => boolean) | undefined;
-    const key = (params: Record<string, string>) =>
-      `/api/machines/diff?${new URLSearchParams(params).toString()}`;
-    const mine = { machineId: 'm1', projectName: 'repo', branchName: 'feature' };
+    // Real keys from the real builders, so a param reorder can't leave this green
+    // while Refresh silently matches nothing in the app.
+    const f = { path: 'src/a.ts', status: 'modified' as const };
 
     assert({
       given: 'the Refresh button clicked',
       should: "revalidate THIS branch's list and per-file pair keys — and nothing else's",
       actual: {
         called: swrMutate.mock.calls.length,
-        myList: predicate?.(key({ ...mine, scope: 'uncommitted' })),
-        myPair: predicate?.(key({ ...mine, scope: 'uncommitted', path: 'src/a.ts', status: 'modified' })),
-        otherMachine: predicate?.(key({ ...mine, machineId: 'm2', scope: 'uncommitted' })),
-        otherBranch: predicate?.(key({ ...mine, branchName: 'other', scope: 'uncommitted' })),
-        otherProject: predicate?.(key({ ...mine, projectName: 'other-repo', scope: 'uncommitted' })),
+        myList: predicate?.(machineDiffListKey('m1', 'repo', 'feature', 'uncommitted')),
+        myPair: predicate?.(machineDiffPairKey('m1', 'repo', 'feature', 'uncommitted', f)),
+        otherMachine: predicate?.(machineDiffListKey('m2', 'repo', 'feature', 'uncommitted')),
+        otherBranch: predicate?.(machineDiffListKey('m1', 'repo', 'other', 'uncommitted')),
+        otherProject: predicate?.(machineDiffListKey('m1', 'other-repo', 'feature', 'uncommitted')),
         unrelatedRoute: predicate?.('/api/machines/files?machineId=m1'),
       },
       expected: {

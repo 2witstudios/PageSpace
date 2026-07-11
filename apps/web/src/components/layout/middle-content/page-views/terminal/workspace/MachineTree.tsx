@@ -135,10 +135,13 @@ function TreeRow({
   return (
     <div
       className={cn(
-        'group flex items-center gap-1 rounded-sm py-1 pr-1 hover:bg-accent/50',
-        selected && 'bg-accent',
+        'group flex items-center gap-1 rounded-sm py-1 pr-1',
+        // Hover must not fight the selected state: bg-accent and hover:bg-accent/50
+        // are different variant groups, so twMerge keeps both and the hover rule
+        // wins — pointing at the selected row would LIGHTEN it, making it read as
+        // less selected than its unhovered siblings.
+        selected ? 'bg-accent' : 'hover:bg-accent/50',
       )}
-      aria-current={selected ? 'true' : undefined}
     >
       {onToggleExpand ? (
         <button
@@ -157,6 +160,10 @@ function TreeRow({
         type="button"
         onClick={onLabelClick}
         disabled={!onLabelClick}
+        // aria-current belongs on the INTERACTIVE element, not the row wrapper: the
+        // wrapper has no role and isn't focusable, so a screen-reader user never
+        // reaches it and the selection would be conveyed by background colour alone.
+        aria-current={selected ? 'true' : undefined}
         className={cn('flex flex-1 items-center gap-1 text-left', !onLabelClick && 'cursor-default')}
       >
         {icon}

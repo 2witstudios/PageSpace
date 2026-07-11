@@ -55,13 +55,53 @@ export type MachineDiffPairResponse =
       modified: MachineDiffSide | null;
     };
 
+const MACHINE_DIFF_KEY_PREFIX = '/api/machines/diff?';
+
 /**
- * Every diff SWR key (lists AND per-file pairs) starts with this. Both builders
- * below emit `machineId`, `projectName`, `branchName` first and in that order, so
- * a key for one branch is exactly `<prefix><those three>&…` — which is what makes
- * the scoped filter below a simple, exact string test.
+ * The params identifying WHICH branch's diff a key addresses. Every key — list and
+ * pair alike — starts with exactly these three, in this order.
+ *
+ * This is a single shared builder ON PURPOSE. `machineDiffKeyFilter` matches keys
+ * by string prefix, so its correctness depends on that ordering; if the list and
+ * pair hooks each spelled their own `URLSearchParams` literal, reordering one of
+ * them would silently stop Refresh from matching it — the button would revalidate
+ * nothing, with no spinner and no error, and present a stale diff as fresh. Routing
+ * every key through one function makes that drift impossible rather than merely
+ * unlikely.
  */
-export const MACHINE_DIFF_KEY_PREFIX = '/api/machines/diff?';
+function branchScopedParams(machineId: string, projectName: string, branchName: string): URLSearchParams {
+  return new URLSearchParams({ machineId, projectName, branchName });
+}
+
+/** SWR key for one branch+scope's changed-file list. */
+export function machineDiffListKey(
+  machineId: string,
+  projectName: string,
+  branchName: string,
+  scope: MachineDiffScope,
+): string {
+  const params = branchScopedParams(machineId, projectName, branchName);
+  params.set('scope', scope);
+  return MACHINE_DIFF_KEY_PREFIX + params.toString();
+}
+
+/** SWR key for ONE file's diff pair within a branch+scope. */
+export function machineDiffPairKey(
+  machineId: string,
+  projectName: string,
+  branchName: string,
+  scope: MachineDiffScope,
+  file: MachineDiffFile,
+): string {
+  const params = branchScopedParams(machineId, projectName, branchName);
+  params.set('scope', scope);
+  params.set('path', file.path);
+  params.set('status', file.status);
+  // The rename SOURCE, so the route reads the 'original' side from the pre-rename
+  // location instead of missing at the new path and mis-showing the rename as an add.
+  if (file.previousPath) params.set('previousPath', file.previousPath);
+  return MACHINE_DIFF_KEY_PREFIX + params.toString();
+}
 
 /**
  * An SWR `mutate` filter matching every key of ONE branch's diff — its scope
@@ -79,16 +119,18 @@ export const MACHINE_DIFF_KEY_PREFIX = '/api/machines/diff?';
  * refreshing only the lists would leave an open card serving pre-edit content
  * forever (both hooks set `revalidateOnFocus: false`) — hence a filter rather than
  * two `mutate()` calls.
+ *
+ * The trailing '&' is a real boundary, not decoration: without it the filter for
+ * branch 'feat' would also swallow 'feature'. A value can never forge that
+ * delimiter, because `URLSearchParams` percent-encodes any literal '&' or '=' it
+ * contains.
  */
 export function machineDiffKeyFilter(
   machineId: string,
   projectName: string,
   branchName: string,
 ): (key: unknown) => boolean {
-  const branchPrefix =
-    MACHINE_DIFF_KEY_PREFIX +
-    new URLSearchParams({ machineId, projectName, branchName }).toString() +
-    '&';
+  const branchPrefix = MACHINE_DIFF_KEY_PREFIX + branchScopedParams(machineId, projectName, branchName).toString() + '&';
   return (key: unknown): boolean => typeof key === 'string' && key.startsWith(branchPrefix);
 }
 
@@ -113,10 +155,7 @@ export function useMachineDiffFiles(
   scope: MachineDiffScope | null,
 ) {
   const key =
-    projectName && branchName && scope
-      ? MACHINE_DIFF_KEY_PREFIX +
-        new URLSearchParams({ machineId, projectName, branchName, scope }).toString()
-      : null;
+    projectName && branchName && scope ? machineDiffListKey(machineId, projectName, branchName, scope) : null;
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<MachineDiffFilesResponse>(key, fetcher, {
     revalidateOnFocus: false,
@@ -144,21 +183,7 @@ export function useMachineDiffPair(
 ) {
   const key =
     enabled && projectName && branchName && scope && file
-      ? (() => {
-          const params = new URLSearchParams({
-            machineId,
-            projectName,
-            branchName,
-            scope,
-            path: file.path,
-            status: file.status,
-          });
-          // The rename SOURCE, so the route reads the 'original' side from the
-          // pre-rename location instead of missing at the new path and
-          // mis-showing the rename as an add.
-          if (file.previousPath) params.set('previousPath', file.previousPath);
-          return MACHINE_DIFF_KEY_PREFIX + params.toString();
-        })()
+      ? machineDiffPairKey(machineId, projectName, branchName, scope, file)
       : null;
 
   const { data, error, isLoading } = useSWR<MachineDiffPairResponse>(key, fetcher, {

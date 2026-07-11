@@ -101,7 +101,9 @@ export default function DiffTab({ machineId }: { machineId: string }) {
           <BranchDiffPane
             // Remounting per branch resets the scope selection and expanded
             // cards, so a stale scope can never carry across a branch switch.
-            key={`${selected.projectName}/${selected.branchName}`}
+            // NUL-joined: branch names contain '/', so a '/' separator could let
+            // two different (project, branch) pairs collide on one key.
+            key={`${selected.projectName}\u0000${selected.branchName}`}
             machineId={machineId}
             projectName={selected.projectName}
             branchName={selected.branchName}
@@ -289,8 +291,9 @@ function DiffFileList({
           // Keyed by IDENTITY (path + rename source), deliberately not by status:
           // a refresh that flips a file modified -> deleted would otherwise change
           // its key, remount the card, and silently collapse it under the user.
-          // Status is already a prop, so it still re-renders in place.
-          key={`${file.previousPath ?? ''}:${file.path}`}
+          // Status is already a prop, so it still re-renders in place. NUL-joined
+          // because a path may legally contain ':'.
+          key={`${file.previousPath ?? ''}\u0000${file.path}`}
           machineId={machineId}
           projectName={projectName}
           branchName={branchName}
