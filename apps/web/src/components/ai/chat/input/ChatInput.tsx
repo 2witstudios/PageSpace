@@ -9,6 +9,7 @@ import { AttachButton } from './AttachButton';
 import { AttachmentPreviewStrip } from './AttachmentPreviewStrip';
 import { InputFooter } from '@/components/ui/floating-input';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { isImageGenerationAllowedForTier } from '@/lib/ai/core/image-gen-access';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import type { ImageAttachment } from '@/lib/ai/shared/hooks/useImageAttachments';
@@ -139,9 +140,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
 
     // Get settings from centralized store
     const webSearchEnabled = useAssistantSettingsStore((s) => s.webSearchEnabled);
+    const imageGenEnabled = useAssistantSettingsStore((s) => s.imageGenEnabled);
+    const subscriptionTier = useAssistantSettingsStore((s) => s.subscriptionTier);
     const writeMode = useAssistantSettingsStore((s) => s.writeMode);
     const showPageTree = useAssistantSettingsStore((s) => s.showPageTree);
     const toggleWebSearch = useAssistantSettingsStore((s) => s.toggleWebSearch);
+    const toggleImageGen = useAssistantSettingsStore((s) => s.toggleImageGen);
     const toggleWriteMode = useAssistantSettingsStore((s) => s.toggleWriteMode);
     const toggleShowPageTree = useAssistantSettingsStore((s) => s.toggleShowPageTree);
     const storeProvider = useAssistantSettingsStore((s) => s.currentProvider);
@@ -278,6 +282,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
         <InputFooter
           webSearchEnabled={webSearchEnabled}
           onWebSearchToggle={toggleWebSearch}
+          imageGenEnabled={imageGenEnabled}
+          onImageGenToggle={toggleImageGen}
+          canUseImageGen={isImageGenerationAllowedForTier(subscriptionTier)}
           writeMode={writeMode}
           onWriteModeToggle={toggleWriteMode}
           showPageTree={showPageTree}

@@ -20,6 +20,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 const SHOW_PAGE_TREE_KEY = 'pagespace:assistant:showPageTree';
 const WEB_SEARCH_KEY = 'pagespace:assistant:webSearchEnabled';
 const WRITE_MODE_KEY = 'pagespace:assistant:writeMode';
+const IMAGE_GEN_KEY = 'pagespace:assistant:imageGenEnabled';
 
 interface AssistantSettingsState {
   // Settings
@@ -32,6 +33,7 @@ interface AssistantSettingsState {
   // Chat input toggles (persisted to localStorage)
   webSearchEnabled: boolean;
   writeMode: boolean; // true = write mode, false = read-only
+  imageGenEnabled: boolean; // Whether the image-generation tool is enabled
 
   // Loading state
   isLoading: boolean;
@@ -48,6 +50,8 @@ interface AssistantSettingsState {
   setWriteMode: (enabled: boolean) => void;
   toggleWriteMode: () => void;
   toggleShowPageTree: () => void;
+  setImageGenEnabled: (enabled: boolean) => void;
+  toggleImageGen: () => void;
 }
 
 export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, get) => ({
@@ -59,6 +63,7 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
   subscriptionTier: 'free',
   webSearchEnabled: false,
   writeMode: true, // Default to write mode (full access)
+  imageGenEnabled: false,
   isLoading: false,
   isInitialized: false,
 
@@ -129,6 +134,23 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
     });
   },
 
+  setImageGenEnabled: (enabled: boolean) => {
+    set({ imageGenEnabled: enabled });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(IMAGE_GEN_KEY, String(enabled));
+    }
+  },
+
+  toggleImageGen: () => {
+    set((state) => {
+      const next = !state.imageGenEnabled;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(IMAGE_GEN_KEY, String(next));
+      }
+      return { imageGenEnabled: next };
+    });
+  },
+
   loadSettings: async () => {
     // Prevent duplicate loads
     if (get().isLoading || get().isInitialized) return;
@@ -138,6 +160,7 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
     let showPageTree = false;
     let webSearchEnabled = false;
     let writeMode = true;
+    let imageGenEnabled = false;
 
     if (typeof window !== 'undefined') {
       const storedShowPageTree = localStorage.getItem(SHOW_PAGE_TREE_KEY);
@@ -146,9 +169,11 @@ export const useAssistantSettingsStore = create<AssistantSettingsState>()((set, 
       if (storedWebSearch !== null) webSearchEnabled = storedWebSearch === 'true';
       const storedWriteMode = localStorage.getItem(WRITE_MODE_KEY);
       if (storedWriteMode !== null) writeMode = storedWriteMode === 'true';
+      const storedImageGen = localStorage.getItem(IMAGE_GEN_KEY);
+      if (storedImageGen !== null) imageGenEnabled = storedImageGen === 'true';
     }
 
-    set({ isLoading: true, showPageTree, webSearchEnabled, writeMode });
+    set({ isLoading: true, showPageTree, webSearchEnabled, writeMode, imageGenEnabled });
 
     try {
       const response = await fetchWithAuth('/api/ai/settings');

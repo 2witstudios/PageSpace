@@ -379,6 +379,7 @@ const SidebarChatTab: React.FC = () => {
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
   const writeMode = useAssistantSettingsStore((state) => state.writeMode);
 
   // Refs
@@ -768,6 +769,7 @@ const SidebarChatTab: React.FC = () => {
           conversationId: agentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
@@ -778,6 +780,7 @@ const SidebarChatTab: React.FC = () => {
           conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           showPageTree,
           locationContext,
           selectedProvider: currentProvider,
@@ -818,6 +821,7 @@ const SidebarChatTab: React.FC = () => {
           conversationId: agentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
@@ -828,6 +832,7 @@ const SidebarChatTab: React.FC = () => {
           conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           showPageTree,
           locationContext,
           selectedProvider: currentProvider,
@@ -858,6 +863,7 @@ const SidebarChatTab: React.FC = () => {
           conversationId: agentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
@@ -868,6 +874,7 @@ const SidebarChatTab: React.FC = () => {
           conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           showPageTree,
           locationContext,
           selectedProvider: currentProvider,
