@@ -33,8 +33,18 @@ const mockUseAuth = vi.fn();
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 
 // motion.div → a plain div so the shell renders synchronously in jsdom.
+// Strip the animation-only props (initial/animate/exit/transition) so they
+// don't leak onto the DOM node and trigger React unknown-prop warnings.
 vi.mock('motion/react', () => ({
-  motion: new Proxy({}, { get: () => (props: Record<string, unknown>) => <div {...props} /> }),
+  motion: new Proxy(
+    {},
+    {
+      get: () =>
+        ({ initial: _i, animate: _a, exit: _e, transition: _t, ...rest }: Record<string, unknown>) => (
+          <div {...rest} />
+        ),
+    },
+  ),
 }));
 
 import TerminalView from './TerminalView';
