@@ -16,6 +16,7 @@ export interface GlobalChatRequestBodyParams {
   conversationId: string | null;
   isReadOnly: boolean;
   webSearchEnabled: boolean;
+  imageGenEnabled: boolean;
   showPageTree: boolean;
   locationContext?: LocationContext | null;
   selectedProvider: string | null;
@@ -31,6 +32,7 @@ export interface GlobalChatRequestBody {
   conversationId: string | null;
   isReadOnly: boolean;
   webSearchEnabled: boolean;
+  imageGenEnabled: boolean;
   showPageTree: boolean;
   locationContext: LocationContext | undefined;
   selectedProvider: string | null;
@@ -45,6 +47,7 @@ export function buildGlobalChatRequestBody(
     conversationId: params.conversationId,
     isReadOnly: params.isReadOnly,
     webSearchEnabled: params.webSearchEnabled,
+    imageGenEnabled: params.imageGenEnabled,
     showPageTree: params.showPageTree,
     locationContext: params.locationContext || undefined,
     selectedProvider: params.selectedProvider,

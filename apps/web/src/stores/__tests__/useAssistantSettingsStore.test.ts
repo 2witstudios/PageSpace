@@ -240,6 +240,23 @@ describe('useAssistantSettingsStore', () => {
     });
   });
 
+  describe('toggleImageGen', () => {
+    it('defaults imageGenEnabled to false', () => {
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      expect(result.current.imageGenEnabled).toBe(false);
+    });
+
+    it('flips imageGenEnabled and persists to localStorage', () => {
+      const { result } = renderHook(() => useAssistantSettingsStore());
+      act(() => { result.current.toggleImageGen(); });
+      expect(result.current.imageGenEnabled).toBe(true);
+      expect(localStorageMock.setItem).toHaveBeenCalledWith(
+        'pagespace:assistant:imageGenEnabled',
+        'true'
+      );
+    });
+  });
+
   describe('toggleWriteMode', () => {
     it('should flip writeMode from true to false', () => {
       const { result } = renderHook(() => useAssistantSettingsStore());

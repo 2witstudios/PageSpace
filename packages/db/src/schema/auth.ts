@@ -29,6 +29,10 @@ export const users = pgTable('users', {
   adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
   currentAiProvider: text('currentAiProvider').default('openai').notNull(),
   currentAiModel: text('currentAiModel').default('openai/gpt-5.3-chat').notNull(),
+  // Chosen OpenRouter image-generation model (null = none configured → tool uses the
+  // system default). Deliberately separate from currentAiModel: image generation is a
+  // tool, not the chat model, and is never shown in the model selector.
+  imageGenerationModel: text('imageGenerationModel'),
   // Storage tracking fields (quota/tier now computed from subscriptionTier)
   storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
   activeUploads: integer('activeUploads').default(0).notNull(),

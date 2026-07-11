@@ -980,10 +980,16 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         await releaseHold(data.holdId);
       }
     } catch (error) {
-      loggers.ai.debug('AI usage tracking failed', {
-        error: (error as Error).message,
+      // This swallow is the ONLY thing standing between a failed usage write and a silent
+      // billing gap: if writeAiUsage (or the settle below it) throws, the provider has
+      // already charged us but no ai_usage_logs row exists — so nothing debits the user and
+      // the orphan sweep, which keys off ai_usage_logs, can never find it. Log at ERROR (not
+      // debug) so unbilled spend is visible instead of disappearing into a debug channel.
+      loggers.ai.error('AI usage tracking failed — spend may be UNBILLED', error as Error, {
         model: data.model,
-        provider: data.provider
+        provider: data.provider,
+        source: data.source,
+        holdId: data.holdId,
       });
     }
   } catch (error) {

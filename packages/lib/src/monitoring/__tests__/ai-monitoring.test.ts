@@ -611,13 +611,17 @@ describe('trackAIUsage', () => {
     expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'other' }));
   });
 
-  it('should not throw and should log debug when writeAiUsage rejects', async () => {
+  it('should not throw, and should log at ERROR, when writeAiUsage rejects (spend may be unbilled)', async () => {
+    // A failed usage write is a silent billing gap: the provider already charged us, but with
+    // no ai_usage_logs row nothing debits the user and the orphan sweep (which keys off
+    // ai_usage_logs) can never find it. It must be visible at ERROR, not buried in debug.
     mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
     await trackAIUsage({ userId: 'user-1', provider: 'openai', model: 'gpt-4o' });
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(mockAiLogger.debug).toHaveBeenCalledWith(
-      'AI usage tracking failed',
-      expect.objectContaining({ error: 'db error' })
+    expect(mockAiLogger.error).toHaveBeenCalledWith(
+      'AI usage tracking failed — spend may be UNBILLED',
+      expect.any(Error),
+      expect.objectContaining({ model: 'gpt-4o', provider: 'openai' })
     );
   });
 

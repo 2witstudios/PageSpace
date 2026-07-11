@@ -100,6 +100,7 @@ describe('AI settings route', () => {
       currentAiProvider: 'openai',
       currentAiModel: 'openai/gpt-5.3-chat',
       subscriptionTier: 'pro',
+      imageGenerationModel: null,
     });
     for (const key of ENV_KEYS) delete process.env[key];
   });
@@ -236,6 +237,7 @@ describe('AI settings route', () => {
         currentAiProvider: 'anthropic',
         currentAiModel: 'anthropic/claude-sonnet-4.6',
         subscriptionTier: 'business',
+        imageGenerationModel: null,
       });
 
       const response = await GET(makeRequest('GET'));
@@ -252,6 +254,7 @@ describe('AI settings route', () => {
         currentAiProvider: null,
         currentAiModel: null,
         subscriptionTier: null,
+        imageGenerationModel: null,
       });
 
       const response = await GET(makeRequest('GET'));
@@ -335,6 +338,7 @@ describe('AI settings route', () => {
         currentAiProvider: 'openai',
         currentAiModel: 'openai/gpt-5.3-chat',
         subscriptionTier: 'free',
+        imageGenerationModel: null,
       });
 
       const response = await PATCH(makeRequest('PATCH', {
@@ -394,6 +398,7 @@ describe('AI settings route', () => {
         currentAiProvider: 'openai',
         currentAiModel: 'openai/gpt-5.3-chat',
         subscriptionTier: 'free',
+        imageGenerationModel: null,
       });
       vi.mocked(requiresProSubscription).mockReturnValue(true);
 
@@ -414,6 +419,7 @@ describe('AI settings route', () => {
         currentAiProvider: 'openai',
         currentAiModel: 'openai/gpt-5.3-chat',
         subscriptionTier: 'free',
+        imageGenerationModel: null,
       });
       vi.mocked(requiresProSubscription).mockReturnValue(false);
 

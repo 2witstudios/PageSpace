@@ -152,6 +152,7 @@ const GlobalAssistantView: React.FC = () => {
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
   const loadSettings = useAssistantSettingsStore((state) => state.loadSettings);
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
+  const imageGenEnabled = useAssistantSettingsStore((state) => state.imageGenEnabled);
   const writeMode = useAssistantSettingsStore((state) => state.writeMode);
 
   // Derive isReadOnly from writeMode (inverse) for API request body
@@ -814,12 +815,14 @@ const GlobalAssistantView: React.FC = () => {
           selectedModel: agentSelectedModel,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
       : buildGlobalChatRequestBody({
           conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           showPageTree,
           locationContext,
           selectedProvider: currentProvider,
@@ -846,12 +849,14 @@ const GlobalAssistantView: React.FC = () => {
           selectedModel: agentSelectedModel,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
       : buildGlobalChatRequestBody({
           conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           showPageTree,
           locationContext,
           selectedProvider: currentProvider,
@@ -868,6 +873,7 @@ const GlobalAssistantView: React.FC = () => {
     agentSelectedModel,
     isReadOnly,
     webSearchEnabled,
+    imageGenEnabled,
     showPageTree,
     locationContext,
     currentProvider,
@@ -886,12 +892,14 @@ const GlobalAssistantView: React.FC = () => {
           selectedModel: agentSelectedModel,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
         }
       : buildGlobalChatRequestBody({
           conversationId: currentConversationId,
           isReadOnly,
           webSearchEnabled,
+          imageGenEnabled,
           showPageTree,
           locationContext,
           selectedProvider: currentProvider,
@@ -905,6 +913,7 @@ const GlobalAssistantView: React.FC = () => {
     agentSelectedModel,
     isReadOnly,
     webSearchEnabled,
+    imageGenEnabled,
     showPageTree,
     locationContext,
     currentProvider,

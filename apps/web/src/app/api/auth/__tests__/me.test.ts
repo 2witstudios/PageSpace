@@ -47,6 +47,7 @@ const mockUser: User = {
   adminRoleVersion: 0,
   currentAiProvider: 'openai',
   currentAiModel: 'openai/gpt-5.3-chat',
+  imageGenerationModel: null,
   storageUsedBytes: 0,
   activeUploads: 0,
   lastStorageCalculated: null,

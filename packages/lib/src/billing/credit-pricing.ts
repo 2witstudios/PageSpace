@@ -120,6 +120,55 @@ export const VOICE_HOLD_ESTIMATE_CENTS = envInt('VOICE_HOLD_ESTIMATE_CENTS', 2);
 export const VOICE_MAX_INFLIGHT = envInt('VOICE_MAX_INFLIGHT', 4);
 
 /**
+ * Flat per-call hold estimate for AI image generation. The real cost isn't known
+ * until OpenRouter responds (it varies by image model and resolution), so the gate
+ * reserves this approximate amount up front. A single image runs ~$0.05–0.10 real
+ * provider cost (~$0.068 measured for Gemini Flash Image); at the 1.5× markup that
+ * lands under ~15¢ of credit value, so 25¢ comfortably covers a worst-case single
+ * image without over-reserving. It is an ESTIMATE, not a cap — the real cost settles
+ * exactly via consumeCredits from OpenRouter's usage.cost. Tune via env.
+ */
+export const IMAGE_GEN_HOLD_ESTIMATE_CENTS = envInt('IMAGE_GEN_HOLD_ESTIMATE_CENTS', 25);
+
+/**
+ * Fallback per-image real cost (US dollars) used ONLY when OpenRouter does not return
+ * an authoritative `usage.cost` for an image call (rare — measured calls DO return it).
+ * A flat per-image number is correct here because image models bill per image, not per
+ * token, so the token-based estimate table (AI_PRICING/calculateCost) does not apply.
+ * When the real cost is present it is billed verbatim; this only bounds the no-cost path.
+ */
+export const IMAGE_GEN_FALLBACK_COST_DOLLARS = envFloat('IMAGE_GEN_FALLBACK_COST_DOLLARS', 0.05);
+
+/** Provenance of a settled image cost — mirrors the `costSource` label on ai_usage_logs. */
+export type ImageCostSource = 'openrouter' | 'estimate';
+
+export interface ResolvedImageCost {
+  /** Real provider cost in US dollars to settle the hold against. */
+  costDollars: number;
+  costSource: ImageCostSource;
+}
+
+/**
+ * Pure: resolve the billable dollar cost for one image generation.
+ * - Given OpenRouter's authoritative `usage.cost` (any finite number >= 0), bill it
+ *   verbatim with `costSource: 'openrouter'`. ZERO is a real, authoritative price — free
+ *   image models exist on OpenRouter — so it must NOT fall through to the estimate, which
+ *   would charge for a free generation.
+ * - Only when the cost is absent (undefined/null/non-finite) fall back to a flat per-image
+ *   estimate with `costSource: 'estimate'`.
+ * No I/O; `fallbackDollars` is injectable for tests.
+ */
+export function resolveImageCost(
+  providerCostDollars: number | null | undefined,
+  fallbackDollars: number = IMAGE_GEN_FALLBACK_COST_DOLLARS,
+): ResolvedImageCost {
+  if (typeof providerCostDollars === 'number' && Number.isFinite(providerCostDollars) && providerCostDollars >= 0) {
+    return { costDollars: providerCostDollars, costSource: 'openrouter' };
+  }
+  return { costDollars: fallbackDollars, costSource: 'estimate' };
+}
+
+/**
  * Flat per-call hold estimate for a Machine (Terminal) run, where the active-window
  * duration — and therefore the real cost — isn't known until the run ends, so the
  * gate has nothing exact to reserve against (mirrors VOICE_HOLD_ESTIMATE_CENTS' STT

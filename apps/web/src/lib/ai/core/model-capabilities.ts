@@ -1,6 +1,6 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { hasVisionCapability } from './vision-models';
-import { getBackendProvider } from './ai-providers-config';
+import { getBackendProvider, AI_PROVIDERS } from './ai-providers-config';
 
 const capabilityLogger = loggers.ai.child({ module: 'model-capabilities' });
 
@@ -39,7 +39,13 @@ let openRouterCacheExpiry = 0;
  */
 interface OpenRouterModel {
   id: string;
+  name?: string;
   supported_parameters?: string[];
+  /** OpenRouter reports input/output modalities under `architecture`. */
+  architecture?: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+  };
 }
 
 /**
@@ -84,6 +90,77 @@ async function fetchOpenRouterToolCapabilities(): Promise<Map<string, boolean>> 
     capabilityLogger.warn('Failed to fetch OpenRouter model capabilities', { error: error instanceof Error ? error.message : String(error) });
     // Return empty map on error, fallback to runtime discovery
     return new Map();
+  }
+}
+
+/**
+ * Default image-generation model — an image-output model present in the curated
+ * catalog (see AI_PROVIDERS). Used when a user hasn't chosen one.
+ */
+export const DEFAULT_IMAGE_MODEL = 'google/gemini-3.1-flash-image-preview';
+
+/**
+ * Pure: does this OpenRouter model emit images? True when its
+ * `architecture.output_modalities` includes `"image"`.
+ */
+export function isImageOutputModel(model: OpenRouterModel): boolean {
+  return model.architecture?.output_modalities?.includes('image') ?? false;
+}
+
+/** A minimal image-model descriptor for pickers/routes (no pricing). */
+export interface ImageModelInfo {
+  id: string;
+  displayName: string;
+}
+
+// Cache of image-capable models (1h TTL), populated from the same /api/v1/models payload.
+let imageModelsCache: ImageModelInfo[] = [];
+let imageModelsCacheExpiry = 0;
+
+/** Resolve a display name for a model id: curated catalog → OpenRouter name → id. */
+function resolveImageModelDisplayName(id: string, orName?: string): string {
+  for (const provider of Object.values(AI_PROVIDERS)) {
+    const models = provider.models as Record<string, string>;
+    if (models[id]) return models[id];
+  }
+  return orName ?? id;
+}
+
+/**
+ * Fetch the set of OpenRouter image-output models (`architecture.output_modalities`
+ * includes `"image"`), as `{ id, displayName }` sorted stably by id. Fail-soft: returns
+ * `[]` on any fetch error (never throws). Cached for 1 hour, mirroring
+ * {@link fetchOpenRouterToolCapabilities}.
+ */
+export async function fetchOpenRouterImageModels(): Promise<ImageModelInfo[]> {
+  const now = Date.now();
+  if (imageModelsCacheExpiry > now && imageModelsCache.length > 0) {
+    return imageModelsCache;
+  }
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models');
+    if (!response.ok) {
+      throw new Error(`OpenRouter API error: ${response.status}`);
+    }
+    const data = await response.json();
+    const models = (data.data as OpenRouterModel[]) ?? [];
+
+    imageModelsCache = models
+      .filter(isImageOutputModel)
+      .map((m) => ({ id: m.id, displayName: resolveImageModelDisplayName(m.id, m.name) }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    imageModelsCacheExpiry = now + 60 * 60 * 1000;
+
+    capabilityLogger.debug('Cached OpenRouter image-model metadata', {
+      modelCount: imageModelsCache.length,
+    });
+    return imageModelsCache;
+  } catch (error) {
+    capabilityLogger.warn('Failed to fetch OpenRouter image models', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
   }
 }
 
