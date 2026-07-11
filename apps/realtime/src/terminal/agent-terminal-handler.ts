@@ -24,9 +24,17 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * Sprite can now host MULTIPLE tty sessions at once, "any tty session" is no
  * longer unambiguous — so this bridge persists the Sprite's own exec-session
  * id back to `machine_agent_terminals.streamSessionId` (via
- * `persistStreamSessionId`) the first time it discovers one, and `checkAuth`
- * hands that id back on the next connect so THIS specific session is
- * reattached, not just any one.
+ * `persistStreamSessionId`) the first time it discovers one, and the sandbox
+ * resolution hands that id back on the next COLD connect so THIS specific
+ * session is reattached, not just any one.
+ *
+ * A restart is the only time that costs anything, though: while this process is
+ * up, the session stays in `sessionMap` for the whole 30-min detached grace, so
+ * a tab-back is served by `planConnect`'s reattach path — the access check, the
+ * in-memory lookup, and `agent-terminal:ready` with the buffered scrollback. No
+ * sandbox is resolved, no Sprite is woken and no audit row is written, because
+ * `checkAuth` hands the sprite half back as an UNCALLED `resolveSandbox` thunk
+ * (see `agent-terminal-access.ts`) that only the cold path invokes.
  *
  * `billing` (Terminal Epic 3) meters this PTY session's active-runtime cost
  * against the machine's payer — the same hold/gate/settle seam the retired
@@ -36,16 +44,19 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * -> unmetered (no hold, no settle).
  */
 
-export type AgentTerminalCheckAuthResult =
+/**
+ * The Sprite and launch metadata a FRESH PTY needs. Produced lazily, by
+ * `AgentTerminalCheckAuthResult.resolveSandbox`, and therefore ONLY on the cold
+ * (create) path — reattaching to a live in-memory session never resolves it.
+ */
+export type AgentTerminalSandboxResult =
   | {
       ok: true;
       agentTerminalId: string;
       sandboxId: string;
       /** The resolved working directory for a FRESH session — machine's SANDBOX_ROOT, a project's clone path, or a branch's repo checkout. */
       cwd: string;
-      sessionKey: string;
       sprite: SpriteInstanceLike;
-      releaseSlot: () => void;
       /** The agentType's resolved launch command — the literal sentinel `'shell'` when unresolved to an actual shell binary yet (see `resolveAgentTerminalCommand`). */
       command: string;
       args: string[];
@@ -53,8 +64,31 @@ export type AgentTerminalCheckAuthResult =
       commandOverride: string | null;
       /** The Sprite exec-session id this agent terminal was last known to run under, if any. */
       streamSessionId: string | null;
+    }
+  | { ok: false; reason: string };
+
+/**
+ * The CHEAP half of a connect: a DB-only authorization verdict (leaf 1-2) plus
+ * the session key, which derives from the (scope, name) target alone (leaf 1-1).
+ * Nothing here has touched — let alone woken — a Sprite, which is what lets
+ * `onConnect` look up a live in-memory session and reattach to it before any
+ * sandbox work happens at all.
+ */
+export type AgentTerminalCheckAuthResult =
+  | {
+      ok: true;
+      sessionKey: string;
       /** The machine's resolved payer — metering attribution (Terminal Epic 3), present regardless of whether `billing` is wired. */
       payerId: string;
+      releaseSlot: () => void;
+      /**
+       * Resolve the Sprite for a FRESH PTY — called ONLY on the create path.
+       * Owns the reserved concurrency slot's release on its OWN failure paths:
+       * a denial releases the slot (and logs) before returning `ok: false`, and
+       * a rejection releases it before propagating. On success the slot stays
+       * reserved and the caller owns it.
+       */
+      resolveSandbox: () => Promise<AgentTerminalSandboxResult>;
     }
   | { ok: false; reason: string };
 
@@ -65,6 +99,31 @@ export type AgentTerminalCheckAuthFn = (args: {
   branchName?: string;
   name: string;
 }) => Promise<AgentTerminalCheckAuthResult>;
+
+/** The three ways a connect can go, once the access verdict and the live-session lookup are both in hand. */
+export type ConnectPlan = 'reattach' | 'create' | 'deny';
+
+/**
+ * Pure: decide the connect path from the (cheap, DB-only) access verdict and
+ * whether a live in-memory session already exists for this session key.
+ *
+ * A denied verdict ALWAYS denies — the presence of a live session must never
+ * shortcut authorization, or a user who just lost access could tab back into a
+ * PTY that outlived their permission. An allowed verdict reattaches to a live
+ * session when there is one (the fast path: no sprite resolution, no wake exec,
+ * no audit write — docs.sprites.dev/concepts/lifecycle puts even a warm wake at
+ * 100-500ms, and this skips it entirely), and otherwise creates a fresh one.
+ */
+export function planConnect({
+  accessAllowed,
+  existingSession,
+}: {
+  accessAllowed: boolean;
+  existingSession: TerminalSession | undefined;
+}): ConnectPlan {
+  if (!accessAllowed) return 'deny';
+  return existingSession !== undefined ? 'reattach' : 'create';
+}
 
 export type OpenShellFn = (args: OpenPtyShellArgs) => PtyShell;
 
@@ -358,16 +417,28 @@ export function buildAgentTerminalHandlers({
       const { cols: clampedCols, rows: clampedRows } = clampTerminalDimensions({ cols, rows });
 
       const userId = socket.data.user?.id ?? '';
+
+      // The access check is DB-only (leaf 1-2) and the session key derives from
+      // the (scope, name) target without the Sprite (leaf 1-1) — so the live
+      // in-memory session lookup happens HERE, before anything has resolved,
+      // woken or written policy to a Sprite. A tab-back inside the detached
+      // grace window is therefore decided on the strength of the access check
+      // alone: milliseconds, not the seconds a sandbox resolution costs.
       const authResult = await checkAuth({ userId, machineId, projectName, branchName, name });
+      const existingSession = authResult.ok ? sessionMap.getByKey(authResult.sessionKey) : undefined;
+      const plan = planConnect({ accessAllowed: authResult.ok, existingSession });
+
       if (!authResult.ok) {
+        // plan === 'deny'. Note the lookup above never even ran for a denied
+        // user, so a live session can't be reattached to by someone who has
+        // lost access — auth gates the fast path.
         socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${authResult.reason}`, connectionId });
         return;
       }
 
       const { sessionKey } = authResult;
 
-      const existingSession = sessionMap.getByKey(sessionKey);
-      if (existingSession) {
+      if (plan === 'reattach' && existingSession !== undefined) {
         if (existingSession.idleTimer !== undefined) {
           clearTimeout(existingSession.idleTimer);
           existingSession.idleTimer = undefined;
@@ -376,8 +447,19 @@ export function buildAgentTerminalHandlers({
         existingSession.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
         sessionMap.reattach(sessionKey, connectionId);
         activeConnectionIds.add(connectionId);
+        // The live session already holds the slot it was created with; this
+        // connect's transient reservation is handed straight back.
         authResult.releaseSlot();
         socket.emit('agent-terminal:ready', { scrollback: existingSession.scrollback.join(''), connectionId });
+        return;
+      }
+
+      // plan === 'create' — the cold path. ONLY now is the Sprite resolved: a
+      // reattach above returned without ever calling this.
+      const sandbox = await authResult.resolveSandbox();
+      if (!sandbox.ok) {
+        // resolveSandbox released the reserved slot and logged the reason.
+        socket.emit('agent-terminal:error', { message: `Agent terminal access denied: ${sandbox.reason}`, connectionId });
         return;
       }
 
@@ -399,10 +481,10 @@ export function buildAgentTerminalHandlers({
       }
       const connectedAt = Date.now();
 
-      const { sandboxId, sprite } = authResult;
+      const { sandboxId, sprite } = sandbox;
 
       let sessionsBeforeLaunch: { id: string }[] = [];
-      if (authResult.streamSessionId === null) {
+      if (sandbox.streamSessionId === null) {
         try {
           sessionsBeforeLaunch = await sprite.listSessions();
         } catch {
@@ -414,7 +496,7 @@ export function buildAgentTerminalHandlers({
         command: null as unknown as PtyShell,
         sandboxId,
         sessionKey,
-        sessionId: authResult.streamSessionId ?? undefined,
+        sessionId: sandbox.streamSessionId ?? undefined,
         releaseSlot: authResult.releaseSlot,
         payerId: authResult.payerId,
         holdId,
@@ -429,9 +511,9 @@ export function buildAgentTerminalHandlers({
       };
 
       const launch = resolveAgentTerminalCommand({
-        command: authResult.command,
-        args: authResult.args,
-        commandOverride: authResult.commandOverride,
+        command: sandbox.command,
+        args: sandbox.args,
+        commandOverride: sandbox.commandOverride,
       });
 
       let shell: PtyShell;
@@ -440,10 +522,10 @@ export function buildAgentTerminalHandlers({
           sprite,
           cols: clampedCols,
           rows: clampedRows,
-          sessionId: authResult.streamSessionId ?? undefined,
+          sessionId: sandbox.streamSessionId ?? undefined,
           command: launch.command,
           args: launch.args,
-          cwd: authResult.cwd,
+          cwd: sandbox.cwd,
           onOutput: (data) => {
             appendScrollback(session, data);
             session.outputFn(data);
@@ -460,7 +542,7 @@ export function buildAgentTerminalHandlers({
           // live session's id — otherwise the NEXT reconnect targets the dead id.
           onSessionId: (sessionId) => {
             session.sessionId = sessionId;
-            void persistStreamSessionId({ agentTerminalId: authResult.agentTerminalId, sessionId }).catch((error) => {
+            void persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }).catch((error) => {
               loggers.realtime.error('Failed to persist reconnect session id', error instanceof Error ? error : new Error(String(error)), {
                 sessionKey,
               });
@@ -478,11 +560,11 @@ export function buildAgentTerminalHandlers({
       sessionMap.setNew(sessionKey, connectionId, session);
       activeConnectionIds.add(connectionId);
 
-      if (authResult.streamSessionId === null) {
+      if (sandbox.streamSessionId === null) {
         void discoverNewSessionId(sprite, sessionsBeforeLaunch).then((sessionId) => {
           if (sessionId === undefined) return;
           session.sessionId = sessionId;
-          void persistStreamSessionId({ agentTerminalId: authResult.agentTerminalId, sessionId }).catch((error) => {
+          void persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }).catch((error) => {
             loggers.realtime.error('Failed to persist agent terminal session id', error instanceof Error ? error : new Error(String(error)), {
               sessionKey,
             });

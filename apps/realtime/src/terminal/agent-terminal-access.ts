@@ -165,8 +165,15 @@ export interface AgentTerminalCheckAuthDeps {
 /**
  * Compose the two halves into the `AgentTerminalCheckAuthFn` the realtime PTY
  * bridge consumes. The access half (gather inputs -> `decideAgentTerminalAccess`)
- * runs first and touches no Sprite; only once it allows AND a concurrency slot
- * is reserved does `resolveSandbox` resolve/read the Sprite for the fresh PTY.
+ * runs first and touches no Sprite; the sprite half is handed back UNCALLED, as
+ * a `resolveSandbox` thunk.
+ *
+ * Returning the sprite half lazily (rather than awaiting it here) is what lets
+ * `onConnect` reattach a live in-memory session — a tab-back inside the 30-min
+ * detached grace — on the strength of the access verdict alone (leaf 1-3): it
+ * simply never calls the thunk, so no Sprite is resolved or woken and no audit
+ * row is written for a session that already exists. Only the cold, create path
+ * calls it.
  */
 export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): AgentTerminalCheckAuthFn {
   return async ({ userId, machineId, projectName, branchName, name }) => {
@@ -211,50 +218,66 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     }
     const releaseSlot = () => deps.releaseSlot(userId);
 
-    // Only NOW — a fresh PTY must be created — resolve/read the Sprite. If this
-    // REJECTS (a DB error inside resolveAgentTerminal, a failed store/SDK
-    // lookup) rather than returning a deny, the reserved slot must still be
-    // released before the rejection propagates — otherwise a transient failure
-    // permanently consumes the user's concurrency capacity. Re-throw so the
-    // socket surface is unchanged (the PTY bridge's onConnect .catch emits the
-    // generic error).
-    let sandbox: ResolveTerminalSandboxResult;
-    try {
-      sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
-    } catch (error) {
-      releaseSlot();
-      throw error;
-    }
-    if (!sandbox.ok) {
-      releaseSlot();
-      if (sandbox.reason === 'provision_failed') {
-        deps.logSandboxLookupFailed({ userId, sandboxId: sandbox.sandboxId });
-      } else {
-        deps.logDenied(sandbox.reason, { userId, machineId, projectName, branchName, name });
-      }
-      return { ok: false, reason: sandbox.reason };
-    }
-
-    deps.writeAudit({
-      userId,
-      actorEmail,
-      driveId: readOnly.driveId,
-      command: sandbox.commandOverride ?? sandbox.command,
-    });
-
     return {
       ok: true,
-      agentTerminalId: sandbox.agentTerminalId,
-      sandboxId: sandbox.sandboxId,
-      cwd: sandbox.cwd,
+      // Derived from the (scope, name) target alone — no Sprite needed (leaf
+      // 1-1), which is precisely what lets the caller look up a live session
+      // before deciding whether any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ terminalId: machineId, projectName, branchName, name }),
-      sprite: sandbox.sprite,
-      releaseSlot,
-      command: sandbox.command,
-      args: sandbox.args,
-      commandOverride: sandbox.commandOverride,
-      streamSessionId: sandbox.streamSessionId,
       payerId: readOnly.payerId,
+      releaseSlot,
+
+      /**
+       * Resolve/read the Sprite for a FRESH PTY — called by the cold path only.
+       *
+       * Owns slot release on its own failure paths (as the fused checkAuth did):
+       * a deny releases and logs before returning; a REJECT (a DB error inside
+       * resolveAgentTerminal, a failed store/SDK lookup) releases before the
+       * rejection propagates, so a transient failure can never permanently
+       * consume the user's concurrency capacity. Re-throws so the socket surface
+       * is unchanged (the PTY bridge's onConnect .catch emits the generic error).
+       *
+       * The audit row is written HERE rather than in the access half, because
+       * it records a session actually being launched — a reattach to an already
+       * running PTY launches nothing and must not write one.
+       */
+      resolveSandbox: async () => {
+        let sandbox: ResolveTerminalSandboxResult;
+        try {
+          sandbox = await deps.resolveSandbox({ userId, machineId, projectName, branchName, name });
+        } catch (error) {
+          releaseSlot();
+          throw error;
+        }
+        if (!sandbox.ok) {
+          releaseSlot();
+          if (sandbox.reason === 'provision_failed') {
+            deps.logSandboxLookupFailed({ userId, sandboxId: sandbox.sandboxId });
+          } else {
+            deps.logDenied(sandbox.reason, { userId, machineId, projectName, branchName, name });
+          }
+          return { ok: false, reason: sandbox.reason };
+        }
+
+        deps.writeAudit({
+          userId,
+          actorEmail,
+          driveId: readOnly.driveId,
+          command: sandbox.commandOverride ?? sandbox.command,
+        });
+
+        return {
+          ok: true,
+          agentTerminalId: sandbox.agentTerminalId,
+          sandboxId: sandbox.sandboxId,
+          cwd: sandbox.cwd,
+          sprite: sandbox.sprite,
+          command: sandbox.command,
+          args: sandbox.args,
+          commandOverride: sandbox.commandOverride,
+          streamSessionId: sandbox.streamSessionId,
+        };
+      },
     };
   };
 }
