@@ -96,6 +96,26 @@ describe('generate_image execute', () => {
     expect(createImageFilePage).not.toHaveBeenCalled();
   });
 
+  it('releases the hold when metering fails, without failing the user-facing result', async () => {
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-3' });
+    generateImageBytes.mockResolvedValue({
+      bytes: new Uint8Array([1]),
+      mediaType: 'image/png',
+      providerCostDollars: 0.05,
+      generationIds: [],
+    });
+    createImageFilePage.mockResolvedValue({ pageId: 'p1', driveId: 'd1', parentId: 'g1' });
+    // trackUsage normally settles the hold; if it throws, the hold must not be stranded.
+    trackUsage.mockRejectedValue(new Error('db down'));
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(true);
+    expect(releaseHold).toHaveBeenCalledWith('hold-3');
+  });
+
   it('fails softly when credits are exhausted', async () => {
     canConsumeAI.mockResolvedValue({ allowed: false });
     const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean };

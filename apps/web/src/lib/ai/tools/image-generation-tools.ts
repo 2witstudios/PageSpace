@@ -153,11 +153,21 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
         driveId: created.driveId,
         pageId: created.pageId,
         metadata: { imageModel: model, mediaType: image.mediaType, costSource: resolved.costSource },
-      }).catch((error) => {
-        // Never fail the user-facing result on a metering error; log and move on.
-        imageLogger.error('Failed to record image usage', error as Error, {
+      }).catch(async (error) => {
+        // trackUsage settles the hold; if it threw, the hold was neither settled nor
+        // released, so it would strand the reserved credits until TTL expiry. Release it
+        // explicitly. The generation itself is then UNBILLED (we paid OpenRouter but
+        // recorded nothing) — log loudly so the gap is visible in the rollout, but never
+        // fail the user-facing result over a metering error.
+        imageLogger.error('Failed to record image usage — generation is UNBILLED', error as Error, {
           userId: maskIdentifier(userId),
+          model,
+          costDollars: resolved.costDollars,
+          costSource: resolved.costSource,
+          generationIds: image.generationIds,
+          pageId: created.pageId,
         });
+        if (holdId) await releaseHold(holdId).catch(() => {});
       });
 
       imageLogger.info('Image generated', {
