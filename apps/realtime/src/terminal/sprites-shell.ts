@@ -5,6 +5,13 @@ import type {
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { readSessionInfoId } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import {
+  flushReplay,
+  freshReplayState,
+  planReplayEmission,
+  trackForwarded,
+  type ReplayState,
+} from './replay-dedupe';
 
 /**
  * The ids of the Sprite's live exec sessions. This is a MEMBERSHIP SET, not a
@@ -156,6 +163,16 @@ const RECONNECT_BASE_DELAY_MS = 200;
  */
 const MAX_UNNAMED_ABANDONS = 1;
 
+/**
+ * How long a replay may stay quiet before we give up on aligning it and emit what
+ * we buffered (see `replay-dedupe`). The scrollback is sent "immediately" on
+ * attach and arrives as one burst, so a gap this long means the replay is over
+ * and its bytes never matched what we had forwarded. Generous enough that a slow
+ * multi-frame replay is not cut in half, short enough that the worst case is a
+ * redraw the user barely notices.
+ */
+const REPLAY_SETTLE_MS = 500;
+
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const TERMINAL_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
@@ -173,6 +190,7 @@ export function openPtyShell({
   onSessionId,
 }: OpenPtyShellArgs): PtyShell {
   const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
+  const toBuf = (chunk: unknown): Buffer => (typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer));
 
   // Definite-assignment asserted: every construction path (initial attach,
   // initial fresh, and each reconnect branch) assigns `current` before `wire`.
@@ -210,6 +228,13 @@ export function openPtyShell({
   // counter, an id we never learn produces a fresh orphan on every keepalive
   // cycle, forever.
   let abandonedUnnamedSessions = 0;
+  // The tail of what this client has actually been shown — the anchor each attach
+  // matches its replayed scrollback against, so a transparent reconnect delivers
+  // only the part the client is missing (see `replay-dedupe`). Empty means
+  // "nothing to dedupe against": a fresh viewer, or a brand-new shell — either
+  // way every replayed byte is new to this xterm and passes straight through,
+  // which is what keeps the cold-attach scrollback UX intact.
+  let forwardedTail: Buffer = Buffer.alloc(0);
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -236,14 +261,52 @@ export function openPtyShell({
     // when `start()` resolves, and any inbound byte proves the same thing. This is
     // the structural boundary the reconnect keys on — see the 'error' handler.
     let opened = false;
+
+    // Every attach REPLAYS the session's scrollback (sprites.dev/api). Frozen at
+    // wire time so the anchor can't shift underneath a replay that is still being
+    // classified, and per-command so each (re)establishment gets a clean slate.
+    const anchor = forwardedTail;
+    let replay: ReplayState = freshReplayState();
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancelSettle = () => {
+      if (settleTimer !== undefined) clearTimeout(settleTimer);
+      settleTimer = undefined;
+    };
+    const deliver = (bytes: Buffer) => {
+      if (bytes.length === 0) return;
+      // Bytes the client HAS are the bytes the next reconnect must not repeat.
+      forwardedTail = trackForwarded(forwardedTail, bytes);
+      onOutput(bytes.toString('utf8'));
+    };
+    /** Release replay bytes we never managed to align — see REPLAY_SETTLE_MS. */
+    const settleReplay = () => {
+      cancelSettle();
+      if (stale || closed) return;
+      const { emit, state } = flushReplay(replay);
+      replay = state;
+      deliver(emit);
+    };
+
     cmd.stdout.on('data', (chunk) => {
+      // A dead command can still drain chunks its stream had buffered when the
+      // socket errored. They are already in the session's scrollback, so the
+      // reattach replays them — forwarding them here would print them twice AND
+      // move the anchor out from under the attach that is about to match it.
+      if (stale) return;
       // Any inbound data proves the connection recovered; reset the failure budget.
       opened = true;
       consecutiveFailures = 0;
-      onOutput(toStr(chunk));
+      cancelSettle();
+      const { emit, state } = planReplayEmission({ anchor, chunk: toBuf(chunk), state: replay });
+      replay = state;
+      deliver(emit);
+      // Still looking for the boundary: hold the bytes, but never indefinitely.
+      if (!replay.resolved) settleTimer = setTimeout(settleReplay, REPLAY_SETTLE_MS);
     });
     cmd.stderr.on('data', (chunk) => {
       opened = true;
+      // Not deduped, and deliberately not part of the anchor: the replay is a
+      // stdout stream, and on a tty the shell's stderr is folded into it anyway.
       onOutput(toStr(chunk));
     });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
@@ -263,6 +326,9 @@ export function openPtyShell({
       // Ignore the stale exit that trails a keepalive 'error' on the same dead
       // command — only an exit WITHOUT a preceding error is a real shell exit.
       if (stale) return;
+      // The shell's last words may still be sitting in the replay buffer: there is
+      // no reconnect coming to re-deliver them, so hand them over before the exit.
+      settleReplay();
       fatal(code ?? -1);
     });
     // A single failed open emits 'error' more than once on the SAME command — the
@@ -278,6 +344,12 @@ export function openPtyShell({
     cmd.on('error', () => {
       if (stale) return;
       stale = true;
+      // Drop anything this dead socket was still holding unclassified. Nothing is
+      // lost: those bytes are in the session's scrollback, so the reattach replays
+      // them — and against an anchor that (having emitted none of them) still ends
+      // where the client's screen ends, so they come back as the missing tail.
+      cancelSettle();
+      replay = freshReplayState();
       // Remember WHY this command died, STRUCTURALLY: if it never reported an open
       // (no 'spawn', no byte of output), its socket never came up, so the session
       // was never started — re-creating it is safe (that is the cold Sprite wake)
@@ -305,6 +377,11 @@ export function openPtyShell({
   // replacing a dangling one).
   function launchFreshSession(): void {
     currentSessionId = undefined;
+    // A brand-new shell shares no history with the one the client was watching, so
+    // there is nothing of ITS output on the client's screen: clear the anchor, or
+    // the replacement's opening banner would be mistaken for a replay of the dead
+    // session's and suppressed.
+    forwardedTail = Buffer.alloc(0);
     const gen = (sessionGeneration += 1);
     current = sprite.createSession(command, args, {
       tty: true,

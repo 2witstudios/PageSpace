@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { openPtyShell, planReconnect, sessionIds } from '../sprites-shell';
+import { appendScrollback } from '../terminal-session-map';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -880,6 +881,179 @@ describe('openPtyShell', () => {
       expect(sprite.createSession).toHaveBeenCalledTimes(2); // initial + fresh fallback
       expect(onSessionId).toHaveBeenCalledWith('sess-fresh');
       expect(onExit).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Attaching to an exec session REPLAYS its scrollback (sprites.dev/api — "the
+   * server immediately sends the session's scrollback buffer as stdout data").
+   * That is the contract a fresh viewer wants and a transparent reconnect must
+   * not honour: the watchdog reattaches an idle shell every ~45s, into an xterm
+   * that already shows every byte being replayed.
+   */
+  describe('scrollback replay on in-place reconnect', () => {
+    const BANNER = 'Welcome to PageSpace\r\nsandbox:~$ ';
+    const outputs = (onOutput: ReturnType<typeof vi.fn>) => onOutput.mock.calls.map(([data]) => data as string);
+
+    it('given a watchdog reconnect of an IDLE shell, replays nothing to the client (the repeated-banner repro)', async () => {
+      const cmd = buildFakeCommand();
+      const attach1 = buildFakeCommand();
+      const attach2 = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession.mockReturnValueOnce(attach1).mockReturnValueOnce(attach2);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER); // the client now has the banner
+
+      // Two full watchdog cycles on a shell that printed nothing in between.
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach1._emitter.emit('spawn');
+      attach1._stdout.emit('data', BANNER); // attach #1 replays it
+
+      attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach2._emitter.emit('spawn');
+      attach2._stdout.emit('data', BANNER); // attach #2 replays it again
+
+      // Exactly one banner, no matter how many times the watchdog fires.
+      expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
+    it('given a reconnect whose replay carries genuinely new output, emits exactly the new tail', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      // The shell kept working while the socket was down: the replay is what the
+      // client already has, PLUS what it missed.
+      attachCmd._stdout.emit('data', `${BANNER}ls\r\nREADME.md\r\n`);
+
+      expect(outputs(onOutput)).toEqual([BANNER, 'ls\r\nREADME.md\r\n']);
+    });
+
+    it('given a FRESH viewer attach (a cold connect to a persisted session), delivers the full scrollback exactly once', () => {
+      // Nothing has been forwarded to this client, so there is nothing to dedupe
+      // against — the replay IS the terminal's history and must arrive intact.
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(buildFakeCommand(), { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-1', onOutput, onExit: vi.fn() });
+      attachCmd._stdout.emit('data', BANNER);
+
+      expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
+    it('given a reconnect that CREATES a fresh session, passes its output through unchanged', async () => {
+      // A new shell shares no history with the one the client saw, so even
+      // byte-identical output is new: the anchor must reset with the session.
+      const cmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [] }); // the known id is gone
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      freshCmd._stdout.emit('data', BANNER); // the replacement shell's own banner
+
+      expect(outputs(onOutput)).toEqual([BANNER, BANNER]);
+    });
+
+    it('given a replay it cannot align (the server buffer trimmed past what we forwarded), emits it rather than losing it', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'output we never forwarded\r\n');
+
+      // Held back while the boundary might still turn up...
+      expect(outputs(onOutput)).toEqual([BANNER]);
+      // ...then released. Duplicating a redraw is survivable; swallowing the
+      // session's output is not.
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(outputs(onOutput)).toEqual([BANNER, 'output we never forwarded\r\n']);
+    });
+
+    it('given the handler\'s scrollback sink on the other end, appends the banner ONCE across repeated reconnects', async () => {
+      // The suppression has to hold for the app-side buffer too, not just the
+      // socket: `onOutput` is precisely where agent-terminal-handler appends to
+      // `session.scrollback` before emitting. Bytes we never forward are bytes it
+      // never appends — so a tab-back after an hour of idling replays one banner,
+      // not eighty.
+      const session = { scrollback: [] as string[], scrollbackBytes: 0 };
+      const cmd = buildFakeCommand();
+      const attach1 = buildFakeCommand();
+      const attach2 = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession.mockReturnValueOnce(attach1).mockReturnValueOnce(attach2);
+
+      openPtyShell({
+        sprite,
+        cols: 80,
+        rows: 24,
+        onOutput: (data) => appendScrollback(session, data),
+        onExit: vi.fn(),
+      });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach1._stdout.emit('data', BANNER);
+      attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach2._stdout.emit('data', BANNER);
+
+      expect(session.scrollback.join('')).toBe(BANNER);
+      expect(session.scrollbackBytes).toBe(Buffer.byteLength(BANNER, 'utf8'));
+    });
+
+    it('given a shell that exits while replay bytes are still buffered, flushes them before the exit', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'goodbye\r\n'); // unalignable, so buffered
+      attachCmd._emitter.emit('exit', 0);
+
+      expect(outputs(onOutput)).toEqual([BANNER, 'goodbye\r\n']);
+      expect(onExit).toHaveBeenCalledWith(0);
     });
   });
 });
