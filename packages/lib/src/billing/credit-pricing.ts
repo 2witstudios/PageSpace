@@ -169,63 +169,63 @@ export function resolveImageCost(
 }
 
 /**
- * Flat per-call hold estimate for a Machine (Terminal) run, where the active-window
+ * Flat per-call hold estimate for a Machine run, where the active-window
  * duration — and therefore the real cost — isn't known until the run ends, so the
  * gate has nothing exact to reserve against (mirrors VOICE_HOLD_ESTIMATE_CENTS' STT
  * rationale). A short tool call or PTY burst costs a small fraction of a cent at the
  * assumed default machine shape, so 2¢ is a reasonable approximate reservation. The
  * real cost always settles exactly via consumeCredits and the 1.5× markup; concurrent
- * overdraw is bounded by TERMINAL_MAX_INFLIGHT instead. Tune via env.
+ * overdraw is bounded by MACHINE_MAX_INFLIGHT instead. Tune via env.
  */
 export const MACHINE_HOLD_ESTIMATE_CENTS = envInt('MACHINE_HOLD_ESTIMATE_CENTS', 2);
 
 /**
- * Max concurrent in-flight Machine (Terminal) runs per payer, applied to ALL tiers
+ * Max concurrent in-flight Machine runs per payer, applied to ALL tiers
  * (mirrors VOICE_MAX_INFLIGHT). Bounds worst-case concurrent overdraw to
- * `TERMINAL_MAX_INFLIGHT × the real settled cost of a single run` — a payer's
+ * `MACHINE_MAX_INFLIGHT × the real settled cost of a single run` — a payer's
  * multiple agent tool calls and/or interactive PTY sessions can run concurrently
  * across different machines, so this is generous enough for legitimate multi-machine
  * use. Default 4.
  */
-export const TERMINAL_MAX_INFLIGHT = envInt('TERMINAL_MAX_INFLIGHT', 4);
+export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 4);
 
 /**
  * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole
- * point of that constant is to GUARANTEE terminal billing never falls below
+ * point of that constant is to GUARANTEE Machine billing never falls below
  * 1.5x real substrate cost, independent of {@link MARKUP_BPS}; an env
  * misconfiguration (typo, someone mirroring a reduced AI markup) must not be
  * able to silently violate that guarantee. Only a value BELOW this floor is
  * clamped up — a deliberately higher markup passes through unclamped, since
  * there is no stated ceiling.
  */
-export const TERMINAL_MARKUP_FLOOR_BPS = 15000;
+export const MACHINE_MARKUP_FLOOR_BPS = 15000;
 
 /**
- * Markup applied to terminal/Machine substrate cost, in basis points — the
+ * Markup applied to Machine substrate cost, in basis points — the
  * founder-set floor of 1.5× real substrate cost. Deliberately a SEPARATE env
  * var and constant from {@link MARKUP_BPS} (not derived from it): AI-model
  * pricing and substrate-runtime pricing are different economics that may
  * diverge, so lowering `CREDIT_MARKUP_BPS` for AI billing must never silently
- * lower what terminal is charged. Threaded into `consumeCredits` via
+ * lower what a Machine is charged. Threaded into `consumeCredits` via
  * `markupBpsOverride` (see machine-billing.ts's `trackUsage`) so the real
  * settle path enforces this floor independent of the shared default. Clamped
- * to {@link TERMINAL_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
+ * to {@link MACHINE_MARKUP_FLOOR_BPS} so a misconfigured env var can raise
  * the markup but never lower it below the documented floor.
  */
 export const MACHINE_MARKUP_BPS = Math.max(
-  envInt('MACHINE_MARKUP_BPS', TERMINAL_MARKUP_FLOOR_BPS),
-  TERMINAL_MARKUP_FLOOR_BPS,
+  envInt('MACHINE_MARKUP_BPS', MACHINE_MARKUP_FLOOR_BPS),
+  MACHINE_MARKUP_FLOOR_BPS,
 );
 
 /**
  * Published Sprites rates, in USD per resource-hour (tasks/terminal.md: active
  * CPU-hour $0.07 + mem GB-hour $0.04375). Lives here (not machine-pricing.ts) so
- * every terminal-billing constant is env-overridable from one place, matching
+ * every Machine-billing constant is env-overridable from one place, matching
  * every other pricing table in this file.
  */
-export const TERMINAL_RATES = {
-  usdPerCpuHour: envFloat('TERMINAL_USD_PER_CPU_HOUR', 0.07),
-  usdPerMemGbHour: envFloat('TERMINAL_USD_PER_MEM_GB_HOUR', 0.04375),
+export const MACHINE_RATES = {
+  usdPerCpuHour: envFloat('MACHINE_USD_PER_CPU_HOUR', 0.07),
+  usdPerMemGbHour: envFloat('MACHINE_USD_PER_MEM_GB_HOUR', 0.04375),
 };
 
 /**
@@ -235,8 +235,8 @@ export const TERMINAL_RATES = {
  * unset -> provider default). Env-overridable so this can track Sprites' real
  * default shape without a deploy.
  */
-export const TERMINAL_ASSUMED_CPUS = envFloat('TERMINAL_ASSUMED_CPUS', 1);
-export const TERMINAL_ASSUMED_MEMORY_GB = envFloat('TERMINAL_ASSUMED_MEMORY_GB', 0.25);
+export const MACHINE_ASSUMED_CPUS = envFloat('MACHINE_ASSUMED_CPUS', 1);
+export const MACHINE_ASSUMED_MEMORY_GB = envFloat('MACHINE_ASSUMED_MEMORY_GB', 0.25);
 
 /**
  * Assumed persistent-storage rate, in USD per GB-month, for a Machine's persistent
@@ -250,7 +250,7 @@ export const TERMINAL_ASSUMED_MEMORY_GB = envFloat('TERMINAL_ASSUMED_MEMORY_GB',
  * quantity; a per-tier split, if the API ever exposes one, is a follow-up.
  * Placeholder pending Sprites' published storage rate; tune via env once confirmed.
  */
-export const TERMINAL_STORAGE_USD_PER_GB_MONTH = envFloat('TERMINAL_STORAGE_USD_PER_GB_MONTH', 0.15);
+export const MACHINE_STORAGE_USD_PER_GB_MONTH = envFloat('MACHINE_STORAGE_USD_PER_GB_MONTH', 0.15);
 
 /**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the

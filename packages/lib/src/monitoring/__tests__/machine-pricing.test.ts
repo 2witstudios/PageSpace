@@ -5,10 +5,10 @@ import {
 } from '../machine-pricing';
 import {
   MACHINE_MARKUP_BPS,
-  TERMINAL_RATES,
-  TERMINAL_ASSUMED_CPUS,
-  TERMINAL_ASSUMED_MEMORY_GB,
-  TERMINAL_STORAGE_USD_PER_GB_MONTH,
+  MACHINE_RATES,
+  MACHINE_ASSUMED_CPUS,
+  MACHINE_ASSUMED_MEMORY_GB,
+  MACHINE_STORAGE_USD_PER_GB_MONTH,
 } from '../../billing/credit-pricing';
 
 describe('calculateMachineCostDollars', () => {
@@ -20,8 +20,8 @@ describe('calculateMachineCostDollars', () => {
 
   it('prorates partial seconds (1 second of a hourly rate)', () => {
     const perSecond =
-      (TERMINAL_ASSUMED_CPUS * TERMINAL_RATES.usdPerCpuHour +
-        TERMINAL_ASSUMED_MEMORY_GB * TERMINAL_RATES.usdPerMemGbHour) /
+      (MACHINE_ASSUMED_CPUS * MACHINE_RATES.usdPerCpuHour +
+        MACHINE_ASSUMED_MEMORY_GB * MACHINE_RATES.usdPerMemGbHour) /
       3600;
     expect(calculateMachineCostDollars({ activeSeconds: 1 })).toBeCloseTo(perSecond, 6);
   });
@@ -38,10 +38,10 @@ describe('calculateMachineCostDollars', () => {
   });
 });
 
-describe('TERMINAL_RATES defaults pinned to Sprites published pricing', () => {
+describe('MACHINE_RATES defaults pinned to Sprites published pricing', () => {
   it('active CPU-hour = $0.07, mem GB-hour = $0.04375', () => {
-    expect(TERMINAL_RATES.usdPerCpuHour).toBeCloseTo(0.07, 6);
-    expect(TERMINAL_RATES.usdPerMemGbHour).toBeCloseTo(0.04375, 6);
+    expect(MACHINE_RATES.usdPerCpuHour).toBeCloseTo(0.07, 6);
+    expect(MACHINE_RATES.usdPerMemGbHour).toBeCloseTo(0.04375, 6);
   });
 });
 
@@ -68,8 +68,8 @@ describe('MACHINE_MARKUP_BPS is an independent 1.5x floor, not derived from the 
 
 describe('calculateMachineStorageCostDollars', () => {
   it('bills GB-months at the published storage rate', () => {
-    expect(calculateMachineStorageCostDollars(1)).toBeCloseTo(TERMINAL_STORAGE_USD_PER_GB_MONTH, 6);
-    expect(calculateMachineStorageCostDollars(2.5)).toBeCloseTo(TERMINAL_STORAGE_USD_PER_GB_MONTH * 2.5, 6);
+    expect(calculateMachineStorageCostDollars(1)).toBeCloseTo(MACHINE_STORAGE_USD_PER_GB_MONTH, 6);
+    expect(calculateMachineStorageCostDollars(2.5)).toBeCloseTo(MACHINE_STORAGE_USD_PER_GB_MONTH * 2.5, 6);
   });
 
   it('returns 0 for missing/invalid/non-positive quantity', () => {

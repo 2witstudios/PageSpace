@@ -27,10 +27,10 @@
  */
 
 import {
-  TERMINAL_RATES,
-  TERMINAL_ASSUMED_CPUS,
-  TERMINAL_ASSUMED_MEMORY_GB,
-  TERMINAL_STORAGE_USD_PER_GB_MONTH,
+  MACHINE_RATES,
+  MACHINE_ASSUMED_CPUS,
+  MACHINE_ASSUMED_MEMORY_GB,
+  MACHINE_STORAGE_USD_PER_GB_MONTH,
 } from '../billing/credit-pricing';
 
 export interface MachineUsageQuantity {
@@ -47,8 +47,8 @@ export function calculateMachineCostDollars(quantity: MachineUsageQuantity): num
   const seconds = quantity.activeSeconds;
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return 0;
   const perSecondRate =
-    (TERMINAL_ASSUMED_CPUS * TERMINAL_RATES.usdPerCpuHour +
-      TERMINAL_ASSUMED_MEMORY_GB * TERMINAL_RATES.usdPerMemGbHour) /
+    (MACHINE_ASSUMED_CPUS * MACHINE_RATES.usdPerCpuHour +
+      MACHINE_ASSUMED_MEMORY_GB * MACHINE_RATES.usdPerMemGbHour) /
     3600;
   return Number((seconds * perSecondRate).toFixed(6));
 }
@@ -62,5 +62,5 @@ export function calculateMachineCostDollars(quantity: MachineUsageQuantity): num
  */
 export function calculateMachineStorageCostDollars(gbMonths: number): number {
   if (typeof gbMonths !== 'number' || !Number.isFinite(gbMonths) || gbMonths <= 0) return 0;
-  return Number((gbMonths * TERMINAL_STORAGE_USD_PER_GB_MONTH).toFixed(6));
+  return Number((gbMonths * MACHINE_STORAGE_USD_PER_GB_MONTH).toFixed(6));
 }

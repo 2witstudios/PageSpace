@@ -14,7 +14,7 @@ import { canConsumeAI } from '../../billing/credit-gate';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import {
   MACHINE_HOLD_ESTIMATE_CENTS,
-  TERMINAL_MAX_INFLIGHT,
+  MACHINE_MAX_INFLIGHT,
   MACHINE_MARKUP_BPS,
 } from '../../billing/credit-pricing';
 import { resolveMachinePayerId, lookupPageOwnerId } from '../../billing/machine-payer';
@@ -53,7 +53,7 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     const tier = await resolvePayerTier(payerId);
     const result = await canConsumeAI(payerId, tier, {
       estCostCents: MACHINE_HOLD_ESTIMATE_CENTS,
-      maxInFlight: TERMINAL_MAX_INFLIGHT,
+      maxInFlight: MACHINE_MAX_INFLIGHT,
     });
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
   },

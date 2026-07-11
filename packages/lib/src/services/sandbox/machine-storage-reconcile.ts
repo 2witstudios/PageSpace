@@ -7,7 +7,7 @@
  * MEASURED footprint (`machine-storage-measure.ts` captures it opportunistically
  * while the sprite is already awake for real work), never the provisioned cap —
  * a machine that wrote 200MB is metered at 200MB, not the 5GB allocation. See
- * credit-pricing.ts's `TERMINAL_STORAGE_USD_PER_GB_MONTH` and
+ * credit-pricing.ts's `MACHINE_STORAGE_USD_PER_GB_MONTH` and
  * machine-pricing.ts's `calculateMachineStorageCostDollars`.
  *
  * NEVER wakes a paused sprite to measure — that would recreate the Phase-3

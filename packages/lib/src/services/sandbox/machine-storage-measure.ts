@@ -38,7 +38,7 @@ function envInt(name: string, fallback: number): number {
  * env-tunable. Kept independent of the reconcile cadence: measurement rides on
  * real wakes, the cron only reads what's persisted.
  */
-export const STORAGE_MEASUREMENT_THROTTLE_MS = envInt('TERMINAL_STORAGE_MEASURE_THROTTLE_MS', 60 * 60 * 1000);
+export const STORAGE_MEASUREMENT_THROTTLE_MS = envInt('MACHINE_STORAGE_MEASURE_THROTTLE_MS', 60 * 60 * 1000);
 
 /**
  * The workspace SUBTREE whose written bytes we bill. We measure this subtree

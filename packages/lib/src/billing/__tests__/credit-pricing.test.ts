@@ -12,9 +12,9 @@ describe('MACHINE_MARKUP_BPS floor clamp', () => {
   });
 
   it('defaults to the 15000bps (1.5x) floor when unset', async () => {
-    const { MACHINE_MARKUP_BPS, TERMINAL_MARKUP_FLOOR_BPS } = await import('../credit-pricing');
+    const { MACHINE_MARKUP_BPS, MACHINE_MARKUP_FLOOR_BPS } = await import('../credit-pricing');
     expect(MACHINE_MARKUP_BPS).toBe(15000);
-    expect(TERMINAL_MARKUP_FLOOR_BPS).toBe(15000);
+    expect(MACHINE_MARKUP_FLOOR_BPS).toBe(15000);
   });
 
   it('clamps UP to the floor when the env var is set below it (misconfiguration guard)', async () => {
