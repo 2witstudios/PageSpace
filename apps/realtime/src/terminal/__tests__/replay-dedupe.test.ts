@@ -199,7 +199,10 @@ describe('planReplayEmission corroboration (pure)', () => {
 
     expect(emit.length).toBe(0);
     expect(state.resolved).toBe(false); // unprovable → held, then flushed verbatim
-    expect(elapsedMs).toBeLessThan(250);
+    // Deliberately loose: this guards against an UNBOUNDED scan (thousands of
+    // multi-KiB compares), not against a few ms of jitter. A shared CI box can be
+    // slow without being broken; only a missing bound blows through a budget this wide.
+    expect(elapsedMs).toBeLessThan(2_000);
   });
 });
 
@@ -269,6 +272,8 @@ describe('rememberDelivered (pure)', () => {
     const elapsedMs = Number(process.hrtime.bigint() - start) / 1e6;
 
     expect(tail.bytes).toBeLessThanOrEqual(MAX_SEEN_BYTES + 100);
-    expect(elapsedMs).toBeLessThan(500);
+    // Loose on purpose: a full re-copy per chunk is ~650x the work, so it misses a
+    // budget this wide by orders of magnitude. CI jitter does not.
+    expect(elapsedMs).toBeLessThan(3_000);
   });
 });

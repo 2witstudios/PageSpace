@@ -1133,6 +1133,46 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toContain('segfault: dumping core\r\n');
     });
 
+    it('given a dead socket drains a byte AFTER its replacement is wired, keeps deduping on every later cycle', async () => {
+      // The poisoning case. A stale command's late drain must not be recorded into
+      // the history: the replacement already took its snapshot (and, on the create
+      // path, reset it), so that byte belongs to no session's stream. Recorded, it
+      // makes the anchor chimeric — it matches nothing, forever, because an idle
+      // shell never emits the 8 KiB of fresh output needed to scroll it out. The
+      // banner would then reprint on EVERY watchdog cycle: the very bug this fixes,
+      // made permanent.
+      const cmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [], attachCmd }); // known id is gone -> create
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', 'old session output\r\n');
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // the replacement is wired by now
+      cmd._stdout.emit('data', 'X'); // the dead socket drains, late
+
+      // The fresh shell prints its banner, and a later watchdog cycle replays it.
+      freshCmd._emitter.emit('message', announces('sess-2'));
+      freshCmd._emitter.emit('spawn');
+      freshCmd._stdout.emit('data', BANNER);
+      sprite.listSessions.mockResolvedValue([{ id: 'sess-2', command: 'bash', isActive: true, tty: true }]);
+      freshCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', BANNER); // the replay
+      await vi.advanceTimersByTimeAsync(2000); // let the window close, so a duplicate would surface
+
+      // The drained byte reached the user, and the banner still appears exactly once.
+      const shown = outputs(onOutput).join('');
+      expect(shown).toContain('X');
+      expect(shown.split(BANNER).length - 1).toBe(1);
+    });
+
     it('given stdout arrives as Buffers (the production shape), dedupes on bytes just the same', async () => {
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();

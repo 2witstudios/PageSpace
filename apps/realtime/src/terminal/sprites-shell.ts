@@ -317,11 +317,25 @@ export function openPtyShell({
     };
 
     cmd.stdout.on('data', (chunk) => {
-      // A dead socket can still drain chunks its stream had buffered. Forward them:
-      // the window is already closed (the 'error' handler closes it), so they pass
-      // straight through, and dropping them would lose the dying shell's last words
-      // whenever the reconnect creates a fresh session instead of reattaching.
-      if (stale) { deliver(toBuf(chunk)); return; }
+      // A dead socket can still drain chunks its stream had buffered. Forward them —
+      // dropping them would lose the dying shell's last words whenever the reconnect
+      // CREATES a fresh session rather than reattaching, because nothing would ever
+      // replay them. The window is already closed (the 'error' handler closes it), so
+      // they pass straight through.
+      //
+      // But only RECORD them while this command is still the wired one. `seenTail`
+      // must stay a contiguous suffix of the stream the NEXT attach will replay; a
+      // drain that lands after the successor is wired has already missed its `seen`
+      // snapshot (and, on the create path, a reset), so recording it would splice a
+      // byte into the history that belongs to no session's stream. The anchor would
+      // then match nothing, forever — and an idle shell never emits the 8 KiB of
+      // fresh output needed to scroll the poison out. The banner would reprint on
+      // every watchdog cycle: precisely the bug this file exists to prevent.
+      if (stale) {
+        if (cmd === current) deliver(toBuf(chunk));
+        else onOutput(toStr(chunk));
+        return;
+      }
       // Any inbound data proves the connection recovered; reset the failure budget.
       opened = true;
       consecutiveFailures = 0;

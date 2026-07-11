@@ -28,7 +28,7 @@
  * LIVE output — a permanently frozen terminal, a far worse bug than a duplicate
  * banner.
  *
- * ## The one invariant: never suppress a byte the client has not seen
+ * ## The rule: never suppress a byte we cannot prove the client has seen
  *
  * Duplication is survivable — it costs a redraw. Loss is not: it is a terminal
  * that silently ate your build output. So suppression happens ONLY where the
@@ -51,6 +51,16 @@
  * The caller is responsible for bounding the replay window (quiet gap, wall-clock
  * deadline, MAX_PENDING_BYTES) and calling `flushReplay` to close it; after that
  * every byte passes through unsearched.
+ *
+ * What that leaves, honestly: the proof is a byte comparison, so it cannot tell a
+ * replay from an EXACT reproduction of one. Loss therefore remains possible in one
+ * corner — the server's ring must have evicted the true anchor (so there is nothing
+ * genuine to match) AND the stream must then contain a >= 12 KiB contiguous replica
+ * of `seen`'s tail (8 KiB anchor + 4 KiB corroboration) inside the replay window.
+ * Realistically that means violently periodic output — a `while true` loop printing
+ * the same kilobytes — where the dropped bytes are indistinguishable from their
+ * neighbours anyway. It is bounded and understood, not a guarantee we are quietly
+ * assuming away.
  */
 
 const EMPTY = Buffer.alloc(0);
@@ -95,9 +105,18 @@ export const MAX_MATCH_CANDIDATES = 8;
 
 /**
  * How many un-emitted replay bytes the caller may hold while looking for the
- * boundary. Bounds the memory one attach can pin.
+ * boundary. Bounds the memory one attach can pin (transient, and only while a
+ * replay is unresolved).
+ *
+ * The anchor sits at the END of a replay, so the boundary can only be found if the
+ * whole replayed scrollback fits in here. Sized to be comfortably larger than any
+ * plausible server-side scrollback ring, precisely because that ring's size is not
+ * documented (see the module header): if the replay overflows this, we give up and
+ * emit it verbatim — which is safe, but reprints the scrollback, i.e. the bug this
+ * module exists to fix. Erring large costs transient memory; erring small costs the
+ * feature.
  */
-export const MAX_PENDING_BYTES = 256 * 1024;
+export const MAX_PENDING_BYTES = 1024 * 1024;
 
 export type ReplayState = {
   /** Replayed bytes received in THIS attach that we can't yet classify. */
@@ -113,10 +132,15 @@ export type ReplayState = {
 export const freshReplayState = (): ReplayState => ({ pending: EMPTY, resolved: false });
 
 /**
- * The bytes the client has been shown, kept as the chunks they were delivered in
- * rather than one growing buffer: appending to a 64 KiB Buffer copies all of it,
- * per chunk, forever, and a shell that writes in small bursts would spend most of
- * its time memcpying its own history. Materialized once per attach instead.
+ * The bytes of the REPLAYABLE stream (stdout) delivered to this client — what a
+ * future replay can be matched against. stderr is deliberately absent: the server
+ * replays stdout, so recording stderr would splice bytes into the history that no
+ * replay contains, and the anchor would stop matching.
+ *
+ * Kept as the chunks it was delivered in rather than one growing buffer: appending
+ * to a 64 KiB Buffer copies all of it, per chunk, forever, and a shell that writes
+ * in small bursts would spend most of its time memcpying its own history.
+ * Materialized once per attach instead.
  */
 export type SeenTail = { readonly chunks: readonly Buffer[]; readonly bytes: number };
 
@@ -144,7 +168,7 @@ export function rememberDelivered(seen: SeenTail, emitted: Buffer): SeenTail {
 export function materializeSeen(seen: SeenTail): Buffer {
   if (seen.chunks.length === 0) return EMPTY;
   if (seen.chunks.length === 1) return seen.chunks[0];
-  return Buffer.concat([...seen.chunks]);
+  return Buffer.concat(seen.chunks);
 }
 
 const anchorOf = (seen: Buffer): Buffer =>
