@@ -2,39 +2,50 @@
  * Sprite egress network policy construction (pure).
  *
  * Maps a policy's `egressAllowlist` (or `egressMode: 'open'`) to a Fly Sprites
- * L3 `NetworkPolicy` — an ordered, domain-matched rule list applied to the Sprite
- * via the authenticated policy API.
+ * L3 `NetworkPolicy` — a domain-matched rule list applied to the Sprite via the
+ * authenticated policy API. The platform resolves rule precedence by
+ * SPECIFICITY, not array order: per docs.sprites.dev/concepts/networking,
+ * "More specific rules win: an exact match beats a subdomain wildcard, which
+ * beats the global wildcard." We still emit rules in a readable order (denies
+ * ahead of the broad allow), but correctness rests on specificity, not position.
  *
  * Two modes:
- *  - `'allowlist'` (default): deny-by-default. The policy ends in a terminating
- *    `{ domain: '*', action: 'deny' }` catch-all. v1 ships an empty allowlist,
- *    so the policy is pure deny-all — no outbound at all.
- *  - `'open'`: allow all public internet. Returns `[INCLUDE_DEFAULTS, allow-*]`.
- *    Used exclusively by the human terminal (admin-gated, isolated Sprite) where
- *    the tight allowlist would block coding CLIs that need their provider hosts.
+ *  - `'allowlist'` (default): deny-by-default. The policy ends in a global
+ *    `{ domain: '*', action: 'deny' }` catch-all; each allowed host is a more
+ *    specific rule that beats it. v1 ships an empty allowlist, so the policy is a
+ *    pure deny-all — no outbound at all.
+ *  - `'open'`: allow all public internet via a global `{ domain: '*', action:
+ *    'allow' }`. Used exclusively by the human terminal (admin-gated, isolated
+ *    Sprite) where the tight allowlist would block coding CLIs that need their
+ *    provider hosts.
  *
  * Allowlist entries are sanitized first (`sanitizeEgressAllowlist`): trimmed,
- * lowercased, and restricted to literal DNS hostnames. A wildcard `'*'`, an IP
- * literal, or any non-host string (URL, scheme, `host:port`, path) is DROPPED —
- * `'*'` would otherwise emit an allow-all rule that short-circuits the
- * terminating deny under first-match-wins ordering, and an IP "allow" is a
- * silent no-op (Sprites `domain` rules match DNS patterns, never IP literals).
+ * lowercased, and restricted to literal DNS hostnames and `*.`-prefixed
+ * subdomain wildcards. A bare wildcard `'*'`, an IP literal, or any non-host
+ * string (URL, scheme, `host:port`, path) is DROPPED — a bare `'*'` allow is the
+ * global wildcard and would allow everything past the terminating deny, and an
+ * IP "allow" is a silent no-op (Sprites `domain` rules match DNS patterns, never
+ * IP literals).
  *
- * Internal-target blocking is the SDK's `{ include: 'defaults' }` preset — the
- * only lever the Sprites policy API exposes for the internal surface (6PN
- * `*.internal`, the `_api.internal` metadata endpoint, Flycast, Tigris). We
- * prepend it BEFORE any allow whenever the allowlist is deliberately widened for
- * an external registry, so the internal surface is denied first regardless of
- * later rules. The empty-allowlist (v1) case stays a pure deny-all and does not
- * lean on the preset's semantics at all.
+ * Internal-surface protection is EXPLICIT deny rules
+ * (`buildInternalSurfaceDenyRules`) plus the platform's own guarantees — NOT the
+ * `{ include: 'defaults' }` preset, which the docs describe purely as an
+ * allowlist convenience: it "pulls
+ * in the common development domains, GitHub, npm, PyPI, Docker Hub, and the major
+ * AI APIs among them, so package installs and model calls work without listing
+ * every host yourself." `defaults` allows hosts; it denies nothing. Our internal
+ * denies are exact/subdomain-wildcard rules, so by the specificity precedence
+ * above they beat a global `{ domain: '*' }` allow regardless of position.
  *
- * KNOWN LIMITATION — domain rules cannot block IP-LITERAL egress: a policy keyed
- * on `domain` only matches name-resolved traffic, so a Sprite dialing a raw
- * `fdaa::…`/`169.254.169.254` address bypasses it. The IP-level 6PN (`fdaa::/8`)
- * / metadata isolation is therefore a DEPLOYMENT concern — a Sprite is meant to
- * sit on a separate `fdf::` prefix with no 6PN route and no `*.internal`
- * resolution. That empirical 6PN/metadata gate (G1) lives in the enablement
- * checklist, verified before exposure, NOT in this domain-rule builder.
+ * The platform also blocks IP-level egress on its own: "Private IPs are always
+ * blocked, so a Sprite can't reach into private network ranges," and "Raw IP
+ * connections are blocked unless the IP was resolved from an allowed domain. You
+ * can't route around the allowlist by dialing an address directly." A `domain`
+ * rule cannot match an IP literal, but it does not have to — the platform gate
+ * covers that surface. The dedicated 6PN/metadata containment topology (a Sprite
+ * on a separate `fdf::` prefix with no 6PN route and no `*.internal` resolution)
+ * is a DEPLOYMENT concern verified in the enablement checklist (G1) before
+ * exposure, NOT this domain-rule builder; see `containment.ts`.
  *
  * The allow map is built from a frozen, deduped copy of the input so a caller
  * cannot mutate the shared policy array through the returned object.
@@ -43,20 +54,20 @@
 import { isIP } from 'node:net';
 import type { NetworkPolicy, PolicyRule } from '@fly/sprites';
 
-// The SDK's curated internal-blocking preset (mutually exclusive with `domain`).
-// This is the maintained replacement for a hand-rolled `*.internal` / Tigris /
-// Flycast deny list — the SDK owns keeping it complete.
-const INCLUDE_DEFAULTS: PolicyRule = Object.freeze({ include: 'defaults' });
-
 const DENY_ALL: PolicyRule = Object.freeze({ domain: '*', action: 'deny' });
 
-// The Fly internal surface we deny EXPLICITLY rather than trusting the SDK's
-// `{ include: 'defaults' }` preset — no Sprites doc states that preset blocks the
-// internal surface (it is documented only as an *allowlist* of LLM-friendly
-// destinations), so under full egress we must not assume it does. These are
-// belt-and-suspenders DNS-layer denies; they cannot block IP-literal/6PN egress
-// (a domain rule only matches name-resolved traffic), which is why the real
-// boundary is verified containment (see `containment.ts`), not these rules.
+const ALLOW_ALL: PolicyRule = Object.freeze({ domain: '*', action: 'allow' });
+
+// The Fly internal surface we deny EXPLICITLY. These are defense-in-depth
+// DNS-layer denies: each is an exact host or a `*.`-subdomain wildcard, both of
+// which are more specific than a global `{ domain: '*' }` rule, so per the
+// documented precedence ("an exact match beats a subdomain wildcard, which beats
+// the global wildcard") they win over an open-mode allow-all. They are redundant
+// with the platform's own guarantees ("Private IPs are always blocked"; "Raw IP
+// connections are blocked unless the IP was resolved from an allowed domain") for
+// the IP surface, but a name-resolved dial of e.g. `_api.internal` is exactly
+// what these DNS-layer rules cover. They are NOT a substitute for verified
+// containment (see `containment.ts`) — that remains the real boundary.
 const INTERNAL_SURFACE_DENY_DOMAINS: readonly string[] = Object.freeze([
   '_api.internal', // Fly Machines API over 6PN
   '*.internal', // 6PN app/private-network names
@@ -69,11 +80,12 @@ const INTERNAL_SURFACE_DENY_DOMAINS: readonly string[] = Object.freeze([
 ]);
 
 /**
- * Explicit deny rules for the Fly internal surface, independent of the SDK
- * `{ include: 'defaults' }` preset. Returns a FRESH array of fresh rule objects on
- * every call (clone-safe — a caller cannot mutate a shared policy). Ordered so the
- * internal surface is denied first when composed ahead of any allow under
- * first-match-wins.
+ * Explicit deny rules for the Fly internal surface. Returns a FRESH array of
+ * fresh rule objects on every call (clone-safe — a caller cannot mutate a shared
+ * policy). Every entry is an exact host or `*.`-subdomain wildcard, so by the
+ * documented specificity precedence it beats a global `{ domain: '*' }` allow
+ * regardless of position; we still compose them ahead of any broad allow for
+ * readability.
  */
 export function buildInternalSurfaceDenyRules(): PolicyRule[] {
   return INTERNAL_SURFACE_DENY_DOMAINS.map((domain): PolicyRule => ({ domain, action: 'deny' }));
@@ -85,25 +97,35 @@ export function buildInternalSurfaceDenyRules(): PolicyRule[] {
 const HOSTNAME_RE =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+const WILDCARD_PREFIX = '*.';
+
 /**
- * Canonicalize and validate an egress allowlist into the literal hostnames safe
- * to emit as Sprites `domain` allow rules. Fail-closed: a wildcard `'*'` (which
- * would short-circuit the terminating deny under first-match-wins ordering), an
- * IP literal (Sprites `domain` rules are DNS-pattern only — IPs are not matched,
- * so an IP "allow" is a silent no-op that misleads), or any non-host string
- * (URL, scheme, path, `host:port`) is dropped rather than passed through.
+ * Canonicalize and validate an egress allowlist into the domain patterns safe to
+ * emit as Sprites `domain` allow rules: literal hostnames and `*.`-prefixed
+ * subdomain wildcards (e.g. `*.githubusercontent.com`), the two forms the
+ * documented grammar and precedence support ("an exact match beats a subdomain
+ * wildcard, which beats the global wildcard"). Fail-closed: a bare wildcard `'*'`
+ * (the global wildcard — an allow-all that would defeat deny-by-default), an IP
+ * literal (Sprites `domain` rules are DNS-pattern only — IPs are not matched, so
+ * an IP "allow" is a silent no-op that misleads; the platform blocks raw IPs on
+ * its own), or any non-host string (URL, scheme, path, `host:port`) is dropped
+ * rather than passed through.
  */
 export function sanitizeEgressAllowlist(egressAllowlist: readonly string[] = []): string[] {
   const seen = new Set<string>();
   const hosts: string[] = [];
   for (const raw of egressAllowlist) {
-    const host = raw.trim().toLowerCase();
-    if (host.length === 0 || host === '*') continue;
-    if (isIP(host) !== 0) continue; // reject IPv4/IPv6 literals
-    if (!HOSTNAME_RE.test(host)) continue; // reject URLs, schemes, host:port, paths
-    if (seen.has(host)) continue;
-    seen.add(host);
-    hosts.push(host);
+    const entry = raw.trim().toLowerCase();
+    if (entry.length === 0 || entry === '*') continue;
+    // The label validated is the entry itself, or — for a subdomain wildcard —
+    // the base host after the `*.` prefix.
+    const base = entry.startsWith(WILDCARD_PREFIX) ? entry.slice(WILDCARD_PREFIX.length) : entry;
+    if (base.length === 0) continue; // bare `*.`
+    if (isIP(base) !== 0) continue; // reject IPv4/IPv6 literals (incl. `*.1.2.3.4`)
+    if (!HOSTNAME_RE.test(base)) continue; // reject URLs, schemes, host:port, paths, `*.*`
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    hosts.push(entry);
   }
   return hosts;
 }
@@ -115,34 +137,30 @@ export function buildSpriteNetworkPolicy({
   egressAllowlist?: readonly string[];
   egressMode?: 'allowlist' | 'open';
 } = {}): NetworkPolicy {
-  // Open mode: allow all public internet, but deny the Fly internal surface FIRST
-  // under first-match-wins. We emit our OWN explicit internal denies
-  // (`buildInternalSurfaceDenyRules`) rather than trusting the SDK's
-  // `{ include: 'defaults' }` preset — no Sprites doc states that preset blocks the
-  // internal surface — then keep the preset too (belt-and-suspenders), then the
-  // catch-all allow. The allow-all is emitted directly — NOT routed through
-  // sanitizeEgressAllowlist, which intentionally strips '*'.
+  // Open mode: allow all public internet with a single global allow-all. The
+  // explicit internal denies are more specific than that global wildcard, so per
+  // the documented precedence they win and the internal surface stays blocked. We
+  // do NOT also emit `{ include: 'defaults' }` here: it only pre-allows common
+  // dev domains, all of which the allow-all already covers, so it would be pure
+  // redundancy.
   if (egressMode === 'open') {
     return {
-      rules: [
-        ...buildInternalSurfaceDenyRules(),
-        { ...INCLUDE_DEFAULTS },
-        { domain: '*', action: 'allow' },
-      ],
+      rules: [...buildInternalSurfaceDenyRules(), { ...ALLOW_ALL }],
     };
   }
 
   const hosts = sanitizeEgressAllowlist(egressAllowlist);
   if (hosts.length === 0) {
-    // Default-deny: no outbound at all. Pure deny-all — no preset semantics.
+    // Default-deny: no outbound at all. Pure deny-all.
     return { rules: [{ ...DENY_ALL }] };
   }
   return {
     rules: [
-      // Internal surface denied first, via the SDK preset — defence in depth on
-      // top of the allowlist sanitization, so a widened allowlist can never reach
-      // the internal surface regardless of later rules.
-      { ...INCLUDE_DEFAULTS },
+      // Internal surface denied via EXPLICIT deny rules — defense in depth on top
+      // of allowlist sanitization and the platform's own IP/private-range blocks.
+      // Not `{ include: 'defaults' }`: that preset only pre-allows common dev
+      // domains, it denies nothing.
+      ...buildInternalSurfaceDenyRules(),
       ...hosts.map((domain): PolicyRule => ({ domain, action: 'allow' })),
       { ...DENY_ALL },
     ],
