@@ -113,6 +113,9 @@ describe('generate_image execute', () => {
 
     const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as { success: boolean };
     expect(res.success).toBe(false);
+    // The call never reached the provider, so we must NOT bill it — this (not the
+    // releaseHold call, which now happens on every path) is the meaningful assertion.
+    expect(trackUsage).not.toHaveBeenCalled();
     expect(releaseHold).toHaveBeenCalledWith('hold-2');
     expect(createImageFilePage).not.toHaveBeenCalled();
   });
@@ -194,28 +197,47 @@ describe('generate_image execute', () => {
     expect(res.success).toBe(true);
   });
 
-  it('always clears the hold after settling, so a swallowed metering failure cannot strand credits', async () => {
-    // trackAIUsage swallows its own errors: if writeAiUsage throws, the settle/release
-    // branches inside it never run and the hold would be stranded until TTL. The tool
-    // therefore ALWAYS deletes the hold after settling (idempotent — consumeCredits
-    // already removed it on the happy path). Modelled here by a trackUsage that resolves
-    // without having settled anything, exactly like the swallowed-failure case.
-    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-3' });
-    generateImageBytes.mockResolvedValue({
-      bytes: new Uint8Array([1]),
-      mediaType: 'image/png',
-      providerCostDollars: 0.05,
-      generationIds: [],
-    });
-    createImageFilePage.mockResolvedValue({ pageId: 'p1', driveId: 'd1', parentId: 'g1' });
+  it('SETTLES an empty generation at $0 when the model is free (cost 0 is authoritative)', async () => {
+    // cost === 0 is a REAL price from a free image model, not "no cost". It must settle
+    // (billing $0, which consumeCredits records as a 'skipped' ledger row) — not release.
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-free' });
+    generateImageBytes.mockRejectedValue(
+      new ImageGenerationError('Image model returned no image for the given prompt.', {
+        billable: true,
+        providerCostDollars: 0,
+        generationIds: ['gen-free'],
+      }),
+    );
 
     const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
       success: boolean;
     };
 
-    expect(res.success).toBe(true);
+    expect(res.success).toBe(false);
     expect(trackUsage).toHaveBeenCalledOnce();
-    expect(releaseHold).toHaveBeenCalledWith('hold-3');
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({ holdId: 'hold-free', providerCostDollars: 0 });
+  });
+
+  it('RELEASES an empty generation that has a generation id but no cost (an id alone is not reconcilable)', async () => {
+    // reconcileStatus is set only when hasRealCost && ids.length > 0, and the cron picks up
+    // only 'pending' rows — so settling this at the flat estimate would be a permanent,
+    // unreconcilable overcharge for a generation that produced nothing.
+    canConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-idonly' });
+    generateImageBytes.mockRejectedValue(
+      new ImageGenerationError('Image model returned no image for the given prompt.', {
+        billable: true,
+        providerCostDollars: undefined,
+        generationIds: ['gen-id-only'],
+      }),
+    );
+
+    const res = (await run({ prompt: 'x' }, { userId: 'u1', isAdmin: true, subscriptionTier: 'pro' })) as {
+      success: boolean;
+    };
+
+    expect(res.success).toBe(false);
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-idonly');
   });
 
   it('does NOT bill an empty generation with no evidence of spend (nothing could ever reconcile it)', async () => {

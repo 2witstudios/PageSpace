@@ -142,7 +142,10 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
             ...(args.error ? { outcome: args.error } : {}),
           },
         }).catch((metErr) => {
-          // Never fail the user-facing result over a metering error.
+          // Defensive only — currently UNREACHABLE: trackAIUsage wraps its whole body in a
+          // logging try/catch and never rejects (it logs the swallowed failure at ERROR
+          // itself, which is where an unbilled generation actually surfaces). Kept so a
+          // future change that lets it throw can't silently fail the user's request.
           imageLogger.error('Failed to record image usage', metErr as Error, {
             userId: maskIdentifier(userId),
             model,
@@ -156,9 +159,18 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
         // the settle landed: if `writeAiUsage` throws, the throw is caught internally and
         // the settle/release branches below it never run, leaving the hold neither settled
         // nor released — it would strand the user's reserved credits until TTL expiry.
-        // Deleting the hold here is idempotent: consumeCredits already removes it inside its
-        // settle transaction (and in the zero-charge branch), so on the happy path this is a
-        // no-op DELETE; on the swallowed-failure path it is the real cleanup.
+        //
+        // Deleting the hold here is safe and idempotent: consumeCredits already removes it
+        // inside its settle transaction (and in the zero-charge branch), so on the happy path
+        // this deletes zero rows — releaseHold emits only when a row actually came back, so
+        // there is no duplicate balance push. A hold is a pure RESERVATION (the gate sums
+        // creditHolds.estCents against spendable); deleting one never credits the balance, so
+        // this can't refund a settled charge.
+        //
+        // Edge case, accepted: if consumeCredits' transaction failed, the ledger row stays
+        // 'pending' and settlePendingLedgerRow debits it later — releasing the hold here means
+        // that pending debit is briefly under-reserved. No double-credit results; the only
+        // effect is a slightly optimistic spendable for one in-flight call.
         if (holdId) await releaseHold(holdId).catch(() => {});
       };
 
@@ -167,20 +179,23 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
         image = await generateImageBytes({ prompt, model, aspectRatio });
       } catch (error) {
         // A completed-but-empty generation was still billed by OpenRouter → settle it, but
-        // ONLY with evidence of that spend (an authoritative cost, or a generation id the
-        // reconcile cron can price later). With neither, settling would charge the flat
-        // estimate for a generation we cannot show we were billed for — and, since
-        // reconcileStatus requires a generation id, nothing would ever correct it. No
-        // evidence → treat as a failed call and release the hold.
+        // ONLY against an AUTHORITATIVE cost (`usage.cost`, including a legitimate $0 from a
+        // free model — hence `!== undefined`, not truthiness).
+        //
+        // A generation id is NOT sufficient evidence: `reconcileStatus` is set only when
+        // `hasRealCost && generationIds.length > 0` (ai-monitoring), and the reconcile cron
+        // picks up only `'pending'` rows — so an id-only row settled at the flat estimate
+        // would be a permanent, unreconcilable charge for a generation that produced nothing.
+        // Without an authoritative cost we cannot substantiate the amount, so we release the
+        // hold rather than invent a charge. (We may under-bill a failed call; we never
+        // over-bill one.)
+        //
         // A transport/auth failure never reached the provider → release the hold.
-        const hasSpendEvidence =
-          error instanceof ImageGenerationError &&
-          error.billable &&
-          (error.providerCostDollars !== undefined || error.generationIds.length > 0);
-        if (hasSpendEvidence && error instanceof ImageGenerationError) {
+        const imgErr = error instanceof ImageGenerationError ? error : null;
+        if (imgErr?.billable && imgErr.providerCostDollars !== undefined) {
           await settleSpend({
-            providerCostDollars: error.providerCostDollars,
-            generationIds: error.generationIds,
+            providerCostDollars: imgErr.providerCostDollars,
+            generationIds: imgErr.generationIds,
             error: 'no_image_returned',
           });
         } else if (holdId) {

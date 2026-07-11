@@ -35,6 +35,19 @@ describe('pure extractors', () => {
     });
   });
 
+  it('rejects media types the platform does not accept (e.g. SVG)', () => {
+    // SVG is not an allowed image type: the FILE page could never be read back or rendered
+    // (and is force-downloaded as a dangerous MIME). Treat it as "no image" instead.
+    assert({
+      given: 'a model returning image/svg+xml',
+      should: 'return null rather than persist an unreadable file',
+      actual: extractImageFromResult({
+        files: [{ mediaType: 'image/svg+xml', uint8Array: bytes }],
+      }),
+      expected: null,
+    });
+  });
+
   it('extracts the OpenRouter cost', () => {
     assert({ given: 'usage.cost present', should: 'return it', actual: extractImageCost(goodResult), expected: 0.068 });
     assert({ given: 'no provider metadata', should: 'return undefined', actual: extractImageCost({}), expected: undefined });

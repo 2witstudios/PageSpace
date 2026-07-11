@@ -14,6 +14,7 @@
 import type { LanguageModel } from 'ai';
 import { generateText } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { isAllowedImageType } from '@/lib/validation/image-validation';
 import { getManagedProviderKey } from './ai-utils';
 
 /** Result of a successful image generation. */
@@ -59,12 +60,19 @@ export interface ImageGenResult {
   response?: { id?: string };
 }
 
-/** Pure: first image file in the result, or null when none was produced. */
+/**
+ * Pure: first image file in the result, or null when none was produced.
+ *
+ * Only the media types the rest of the platform actually accepts (`isAllowedImageType`)
+ * qualify. A model returning e.g. `image/svg+xml` is treated as "no image" rather than
+ * persisted: SVG is not an allowed image type, so the resulting FILE page could never be
+ * read back or rendered (and is force-downloaded as a dangerous MIME type anyway).
+ */
 export function extractImageFromResult(
   result: ImageGenResult,
 ): { bytes: Uint8Array; mediaType: string } | null {
   const file = result.files?.find(
-    (f) => typeof f.mediaType === 'string' && f.mediaType.startsWith('image/') && f.uint8Array,
+    (f) => typeof f.mediaType === 'string' && isAllowedImageType(f.mediaType) && f.uint8Array,
   );
   if (!file?.uint8Array || !file.mediaType) return null;
   return { bytes: file.uint8Array, mediaType: file.mediaType };
