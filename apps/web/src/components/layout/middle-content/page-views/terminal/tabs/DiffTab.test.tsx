@@ -60,7 +60,7 @@ vi.mock('@/components/editors/MonacoDiffEditor', () => ({
 }));
 
 // Per-test switches for the states the pane must not get wrong.
-let truncatedPair = false;
+let truncatedSide: 'original' | 'modified' | null = null;
 let binaryPair = false;
 let truncatedEmptyList = false;
 let probeErrors = false;
@@ -106,10 +106,14 @@ const pairFor = (enabled: boolean) => {
       notApplicable: false as const,
       scope: 'uncommitted' as const,
       path: 'src/uncommitted.ts',
+      // BOTH sides must be able to be the truncated one: a blob side is cut at
+      // 256 KB while a working-tree side gets 2 MB, so the ORIGINAL (a blob in
+      // every scope) is the likelier casualty — a sniff that only checked
+      // `modified` would miss it and paint the file's untouched tail as added.
       original: binaryPair
         ? { content: `PNG${NUL}${NUL}`, truncated: false }
-        : { content: 'a', truncated: false },
-      modified: binaryPair ? null : { content: 'b', truncated: truncatedPair },
+        : { content: 'a', truncated: truncatedSide === 'original' },
+      modified: binaryPair ? null : { content: 'b', truncated: truncatedSide === 'modified' },
     },
     error: undefined,
     isLoading: false,
@@ -196,7 +200,7 @@ const scopeOptions = () => ({
 describe('DiffTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    truncatedPair = false;
+    truncatedSide = null;
     binaryPair = false;
     truncatedEmptyList = false;
     probeErrors = false;
@@ -504,8 +508,28 @@ describe('DiffTab', () => {
     });
   });
 
-  test('a truncated side is called out instead of being rendered as the whole file', async () => {
-    truncatedPair = true;
+  test('a truncated ORIGINAL side is called out — the likelier cut, and the one that fakes added lines', async () => {
+    // The original is a git BLOB in every scope, capped at 256 KB, while a
+    // working-tree side gets 2 MB. So a 300 KB file's original is cut while its
+    // modified side is whole — and diffing them paints the file's entire untouched
+    // tail as ADDED lines. A sniff that only checked `modified` would miss exactly
+    // this, the most likely truncation in production.
+    truncatedSide = 'original';
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await userEvent.click(await waitFor(() => screen.getByText('src/uncommitted.ts')));
+
+    await waitFor(() => screen.getByTestId('monaco-diff'));
+    assert({
+      given: 'a file whose ORIGINAL side the sandbox cut at the 256 KB blob cap',
+      should: 'warn that the diff is cut off, rather than presenting the untouched tail as new lines',
+      actual: screen.queryByText(/too large to load in full/i) !== null,
+      expected: true,
+    });
+  });
+
+  test('a truncated MODIFIED side is called out instead of being rendered as the whole file', async () => {
+    truncatedSide = 'modified';
     render(<DiffTab machineId="m1" />);
     await userEvent.click(screen.getByText('select-feature'));
     await userEvent.click(await waitFor(() => screen.getByText('src/uncommitted.ts')));

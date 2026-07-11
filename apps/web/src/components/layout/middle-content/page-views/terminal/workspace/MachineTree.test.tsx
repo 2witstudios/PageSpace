@@ -45,10 +45,20 @@ const cannedFetch = () =>
       );
     }
     if (url.includes('/api/machines/branches')) {
-      return new Response(
-        JSON.stringify({ branches: [{ branchName: 'main', createdAt: '2026-01-01' }] }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      );
+      // my-repo carries TWO branches so node identity is pinned on BOTH axes: the
+      // two projects (above) cover the projectName half, these cover branchName.
+      // Without a second branch here, an identity check that ignored branchName
+      // would highlight every branch under the selected project at once.
+      const branches = url.includes('projectName=my-repo')
+        ? [
+            { branchName: 'main', createdAt: '2026-01-01' },
+            { branchName: 'feat/x', createdAt: '2026-01-01' },
+          ]
+        : [{ branchName: 'main', createdAt: '2026-01-01' }];
+      return new Response(JSON.stringify({ branches }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
     return new Response('{}', { status: 200 });
   });
@@ -173,6 +183,31 @@ describe('MachineTree', () => {
       should: 'mark exactly ONE of them current — the one under the selected project',
       actual: { currentCount: current.filter((c) => c === 'true').length, total: current.length },
       expected: { currentCount: 1, total: 2 },
+    });
+  });
+
+  test('a SIBLING branch in the same project is not marked current', async () => {
+    // The other half of node identity: my-repo has both 'main' and 'feat/x'.
+    // Selecting one must not light up the other, or the sidebar claims two
+    // branches are being diffed while the pane shows one.
+    renderTree({
+      onSelectNode: vi.fn(),
+      isNodeSelectable: (node: MachineTreeNode) => node.level === 'branch',
+      selectedNode: { level: 'branch', projectName: 'my-repo', branchName: 'feat/x' },
+    });
+
+    await expandRowFor('my-repo');
+    const selectedRow = (await waitFor(() => screen.getByText('feat/x'))).closest('.group') as HTMLElement;
+    const siblingRow = screen.getAllByText('main')[0].closest('.group') as HTMLElement;
+
+    assert({
+      given: "one project holding two branches, with only feat/x selected",
+      should: 'mark feat/x current and leave its sibling main uncurrent',
+      actual: {
+        selected: labelButtonIn(selectedRow).getAttribute('aria-current'),
+        sibling: labelButtonIn(siblingRow).getAttribute('aria-current'),
+      },
+      expected: { selected: 'true', sibling: null },
     });
   });
 
