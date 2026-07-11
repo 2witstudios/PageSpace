@@ -401,7 +401,7 @@ describe('openPtyShell', () => {
       expect(onOutput).toHaveBeenCalledWith('back\r\n');
     });
 
-    it('given a drop with no announced id and NO live session, creates a fresh shell rather than exiting', async () => {
+    it('given a drop before the session announced its id, creates ONE replacement (the id can be lost to a socket that dies pre-announce)', async () => {
       const cmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [] });
@@ -410,12 +410,64 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      cmd._emitter.emit('spawn'); // the socket DID open — a session exists out there
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
+      // One strand is tolerated; the user keeps a working terminal.
       expect(sprite.createSession).toHaveBeenCalledTimes(2);
       expect(onExit).not.toHaveBeenCalled();
       expect(onOutput).not.toHaveBeenCalledWith(expect.stringContaining('Shell error'));
+    });
+
+    it('given ids NEVER arrive, stops creating replacements instead of stranding a new billable shell every cycle', async () => {
+      // The leak this bounds: an unnamed session cannot be reattached (no id) OR
+      // killed (kill() signals over the socket that just died), yet a tty session
+      // is detachable and keeps running — and billing. Each replacement strands
+      // its predecessor. `spawn` resets the ordinary retry budget (the sockets DO
+      // open; we simply never hear the session's name), so without a dedicated
+      // bound this mints one orphan per keepalive cycle, forever.
+      const created: FakeCommand[] = [];
+      const sprite = buildFakeSprite(buildFakeCommand(), { sessions: [] });
+      sprite.createSession.mockImplementation(() => {
+        const next = buildFakeCommand();
+        created.push(next);
+        setTimeout(() => next._emitter.emit('spawn'), 0); // socket opens fine — budget resets
+        return next;
+      });
+      const onOutput = vi.fn();
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Drop the shell repeatedly, far more often than the reconnect budget allows.
+      for (let i = 0; i < 8; i += 1) {
+        created[created.length - 1]._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+        await vi.advanceTimersByTimeAsync(2000);
+      }
+
+      // Bounded: the initial session + a single tolerated replacement, then it stops.
+      expect(sprite.createSession).toHaveBeenCalledTimes(2);
+      expect(onExit).toHaveBeenCalledWith(-1);
+      expect(onOutput).toHaveBeenCalledWith(expect.stringContaining('could not be identified'));
+    });
+
+    it('given no announced id while a SIBLING terminal\'s shell is live, never attaches to it (it is not ours to take)', async () => {
+      // The production shape: one Sprite hosts every terminal on the machine. The
+      // retired pickShellSession would have handed this user the sibling's PTY.
+      const cmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sibling: SpriteSessionInfo = { id: 'sess-sibling', command: 'claude', isActive: true, tty: true };
+      const sprite = buildFakeSprite(cmd, { sessions: [sibling] });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(sprite.attachSession).not.toHaveBeenCalled();
+      expect(sprite.createSession).toHaveBeenCalledTimes(2);
     });
 
     it('given every reconnect attempt fails, should give up after the bounded budget and surface onExit(-1)', async () => {

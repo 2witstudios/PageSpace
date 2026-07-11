@@ -599,6 +599,27 @@ describe('readSessionInfoId (pure)', () => {
   });
 
   assert({
+    given: 'the EXACT frame captured from the live Sprites API on a create socket',
+    should: 'return its session_id — pins the real wire shape, not an idealized one',
+    // Recorded verbatim from api.sprites.dev while creating a tty session:
+    //   {"type":"session_info","session_id":"20","command":"bash",
+    //    "created":1783791670,"cols":0,"rows":0,"is_owner":true,"tty":true}
+    // Note `is_owner: true` (we created it) and that the id is a SHORT NUMERIC
+    // STRING — not a uuid. Nothing may assume its format.
+    actual: readSessionInfoId({
+      type: 'session_info',
+      session_id: '20',
+      command: 'bash',
+      created: 1783791670,
+      cols: 0,
+      rows: 0,
+      is_owner: true,
+      tty: true,
+    }),
+    expected: '20',
+  });
+
+  assert({
     given: 'a non-session_info control frame (a port notification, a resize ack)',
     should: 'return undefined — only session_info names a session',
     actual: readSessionInfoId({ type: 'port_open', port: 3000, session_id: 'sess-1' }),

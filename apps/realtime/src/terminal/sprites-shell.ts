@@ -125,6 +125,15 @@ export type OpenPtyShellArgs = {
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 200;
 
+/**
+ * How many sessions this shell may create-and-strand (see
+ * `abandonedUnnamedSessions`) before it gives up rather than mint another
+ * unreachable, still-billing Sprite session. One is tolerance for the genuinely
+ * transient case — a socket that dies between 'spawn' and `session_info`. A
+ * second means ids are not arriving at all, which no amount of retrying fixes.
+ */
+const MAX_UNNAMED_ABANDONS = 1;
+
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const TERMINAL_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
@@ -156,6 +165,25 @@ export function openPtyShell({
   let closed = false; // a real exit (or exhausted reconnects) — stop everything
   let reconnecting = false;
   let consecutiveFailures = 0;
+  // How many sessions this shell has created but had to ABANDON without ever
+  // learning their id. Such a session is unreachable in every direction: we
+  // can't reattach to it (no id), and we can't kill it (`kill()` signals over
+  // the command's own socket, which is exactly the socket that just died) — yet
+  // a tty session is detachable and keeps running, and billing, regardless. So
+  // each one is an orphan, and creating its replacement is what strands it.
+  //
+  // Tracked SEPARATELY from `consecutiveFailures` because that budget is reset
+  // by 'spawn'/stdout — a replacement whose socket opens fine (and it does; the
+  // shell is healthy, we merely never heard its name) zeroes it. Without its own
+  // counter, an id we never learn produces a fresh orphan on every keepalive
+  // cycle, forever.
+  let abandonedUnnamedSessions = 0;
+  // Whether the CURRENT fresh session's socket ever opened ('spawn'). Only an
+  // opened socket implies the server actually started a session — and therefore
+  // that dropping it without an id strands something. A create whose socket dies
+  // before it opens started nothing, so it is an ordinary (budgeted) retry, not
+  // an orphan.
+  let currentSessionOpened = false;
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -210,6 +238,7 @@ export function openPtyShell({
   // replacing a dangling one).
   function launchFreshSession(): void {
     currentSessionId = undefined;
+    currentSessionOpened = false;
     const gen = (sessionGeneration += 1);
     current = sprite.createSession(command, args, {
       tty: true,
@@ -217,6 +246,12 @@ export function openPtyShell({
       rows: lastRows,
       cwd,
       env: TERMINAL_ENV,
+    });
+    // An open socket means the server started this session — so if it drops before
+    // naming itself, something real is left running out there (see
+    // `abandonedUnnamedSessions`). A socket that never opens started nothing.
+    current.on('spawn', () => {
+      if (gen === sessionGeneration) currentSessionOpened = true;
     });
     current.on('message', (message) => {
       const id = readSessionInfoId(message);
@@ -243,6 +278,24 @@ export function openPtyShell({
     try {
       await delay(RECONNECT_BASE_DELAY_MS * consecutiveFailures);
       if (closed) { reconnecting = false; return; }
+
+      // No id in hand means the session we are about to replace never announced
+      // itself, so replacing it STRANDS it (see `abandonedUnnamedSessions`). The
+      // shell it left behind is healthy, detached, and billable, and nothing can
+      // ever reach it again. That is survivable once — the socket can die in the
+      // sliver between 'spawn' (WebSocket open) and the `session_info` frame — but
+      // it must never become a steady state: if ids stop arriving at all (a server
+      // or SDK regression), every keepalive cycle would mint another orphan. Fail
+      // loudly after a bounded number instead, so the user sees a dead terminal and
+      // we see it in the logs, rather than quietly burning a Sprite forever.
+      if (currentSessionId === undefined && currentSessionOpened) {
+        abandonedUnnamedSessions += 1;
+        if (abandonedUnnamedSessions > MAX_UNNAMED_ABANDONS) {
+          reconnecting = false;
+          fatal(-1, 'shell session could not be identified — refusing to strand another Sprite session');
+          return;
+        }
+      }
 
       // Verify the known id against what the Sprite reports live BEFORE any retry
       // — exec sessions don't survive a pause, so a known id can be dangling.

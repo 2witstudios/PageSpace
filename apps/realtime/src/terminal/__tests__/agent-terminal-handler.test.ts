@@ -368,6 +368,34 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).toHaveBeenCalledWith({ agentTerminalId: 'agent-terminal-1', sessionId: 'sess-new' });
     });
 
+    it('given two sessions announced in quick succession, should persist them IN ORDER (a dead id must not win)', async () => {
+      // A flapping Sprite creates session A, drops, then creates B. Two un-awaited
+      // UPDATEs would race; if A's landed last the DB would name a session that is
+      // already dead, sending the next cold connect at a corpse. The writes are
+      // chained, so the last session announced is the last one written.
+      const writes: string[] = [];
+      const slowFirst = deferred<void>();
+      persistStreamSessionId = vi.fn().mockImplementationOnce(async (a: { sessionId: string }) => {
+        await slowFirst.promise;            // A's write is slow...
+        writes.push(a.sessionId);
+      }).mockImplementation(async (a: { sessionId: string }) => {
+        writes.push(a.sessionId);           // ...B's would otherwise overtake it
+      });
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ streamSessionId: null })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      const args = openShell.mock.calls[0][0] as OpenPtyShellArgs;
+      const announce = args.onSessionId as (id: string) => void;
+      announce('sess-a');
+      announce('sess-b');
+      slowFirst.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(writes).toEqual(['sess-a', 'sess-b']); // B last — the live session wins
+      expect(sessionMap.getByKey('branch1:agent:cli')?.sessionId).toBe('sess-b');
+    });
+
     it('given a FRESH session whose shell never reports an id, should not call persistStreamSessionId', async () => {
       const auth = makeAuthSuccess({ streamSessionId: null, sessions: [] });
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;

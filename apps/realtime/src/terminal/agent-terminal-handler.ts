@@ -590,6 +590,9 @@ export function buildAgentTerminalHandlers({
           idleTimer: undefined,
         };
 
+        // Serializes this terminal's streamSessionId writes — see `onSessionId`.
+        let persistQueue: Promise<void> = Promise.resolve();
+
         const launch = resolveAgentTerminalCommand({
           command: sandbox.command,
           args: sandbox.args,
@@ -624,13 +627,23 @@ export function buildAgentTerminalHandlers({
             // id is authoritative, so it can never name a sibling terminal's shell
             // — which is precisely what the retired listSessions before/after diff
             // could not guarantee on a Sprite with concurrent terminals.
+            //
+            // Writes are CHAINED, not fired in parallel. A flapping Sprite can
+            // create session A, drop, and create session B in quick succession;
+            // two independent un-awaited UPDATEs race, and if A's lands last the
+            // DB ends up naming the session that is already dead, sending the next
+            // cold connect at a corpse. Serializing keeps the last write the last
+            // session. A failed write is logged and does NOT break the chain — the
+            // next session's id still gets its turn.
             onSessionId: (sessionId) => {
               session.sessionId = sessionId;
-              void persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }).catch((error) => {
-                loggers.realtime.error('Failed to persist reconnect session id', error instanceof Error ? error : new Error(String(error)), {
-                  sessionKey,
+              persistQueue = persistQueue
+                .then(() => persistStreamSessionId({ agentTerminalId: sandbox.agentTerminalId, sessionId }))
+                .catch((error) => {
+                  loggers.realtime.error('Failed to persist agent terminal session id', error instanceof Error ? error : new Error(String(error)), {
+                    sessionKey,
+                  });
                 });
-              });
             },
           });
         } catch {

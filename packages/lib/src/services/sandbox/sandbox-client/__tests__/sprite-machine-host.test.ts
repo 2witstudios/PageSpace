@@ -201,7 +201,7 @@ describe('createSpriteMachineHost', () => {
     expect(attachedId).toBe('existing-session');
   });
 
-  it('given listStreams, should surface only tty sessions from the underlying Sprite', async () => {
+  it('given listStreams, should exclude sessions the SDK reports as non-tty', async () => {
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
@@ -217,6 +217,31 @@ describe('createSpriteMachineHost', () => {
 
     const streams = await handle.listStreams();
     expect(streams).toEqual([{ id: 's1', command: 'bash', isActive: true }]);
+  });
+
+  it('given an SDK that does not report `tty` at all, should still surface the sessions (fail open, not empty)', async () => {
+    // The published 0.0.1 @fly/sprites build drops `tty` from its listSessions
+    // mapping even though the raw API returns it. A truthy filter would hide
+    // EVERY stream — a machine full of live terminals would look empty. Keeping
+    // sessions of unknown mode costs at most a stray row.
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          listSessions: async () => [
+            { id: 's1', command: '/usr/bin/bash', isActive: true },
+            { id: 's2', command: '/usr/bin/bash', isActive: false },
+          ],
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    const streams = await handle.listStreams();
+    expect(streams).toEqual([
+      { id: 's1', command: '/usr/bin/bash', isActive: true },
+      { id: 's2', command: '/usr/bin/bash', isActive: false },
+    ]);
   });
 
   it('given a MachineStream, should write/resize/kill through to the underlying command', async () => {
