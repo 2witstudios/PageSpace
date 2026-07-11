@@ -5,7 +5,8 @@ import { useSWRConfig } from 'swr';
 import { GitCompare, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { cn } from '@/lib/utils';
 import { useMachineDiffFiles, isMachineDiffKey } from '@/hooks/useMachineDiff';
 import { isMachineDiffScope, type MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
@@ -14,7 +15,13 @@ import DiffFileCard from './DiffFileCard';
 const SCOPE_LABELS: Record<MachineDiffScope, string> = {
   uncommitted: 'Uncommitted',
   committed: 'Committed',
-  branch: 'Branch vs master',
+  // "vs default", not "vs master": the server diffs against `origin/HEAD` — the
+  // remote's ACTUAL default branch — precisely so the scope is correct whether a
+  // repo's default is master, main, or anything else (see machine-diff-scope.ts,
+  // which refuses to hardcode the literal). Labeling it "vs master" would name a
+  // branch that doesn't exist on a main-default repo, and would contradict this
+  // file's own empty state ("identical to the default branch").
+  branch: 'Branch vs default',
 };
 
 interface SelectedBranch {
@@ -130,8 +137,21 @@ function BranchDiffPane({
     ? ['uncommitted', 'committed', 'branch']
     : ['uncommitted'];
 
+  const refreshing = list.isValidating || committed.isValidating;
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // Tabs wraps the triggers AND the panel on purpose: a Radix TabsTrigger emits
+    // aria-controls pointing at its TabsContent, so a TabsList with no TabsContent
+    // would leave every tab referencing an element id that exists nowhere in the
+    // DOM (a tablist owning no tabpanel — invalid ARIA, and a screen reader
+    // announces a panel the user can never reach).
+    <Tabs
+      value={active}
+      onValueChange={(value) => {
+        if (isMachineDiffScope(value)) setScope(value);
+      }}
+      className="flex h-full min-h-0 flex-col gap-0"
+    >
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-xs text-muted-foreground">
@@ -142,45 +162,53 @@ function BranchDiffPane({
           {!probeResolved ? (
             <span className="text-xs text-muted-foreground">Loading scopes…</span>
           ) : (
-            <Tabs
-              value={active}
-              onValueChange={(value) => {
-                if (isMachineDiffScope(value)) setScope(value);
-              }}
-            >
-              <TabsList>
-                {availableScopes.map((option) => (
-                  <TabsTrigger key={option} value={option}>
-                    {SCOPE_LABELS[option]}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+            <TabsList>
+              {availableScopes.map((option) => (
+                <TabsTrigger key={option} value={option}>
+                  {SCOPE_LABELS[option]}
+                </TabsTrigger>
+              ))}
+            </TabsList>
           )}
-          <Button variant="ghost" size="icon" className="size-8" onClick={refresh} title="Refresh diff">
-            <RefreshCw className="size-3.5" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            onClick={refresh}
+            disabled={refreshing}
+            title="Refresh diff"
+          >
+            {/* Without this the click has no visible effect until the sandbox
+                answers — SWR keeps the stale data and only flips isValidating. */}
+            <RefreshCw className={cn('size-3.5', refreshing && 'animate-spin')} />
           </Button>
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        {/* Hold the list until the probe answers: rendering it first would show
-            a generic "No uncommitted changes" that then flips to the
-            main-branch-specific copy once applicability is known. */}
-        {!probeResolved ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>
-        ) : (
-          <DiffFileList
-            machineId={machineId}
-            projectName={projectName}
-            branchName={branchName}
-            scope={active}
-            scopesApplicable={scopesApplicable}
-            list={list}
-          />
-        )}
-      </ScrollArea>
-    </div>
+      {/* Hold the list until the probe answers: rendering it first would show a
+          generic "No uncommitted changes" that then flips to the main-branch
+          copy once applicability is known. */}
+      {!probeResolved ? (
+        <div className="p-4 text-sm text-muted-foreground">Loading changed files…</div>
+      ) : (
+        availableScopes.map((option) => (
+          // Radix renders only the ACTIVE scope's content, so this is one list,
+          // not three — it just gives each trigger a real panel to control.
+          <TabsContent key={option} value={option} className="min-h-0 flex-1">
+            <ScrollArea className="h-full">
+              <DiffFileList
+                machineId={machineId}
+                projectName={projectName}
+                branchName={branchName}
+                scope={active}
+                scopesApplicable={scopesApplicable}
+                list={list}
+              />
+            </ScrollArea>
+          </TabsContent>
+        ))
+      )}
+    </Tabs>
   );
 }
 

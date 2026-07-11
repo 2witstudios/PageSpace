@@ -95,11 +95,13 @@ export function useMachineDiffFiles(
         new URLSearchParams({ machineId, projectName, branchName, scope }).toString()
       : null;
 
-  const { data, error, isLoading, mutate } = useSWR<MachineDiffFilesResponse>(key, fetcher, {
+  const { data, error, isLoading, isValidating, mutate } = useSWR<MachineDiffFilesResponse>(key, fetcher, {
     revalidateOnFocus: false,
   });
 
-  return { data, error: error as Error | undefined, isLoading, mutate };
+  // `isValidating` (not `isLoading`) is what a refresh flips: the list already
+  // has data, so SWR keeps serving it and only marks the refetch in flight.
+  return { data, error: error as Error | undefined, isLoading, isValidating, mutate };
 }
 
 /**

@@ -6,8 +6,13 @@ import type { MachineTreeNode } from '../workspace/MachineTree';
 import type { MachineDiffFilesResponse } from '@/hooks/useMachineDiff';
 import type { MachineDiffScope } from '@pagespace/lib/services/sandbox/machine-diff-scope';
 
+// A NUL byte is how a decoded binary file gives itself away (git's own
+// heuristic). Kept as an escape, never a literal control char in the source.
+const NUL = '\u0000';
+
 // The tree is exercised by its own suite; here we only need a way to fire
-// onSelectNode with a branch node, so stub it to a pair of select buttons.
+// onSelectNode, so stub it to a set of select buttons — including a PROJECT node,
+// which DiffTab must ignore.
 vi.mock('../workspace/MachineTree', () => ({
   default: ({ onSelectNode }: { onSelectNode?: (node: MachineTreeNode) => void }) => (
     <div>
@@ -31,17 +36,26 @@ vi.mock('@/components/editors/MonacoDiffEditor', () => ({
   ),
 }));
 
-// The scope toggle's behaviour is driven entirely by what the files hook
-// returns for each (branch, scope) — so the mock keys off branchName + scope:
-// 'main' answers notApplicable for the non-uncommitted scopes (mirroring the
-// route), every other branch answers a real list.
+// Per-test switches for the states the pane must not get wrong.
+let truncatedPair = false;
+let binaryPair = false;
+let truncatedEmptyList = false;
+let probeErrors = false;
+
+// The scope toggle's behaviour is driven entirely by what the files hook returns
+// for each (branch, scope) — so the mock keys off branchName + scope: 'main'
+// answers notApplicable for the non-uncommitted scopes (mirroring the route),
+// every other branch answers a real list.
 const filesFor = (branchName: string, scope: string): MachineDiffFilesResponse => {
-  if (branchName === 'main' && scope !== 'uncommitted') {
-    return { notApplicable: true };
-  }
+  if (branchName === 'main' && scope !== 'uncommitted') return { notApplicable: true };
   if (branchName === 'main') {
     // Clean uncommitted tree on main — drives the explicit empty state.
     return { notApplicable: false, scope: 'uncommitted', files: [], truncated: false };
+  }
+  if (truncatedEmptyList) {
+    // The sandbox output cap cut the list before its FIRST complete entry: zero
+    // files, but the diff is emphatically NOT clean.
+    return { notApplicable: false, scope: scope as MachineDiffScope, files: [], truncated: true };
   }
   return {
     notApplicable: false,
@@ -52,27 +66,35 @@ const filesFor = (branchName: string, scope: string): MachineDiffFilesResponse =
 };
 
 // The pair fixture MUST mirror the route's real wire shape — each side is
-// `{ content, truncated }`, NOT a bare string. An earlier version of this mock
-// asserted the string shape and so kept the suite green while the production
-// code handed Monaco an object; useMachineDiff.test.tsx now pins the real
-// contract against fetchWithAuth so this mock can't drift from it again.
+// `{ content, truncated }` or null, NOT a bare string. An earlier version of this
+// mock asserted the string shape and so kept the suite green while the production
+// code handed Monaco an object; useMachineDiff.test.tsx now pins the real contract
+// against fetchWithAuth so this mock can't drift from it again.
+//
+// The binary case deliberately nulls the MODIFIED side (a deleted binary): the
+// card must sniff EITHER side, so an `&&` across the two would leak mojibake here.
 const pairFor = (enabled: boolean) => ({
   data: enabled
     ? {
         notApplicable: false as const,
         scope: 'uncommitted' as const,
         path: 'src/uncommitted.ts',
-        // A binary file's decoded content carries NUL bytes — that's how the card sniffs it.
-        original: { content: binaryPair ? 'PNG\u0000\u0000' : 'a', truncated: false },
-        modified: { content: binaryPair ? 'PNG\u0000' : 'b', truncated: truncatedPair },
+        original: binaryPair
+          ? { content: `PNG${NUL}${NUL}`, truncated: false }
+          : { content: 'a', truncated: false },
+        modified: binaryPair ? null : { content: 'b', truncated: truncatedPair },
       }
     : undefined,
   error: undefined,
   isLoading: false,
 });
 
-let truncatedPair = false;
-let binaryPair = false;
+// Spy at the CALL SITE: proves DiffFileCard threads `expanded` into the hook's
+// `enabled` gate. Asserting only "no editor while collapsed" would be satisfied by
+// the JSX guard alone — leaving a mutation to `enabled: true` free to fire a
+// content request per file on list render (the N-fetch regression the design
+// forbids) with a green suite.
+const useMachineDiffPairSpy = vi.fn(pairFor);
 
 // SWR's global mutate — the refresh path calls it with a key predicate.
 const swrMutate = vi.fn();
@@ -91,13 +113,26 @@ vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
       projectName: string | null,
       branchName: string | null,
       scope: string | null,
-    ) => ({
-      data: projectName && branchName && scope ? filesFor(branchName, scope) : undefined,
-      error: undefined,
-      isLoading: false,
-      mutate: vi.fn(),
-    }),
-    // Honors `enabled`, so a collapsed card genuinely fetches nothing.
+    ) => {
+      // A failed PROBE (machine stopped, transient git failure) must never be
+      // mistaken for the main branch's notApplicable answer.
+      if (probeErrors && scope === 'committed') {
+        return {
+          data: undefined,
+          error: new Error('Branch machine unreachable'),
+          isLoading: false,
+          isValidating: false,
+          mutate: vi.fn(),
+        };
+      }
+      return {
+        data: projectName && branchName && scope ? filesFor(branchName, scope) : undefined,
+        error: undefined,
+        isLoading: false,
+        isValidating: false,
+        mutate: vi.fn(),
+      };
+    },
     useMachineDiffPair: (
       _machineId: string,
       _projectName: string | null,
@@ -105,17 +140,25 @@ vi.mock('@/hooks/useMachineDiff', async (importOriginal) => {
       _scope: string | null,
       _file: unknown,
       enabled: boolean,
-    ) => pairFor(enabled),
+    ) => useMachineDiffPairSpy(enabled),
   };
 });
 
 import DiffTab from './DiffTab';
+
+const scopeOptions = () => ({
+  uncommitted: screen.queryByText('Uncommitted') !== null,
+  committed: screen.queryByText('Committed') !== null,
+  branch: screen.queryByText('Branch vs default') !== null,
+});
 
 describe('DiffTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     truncatedPair = false;
     binaryPair = false;
+    truncatedEmptyList = false;
+    probeErrors = false;
   });
 
   test('shows the empty placeholder until a branch is selected', () => {
@@ -131,6 +174,21 @@ describe('DiffTab', () => {
     });
   });
 
+  test('selecting a PROJECT node does not open a diff — only a branch identifies a checkout', async () => {
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-project'));
+
+    assert({
+      given: 'a project node reported by the tree',
+      should: 'ignore it and keep prompting for a branch — a project has no single checkout to diff',
+      actual: {
+        prompt: screen.queryByText('Select a branch to view its diff.') !== null,
+        toggle: screen.queryByText('Uncommitted') !== null,
+      },
+      expected: { prompt: true, toggle: false },
+    });
+  });
+
   test('a non-main branch shows all three scope options', async () => {
     render(<DiffTab machineId="m1" />);
     await userEvent.click(screen.getByText('select-feature'));
@@ -138,12 +196,8 @@ describe('DiffTab', () => {
     await waitFor(() => screen.getByText('Committed'));
     assert({
       given: 'a feature branch where committed/branch scopes are applicable',
-      should: 'render Uncommitted, Committed and Branch vs master in the toggle',
-      actual: {
-        uncommitted: screen.queryByText('Uncommitted') !== null,
-        committed: screen.queryByText('Committed') !== null,
-        branch: screen.queryByText('Branch vs master') !== null,
-      },
+      should: 'render all three scope options',
+      actual: scopeOptions(),
       expected: { uncommitted: true, committed: true, branch: true },
     });
   });
@@ -156,12 +210,22 @@ describe('DiffTab', () => {
     assert({
       given: 'the main branch, where the route returns notApplicable for committed/branch',
       should: 'render ONLY the Uncommitted option — not all three with two disabled',
-      actual: {
-        uncommitted: screen.queryByText('Uncommitted') !== null,
-        committed: screen.queryByText('Committed') !== null,
-        branch: screen.queryByText('Branch vs master') !== null,
-      },
+      actual: scopeOptions(),
       expected: { uncommitted: true, committed: false, branch: false },
+    });
+  });
+
+  test('an ERRORED probe keeps the full toggle — a failed request is not a main-branch answer', async () => {
+    probeErrors = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+
+    await waitFor(() => screen.getByText('Uncommitted'));
+    assert({
+      given: 'the applicability probe failing (machine stopped / transient git failure)',
+      should: 'keep all three scopes offered — collapsing here would silently hide real scopes on a flake',
+      actual: scopeOptions(),
+      expected: { uncommitted: true, committed: true, branch: true },
     });
   });
 
@@ -175,6 +239,39 @@ describe('DiffTab', () => {
       should: 'name the branch in an explicit empty state, not a generic no-diff message',
       actual: screen.queryByText('No uncommitted changes on main') !== null,
       expected: true,
+    });
+  });
+
+  test('an empty-but-TRUNCATED list is not reported as a clean tree', async () => {
+    truncatedEmptyList = true;
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+
+    await waitFor(() => screen.getByText('Uncommitted'));
+    assert({
+      given: 'a file list cut by the output cap before its first complete entry (files: [], truncated: true)',
+      should: 'warn that the diff was cut — never claim "no changes" on partial data',
+      actual: {
+        warned: screen.queryByText(/too large to list in full/i) !== null,
+        falselyClean: screen.queryByText(/^No uncommitted changes$/i) !== null,
+      },
+      expected: { warned: true, falselyClean: false },
+    });
+  });
+
+  test('a collapsed card fetches nothing — the pair hook is called with enabled=false', async () => {
+    render(<DiffTab machineId="m1" />);
+    await userEvent.click(screen.getByText('select-feature'));
+    await waitFor(() => screen.getByText('src/uncommitted.ts'));
+
+    assert({
+      given: 'a changed-file list rendered with every card collapsed',
+      should: 'gate the pair hook off, so a 200-file scope costs ZERO content requests until a card is opened',
+      actual: {
+        everCalled: useMachineDiffPairSpy.mock.calls.length > 0,
+        everEnabled: useMachineDiffPairSpy.mock.calls.some(([enabled]) => enabled === true),
+      },
+      expected: { everCalled: true, everEnabled: false },
     });
   });
 
@@ -195,22 +292,25 @@ describe('DiffTab', () => {
     assert({
       given: 'the changed file card clicked open',
       should: "mount MonacoDiffEditor with each side's CONTENT string, not the raw { content, truncated } side object",
-      actual: screen.getByTestId('monaco-diff').textContent,
-      expected: 'a→b',
+      actual: {
+        rendered: screen.getByTestId('monaco-diff').textContent,
+        enabledOnExpand: useMachineDiffPairSpy.mock.calls.some(([enabled]) => enabled === true),
+      },
+      expected: { rendered: 'a→b', enabledOnExpand: true },
     });
   });
 
-  test('Refresh revalidates the expanded cards\' pair keys, not just the file lists', async () => {
+  test("Refresh revalidates the expanded cards' pair keys, not just the file lists", async () => {
     render(<DiffTab machineId="m1" />);
     await userEvent.click(screen.getByText('select-feature'));
     await waitFor(() => screen.getByText('src/uncommitted.ts'));
 
     await userEvent.click(screen.getByTitle('Refresh diff'));
 
-    // The pane owns only the two LIST keys; every expanded card holds its own
-    // pair key. Refreshing via the keyed predicate is what stops an open Monaco
-    // diff from serving pre-edit content forever (both hooks are
-    // revalidateOnFocus: false) — so assert the predicate reaches a pair key.
+    // The pane owns only the two LIST keys; every expanded card holds its own pair
+    // key. Refreshing via the keyed predicate is what stops an open Monaco diff
+    // from serving pre-edit content forever (both hooks are revalidateOnFocus:
+    // false) — so assert the predicate actually reaches a pair key.
     const predicate = swrMutate.mock.calls[0]?.[0] as ((key: unknown) => boolean) | undefined;
     assert({
       given: 'the Refresh button clicked',
@@ -231,8 +331,11 @@ describe('DiffTab', () => {
     await userEvent.click(screen.getByText('select-feature'));
     await userEvent.click(await waitFor(() => screen.getByText('src/uncommitted.ts')));
 
+    // Only the ORIGINAL side is binary here (a deleted binary has no modified
+    // side), so a card that sniffed `original && modified` would fall through and
+    // render garbage.
     assert({
-      given: 'a changed binary file (its decoded content carries NUL bytes)',
+      given: 'a changed binary file whose decoded content carries NUL bytes on one side only',
       should: 'say it is binary and mount no diff editor — a text diff of decoded bytes is garbage',
       actual: {
         note: screen.queryByText(/binary file/i) !== null,

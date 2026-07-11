@@ -18,6 +18,16 @@ const MonacoDiffEditor = dynamic(() => import('@/components/editors/MonacoDiffEd
  */
 const BINARY_SNIFF_CHARS = 8000;
 
+/**
+ * Monaco measures its container once at mount and installs no ResizeObserver, so
+ * without `automaticLayout` the diff keeps its original pixel width when the
+ * app's sidebar collapses or the window resizes — the modified pane gets clipped
+ * and the gutters misalign until the card is closed and reopened. `CodeViewer`
+ * sets this for the same reason. Module-level so the object identity is stable
+ * (a fresh literal each render would re-run the editor's options effect).
+ */
+const MONACO_OPTIONS = { automaticLayout: true } as const;
+
 function looksBinary(side: { content: string } | null): boolean {
   return side !== null && side.content.slice(0, BINARY_SNIFF_CHARS).includes('\u0000');
 }
@@ -135,6 +145,7 @@ function DiffBody({
           original={data.original?.content ?? ''}
           modified={data.modified?.content ?? ''}
           filename={path}
+          options={MONACO_OPTIONS}
         />
       </div>
     </>
