@@ -1,5 +1,6 @@
+import { StrictMode } from 'react';
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 import type { MachineSettings } from '@pagespace/lib/services/machines/machine-settings';
@@ -337,6 +338,75 @@ describe('SettingsTab', () => {
       },
       expected: { staleForm: false, errored: true },
     }));
+  });
+
+  test('renders the form under StrictMode (no impure updater stranding the spinner)', async () => {
+    // Next 15 enables reactStrictMode by default, so `bun run dev` always double-
+    // invokes effects and REPLAYS state updaters at render time. An updater with a
+    // side effect inside (e.g. calling setLoading from within a setSettings
+    // updater) gets replayed after the load's `finally` already cleared loading —
+    // stranding the tab on a spinner forever. This is the dev-only path, so only a
+    // StrictMode render catches it.
+    mockLoad();
+    render(
+      <StrictMode>
+        <SettingsTab machineId="m1" />
+      </StrictMode>,
+    );
+
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    assert({
+      given: 'the tab mounted under StrictMode with a successful load',
+      should: 'render the loaded form, not hang on the spinner',
+      actual: name.value,
+      expected: 'My Machine',
+    });
+  });
+
+  test('a save that settles after a machine switch never writes onto the new machine', async () => {
+    const other: MachineSettings = { ...baseSettings, name: 'Other Machine', description: 'other' };
+    fetchWithAuth.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: async () => ({ settings: url.includes('m2') ? other : baseSettings }),
+      }),
+    );
+    let failRename: (e: Error) => void = () => {};
+    apiPatch.mockImplementation(() => new Promise((_r, reject) => { failRename = reject; }));
+
+    const { rerender } = render(<SettingsTab machineId="m1" />);
+    const name = await screen.findByLabelText('Name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Renamed');
+    await userEvent.tab(); // m1's rename PATCH is now in flight
+
+    rerender(<SettingsTab machineId="m2" />);
+    await waitFor(() => assert({
+      given: 'a switch to m2',
+      should: 'show m2 settings',
+      actual: (screen.getByLabelText('Name') as HTMLInputElement).value,
+      expected: 'Other Machine',
+    }));
+
+    // m1's rename now fails. Its revert must NOT write m1's old name into m2's
+    // form — where the next blur would rename m2.
+    failRename(new Error('too late'));
+
+    // Flush the rejection and React's resulting work. This CANNOT be a `waitFor`:
+    // when the guard works, the correct outcome is that nothing happens, so a
+    // polling assertion would pass on its first tick before the rejection even
+    // propagated — asserting nothing. Drain, then assert once.
+    await act(async () => { await Promise.resolve(); });
+
+    assert({
+      given: "a stale machine's save failing after the tab moved to another machine",
+      should: "leave the new machine's form untouched and stay silent",
+      actual: {
+        name: (screen.getByLabelText('Name') as HTMLInputElement).value,
+        errored: (toast.error as ReturnType<typeof vi.fn>).mock.calls.length,
+      },
+      expected: { name: 'Other Machine', errored: 0 },
+    });
   });
 
   test('a first-load failure shows the error state and Retry refetches', async () => {

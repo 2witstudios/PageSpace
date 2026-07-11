@@ -79,21 +79,22 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    if (loadedFor.current !== machineId) {
+    const isNewMachine = loadedFor.current !== machineId;
+    if (isNewMachine) {
       // Drop the previous machine's settings before loading a different one —
       // otherwise a FAILED load would fall through to rendering the old machine's
       // name/toggles under the new machine's identity.
       setSettings(null);
       serverSettings.current = null;
     }
-    // Spinner whenever we have nothing to show for THIS machine — a different
-    // machine, or a retry after the error state. Keying on `settings` (not just
-    // the machine) also stops a return-trip to a machine whose load failed from
-    // rendering the error state while its GET is still in flight.
-    setSettings((current) => {
-      if (loadedFor.current !== machineId || current === null) setLoading(true);
-      return current;
-    });
+    // Spinner whenever we have nothing to show for THIS machine: a different
+    // machine, or a retry after the error state. `serverSettings` moves in exact
+    // lockstep with `settings` (both nulled above, both set on load, and `persist`
+    // touches neither), so the ref answers "do we have anything to show?" without
+    // reading state — reading it via a `setSettings` updater instead would be an
+    // impure updater, which StrictMode replays at render time and which strands
+    // `loading: true` after the load's `finally` has already cleared it.
+    if (isNewMachine || serverSettings.current === null) setLoading(true);
     (async () => {
       try {
         const response = await fetchWithAuth(
@@ -157,12 +158,21 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
     const revert: MachineSettingsPatch = {};
     for (const key of keys) Object.assign(revert, { [key]: settings[key] });
 
+    // The machine this save belongs to. If the tab is showing a DIFFERENT machine
+    // by the time the request settles, every write below would land on that
+    // machine's form — reverting machine A's name into machine B's input, where
+    // the next blur would rename B. Late results for a machine we've left are
+    // dropped (the resync too: it would refetch the wrong machine).
+    const forMachine = machineId;
+    const isStale = () => loadedFor.current !== forMachine;
+
     setSettings((current) => (current ? { ...current, ...patch } : current));
     pendingSavesRef.current += 1;
     setPendingSaves(pendingSavesRef.current);
     try {
-      await apiPatch('/api/machines/settings', { machineId, ...patch });
+      await apiPatch('/api/machines/settings', { machineId: forMachine, ...patch });
     } catch (error) {
+      if (isStale()) return;
       setSettings((current) => (current ? { ...current, ...revert } : current));
       if (revert.name !== undefined) setNameDraft(revert.name);
       if (revert.description !== undefined) setDescriptionDraft(revert.description ?? '');
@@ -171,7 +181,7 @@ export default function SettingsTab({ machineId }: { machineId: string }) {
     } finally {
       pendingSavesRef.current -= 1;
       setPendingSaves(pendingSavesRef.current);
-      if (pendingSavesRef.current === 0 && resyncWhenIdle.current) {
+      if (!isStale() && pendingSavesRef.current === 0 && resyncWhenIdle.current) {
         resyncWhenIdle.current = false;
         setReloadToken((t) => t + 1);
       }
