@@ -334,9 +334,12 @@ export default function AccountPage() {
     try {
       await del("/api/account", { emailConfirmation });
 
-      // Clear authentication and redirect to home
+      // Clear authentication and redirect to home. router.replace, not
+      // window.location: a hard navigation to a path outside /dashboard is
+      // cancelled and punted to Safari by the iOS shell, blanking the WebView
+      // (see lib/navigation/app-navigator.ts).
       setTimeout(() => {
-        window.location.href = "/";
+        router.replace("/");
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);

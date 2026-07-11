@@ -210,8 +210,14 @@ export default function PlanPage() {
     // Brief delay for webhook to process
     await new Promise(r => setTimeout(r, 2000));
 
-    // Hard refresh - guaranteed fresh data for both plan page and navbar
-    window.location.href = '/settings/plan?success=true';
+    // Refetch in place rather than reloading the document. A hard navigation to a
+    // path outside /dashboard is cancelled and punted to Safari by the iOS shell,
+    // blanking the WebView (see lib/navigation/app-navigator.ts); router.replace is
+    // pushState and never reaches that policy check. fetchSubscriptionData() +
+    // router.refresh() give the same post-webhook freshness the reload used to.
+    router.replace('/settings/plan?success=true');
+    router.refresh();
+    await fetchSubscriptionData();
   };
 
   const handleCheckoutCancel = () => {

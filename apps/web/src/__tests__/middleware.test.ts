@@ -19,6 +19,13 @@ const MOCK_API_CORS_HEADERS: Record<string, string> = {
 
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse: () => ({ response: NextResponse.json({ ok: true }, { status: 200 }) }),
+  // Kept faithful to the real implementation's rewrite: the whole point of the
+  // /dashboard branch is that Next emits an x-middleware-rewrite header instead
+  // of a 307, so a stub that dropped it would assert nothing.
+  createSecureRewrite: (destination: URL) => ({
+    response: NextResponse.rewrite(destination),
+    nonce: 'test-nonce',
+  }),
   createSecureErrorResponse: (body: unknown, status: number) => NextResponse.json(body, { status }),
   isPublicPageRoute: () => false,
   isPublishedSiteHost: () => false,
@@ -204,5 +211,84 @@ describe('middleware — CORS for Bearer-authenticated API routes', () => {
     expect(response.headers.get('Access-Control-Allow-Methods')).toContain('POST');
     expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
     expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+});
+
+// The iOS shell remote-loads https://pagespace.ai/dashboard. Capacitor's
+// WKNavigationDelegate cancels any top-level navigation whose URL does not start
+// with that exact string and opens it in system Safari instead, leaving the
+// WebView with no document — the black screen on every cold launch with no
+// session cookie. A *redirect* to /auth/signin trips that. A *rewrite* is not a
+// navigation at all, so the signin page renders in place and the shell survives.
+// This is scoped to /dashboard (the shell's only entry point); everywhere else
+// must keep the honest redirect and its correct URL bar.
+describe('middleware — unauthenticated /dashboard rewrites instead of redirecting', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  const rewriteTarget = (response: NextResponse): string | null =>
+    response.headers.get('x-middleware-rewrite');
+
+  it.each([['/dashboard'], ['/dashboard/drv_abc/pg_xyz']])(
+    'rewrites %s to /auth/signin, carrying the requested path as next=',
+    async (pathname) => {
+      const response = await middleware(buildRequest(pathname));
+
+      const target = rewriteTarget(response);
+      expect(target).not.toBeNull();
+      const url = new URL(target as string);
+      expect(url.pathname).toBe('/auth/signin');
+      expect(url.searchParams.get('next')).toBe(pathname);
+
+      // A rewrite is emphatically not a redirect — a 307 here is the bug.
+      expect(response.status).not.toBe(307);
+      expect(response.headers.get('location')).toBeNull();
+    },
+  );
+
+  it('preserves the query string of the requested /dashboard deep link in next=', async () => {
+    const response = await middleware(buildRequest('/dashboard/drv_abc?tab=chat'));
+
+    const url = new URL(rewriteTarget(response) as string);
+    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc?tab=chat');
+  });
+
+  it('honours an explicit next= already on the request rather than reconstructing it', async () => {
+    // How a non-/dashboard surface funnels an expired session through the one
+    // path the iOS shell will accept without losing the user's destination.
+    const response = await middleware(buildRequest('/dashboard?next=%2Fdashboard%2Fdrv_abc%2Fpg_xyz'));
+
+    const url = new URL(rewriteTarget(response) as string);
+    expect(url.searchParams.get('next')).toBe('/dashboard/drv_abc/pg_xyz');
+  });
+
+  it('drops an off-origin next= instead of passing it through', async () => {
+    const response = await middleware(buildRequest('/dashboard?next=https%3A%2F%2Fevil.example%2Fx'));
+
+    const url = new URL(rewriteTarget(response) as string);
+    // Falls back to the requested path; the attacker-supplied value never survives.
+    expect(url.searchParams.get('next')).toBe('/dashboard');
+  });
+
+  it('still REDIRECTS an unauthenticated page request outside /dashboard, with next= preserved', async () => {
+    const response = await middleware(buildRequest('/activate?user_code=ABCD-EFGH'));
+
+    expect(response.status).toBe(307);
+    expect(rewriteTarget(response)).toBeNull();
+
+    const location = new URL(response.headers.get('location') as string);
+    expect(location.pathname).toBe('/auth/signin');
+    expect(location.searchParams.get('next')).toBe('/activate?user_code=ABCD-EFGH');
+  });
+
+  it('does not rewrite for an unauthenticated API request under /api — that still 401s', async () => {
+    const response = await middleware(buildRequest('/api/pages/xyz'));
+
+    expect(response.status).toBe(401);
+    expect(rewriteTarget(response)).toBeNull();
   });
 });

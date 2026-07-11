@@ -19,8 +19,13 @@ vi.mock('@/middleware/monitoring', () => ({
   monitoringMiddleware: vi.fn((_req, handler: () => unknown) => handler()),
 }));
 const createSecureResponse = vi.fn(() => ({ response: { status: 200, headers: new Headers() } }));
+const createSecureRewrite = vi.fn((destination: URL) => ({
+  response: NextResponse.rewrite(destination),
+  nonce: 'test-nonce',
+}));
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse,
+  createSecureRewrite,
   createSecureErrorResponse: vi.fn(),
   isPublicPageRoute: vi.fn(() => false),
   isPublishedSiteHost: vi.fn(() => false),
@@ -58,14 +63,28 @@ describe('middleware — RFC 8414 discovery URL', () => {
     expect(response.status).not.toBe(307);
   });
 
+  // Control case: a protected page still gets the signin treatment, so the
+  // discovery rewrite above is demonstrably a carve-out and not the norm.
+  // Deliberately NOT /dashboard — that path is now its own carve-out (the iOS
+  // shell's entry point rewrites rather than redirects; see the case below).
   it('still redirects other unauthenticated non-API routes to sign-in (control case)', async () => {
     createSecureResponse.mockClear();
-    const req = new NextRequest('https://pagespace.ai/dashboard');
+    const req = new NextRequest('https://pagespace.ai/settings/plan');
 
     const response = await middleware(req);
 
     expect(createSecureResponse).not.toHaveBeenCalled();
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toContain('/auth/signin');
+  });
+
+  it('rewrites — never redirects — unauthenticated /dashboard, so the iOS shell is not punted to Safari', async () => {
+    createSecureResponse.mockClear();
+    const req = new NextRequest('https://pagespace.ai/dashboard');
+
+    const response = await middleware(req);
+
+    expect(response.headers.get('x-middleware-rewrite')).toContain('/auth/signin');
+    expect(response.status).not.toBe(307);
   });
 });

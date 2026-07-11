@@ -2,6 +2,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { navigateInApp } from '@/lib/navigation/app-navigator';
 
 interface User {
   id: string;
@@ -776,10 +777,11 @@ export const authStoreHelpers = {
       const state = useAuthStore.getState();
       state.endSession();
 
-      // Redirect to login page
-      if (typeof window !== 'undefined') {
-        window.location.href = '/auth/signin';
-      }
+      // Route to the login page. Deliberately NOT window.location: a hard
+      // navigation to /auth/signin is cancelled and punted to Safari by the iOS
+      // shell's navigation policy, blanking the WebView on session expiry (see
+      // lib/navigation/app-navigator.ts).
+      navigateInApp('/auth/signin');
     };
 
     const handleAuthCleared = () => {

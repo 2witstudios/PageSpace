@@ -4,12 +4,14 @@ import { monitoringMiddleware } from '@/middleware/monitoring';
 import {
   applyApiCorsHeaders,
   createSecureResponse,
+  createSecureRewrite,
   createSecureErrorResponse,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
+import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
   validateOriginForMiddleware,
@@ -36,6 +38,54 @@ import { getClientIP } from '@/lib/security/edge-client-ip';
 const MCP_BEARER_PREFIX = `Bearer ${MCP_TOKEN_PREFIX}`;
 const SESSION_BEARER_PREFIX = `Bearer ${SESSION_TOKEN_PREFIX}`;
 const OAUTH_BEARER_PREFIX = `Bearer ${OAUTH_ACCESS_TOKEN_PREFIX}`;
+
+const SIGNIN_PATH = '/auth/signin';
+
+// The iOS shell remote-loads https://pagespace.ai/dashboard (apps/ios/capacitor.config.ts).
+// Capacitor decides every top-level navigation in WebViewDelegationHandler.swift:98-116:
+// with no `server.allowNavigation` the host allowlist is empty, so it falls through to a
+// raw string-prefix test of the target URL against `server.url` — path included. A signin
+// *redirect* fails that test, gets opened in system Safari, and is cancelled in the
+// WebView, which is then left holding no document at all: the black screen. A *rewrite*
+// is not a navigation, so the policy delegate is never consulted and the signin page just
+// renders in place. Only /dashboard needs this — it is the shell's sole entry point — and
+// scoping it there keeps the honest redirect (and its correct URL bar) everywhere else.
+const REWRITE_SIGNIN_ROOT = '/dashboard';
+
+const isShellEntryPath = (pathname: string): boolean =>
+  pathname === REWRITE_SIGNIN_ROOT || pathname.startsWith(`${REWRITE_SIGNIN_ROOT}/`);
+
+/**
+ * Signin URL carrying the deep link the user was denied, so signin can return them
+ * there. Honours an explicit `next=` already on the request (a hard nav to
+ * `/dashboard?next=…` from a non-/dashboard surface is how the app funnels expiry
+ * through the shell-safe path) and otherwise reconstructs it from the request. Only
+ * targets the signin surface actually accepts survive — anything else is dropped
+ * rather than passed along to be rejected there.
+ */
+const buildSigninUrl = (req: NextRequest): URL => {
+  const url = new URL(SIGNIN_PATH, req.url);
+  const explicitNext = req.nextUrl.searchParams.get('next');
+
+  let candidate: string;
+  if (isSafeNextPath({ path: explicitNext, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
+    candidate = explicitNext as string;
+  } else {
+    // Reconstruct from the request, minus any `next` we just rejected — leaving a
+    // tainted one in the query string would make the rebuilt path fail validation
+    // too and cost the user the rest of their query params along with it.
+    const search = new URLSearchParams(req.nextUrl.search);
+    search.delete('next');
+    const query = search.toString();
+    candidate = query ? `${req.nextUrl.pathname}?${query}` : req.nextUrl.pathname;
+  }
+
+  if (isSafeNextPath({ path: candidate, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })) {
+    url.searchParams.set('next', candidate);
+  }
+
+  return url;
+};
 
 const IS_ONPREM = process.env.DEPLOYMENT_MODE === 'onprem';
 const IS_TENANT = process.env.DEPLOYMENT_MODE === 'tenant';
@@ -273,7 +323,17 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
         return createSecureErrorResponse('Authentication required', 401, isProduction, isSecureRequest(req));
       }
 
-      return NextResponse.redirect(new URL('/auth/signin', req.url));
+      const signinUrl = buildSigninUrl(req);
+
+      if (isShellEntryPath(pathname)) {
+        // disableCOEP mirrors what the /auth/* branch above would have applied: the
+        // signin page's OAuth popups and Google One Tap iframe need it, and the
+        // rewrite means shouldDisableCOEP() only ever sees the /dashboard pathname.
+        const { response } = createSecureRewrite(signinUrl, isProduction, req, { disableCOEP: true });
+        return response;
+      }
+
+      return NextResponse.redirect(signinUrl);
     }
 
     // Session cookie exists - let request through
