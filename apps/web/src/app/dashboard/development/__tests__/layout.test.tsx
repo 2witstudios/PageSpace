@@ -48,7 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hostRenders.length = 0;
   usePendingSessionStore.setState({ pending: null });
-  useMachineWorkspaceStore.setState({ workspaces: {} });
+  useMachineWorkspaceStore.setState({ machines: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseAllMachines.mockReturnValue(allMachines());
 });

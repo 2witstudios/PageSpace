@@ -100,7 +100,8 @@ export function deriveMachineSessionKey({
   return `pgs-sbx-${digest}`;
 }
 
-export type MachineTeardownReason = 'idle' | 'session_end';
+/** The only teardown reason left: idle sandboxes hibernate on the platform, they are never destroyed by this planner. */
+export type MachineTeardownReason = 'session_end';
 export type MachineLifecycleIntent = 'run' | 'end';
 
 export interface MachineSessionRef {
@@ -121,8 +122,6 @@ export interface PlanMachineLifecycleInput {
   now: Date;
   idleTimeoutMs?: number;
   intent?: MachineLifecycleIntent;
-  /** When true, idle sessions return noop instead of teardown — Sprites hibernates the VM. */
-  persistent?: boolean;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
@@ -133,7 +132,6 @@ export function planMachineLifecycle({
   now,
   idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
   intent = 'run',
-  persistent = false,
 }: PlanMachineLifecycleInput): MachineLifecyclePlan {
   // Cleanup is unconditional on 'end' intent — authorization never gates cleanup.
   if (intent === 'end') {
@@ -154,9 +152,9 @@ export function planMachineLifecycle({
 
   const idleFor = now.getTime() - existingSession.lastActiveAt.getTime();
   if (idleFor >= idleTimeoutMs) {
-    // Persistent sandboxes hibernate on their own — keep the session store record alive.
-    if (persistent) return { action: 'noop' };
-    return { action: 'teardown', sandboxId: existingSession.sandboxId, reason: 'idle' };
+    // Sandboxes hibernate on their own — keep the session store record alive,
+    // never destroy the filesystem for mere idleness.
+    return { action: 'noop' };
   }
 
   return { action: 'resume', sandboxId: existingSession.sandboxId };
@@ -339,6 +337,9 @@ export async function acquireMachineSession(
   try {
     const existing = await deps.store.findBySessionKey(key);
 
+    // Sprites hibernate when idle and wake on demand, so an idle terminal VM is
+    // always resumed, never destroyed — the planner returns `noop` on idle
+    // (handled below as a reconnect), and can never express idle teardown.
     const plan = planMachineLifecycle({
       canRun,
       existingSession: existing
@@ -346,10 +347,6 @@ export async function acquireMachineSession(
         : null,
       now: deps.now(),
       intent: 'run',
-      // Sprites hibernate when idle and wake on demand, so an idle terminal VM
-      // must be resumed, not destroyed — `persistent` makes the planner return
-      // `noop` on idle (handled below as a reconnect) instead of `teardown`.
-      persistent: true,
     });
 
     // Reconnect to an existing session via getOrCreate. This covers: (a) normal
@@ -413,10 +410,10 @@ export async function acquireMachineSession(
         return await provisionFreshMachine({ key, input });
 
       case 'resume':
-        return await reconnectExisting();
-
       case 'noop':
-        // Persistent-idle: existing is guaranteed (noop only arises with a session).
+        // 'resume' (warm) and 'noop' (hibernating-idle) both reconnect; `existing`
+        // is guaranteed for both — the planner only returns either action when
+        // an existing session was passed in.
         return existing
           ? await reconnectExisting()
           : { ok: false, reason: 'error' };

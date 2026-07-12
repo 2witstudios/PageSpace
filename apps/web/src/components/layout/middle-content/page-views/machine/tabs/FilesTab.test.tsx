@@ -9,7 +9,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 
 // Stub the branch picker: expose one button per node kind so a test can drive
-// exactly the selection CodeTab reacts to, without pulling MachineTree's whole
+// exactly the selection FilesTab reacts to, without pulling MachineTree's whole
 // projects/branches hook subtree.
 vi.mock('../workspace/MachineTree', () => ({
   default: ({ onSelectNode }: { onSelectNode?: (node: unknown) => void }) => (
@@ -38,7 +38,7 @@ vi.mock('../workspace/MachineTree', () => ({
  * tab's correctness depends on: it self-keys on `${machineId}/${projectName}/
  * ${branchName}`, so mounting it — or handing it a new branch — fetches that
  * branch's root listing. A dumb stub that never fetches would let the "no wasted
- * listing" test pass even with CodeTab's key deleted, which is exactly the hole
+ * listing" test pass even with FilesTab's key deleted, which is exactly the hole
  * a reviewer caught: the wasted listing came from the REAL tree, so a stub that
  * doesn't list cannot witness it.
  */
@@ -63,15 +63,15 @@ vi.mock('../workspace/MachineFileTree', () => ({
   },
 }));
 
-// Stub the main pane so CodeTab's composition (which file, which branch) is what's asserted.
-vi.mock('./CodeFilePane', () => ({
+// Stub the main pane so FilesTab's composition (which file, which branch) is what's asserted.
+vi.mock('./FilesFilePane', () => ({
   default: ({ path, branchName }: { path: string; branchName: string }) => (
     <div data-testid="file-pane">pane:{branchName}:{path}</div>
   ),
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import CodeTab from './CodeTab';
+import FilesTab from './FilesTab';
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -85,7 +85,7 @@ const cannedFetch = (perBranch: Record<string, () => Promise<Response>>) =>
     return jsonResponse({ error: 'unexpected branch' }, 500);
   });
 
-describe('CodeTab', () => {
+describe('FilesTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     treeListings.length = 0;
@@ -93,10 +93,10 @@ describe('CodeTab', () => {
 
   test('shows the branch prompt before any branch is picked', () => {
     cannedFetch({});
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     assert({
-      given: 'a freshly mounted Code tab',
+      given: 'a freshly mounted Files tab',
       should: 'prompt to select a branch and probe nothing',
       actual: {
         prompt: screen.queryByText('Select a branch to browse its checkout.') !== null,
@@ -108,7 +108,7 @@ describe('CodeTab', () => {
 
   test('selecting a machine (non-branch) node is ignored', async () => {
     cannedFetch({ main: async () => jsonResponse({ entries: [] }) });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-machine'));
 
@@ -125,7 +125,7 @@ describe('CodeTab', () => {
 
   test('picking a ready branch probes its checkout ONCE and mounts the file tree', async () => {
     cannedFetch({ main: async () => jsonResponse({ entries: [] }) });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     const tree = await waitFor(() => screen.getByTestId('file-tree'));
@@ -147,7 +147,7 @@ describe('CodeTab', () => {
       main: async () => jsonResponse({ entries: [] }),
       dev: async () => jsonResponse({ entries: [] }),
     });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await waitFor(() => screen.getByText('tree:main'));
@@ -169,7 +169,7 @@ describe('CodeTab', () => {
 
   test('re-picking the branch already open keeps the open file', async () => {
     cannedFetch({ main: async () => jsonResponse({ entries: [] }) });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));
@@ -187,7 +187,7 @@ describe('CodeTab', () => {
 
   test('a not-yet-cloned branch shows the empty state, not the file tree', async () => {
     cannedFetch({ main: async () => jsonResponse({ error: 'Branch machine not_found', reason: 'not_found' }, 404) });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await waitFor(() => screen.getByTestId('checkout-absent'));
@@ -205,7 +205,7 @@ describe('CodeTab', () => {
 
   test("a vanished sandbox reports the checkout is gone", async () => {
     cannedFetch({ main: async () => jsonResponse({ error: 'Branch machine vanished', reason: 'vanished' }, 503) });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     const gone = await waitFor(() => screen.getByText('This branch checkout is gone'));
@@ -224,7 +224,7 @@ describe('CodeTab', () => {
     cannedFetch({
       main: async () => jsonResponse({ error: 'You do not have access to this machine' }, 403),
     });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await waitFor(() => screen.getByTestId('checkout-error'));
@@ -249,7 +249,7 @@ describe('CodeTab', () => {
           ? jsonResponse({ entries: [] })
           : jsonResponse({ error: 'This branch checkout is unavailable', reason: 'not_found' }, 404),
     });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await waitFor(() => screen.getByTestId('checkout-absent'));
@@ -271,7 +271,7 @@ describe('CodeTab', () => {
 
   test('selecting a file in the tree opens it in the main pane', async () => {
     cannedFetch({ main: async () => jsonResponse({ entries: [] }) });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));
@@ -290,7 +290,7 @@ describe('CodeTab', () => {
       main: async () => jsonResponse({ entries: [] }),
       dev: async () => jsonResponse({ entries: [] }),
     });
-    render(<CodeTab machineId="machine-1" />);
+    render(<FilesTab machineId="machine-1" />);
 
     await userEvent.click(screen.getByText('pick-main'));
     await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));

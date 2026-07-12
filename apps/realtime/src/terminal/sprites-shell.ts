@@ -13,7 +13,10 @@ import {
   materializeSeen,
   planReplayEmission,
   rememberDelivered,
+  resolveGiveUpAction,
+  type AttachKind,
   type GiveUpCause,
+  type ReplayEmission,
   type ReplayState,
   type SeenTail,
 } from './replay-dedupe';
@@ -314,7 +317,7 @@ export function openPtyShell({
     onExit(exitCode);
   }
 
-  function wire(cmd: SpriteCommandLike): void {
+  function wire(cmd: SpriteCommandLike, attachKind: AttachKind): void {
     // Per-command staleness. A keepalive timeout in the SDK emits 'error' and
     // then closes the socket, which makes the SAME dead command also emit a
     // spurious 'exit' (code 0 or 1). A genuine shell exit (user typed `exit`)
@@ -369,10 +372,14 @@ export function openPtyShell({
      * latched permanently by one blip. Replacing the history with the replayed bytes
      * restores the invariant, because a replay IS a contiguous run of that stream.
      */
-    const deliver = (bytes: Buffer, mode: 'append' | 'restart' = 'append') => {
+    const recordHistory = (bytes: Buffer, mode: 'append' | 'restart') => {
       if (bytes.length === 0) return;
       if (mode === 'restart') seenTail = EMPTY_SEEN;
       seenTail = rememberDelivered(seenTail, bytes);
+    };
+    const deliver = (bytes: Buffer, mode: 'append' | 'restart' = 'append') => {
+      if (bytes.length === 0) return;
+      recordHistory(bytes, mode);
       onOutput(bytes.toString('utf8'));
     };
     // Bytes that arrived while a replay was being held, and that must not be deduped:
@@ -429,7 +436,7 @@ export function openPtyShell({
      *   its scrollback", not as "raise the cap" — a ring over the cap is the diagnosis only if
      *   the shell was quiet, and neither field here can tell you that.
      */
-    const reportUnaligned = (cause: GiveUpCause, bytes: number) => {
+    const reportUnaligned = (cause: GiveUpCause, bytes: number, action: 'emit' | 'discard') => {
       // WARN, not info: this is the whole safety net under two constants that bracket a
       // server value nobody has measured, and `.env.example` tells operators to run
       // production at LOG_LEVEL=warn. At info, the one signal that this feature has
@@ -438,7 +445,45 @@ export function openPtyShell({
         cause,
         unalignedBytes: bytes,
         seenBytes: seenTail.bytes,
+        outcome: action === 'discard' ? 'discarded' : 'reprinted',
       });
+    };
+
+    /**
+     * A give-up's terminal action, resolved by `attachKind` AND burst size (see
+     * `resolveGiveUpAction`): shown (today's baseline — a fresh session, this shell's first
+     * attach, or a burst too large to plausibly be a mere redraw), or discarded (a small give-up
+     * on a transparent in-place reconnect).
+     *
+     * Discarding means these bytes never reach `onOutput` at all — not "shown to someone else
+     * instead." `onOutput` is the ONE sink this shell has (the caller wires it to both the live
+     * viewer and whatever app-level scrollback buffer a later viewer catches up from — see
+     * `agent-terminal-handler.ts`'s `attachToLiveSession`), so a discard is total loss from every
+     * consumer of it, not just the connection whose reconnect triggered the give-up. That is the
+     * bet `resolveGiveUpAction`'s size bound is deliberately scoped around — see its own doc.
+     *
+     * Either way the history RESTARTS to these bytes: a give-up's bytes ARE a contiguous run
+     * of the stream regardless of whether they are shown, and recording them (via
+     * `recordHistory`, not `deliver`, on the discard path) is what keeps the NEXT reconnect's
+     * dedupe working instead of latching an empty-then-broken history.
+     */
+    const settleGiveUp = (emit: Buffer, cause: GiveUpCause) => {
+      const action = resolveGiveUpAction({ attachKind, burstBytes: emit.length });
+      reportUnaligned(cause, emit.length, action);
+      if (action === 'discard') recordHistory(emit, 'restart');
+      else deliver(emit, 'restart');
+    };
+
+    /**
+     * The dispatch every `ReplayEmission` (from either `planReplayEmission` or `flushReplay`)
+     * goes through: a give-up is SETTLED (shown or discarded, by `settleGiveUp`); anything else
+     * — the aligned/suppress-nothing case, and the "nothing to dedupe" pass-through — is just
+     * delivered. Shared by both call sites (the live `stdout` handler and `closeReplayWindow`)
+     * so the two can't drift out of sync on what counts as a give-up.
+     */
+    const resolveEmission = ({ emit, history, giveUp }: Pick<ReplayEmission, 'emit' | 'history' | 'giveUp'>) => {
+      if (giveUp !== undefined) settleGiveUp(emit, giveUp);
+      else deliver(emit, history);
     };
 
     /** Close the replay window: hand over whatever we were still holding. */
@@ -447,9 +492,7 @@ export function openPtyShell({
       if (closed) return;
       const { emit, state, history, giveUp } = flushReplay(replay);
       replay = state;
-      if (giveUp !== undefined) reportUnaligned(giveUp, emit.length);
-      // A give-up RESTARTS the history rather than extending it — see `deliver`.
-      deliver(emit, history);
+      resolveEmission({ emit, history, giveUp });
       releaseOutOfBand();
     };
 
@@ -515,13 +558,12 @@ export function openPtyShell({
 
       const { emit, state, history, giveUp } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
-      // A give-up re-emits bytes the history may already hold, so it RESTARTS that history
-      // instead of extending it (see `deliver`). It also has to be REPORTED here: the byte-cap
-      // give-up resolves the window inside the pure core, so `closeReplayWindow` — and its log
-      // — never runs. Without this the one failure the cap exists to catch would be the only
-      // one that happens silently.
-      if (giveUp !== undefined) reportUnaligned(giveUp, emit.length);
-      deliver(emit, history);
+      // A give-up has to be SETTLED here rather than just delivered: the byte-cap give-up
+      // resolves the window inside the pure core, so `closeReplayWindow` — and its report —
+      // never runs. Without this the one failure the cap exists to catch would be the only one
+      // that happens silently. `settleGiveUp` (via `resolveEmission`) also decides
+      // show-vs-discard by `attachKind` and burst size.
+      resolveEmission({ emit, history, giveUp });
       if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over: on the
       // next quiet gap, and on a deadline a chatty shell cannot push out by talking.
@@ -724,7 +766,9 @@ export function openPtyShell({
           sessionGeneration += 1;
           wiredBinding = { id: currentSessionId };
           current = sprite.attachSession(currentSessionId, { cols: lastCols, rows: lastRows });
-          wire(current);
+          // A transparent in-place reconnect: the viewer never left, so a SMALL give-up on
+          // THIS attach's replay is discarded rather than shown — see `resolveGiveUpAction`.
+          wire(current, 'transparent-attach');
           reconnecting = false;
           return;
         }
@@ -739,9 +783,11 @@ export function openPtyShell({
         // Either the known id is dead (Sprite paused then cold-woke) or we never
         // learned one. Start a fresh shell transparently; its own session_info
         // frame names it, overwriting any dangling streamSessionId, so the user
-        // sees a new prompt rather than exit -1.
+        // sees a new prompt rather than exit -1. `launchFreshSession` already clears
+        // `seenTail`, so there is nothing a give-up here could be redundant WITH —
+        // 'fresh' keeps it shown, matching a brand-new shell's own scrollback.
         launchFreshSession();
-        wire(current);
+        wire(current, 'fresh');
         reconnecting = false;
         return;
       }
@@ -749,7 +795,9 @@ export function openPtyShell({
       wiredBinding = { id: plan.id };
       currentSessionId = plan.id;
       current = sprite.attachSession(plan.id, { cols: lastCols, rows: lastRows });
-      wire(current);
+      // Same reasoning as the optimistic-reattach branch above: the viewer has been
+      // continuously attached, so a SMALL give-up on this reconnect (if any) is discarded.
+      wire(current, 'transparent-attach');
       reconnecting = false;
     } catch {
       reconnecting = false;
@@ -769,7 +817,11 @@ export function openPtyShell({
   } else {
     launchFreshSession();
   }
-  wire(current);
+  // This shell's FIRST wire(), whether attaching to a persisted session or creating fresh: a
+  // fresh-viewer attach, not a transparent reconnect — nothing has been shown yet in this
+  // process (`seenTail` starts empty), so there is nothing a give-up could be redundant with.
+  // Discard is scoped to reconnects INSIDE this shell's own lifetime — see `resolveGiveUpAction`.
+  wire(current, 'fresh');
 
   return {
     write: (data) => { if (!closed) current.stdin?.write(data); },
