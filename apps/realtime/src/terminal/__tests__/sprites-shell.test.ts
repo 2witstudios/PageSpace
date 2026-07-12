@@ -1269,6 +1269,44 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([history, '$ echo done\r\n']);
     });
 
+    it('given stderr from a SUPERSEDED command, does not jump the replay its successor is holding', async () => {
+      // Same reordering hazard as the stdout drain: the dead command's own window is
+      // long closed, so without the guard its bytes would render ahead of the older
+      // stdout the live command is still holding.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'unalignable output\r\n'); // held
+      cmd._stderr.emit('data', 'late stderr\r\n'); // the dead command speaks
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // The held stdout came out FIRST, then the late stderr — wire order preserved.
+      const shown = outputs(onOutput).join('');
+      expect(shown.indexOf('unalignable output')).toBeLessThan(shown.indexOf('late stderr'));
+    });
+
+    it('given stderr arrives after the terminal is killed, does not deliver it', async () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      const onOutput = vi.fn();
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('spawn');
+      shell.kill();
+      cmd._stderr.emit('data', 'too late\r\n');
+
+      expect(onOutput).not.toHaveBeenCalled();
+    });
+
     it('given stdout arrives as Buffers (the production shape), dedupes on bytes just the same', async () => {
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();

@@ -250,6 +250,33 @@ describe('planReplayEmission incremental scan (pure)', () => {
   });
 });
 
+describe('empty inputs (pure)', () => {
+  assert({
+    given: 'an empty delivery (a chunk that carried no bytes)',
+    should: 'leave the history untouched',
+    actual: (() => {
+      const before = rememberDelivered(EMPTY_SEEN, buf('output'));
+      const after = rememberDelivered(before, Buffer.alloc(0));
+      return { same: after === before, text: materializeSeen(after).toString('utf8') };
+    })(),
+    expected: { same: true, text: 'output' },
+  });
+
+  assert({
+    given: 'an empty chunk on a resolved window',
+    should: 'emit nothing and stay resolved',
+    actual: plan({ anchor: BANNER, chunk: '', resolved: true }),
+    expected: { emit: '', pending: '', resolved: true },
+  });
+
+  assert({
+    given: 'an empty chunk while bytes are being held',
+    should: 'keep holding them, unchanged',
+    actual: plan({ anchor: BANNER, pending: 'half a replay', chunk: '' }),
+    expected: { emit: '', pending: 'half a replay', resolved: false },
+  });
+});
+
 describe('flushReplay (pure)', () => {
   assert({
     given: 'buffered bytes the search could never align',
