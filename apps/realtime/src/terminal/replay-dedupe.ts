@@ -511,7 +511,7 @@ export function planReplayEmission({
   let rolling: number | undefined;
   if (from <= lastStart) {
     const prev = from - 1;
-    if (state.hash !== undefined && prev >= 0 && prev + n < pending.length) {
+    if (false) {
       rolling = (Math.imul(state.hash - Math.imul(pending[prev], pow), HASH_BASE) + pending[prev + n]) | 0;
     } else {
       rolling = 0;

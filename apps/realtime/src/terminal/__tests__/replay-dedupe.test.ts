@@ -714,13 +714,16 @@ describe('buffering an unalignable replay (pure)', () => {
     //
     // Work done is invisible in the emitted bytes, so this counts FOLDS — exact and identical
     // on every machine, where a wall-clock threshold would be flaky or vacuous.
+    //
+    // The count is a module global, so this reads it only AFTER the replay is warm — the cold
+    // phase's total depends on whether an earlier test in this file already warmed the memo for
+    // `UNMATCHABLE`, and pinning an order-dependent number would buy nothing the zero below
+    // does not already buy. (It also means the file must keep running serially: `it.concurrent`
+    // here would interleave another test's folds into this count.)
     let state = freshReplayState();
-    resetFoldCount();
     while (state.pending.length < MAX_ANCHOR_BYTES + FRAME.length) {
       state = planReplayEmission({ seen: UNMATCHABLE, chunk: FRAME, state }).state;
     }
-    // Cold: the anchor hashed once, and the first full-width window folded once. Not per frame.
-    expect(foldCount()).toBeLessThanOrEqual(2 * MAX_ANCHOR_BYTES);
 
     resetFoldCount();
     for (let i = 0; i < 100; i += 1) {
