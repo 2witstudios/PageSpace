@@ -496,18 +496,37 @@ describe('rememberDelivered (pure)', () => {
     expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
   });
 
-  it('given the delivery size that coalesces WORST, should still hold the block count to the low tens', () => {
-    // A byte over half a block is the adversarial size: it can never fold into a tail
-    // block that is itself over half full, so every block closes at just over half and
-    // the count doubles to 32. That is the real bound the materialize-per-attach cost is
-    // priced against — not the 16 a naive MAX_SEEN_BYTES / block-size would suggest.
-    let tail = EMPTY_SEEN;
-    const worst = Buffer.alloc(2049, 0x61);
-    for (let i = 0; i < 200; i += 1) tail = rememberDelivered(tail, worst); // well past the bound
+  it('given delivery sizes that coalesce WORST, should still hold the block count to the low tens', () => {
+    // The real bound is 2 x MAX_SEEN_BYTES / block, not the 16 that dividing them suggests.
+    // Two patterns reach it from opposite directions: a byte over half a block, which can
+    // never fold into a tail that is itself over half full; and a 1-byte delivery alternating
+    // with a full one, which leaves single-byte blocks behind. Blocks can be tiny — they just
+    // cannot be tiny CONSECUTIVELY, which is what holds the count down.
+    const blocks = (deliveries: Buffer[], rounds: number) => {
+      let tail = EMPTY_SEEN;
+      for (let i = 0; i < rounds; i += 1) for (const d of deliveries) tail = rememberDelivered(tail, d);
+      expect(tail.bytes).toBe(MAX_SEEN_BYTES); // each pattern runs well past the bound
+      expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
+      return tail.chunks.length;
+    };
+    const CAP = (2 * MAX_SEEN_BYTES) / 4096; // 32
 
-    expect(tail.bytes).toBe(MAX_SEEN_BYTES);
-    expect(tail.chunks.length).toBeLessThanOrEqual((2 * MAX_SEEN_BYTES) / 4096 + 1);
-    expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
+    expect(blocks([Buffer.alloc(2049, 0x61)], 200)).toBeLessThanOrEqual(CAP);
+    expect(blocks([buf('x'), Buffer.alloc(4096, 0x61)], 200)).toBeLessThanOrEqual(CAP);
+  });
+
+  it('given delivered bytes that are a VIEW into a larger buffer, should copy them into the history, not alias it', () => {
+    // `emitted` is typically a view into the replay arena or Node's socket pool. Keeping the
+    // view would pin the whole parent allocation — up to 8 MiB of arena — inside a 64 KiB
+    // history, and would leave the history's bytes at the mercy of whoever owns that parent.
+    const parent = Buffer.alloc(64 * 1024, 0x61);
+    const view = parent.subarray(0, 16);
+
+    const tail = rememberDelivered(EMPTY_SEEN, view);
+    parent.fill(0x5a); // the owner reuses its buffer
+
+    expect(materializeSeen(tail).toString()).toBe('a'.repeat(16)); // history unchanged
+    expect(tail.chunks[0].buffer).not.toBe(parent.buffer); // and not pinning the parent
   });
 
   it('given large deliveries, should keep them as separate blocks (no needless re-copy)', () => {

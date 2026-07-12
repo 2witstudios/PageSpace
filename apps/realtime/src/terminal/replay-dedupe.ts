@@ -126,6 +126,13 @@ export const MIN_CORROBORATION_BYTES = 4 * 1024;
  * thousands of offsets; without a bound, each one would cost a corroboration
  * compare, on the realtime process's event loop, driven by bytes the sandbox
  * chose. Giving up early is safe — it emits verbatim.
+ *
+ * It bounds a CHUNK's search (8 candidates, each a compare of at most `seen`), not an
+ * ATTACH's: every chunk gets a fresh budget, so output engineered to be self-similar can
+ * spend the full budget on all of them. What bounds the total is the replay window the
+ * caller closes and MAX_PENDING_BYTES — worst measured is ~1.5s of CPU for a 4 MiB
+ * replay in 64-byte frames, spent ~23µs at a time between chunks. It costs throughput,
+ * never a stalled event loop.
  */
 export const MAX_MATCH_CANDIDATES = 8;
 
@@ -269,10 +276,12 @@ export const EMPTY_SEEN: SeenTail = { chunks: [], bytes: 0 };
  *
  * Caps both the copy a small delivery pays (it rewrites at most this much) and the number
  * of blocks the history can hold. That block bound is 2 × MAX_SEEN_BYTES / this — 32, not
- * 16: a block is only ever closed because the next delivery would overflow it, so every
- * block except the head holds MORE than half of this, and a stream of deliveries just over
- * half (2049 bytes) closes each one at just over half. Either way the count is the low tens
- * the materialize-per-attach cost is priced against.
+ * the 16 that dividing the two would suggest. Individual blocks CAN be tiny (alternate a
+ * 1-byte delivery with a 4 KiB one and every other block is a single byte), but they cannot
+ * be tiny in a row: a block is closed only because the next delivery would overflow it, so
+ * a closed block plus the delivery that closed it exceed this together. Consecutive blocks
+ * sum past the block size, and pairing them bounds the count at twice the naive figure.
+ * Either way it is the low tens the materialize-per-attach cost is priced against.
  */
 const COALESCE_BLOCK_BYTES = 4 * 1024;
 
