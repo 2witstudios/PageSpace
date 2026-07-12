@@ -351,9 +351,11 @@ export function openPtyShell({
     };
     cancelReplayTimers = cancelTimers;
     /**
-     * Hand bytes to the client, and record them as history — `seen` is exactly "what this
-     * client has been shown", and it is what the next reconnect's replay is matched
-     * against.
+     * Hand bytes to the client, and record them as history. `seen` is what the next
+     * reconnect's replay is matched against, so it holds the REPLAYABLE stream — the bound
+     * session's stdout, and only that. Bytes shown to the client out of band (stderr, a
+     * foreign session's drain) go out through `emitOutOfBand` and are never recorded: no
+     * replay contains them, and splicing them in would break the run the anchor bets on.
      *
      * `restart` is for an UNALIGNED emission: a replay we could not place, re-emitted
      * verbatim. Those bytes are (mostly) a duplicate of history we already hold, so

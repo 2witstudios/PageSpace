@@ -145,8 +145,8 @@ export const MAX_MATCH_CANDIDATES = 8;
  * search never reaches it, the replay is emitted verbatim, and it happens again on the NEXT
  * reconnect, and the next. That is not a degradation that heals — it is the original bug,
  * reprinting the whole scrollback every 45 seconds, for any terminal whose ring exceeds this
- * number. (Fuzzing a 1.5 MiB ring against a 1 MiB cap reproduces exactly that: ~2 MB
- * reprinted on every idle cycle, indefinitely.)
+ * number. (Fuzzing a 1.5 MiB ring against a 1 MiB cap reproduces exactly that: the whole
+ * ring — 1.5 MiB, the reprint is the ring, exactly — on every idle cycle, indefinitely.)
  *
  * So this errs large, deliberately. Erring large costs transient memory during a reconnect;
  * erring small costs the entire feature for the terminals that need it most — the ones with
