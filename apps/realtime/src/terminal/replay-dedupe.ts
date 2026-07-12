@@ -66,7 +66,8 @@
  *     compare what is not there), and a replica of the anchor ALONE — 8 KiB — is accepted at
  *     a replay's head. That is the weakest point: a full-screen TUI repaint landing exactly on
  *     the ring's boundary can produce one. And when `seen` is shorter than the anchor bound
- *     the anchor IS the whole history, so it collapses to `seen.length` (512 B demonstrated).
+ *     the anchor IS the whole history, so it collapses to `seen.length` — which for a young
+ *     terminal is a few hundred bytes.
  *
  *   - What such a match can COST (the magnitude): everything in front of it that was never
  *     proven — `at - depth` bytes — goes with it. That is bounded by the replay window, not by

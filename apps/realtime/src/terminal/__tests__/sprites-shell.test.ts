@@ -1124,11 +1124,14 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(afterRecovery); // recovered, and stayed recovered
     });
 
-    it('given a replay that overflows the byte cap, restarts the history from it (not appends)', async () => {
+    it('given a replay that overflows the byte cap, emits it and leaves a usable history', async () => {
       // The other give-up path: the replay never aligns and grows past MAX_PENDING_BYTES, so
-      // it is emitted verbatim by the pure core rather than the window timer. It must
-      // restart the history for the same reason the timer flush does — appending a duplicate
-      // of the past breaks the run, and an idle terminal never recovers from that.
+      // the pure core emits it verbatim rather than the window timer. (Whether that emission
+      // 'restarts' or 'appends' the history is unobservable HERE by construction — it is
+      // larger than the whole history, so the retention trim evicts the past either way. The
+      // flag itself is asserted at the source, in replay-dedupe.test.ts.) What this pins is
+      // what the shell must guarantee: the bytes reach the user, and the history that comes
+      // out the other side still dedupes.
       const cmd = buildFakeCommand();
       const attach1 = buildFakeCommand();
       const attach2 = buildFakeCommand();
@@ -1498,7 +1501,7 @@ describe('openPtyShell', () => {
 
     it('given the replay ALREADY delivered the drain, a later fresh session does not repeat it', async () => {
       // The other half of holding the drain: once a replay has actually carried those
-      // bytes to the client, the hold must be released. Otherwise the next fresh session
+      // bytes to the client, they must not be shown again. Otherwise the next fresh session
       // — which flushes what it is holding, on the grounds that nothing will replay it —
       // would hand the user the same bytes a second time.
       const cmd = buildFakeCommand();
@@ -1515,7 +1518,7 @@ describe('openPtyShell', () => {
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
-      cmd._stdout.emit('data', 'X'); // drained late; held for the replay
+      cmd._stdout.emit('data', 'X'); // drained late; recorded, so the replay recognises it
       attachCmd._stdout.emit('data', `${BANNER}X`); // the replay delivers it
       await vi.advanceTimersByTimeAsync(2000);
 
@@ -1569,12 +1572,12 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(afterFlush); // nothing reprinted
     });
 
-    it('given the reattach receives PART of a replay and then dies, still delivers the held drain', async () => {
-      // "Did any replay byte arrive?" is not the question. A drain sits at the END of the
-      // session's ring, so a PREFIX of the replay cannot have carried it. While the socket
-      // lives the rest of the burst still streams in and delivers it — but once the socket
-      // is dead nothing will, and one arrived frame was enough to make us throw the hold
-      // away. The shell's panic died with it.
+    it('given a drain, a PARTIAL replay, then a socket death and a fresh session, delivers the drain exactly once', async () => {
+      // A drain is never withheld waiting for a replay to carry it — that idea was tried and
+      // it cost bytes every time. It is delivered when it arrives, and recorded, so the replay
+      // that also carries it recognises it. Here the replay never completes (the socket dies
+      // mid-burst) and the session is gone by the next reconnect: nothing else will ever
+      // deliver those bytes, and nothing must deliver them twice either.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
@@ -1589,23 +1592,26 @@ describe('openPtyShell', () => {
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500); // reattached to sess-1
-      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // drained late; held for the replay
+      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // the dying socket's last words
 
       // The replay starts arriving — and the socket dies MID-BURST.
       attachCmd._emitter.emit('spawn');
-      attachCmd._stdout.emit('data', BANNER.slice(0, 10)); // a prefix: cannot contain the drain
+      attachCmd._stdout.emit('data', `${BANNER}panic: goodbye\r\n`.slice(0, 10)); // a prefix
       sprite.listSessions.mockResolvedValue([]); // the session died with the Sprite
       attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(1000);
+      freshCmd._emitter.emit('spawn');
+      freshCmd._stdout.emit('data', '$ '); // the replacement shell
+      await vi.advanceTimersByTimeAsync(2000);
 
-      expect(outputs(onOutput).join('')).toContain('panic: goodbye\r\n');
+      const shown = outputs(onOutput).join('');
+      expect(shown.split('panic: goodbye\r\n').length - 1).toBe(1); // exactly once
     });
 
-    it('given the terminal EXITS while a drain is held, delivers it before the exit', async () => {
-      // The most likely shape in the wild: the shell panics (that IS the drain), its socket
-      // dies, we reattach, and the reattached session reports the exit. There is no
-      // reconnect after an exit, so the one door the drain had never opens — the user sees
-      // the terminal close with no explanation.
+    it('given the terminal exits immediately after a drain, delivers it and still exits cleanly', async () => {
+      // The likeliest shape in the wild: the shell panics — that panic IS the drain — its
+      // socket dies, we reattach, and the reattached session reports the exit. The user must
+      // see why the terminal closed.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1619,10 +1625,11 @@ describe('openPtyShell', () => {
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500); // reattached
-      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // held for the replay
-      attachCmd._emitter.emit('exit', 0); // ...which never comes: the shell is gone
+      cmd._stdout.emit('data', 'panic: goodbye\r\n');
+      attachCmd._emitter.emit('exit', 0); // the shell is gone
 
-      expect(outputs(onOutput).join('')).toContain('panic: goodbye\r\n');
+      const shown = outputs(onOutput).join('');
+      expect(shown.split('panic: goodbye\r\n').length - 1).toBe(1); // delivered, exactly once
       expect(onExit).toHaveBeenCalledWith(0);
     });
 
@@ -1735,7 +1742,7 @@ describe('openPtyShell', () => {
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500); // reattached to sess-1
-      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // drained late; held for the replay
+      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // drained late; recorded with the history
 
       // ...but the reattach dies before replaying anything, and the session is gone now.
       sprite.listSessions.mockResolvedValue([]);
@@ -1889,7 +1896,7 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(`${BANNER}a warning\r\n`); // still no banner reprint
     });
 
-    it('given a fresh session flushes a held drain, does not poison the history with it', async () => {
+    it('given a fresh session that inherits a dead one\'s last words, does not poison its history with them', async () => {
       // The create path hands over the dead shell's last words — but those bytes are no
       // part of the NEW session's stream, so recording them would splice the anchor and
       // leave every later replay unmatchable: the banner would reprint forever.
@@ -1946,7 +1953,7 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toContain('unalignable\r\n');
     });
 
-    it('given stderr that floods past the hold cap while a replay is held, releases it rather than buffering without limit', async () => {
+    it('given stderr that floods past the queue cap while a replay is held, releases it rather than buffering without limit', async () => {
       // These are bytes the SANDBOX chose, queued on the process every terminal shares:
       // `replay.pending` is capped for that reason and so is this queue. Past the cap the
       // bytes are RELEASED, never dropped — ordering is what we give up, not output.
@@ -2052,8 +2059,10 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
       attachCmd._stdout.emit('data', 'unalignable\r\n'); // buffered, settle armed
       shell.kill();
-      // The settle timer the kill cancelled must not fire output at a client that is
-      // no longer there.
+      // Nothing may reach a client that is no longer there. Two things stand in the way and
+      // either would do: kill() cancels the window timers, and every path out of the shell
+      // re-checks `closed`. The redundancy is deliberate — a teardown is not the place to
+      // rely on a single guard.
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(outputs(onOutput)).toEqual([BANNER]);
