@@ -52,15 +52,30 @@
  * deadline, MAX_PENDING_BYTES) and calling `flushReplay` to close it; after that
  * every byte passes through unsearched.
  *
- * What that leaves, honestly: the proof is a byte comparison, so it cannot tell a
- * replay from an EXACT reproduction of one. Loss therefore remains possible in one
- * corner — the server's ring must have evicted the true anchor (so there is nothing
- * genuine to match) AND the stream must then contain a >= 12 KiB contiguous replica
- * of `seen`'s tail (8 KiB anchor + 4 KiB corroboration) inside the replay window.
- * Realistically that means violently periodic output — a `while true` loop printing
- * the same kilobytes — where the dropped bytes are indistinguishable from their
- * neighbours anyway. It is bounded and understood, not a guarantee we are quietly
- * assuming away.
+ * What that leaves, honestly: the proof is a byte comparison, so it cannot tell a replay
+ * from an EXACT reproduction of one. Loss remains possible where the server's ring has
+ * evicted the true anchor (leaving nothing genuine to match) and the stream then contains a
+ * contiguous replica of `seen`'s tail. How big that replica must be is the real measure of
+ * the risk, and it is smaller than it first looks:
+ *
+ * - A match at offset 0 has NOTHING in front of it, so it is corroborated by zero bytes —
+ *   `corroborated` cannot compare what is not there. A replica of the anchor alone (8 KiB)
+ *   at a replay's head is therefore accepted. This is the weakest point of the scheme: a
+ *   full-screen TUI repaint landing exactly on the ring's boundary can produce one.
+ * - Anywhere else, the replica must ALSO reproduce MIN_CORROBORATION_BYTES of the history in
+ *   front of the anchor — 12 KiB in total.
+ * - And when `seen` is shorter than the anchor bound, the anchor IS the whole history: there
+ *   is nothing left to corroborate with, and the bound collapses to `seen.length`.
+ *
+ * So the precondition is `min(seen.length, MAX_ANCHOR_BYTES)`, plus MIN_CORROBORATION_BYTES
+ * only when the match is not at the head. The exposure is bounded in SIZE too: a search over
+ * ~366k configurations put the worst case at roughly one anchor's worth (~8 KiB) per
+ * occurrence.
+ *
+ * Realistically it takes violently periodic output — a `while true` loop printing the same
+ * kilobytes, a repainting TUI — where the dropped bytes are indistinguishable from their
+ * neighbours anyway. Fuzzing over non-periodic output finds no loss at all. It is bounded
+ * and understood, not a guarantee quietly assumed away.
  */
 
 const EMPTY = Buffer.alloc(0);
