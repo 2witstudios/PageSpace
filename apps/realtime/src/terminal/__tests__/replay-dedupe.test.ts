@@ -389,6 +389,24 @@ describe('empty inputs (pure)', () => {
     actual: plan({ anchor: BANNER, pending: 'half a replay', chunk: '' }),
     expected: { emit: '', pending: 'half a replay', resolved: false },
   });
+
+  // The resolved path passes buffered bytes through rather than assuming there are none.
+  // Nothing reaches it holding bytes today — `seen` is frozen for the life of an attach —
+  // but a future caller that recomputes `seen` mid-attach would resolve a state that IS
+  // holding some, and dropping them would be silent output loss. These pin that promise.
+  assert({
+    given: 'a chunk on a resolved window that somehow still holds bytes',
+    should: 'emit the held bytes AHEAD of it rather than dropping them',
+    actual: plan({ anchor: BANNER, pending: 'held', chunk: 'live', resolved: true }),
+    expected: { emit: 'heldlive', pending: '', resolved: true },
+  });
+
+  assert({
+    given: 'an EMPTY chunk on a resolved window that still holds bytes',
+    should: 'still emit the held bytes',
+    actual: plan({ anchor: BANNER, pending: 'held', chunk: '', resolved: true }),
+    expected: { emit: 'held', pending: '', resolved: true },
+  });
 });
 
 describe('flushReplay (pure)', () => {
@@ -478,11 +496,66 @@ describe('rememberDelivered (pure)', () => {
     expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
   });
 
+  it('given the delivery size that coalesces WORST, should still hold the block count to the low tens', () => {
+    // A byte over half a block is the adversarial size: it can never fold into a tail
+    // block that is itself over half full, so every block closes at just over half and
+    // the count doubles to 32. That is the real bound the materialize-per-attach cost is
+    // priced against — not the 16 a naive MAX_SEEN_BYTES / block-size would suggest.
+    let tail = EMPTY_SEEN;
+    const worst = Buffer.alloc(2049, 0x61);
+    for (let i = 0; i < 200; i += 1) tail = rememberDelivered(tail, worst); // well past the bound
+
+    expect(tail.bytes).toBe(MAX_SEEN_BYTES);
+    expect(tail.chunks.length).toBeLessThanOrEqual((2 * MAX_SEEN_BYTES) / 4096 + 1);
+    expect(materializeSeen(tail).length).toBe(MAX_SEEN_BYTES);
+  });
+
   it('given large deliveries, should keep them as separate blocks (no needless re-copy)', () => {
     let tail = EMPTY_SEEN;
     for (let i = 0; i < 8; i += 1) tail = rememberDelivered(tail, Buffer.alloc(8 * 1024, 0x61));
 
     expect(tail.bytes).toBe(MAX_SEEN_BYTES);
     expect(tail.chunks.length).toBe(8); // untouched, not merged
+  });
+});
+
+describe('buffering an unalignable replay (pure)', () => {
+  const UNMATCHABLE = Buffer.alloc(64 * 1024, 0x61); // `seen`: nothing in the replay matches it
+  const FRAME = Buffer.alloc(256, 0x62); // a WS frame's worth of replay
+
+  it('given a replay buffered frame by frame, should grow the buffer in O(log n) allocations, not one per frame', () => {
+    // Re-copying `pending` on every frame is quadratic in the bytes the SANDBOX chose:
+    // 4 MiB of output in 256-byte frames became tens of GB of memcpy on the process every
+    // terminal shares. Counting backing allocations pins the amortized growth without a
+    // wall-clock assertion: a copy per frame would mint ~2000 buffers here, doubling mints
+    // a handful. (Timing, for the record: ~3.9s before, ~6ms after.)
+    let state = freshReplayState();
+    const backings = new Set<ArrayBufferLike>();
+    for (let i = 0; i < 2_000; i += 1) {
+      state = planReplayEmission({ seen: UNMATCHABLE, chunk: FRAME, state }).state;
+      backings.add(state.pending.buffer);
+    }
+
+    expect(state.pending.length).toBe(2_000 * 256); // every byte still held
+    expect(backings.size).toBeLessThanOrEqual(16);
+  });
+
+  it('given a state reused after it was already appended to, should not splice the other fork\'s bytes into it', () => {
+    // The arena is mutable, so appending in place is only safe while the state being
+    // appended to is the LIVE end of the run. A caller that keeps an older state and
+    // appends again has FORKED it — and an arena that just wrote at its own high-water
+    // mark would hand that second fork the first fork's bytes as well as its own,
+    // inventing replay output no socket ever sent. Comparing the mark to `pending`
+    // catches the fork and copies out to a fresh arena instead.
+    const base = Buffer.alloc(512, 0x62);
+    const forked = planReplayEmission({ seen: UNMATCHABLE, chunk: base, state: freshReplayState() }).state;
+
+    const first = planReplayEmission({ seen: UNMATCHABLE, chunk: buf('AAAA'), state: forked }).state;
+    const firstBytes = Buffer.from(first.pending); // snapshot before the second append
+    const second = planReplayEmission({ seen: UNMATCHABLE, chunk: buf('BBBB'), state: forked }).state;
+
+    expect(first.pending.equals(firstBytes)).toBe(true); // the first fork is untouched
+    expect(first.pending.equals(Buffer.concat([base, buf('AAAA')]))).toBe(true);
+    expect(second.pending.equals(Buffer.concat([base, buf('BBBB')]))).toBe(true); // no 'AAAA' spliced in
   });
 });

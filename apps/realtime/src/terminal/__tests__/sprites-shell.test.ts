@@ -963,6 +963,28 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([BANNER]);
     });
 
+    it('given kill() while a replay window is still open, leaves no timer armed against a shell nobody is watching', async () => {
+      const cmd = buildFakeCommand();
+      const attach = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession.mockReturnValueOnce(attach);
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach._emitter.emit('spawn');
+      attach._stdout.emit('data', 'nothing here matches the anchor'); // held: window opens
+      expect(vi.getTimerCount()).toBeGreaterThan(0); // settle + deadline are armed
+
+      shell.kill();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it('given a reconnect whose replay carries genuinely new output, emits exactly the new tail', async () => {
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();

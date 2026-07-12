@@ -171,9 +171,26 @@ export type ReplayEmission = {
   aligned: boolean;
 };
 
+/**
+ * The allocation `pending` is being grown inside. Mutable, and deliberately so: it is
+ * how appending a chunk stays O(chunk) instead of O(pending) — see `appendPending`.
+ *
+ * `used` is the guard that keeps that safe. It is the arena's high-water mark, so a
+ * state whose `pending` ends short of it is a STALE fork of the run (someone reused an
+ * older state), and appending to it in place would overwrite bytes another state's
+ * `pending` still spans. Appending copies out to a fresh arena in that case.
+ */
+type PendingArena = { buf: Buffer; used: number };
+
 export type ReplayState = {
   /** Replayed bytes received in THIS attach that we can't yet classify. */
   pending: Buffer;
+  /**
+   * Where `pending` lives, when it has room to grow into. Absent on a state nobody has
+   * appended to yet, and on one a caller synthesized from bytes of its own — an arena is
+   * an optimization this module hands itself, never something a caller has to supply.
+   */
+  arena?: PendingArena;
   /**
    * How far into `pending` the anchor search has already looked, and will not look again.
    * Not quite "tested and rejected": once MAX_MATCH_CANDIDATES trips, the positions past the
@@ -194,6 +211,42 @@ export const freshReplayState = (): ReplayState => ({ pending: EMPTY, scanned: 0
 /** Nothing left to classify: every later byte of this attach passes straight through. */
 const RESOLVED: ReplayState = { pending: EMPTY, scanned: 0, resolved: true };
 
+/** The smallest arena worth allocating — a few WS frames' worth of headroom. */
+const MIN_ARENA_BYTES = 16 * 1024;
+
+/**
+ * `pending` with `chunk` appended, without re-copying `pending` to do it.
+ *
+ * `Buffer.concat(pending, chunk)` copies the whole buffer per chunk, which is quadratic
+ * in BYTES even though the SCAN is bounded — and the two are independent. A sandbox that
+ * emits MAX_PENDING_BYTES in 256-byte frames across an unalignable reconnect turns 4 MiB
+ * of its own output into tens of GB of memcpy on the process every terminal shares: an
+ * amplification the sandbox picks the size of. So `pending` grows like a vector instead —
+ * allocate with headroom, write into the headroom, double when it runs out — and the total
+ * copying over an attach is O(bytes).
+ *
+ * Writing past `pending.length` is only safe because the arena says those bytes are ours.
+ * A Buffer straight off Node's chunk pool is a VIEW into an 8 KiB arena shared with
+ * unrelated buffers; writing past its end would corrupt them.
+ */
+function appendPending(state: ReplayState, chunk: Buffer): Pick<ReplayState, 'pending' | 'arena'> {
+  const { pending, arena } = state;
+  const fits =
+    arena !== undefined &&
+    arena.used === pending.length &&
+    chunk.length <= arena.buf.length - arena.used;
+  if (fits) {
+    chunk.copy(arena.buf, arena.used);
+    arena.used += chunk.length;
+    return { pending: arena.buf.subarray(0, arena.used), arena };
+  }
+  const length = pending.length + chunk.length;
+  const buf = Buffer.allocUnsafe(Math.max(length * 2, MIN_ARENA_BYTES));
+  pending.copy(buf, 0);
+  chunk.copy(buf, pending.length);
+  return { pending: buf.subarray(0, length), arena: { buf, used: length } };
+}
+
 /**
  * The bytes of the REPLAYABLE stream (stdout) delivered to this client — what a
  * future replay can be matched against. stderr is deliberately absent: the server
@@ -213,8 +266,13 @@ export const EMPTY_SEEN: SeenTail = { chunks: [], bytes: 0 };
 
 /**
  * The size a tail block may reach by coalescing before a new block is started.
- * Caps both the copy a small delivery pays (it rewrites at most this much) and the
- * number of blocks the history can hold (MAX_SEEN_BYTES / this).
+ *
+ * Caps both the copy a small delivery pays (it rewrites at most this much) and the number
+ * of blocks the history can hold. That block bound is 2 × MAX_SEEN_BYTES / this — 32, not
+ * 16: a block is only ever closed because the next delivery would overflow it, so every
+ * block except the head holds MORE than half of this, and a stream of deliveries just over
+ * half (2049 bytes) closes each one at just over half. Either way the count is the low tens
+ * the materialize-per-attach cost is priced against.
  */
 const COALESCE_BLOCK_BYTES = 4 * 1024;
 
@@ -329,7 +387,7 @@ export function planReplayEmission({
     return { emit: concat(state.pending, chunk), state: RESOLVED, aligned: true };
   }
 
-  const pending = concat(state.pending, chunk);
+  const { pending, arena } = appendPending(state, chunk);
   const anchor = anchorOf(seen);
 
   // Search only where a match could newly START. Everything before `state.scanned` has been
@@ -337,12 +395,13 @@ export function planReplayEmission({
   // because corroboration only ever looks BACKWARD from the match while pending only grows
   // forward, so no later byte can rehabilitate an earlier candidate) — or skipped, when the
   // candidate bound below cut the scan short. Skipping costs a suppression, never a byte: the
-  // replay simply goes out verbatim. Rescanning from zero on every chunk is what made this
-  // quadratic: a
-  // shell emitting 1 MiB in 256-byte chunks across an unalignable reconnect cost
-  // ~570ms of solid event loop, on the process every terminal shares, driven by
-  // bytes the sandbox chose. Bounding the candidate count without bounding the scan
-  // left the same door open one line down.
+  // replay simply goes out verbatim.
+  //
+  // Rescanning from zero on every chunk is one of the two ways this went quadratic in the
+  // bytes a sandbox chose to emit — a shell pushing 1 MiB in 256-byte frames across an
+  // unalignable reconnect cost ~570ms of solid event loop, on the process every terminal
+  // shares. `appendPending` closes the other (the per-chunk re-copy). Bounding the candidate
+  // count without bounding the scan would have left this one open one line down.
   const from = state.scanned;
   let at = pending.indexOf(anchor, from);
   for (let tried = 0; at !== -1 && tried < MAX_MATCH_CANDIDATES; tried += 1) {
@@ -361,7 +420,7 @@ export function planReplayEmission({
   // A match can still begin in the last `anchor.length - 1` bytes: those are the only
   // start positions the next chunk could complete.
   const scanned = Math.max(0, pending.length - anchor.length + 1);
-  return { emit: EMPTY, state: { pending, scanned, resolved: false }, aligned: true };
+  return { emit: EMPTY, state: { pending, arena, scanned, resolved: false }, aligned: true };
 }
 
 /**
