@@ -27,12 +27,21 @@ vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 // a non-admin, so the argument is the security property — asserting only that no
 // machine renders would still pass if the gate were dropped, since the refusal
 // notice short-circuits the list anyway.
-const mockUseDriveMachines = vi.fn((driveId: string | null) => ({
-  machines: driveId ? [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }] : [],
-  isLoading: false,
-  error: undefined,
-  mutate: vi.fn(),
-}));
+interface DriveMachinesResult {
+  machines: { id: string; title: string; updatedAt: string }[];
+  isLoading: boolean;
+  error: Error | undefined;
+  mutate: () => void;
+}
+
+const mockUseDriveMachines = vi.fn(
+  (driveId: string | null): DriveMachinesResult => ({
+    machines: driveId ? [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }] : [],
+    isLoading: false,
+    error: undefined,
+    mutate: vi.fn(),
+  }),
+);
 
 vi.mock('@/hooks/useDriveMachines', () => ({
   useDriveMachines: (driveId: string | null) => mockUseDriveMachines(driveId),
@@ -98,6 +107,24 @@ describe('DevelopmentSidebar', () => {
     render(<DevelopmentSidebar />);
 
     expect(mockUseDriveMachines).toHaveBeenCalledWith('drive-1');
+  });
+
+  test('a failed POLL keeps the tree — it does not replace it with an error', () => {
+    // The list polls, and SWR keeps the last good data while setting `error` on a
+    // failed revalidation. Reporting the error ahead of the data would let one
+    // blip tear down every MachineTree, losing its expansion state and the
+    // session leaves under it, while the app still holds a good list.
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }],
+      isLoading: false,
+      error: new Error('blip'),
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText('Dev box')).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
   });
 
   test('says nothing about admin rights until auth has resolved', () => {

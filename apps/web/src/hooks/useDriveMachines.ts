@@ -34,10 +34,17 @@ export function useDriveMachines(driveId: string | null) {
   // of the session, and the only ways out (reload, or leave and return) both
   // unmount the keep-alive host and disconnect every warm terminal.
   //
-  // It also means a machine created elsewhere shows up without a reload. Cheap:
-  // one indexed query, on an admin-only surface, and SWR keeps the previous
-  // array identity when the ids are unchanged — so a poll that changes nothing
-  // doesn't churn the keep-alive LRU.
+  // It also means a machine created elsewhere shows up without a reload, and
+  // (by dropping the previous `revalidateOnFocus: false`) that coming back to the
+  // tab recovers immediately rather than waiting out the interval.
+  //
+  // Cheap: one indexed query on an admin-only surface, and SWR suppresses the
+  // poll entirely while the tab is hidden. A poll cannot churn the keep-alive LRU
+  // — note that is NOT because SWR preserves the array's identity (it only does
+  // that when the whole payload is deep-equal, and `updatedAt` moves whenever a
+  // Machine page is touched). It's because the consumers key on the IDS alone:
+  // `useStickyMachineIds` and the host's `validKey` both collapse the list to its
+  // ids, so a payload that carries new timestamps but the same machines is inert.
   const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
     refreshInterval: 30_000,
   });

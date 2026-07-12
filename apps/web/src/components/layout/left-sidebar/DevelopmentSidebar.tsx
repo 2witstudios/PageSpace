@@ -137,7 +137,12 @@ function MachineList({
   // The driveless entry redirects, so a missing driveId is the redirect in
   // flight — not a state the user can sit in.
   if (!driveId) return <ListNotice>Opening Development…</ListNotice>;
-  if (error) return <ListNotice>Failed to load machines</ListNotice>;
+  // Only when the failure left us with NOTHING to show. The list polls, and SWR
+  // keeps the last good data while setting `error` on a failed revalidation — so
+  // reporting the error ahead of the data would let one blip of a background poll
+  // tear down the whole tree (losing every expansion and its session leaves) while
+  // the app still holds a perfectly good list.
+  if (error && machines.length === 0) return <ListNotice>Failed to load machines</ListNotice>;
   if (isLoading) return <ListNotice>Loading…</ListNotice>;
   if (machines.length === 0) return <ListNotice>No machines in this drive yet</ListNotice>;
 

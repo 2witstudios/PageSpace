@@ -92,6 +92,18 @@ describe('DevelopmentLayout', () => {
     expect(screen.queryByText(/machine not found/i)).toBeNull();
   });
 
+  test('a failed POLL does not blank out a machine we can still show', () => {
+    // The list polls, and SWR keeps the last good data while setting `error` on a
+    // failed revalidation. Reporting the error ahead of the data would let one
+    // blip of a background poll replace a working machine with an error notice.
+    mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [machine('machine-1')], error: new Error('blip') }));
+
+    render(<DevelopmentLayout>{null}</DevelopmentLayout>);
+
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+    expect(hostRenders.at(-1)!.activePageId).toBe('machine-1');
+  });
+
   test('a machine that vanishes stops being shown, but is NOT evicted', () => {
     // It may have been deleted — or the per-page permission check may have
     // swallowed a DB error and reported "cannot view". Stop DISPLAYING it either
