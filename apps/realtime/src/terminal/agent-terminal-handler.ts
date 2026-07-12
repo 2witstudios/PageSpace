@@ -678,16 +678,14 @@ export function buildAgentTerminalHandlers({
         const reAuthInterval = setInterval(async () => {
           const liveSession = sessionMap.getByKey(sessionKey);
           if (!liveSession) { clearInterval(reAuthInterval); return; }
-          // Keeps ticking DB-only checks while DETACHED too. An earlier version
-          // of this paused the tick for a detached session on the theory that
-          // nobody is watching, so there is nothing to protect — but the PTY/
-          // agent process a detached session leaves running is not idle just
-          // because its viewer left, and it keeps the Sprite active regardless
-          // (docs.sprites.dev/concepts/lifecycle: "open sessions" count as
-          // activity on their own). Pausing bought no wake/billing benefit and
-          // cost a real guarantee: a revoked user's still-running process would
-          // keep executing, unsupervised, for up to the full 30-min detached
-          // grace instead of being torn down within one interval.
+          // Keeps ticking DB-only checks while DETACHED too, deliberately: the
+          // PTY/agent process a detached session leaves running is not idle
+          // just because its viewer left, and a revoked user's still-running
+          // process must not get to keep executing, unsupervised, until the
+          // 30-min idle reap. Skipping the check while detached would also buy
+          // nothing toward Sprite pause/billing — an open exec session already
+          // counts as Sprite activity on its own (docs.sprites.dev/concepts/
+          // lifecycle), independent of this tick's cadence.
           // Re-check the session's CURRENT viewer, not whoever created it. A session
           // outlives its creator's connection: any authorized user may reattach, and
           // `attachToLiveSession` re-points the PTY's output at them. Checking the
