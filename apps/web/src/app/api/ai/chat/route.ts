@@ -100,6 +100,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
+  attachStreamFinisher,
   createStreamAbortController,
   removeStream,
   STREAM_ID_HEADER,
@@ -1224,8 +1225,14 @@ export async function POST(request: Request) {
       userId: userId!,
       displayName,
       browserSessionId,
+      streamId,
       isShared: isConversationShared,
     });
+
+    // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
+    // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
+    // this row to settle before deciding what to tell the user. See attachStreamFinisher.
+    attachStreamFinisher({ streamId, finish: lifecycle.finish });
 
     try {
       const stream = createUIMessageStream({

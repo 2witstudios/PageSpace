@@ -33,7 +33,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
-import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
@@ -1034,11 +1034,11 @@ const SidebarChatTab: React.FC = () => {
         lastAssistantMessageId,
       });
       if (messageId) {
-        void abortActiveStreamByMessageId({ messageId });
+        void abortActiveStreamByMessageId({ messageId }).then(reportAbortOutcome);
         return;
       }
       if (currentConversationId) {
-        await abortActiveStream({ chatId: currentConversationId });
+        reportAbortOutcome(await abortActiveStream({ chatId: currentConversationId }));
       }
     }
   }, [

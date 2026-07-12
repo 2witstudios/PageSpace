@@ -19,6 +19,12 @@ interface StreamEntry {
   controller: AbortController;
   createdAt: number;
   userId: string;
+  /**
+   * Drives the stream's row terminal. Attached by the generation routes right after the
+   * lifecycle is created (`attachStreamFinisher`) — see why it must not be left to callbacks
+   * in the docblock there.
+   */
+  finish?: (aborted: boolean) => void;
 }
 
 const registry = new Map<string, StreamEntry>();
@@ -122,6 +128,59 @@ export const createStreamAbortController = ({
 };
 
 /**
+ * Attach the stream's terminal write to its registry entry, so that aborting the stream and
+ * recording that it stopped are ONE act.
+ *
+ * WHY THIS IS NOT LEFT TO onAbort/onFinish
+ *
+ * It looks redundant: the generation routes already call `lifecycle.finish(true)` from
+ * `streamText`'s `onAbort`. But both routes document, in their own comments, that those hooks are
+ * not reachable on every path:
+ *
+ *   - "onAbort only fires while a streamText is live" — an abort during the inter-attempt retry
+ *     backoff, or before the first streamText is built, is never seen by it.
+ *   - "onFinish is coupled to the response stream and may never fire when the mobile client
+ *     backgrounds mid-stream" — which is EXACTLY the population of a cross-instance abort. The
+ *     whole reason streams are server-owned is that the client went away.
+ *
+ * Before this change that was survivable: the row would sit at 'streaming' until its heartbeat
+ * went stale and the next takeover reconciled it. It is not survivable now. A cross-instance
+ * abort WAITS for the row to go terminal to decide what to tell the user, so a stopped stream
+ * whose row never settles would be reported as "still running, still billing" — a false alarm on
+ * the one message that must never be false.
+ *
+ * So the terminal write rides the abort itself. `lifecycle.finish` is idempotent, so the ordinary
+ * onAbort path is unaffected.
+ */
+export const attachStreamFinisher = ({
+  streamId,
+  finish,
+}: {
+  streamId: string;
+  finish: (aborted: boolean) => void;
+}): void => {
+  const entry = registry.get(streamId);
+  if (!entry) return;
+  entry.finish = finish;
+};
+
+/**
+ * Every stream this process owns — i.e. whose AbortController lives in THIS instance's registry.
+ *
+ * The cross-instance abort watcher needs this to know which marked rows are its own to act on.
+ * Only streams registered with a messageId appear (both generation routes always pass one).
+ */
+export const listLocalStreams = (): { messageId: string; streamId: string; userId: string }[] => {
+  const streams: { messageId: string; streamId: string; userId: string }[] = [];
+  for (const [messageId, streamId] of messageIdToStreamId.entries()) {
+    const entry = registry.get(streamId);
+    if (!entry) continue;
+    streams.push({ messageId, streamId, userId: entry.userId });
+  }
+  return streams;
+};
+
+/**
  * Abort a stream by its ID
  * Returns true if stream was found and aborted, false if not found
  *
@@ -141,7 +200,12 @@ export const abortStream = ({
     return { aborted: false, reason: 'Stream not found or already completed' };
   }
 
-  // SECURITY: Verify the requesting user owns this stream (prevents IDOR attacks)
+  // SECURITY: Verify the requesting user owns this stream (prevents IDOR attacks).
+  //
+  // This is the LAST of three independent checks on the cross-instance path, and it is not
+  // redundant: the mark can only be written by a UPDATE carrying the caller's user id, and the
+  // watcher refuses to act unless the row's owner matches this entry's. This one holds the line
+  // if either of those is ever weakened.
   if (entry.userId !== userId) {
     return { aborted: false, reason: 'Unauthorized to abort this stream' };
   }
@@ -149,6 +213,9 @@ export const abortStream = ({
   entry.controller.abort();
   registry.delete(streamId);
   unlinkStream(streamId);
+
+  // Record that it stopped, as part of stopping it. See `attachStreamFinisher`.
+  entry.finish?.(true);
 
   return { aborted: true, reason: 'Stream aborted by user request' };
 };

@@ -245,6 +245,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 vi.mock('@/lib/utils/query-params', () => ({ parseBoundedIntParam: vi.fn().mockReturnValue(50) }));
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',

@@ -356,4 +356,68 @@ describe('stream-abort-registry', () => {
       expect(registry.isStreamActive({ streamId: 'stream-2' })).toBe(true);
     });
   });
+
+  // The terminal write has to ride the abort, because the callbacks that would otherwise perform
+  // it are not reachable on every path — both generation routes say so in their own comments:
+  // `onAbort` only fires while a streamText is live, and `onFinish` "may never fire when the
+  // mobile client backgrounds mid-stream" (which is precisely the population of a cross-instance
+  // abort — the client went away, which is the whole reason the stream is server-owned).
+  //
+  // A cross-instance Stop now WAITS for the row to go terminal before deciding what to tell the
+  // user. If a stopped stream's row never settled, the user would be warned that their agent is
+  // "still running and still billing" when it is already dead — a false alarm on the one message
+  // that must never be false.
+  describe('attachStreamFinisher', () => {
+    it('drives the stream terminal as part of aborting it', async () => {
+      const registry = await import('../stream-abort-registry');
+      const finish = vi.fn();
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1' });
+      registry.attachStreamFinisher({ streamId: 'stream-1', finish });
+
+      registry.abortStream({ streamId: 'stream-1', userId: 'user-1' });
+
+      expect(finish).toHaveBeenCalledWith(true);
+    });
+
+    // The IDOR guard runs first. A refused abort must not write a terminal status either, or a
+    // stranger could mark another user's live generation as finished without stopping it — hiding
+    // a running stream from every subscriber while it kept generating.
+    it('does not finish a stream whose abort was refused', async () => {
+      const registry = await import('../stream-abort-registry');
+      const finish = vi.fn();
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1' });
+      registry.attachStreamFinisher({ streamId: 'stream-1', finish });
+
+      registry.abortStream({ streamId: 'stream-1', userId: 'user-2' });
+
+      expect(finish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listLocalStreams', () => {
+    // The abort watcher's notion of "mine". A stream missing from this list would never have its
+    // cross-instance abort request consumed.
+    it('reports the streams this process owns, with their owners', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.createStreamAbortController({ userId: 'user-2', streamId: 'stream-2', messageId: 'msg-2' });
+
+      expect(registry.listLocalStreams()).toEqual([
+        { messageId: 'msg-1', streamId: 'stream-1', userId: 'user-1' },
+        { messageId: 'msg-2', streamId: 'stream-2', userId: 'user-2' },
+      ]);
+    });
+
+    it('forgets a stream once it has been aborted', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.abortStream({ streamId: 'stream-1', userId: 'user-1' });
+
+      expect(registry.listLocalStreams()).toEqual([]);
+    });
+  });
 });

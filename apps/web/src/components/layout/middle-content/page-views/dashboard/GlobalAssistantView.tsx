@@ -72,7 +72,7 @@ import {
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
-import { abortActiveStream, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
@@ -645,19 +645,19 @@ const GlobalAssistantView: React.FC = () => {
 
   // Register stop function to global context (global mode only)
   // Combined function calls both abort endpoint (server-side) and useChat stop (client-side)
-  // Use try/finally to guarantee client-side stop runs even if server abort fails
+  // Local stop FIRST, then the server. The server abort now waits to confirm the generation
+  // actually stopped (it may be running on another web instance), so awaiting it first would hang
+  // the Stop button for seconds with tokens still rendering. Calling the local stop up front
+  // guarantees it more strongly than the old `finally` did. See useChatStop.
   useEffect(() => {
     if (selectedAgent) return;
     if (globalStatus === 'submitted' || globalStatus === 'streaming') {
       setGlobalStopStreaming(() => async () => {
-        try {
-          // Call abort endpoint to stop server-side processing
-          if (globalConversationId) {
-            await abortActiveStream({ chatId: globalConversationId });
-          }
-        } finally {
-          // Call useChat's stop to abort client-side fetch
-          globalStop();
+        // Stops this client reading. Stops NOTHING on the server — streams are server-owned.
+        globalStop();
+
+        if (globalConversationId) {
+          reportAbortOutcome(await abortActiveStream({ chatId: globalConversationId }));
         }
       });
     } else {
@@ -699,14 +699,11 @@ const GlobalAssistantView: React.FC = () => {
     if (!selectedAgent) return;
     if (agentStatus === 'submitted' || agentStatus === 'streaming') {
       setAgentStopStreaming(() => async () => {
-        try {
-          // Call abort endpoint to stop server-side processing
-          if (agentConversationId) {
-            await abortActiveStream({ chatId: agentConversationId });
-          }
-        } finally {
-          // Call useChat's stop to abort client-side fetch
-          agentStop();
+        // Local stop first — see the note on the global handler above.
+        agentStop();
+
+        if (agentConversationId) {
+          reportAbortOutcome(await abortActiveStream({ chatId: agentConversationId }));
         }
       });
     } else {

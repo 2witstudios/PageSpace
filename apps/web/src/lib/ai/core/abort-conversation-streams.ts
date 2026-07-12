@@ -24,6 +24,13 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * The conversationId is the one name the client holds from t=0. So Stop can now always say
  * something true.
  *
+ * SCOPE — this is the LOCAL step only.
+ *
+ * It stops what this instance owns. Anything it could not stop lives on another web instance (the
+ * registry is in-process), and is handled by the cross-instance mark in `abortStreamAnywhere`,
+ * which calls this first. That is why this function no longer renders a verdict: it reports what
+ * it aborted, and the caller — which can see both halves — decides what the user is told.
+ *
  * AUTHORIZATION — deliberately stricter than the takeover's.
  *
  * `takeOverConversationStreams` aborts as the STREAM's owner (`row.userId`), because a second
@@ -38,7 +45,7 @@ export const abortConversationStreams = async ({
 }: {
   conversationId: string;
   userId: string;
-}): Promise<{ aborted: string[]; reason: string }> => {
+}): Promise<{ aborted: string[] }> => {
   let rows: { messageId: string }[];
   try {
     rows = await db
@@ -55,7 +62,7 @@ export const abortConversationStreams = async ({
       conversationId,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return { aborted: [], reason: 'Lookup failed' };
+    return { aborted: [] };
   }
 
   const aborted: string[] = [];
@@ -65,17 +72,5 @@ export const abortConversationStreams = async ({
     if (result.aborted) aborted.push(row.messageId);
   }
 
-  if (aborted.length === 0) {
-    // Not an error. The stream may live on another web instance (the abort registry is
-    // in-process), or it may have finished between the SELECT and here. Reported honestly
-    // rather than as a success.
-    return {
-      aborted: [],
-      reason: rows.length > 0
-        ? 'In-flight stream(s) found but none could be aborted from this instance'
-        : 'No in-flight stream on this conversation',
-    };
-  }
-
-  return { aborted, reason: '' };
+  return { aborted };
 };

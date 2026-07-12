@@ -1,4 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { assert } from './riteway';
+
+const { mockToastWarning } = vi.hoisted(() => ({ mockToastWarning: vi.fn() }));
+
+vi.mock('sonner', () => ({
+  toast: { warning: mockToastWarning },
+}));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
@@ -97,6 +104,7 @@ describe('stream-abort-client', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         json: vi.fn().mockResolvedValueOnce({
           aborted: true,
+          code: 'aborted',
           reason: 'Stream aborted by user request',
         }),
       } as unknown as Response);
@@ -434,4 +442,78 @@ describe('stream-abort-client', () => {
     });
   });
 
+  // `aborted: false` used to mean two completely different things, and every caller threw the
+  // result away — so the Stop button flipped back to Send regardless of what actually happened on
+  // the server. Now that a cross-instance abort can genuinely fail, that distinction has to reach
+  // the user, and ONLY when it is real.
+  describe('reportAbortOutcome', () => {
+    it('warns the user when the generation could not be confirmed stopped', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcome({ aborted: false, code: 'unconfirmed', reason: 'still running' });
+
+      assert({
+        given: 'a stream that was asked to stop and did not',
+        should: 'tell the user — it is still running, and still billing',
+        actual: mockToastWarning.mock.calls.length,
+        expected: 1,
+      });
+    });
+
+    // The benign race: the stream ended a beat before Stop was pressed. This is COMMON. A toast
+    // here would fire constantly, for a non-event the user cannot act on, and would teach them to
+    // dismiss the warning above without reading it — which is worse than showing nothing at all.
+    it('stays silent when there was no in-flight stream to stop', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcome({ aborted: false, code: 'not_found', reason: 'nothing in flight' });
+
+      assert({
+        given: 'a Stop pressed just after the stream finished on its own',
+        should: 'say nothing — a benign race is not a failure',
+        actual: mockToastWarning.mock.calls.length,
+        expected: 0,
+      });
+    });
+
+    it('stays silent when the stream stopped', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcome({ aborted: true, code: 'aborted', reason: '' });
+
+      expect(mockToastWarning).not.toHaveBeenCalled();
+    });
+
+    it('warns only once when one Stop fires several aborts at the same stream', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcomes([
+        { aborted: false, code: 'unconfirmed', reason: 'still running' },
+        { aborted: false, code: 'unconfirmed', reason: 'still running' },
+      ]);
+
+      assert({
+        given: 'a surface that names its stream under two keys, both unconfirmed',
+        should: 'warn once — they are the same stream',
+        actual: mockToastWarning.mock.calls.length,
+        expected: 1,
+      });
+    });
+
+    // A request that never reached the server means the server never heard the Stop. The
+    // generation is definitely still running. That is not "unknown" — it is the alarm case.
+    it('treats an unreachable abort endpoint as still running', async () => {
+      const client = await import('../stream-abort-client');
+      vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('offline'));
+
+      const result = await client.abortActiveStreamByMessageId({ messageId: 'msg-1' });
+
+      assert({
+        given: 'the abort request never reaching the server',
+        should: 'report the generation as unconfirmed rather than stopped',
+        actual: result.code,
+        expected: 'unconfirmed',
+      });
+    });
+  });
 });

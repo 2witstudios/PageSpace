@@ -4,6 +4,12 @@ import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
 import { decideStreamTakeover } from '@/lib/ai/core/stream-liveness';
+import {
+  awaitAbortSettled,
+  markAbortRequestedAsOwner,
+  reconcileDeadStreamRows,
+  TAKEOVER_SETTLE_TIMEOUT_MS,
+} from '@/lib/ai/core/stream-abort-mark';
 
 /**
  * Per-conversation in-flight guard. Used by both chat routes (POST /api/ai/chat and
@@ -37,9 +43,12 @@ import { decideStreamTakeover } from '@/lib/ai/core/stream-liveness';
  *      an abort for a row we misjudged as dead leaves a real generation running.
  *   2. Only rows we can PROVE are finished — the ones the registry actually aborted, plus
  *      the ones whose heartbeat says their process is gone — are driven terminal. A live
- *      row we could not abort (it belongs to another web instance) is left alone: marking
- *      it 'aborted' and wiping its parts would hide a running stream from every subscriber
- *      and destroy its only crash-recovery snapshot.
+ *      row we could not abort is left alone: marking it 'aborted' and wiping its parts would
+ *      hide a running stream from every subscriber and destroy its only crash-recovery snapshot.
+ *   3. A live row we could not abort belongs to ANOTHER WEB INSTANCE (the registry is
+ *      in-process). It is marked for a cross-instance abort and we wait, briefly, for its owner
+ *      to stop it. This used to be the end of the road: the send simply proceeded alongside a
+ *      still-running generation — two agents, two sets of write tools, two bills.
  *
  * The new generation then proceeds regardless — see `stream-liveness.ts` for why this is a
  * takeover and never a 409.
@@ -147,41 +156,75 @@ export const takeOverConversationStreams = async ({
       }
     }
 
+    // A live row this instance does not own. This USED to be the end of the road — it was logged
+    // ("in-flight stream(s) could not be aborted from this instance") and the send proceeded,
+    // starting a SECOND generation beside a first that was still running: two agents, two sets of
+    // write tools, two bills. The abort registry is in-process, so there was genuinely nothing
+    // more this instance could do.
+    //
+    // There is now. Mark the row and wait for the instance that owns it to consume the mark and
+    // stop the stream.
     const unstoppable = rows
       .map((r) => r.messageId)
       .filter((id) => !aborted.includes(id) && !reconcile.includes(id));
+
+    const remotelyAborted: string[] = [];
+    let stillLive: string[] = [];
+
     if (unstoppable.length > 0) {
-      // Known limitation, logged rather than papered over: the abort registry is
-      // in-process, so a live stream owned by another web instance cannot be stopped
-      // from here. It will finish and persist normally; this send runs alongside it.
-      loggers.ai.warn('AI Chat API: in-flight stream(s) could not be aborted from this instance', {
-        conversationId,
-        channelId,
-        messageIds: unstoppable,
+      // As the stream's OWNER, not the caller — the exact analogue of the abort loop above, and
+      // for the same reason: on a SHARED conversation, user B's send must be able to take over
+      // user A's generation. See markAbortRequestedAsOwner, which may never be reached from a
+      // client-driven Stop.
+      const marked = await markAbortRequestedAsOwner({ messageIds: unstoppable });
+
+      // Bounded: the user is waiting for their message to send. Shorter than a user-facing Stop's
+      // budget, and on expiry we proceed exactly as before rather than blocking the send.
+      const outcome = await awaitAbortSettled({
+        messageIds: marked,
+        timeoutMs: TAKEOVER_SETTLE_TIMEOUT_MS,
       });
+
+      remotelyAborted.push(...outcome.aborted);
+      stillLive = outcome.stillLive;
+
+      // Rows whose owner is provably gone (stale heartbeat) — nothing is running, but nothing
+      // wrote their terminal status either. Same licence decideStreamTakeover already grants.
+      await reconcileDeadStreamRows({ messageIds: outcome.reconcile });
+
+      if (stillLive.length > 0) {
+        // The honest, narrower successor to the old warn. It no longer means "we cannot stop
+        // this" — it means "we asked, and it has not stopped yet". In steady state it never
+        // fires; during a rolling deploy, where an old worker without the abort watcher still
+        // owns the stream, it is the single most valuable line in the log.
+        loggers.ai.warn('AI Chat API: in-flight stream(s) marked for cross-instance abort but not confirmed stopped', {
+          conversationId,
+          channelId,
+          messageIds: stillLive,
+          waitedMs: TAKEOVER_SETTLE_TIMEOUT_MS,
+        });
+      }
     }
+
+    const allAborted = [...aborted, ...remotelyAborted];
 
     // Only claim a takeover when one actually happened.
     //
-    // This used to log "took over in-flight stream(s)" unconditionally — including the case
-    // where `aborted` and `reconciled` are BOTH empty, which means we took over nothing: the
-    // live row belongs to another web instance (the abort registry is in-process), it is still
-    // generating, and this send is about to start a SECOND generation alongside it.
-    //
-    // That is the exact moment an operator most needs the truth, and the log was saying the
-    // opposite. The `unstoppable` warn above already states it; this line was quietly
-    // contradicting it in the same breath. A log that misreports is a signal that attests to
-    // nothing, which is the same defect as a test that cannot fail.
-    if (aborted.length > 0 || reconcile.length > 0) {
+    // This used to log "took over in-flight stream(s)" unconditionally — including when we had
+    // taken over NOTHING and were about to generate alongside a live foreign stream. That was the
+    // exact moment an operator most needed the truth, and the log said the opposite. A log that
+    // misreports is a signal that attests to nothing, which is the same defect as a test that
+    // cannot fail.
+    if (allAborted.length > 0 || reconcile.length > 0) {
       loggers.ai.info('AI Chat API: took over in-flight stream(s) on this conversation', {
         conversationId,
         channelId,
-        aborted,
+        aborted: allAborted,
         reconciled: reconcile,
       });
     }
 
-    return { aborted, reconciled: reconcile };
+    return { aborted: allAborted, reconciled: reconcile };
   } catch (error) {
     // Never block the send on a failed takeover — the worst case is the
     // pre-existing behaviour (a concurrent generation), not a locked chat.

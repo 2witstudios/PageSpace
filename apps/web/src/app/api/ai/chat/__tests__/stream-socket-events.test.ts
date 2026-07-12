@@ -237,6 +237,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 }));
 
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',
@@ -558,6 +559,9 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         userId: 'user-1',
         displayName: 'Profile User',
         browserSessionId: 'session-7',
+        // Persisted on the row so an abort landing on ANY instance can resolve the streamId it was
+        // handed in X-Stream-Id back to a stream. The registry that mints it is in-process.
+        streamId: 'stream_123',
         isShared: false,
       });
     });

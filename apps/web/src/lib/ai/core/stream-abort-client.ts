@@ -11,12 +11,82 @@
  * 3. Call abortActiveStream() when user clicks stop
  */
 
+import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getBrowserSessionId } from './browser-session-id';
 import {
   markChannelConsuming,
   unmarkChannelConsuming,
 } from '@/lib/ai/streams/consumingChannels';
+import type { AbortCode } from '@/lib/ai/core/stream-abort-decisions';
+
+/**
+ * What the server says happened.
+ *
+ * `code` exists because `aborted: false` used to mean two entirely different things, and every
+ * caller discarded it anyway (`void abortActiveStream(...)`) — so the button flipped back to Send
+ * no matter what actually happened on the server:
+ *
+ *   - 'not_found'   — nothing was in flight. The stream finished a beat before Stop was pressed.
+ *                     A BENIGN race. Must stay SILENT: it fires often, and a toast here would
+ *                     train users to ignore the one below.
+ *   - 'unconfirmed' — the stream was found, the abort was requested, and it is STILL GENERATING.
+ *                     Still calling write tools. Still billing. The user must be told.
+ *
+ * Codes, not `reason` substrings. The old code sniffed for 'not found' / 'already completed' in a
+ * prose string, which is a contract nobody can see they are breaking when they reword a log line.
+ */
+export interface AbortResult {
+  aborted: boolean;
+  code: AbortCode;
+  reason: string;
+}
+
+/**
+ * A failure to even reach the abort endpoint is not ambiguous: the server never heard the Stop, so
+ * the generation is definitely still running, and still billing. That is exactly 'unconfirmed'.
+ */
+const NETWORK_FAILURE: AbortResult = {
+  aborted: false,
+  code: 'unconfirmed',
+  reason: 'Failed to call abort endpoint',
+};
+
+const parseAbortResult = async (response: Response): Promise<AbortResult> => {
+  const body = await response.json();
+
+  if (!body || typeof body.code !== 'string') {
+    // The endpoint answered with something we do not understand (an error envelope, a proxy page).
+    // We cannot claim the stream stopped.
+    return { aborted: false, code: 'unconfirmed', reason: 'Unrecognized abort response' };
+  }
+
+  return body as AbortResult;
+};
+
+/**
+ * Surface an abort outcome to the user — and only when it is worth surfacing.
+ *
+ * Call this from USER-INITIATED Stop paths. It deliberately says nothing on 'not_found': the
+ * stream had already finished, which is not something the user did wrong and not something they
+ * can act on.
+ */
+export const reportAbortOutcome = (result: AbortResult): void => {
+  reportAbortOutcomes([result]);
+};
+
+/**
+ * The same, for a Stop that fires more than one abort (a surface that must name a stream under two
+ * possible keys). One toast at most, however many of them come back unconfirmed — they are all the
+ * same stream, and the user does not need to be told twice.
+ */
+export const reportAbortOutcomes = (results: readonly AbortResult[]): void => {
+  if (!results.some((result) => result.code === 'unconfirmed')) return;
+
+  toast.warning('Could not confirm the generation stopped', {
+    description: 'It may still be running. Reload to see its current state.',
+  });
+};
 
 // Track active streams by chat/conversation ID
 const activeStreams = new Map<string, string>();
@@ -80,16 +150,16 @@ export const abortActiveStreamByConversation = async ({
   conversationId,
 }: {
   conversationId: string;
-}): Promise<{ aborted: boolean; reason: string }> => {
+}): Promise<AbortResult> => {
   try {
     const response = await fetchWithAuth('/api/ai/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversationId }),
     });
-    return await response.json();
+    return await parseAbortResult(response);
   } catch {
-    return { aborted: false, reason: 'Failed to call abort endpoint' };
+    return NETWORK_FAILURE;
   }
 };
 
@@ -105,14 +175,14 @@ export const abortActiveStream = async ({
 }: {
   chatId: string;
   conversationId?: string | null;
-}): Promise<{ aborted: boolean; reason: string }> => {
+}): Promise<AbortResult> => {
   const streamId = activeStreams.get(chatId);
 
   if (!streamId) {
     if (conversationId) {
       return abortActiveStreamByConversation({ conversationId });
     }
-    return { aborted: false, reason: 'No active stream for this chat' };
+    return { aborted: false, code: 'not_found', reason: 'No active stream for this chat' };
   }
 
   try {
@@ -122,17 +192,12 @@ export const abortActiveStream = async ({
       body: JSON.stringify({ streamId }),
     });
 
-    const result = await response.json();
+    const result = await parseAbortResult(response);
 
-    // Only clear streamId when abort succeeded or stream is already gone
-    // Keep streamId on 401/429/500 errors so user can retry
-    const shouldClear =
-      result.aborted === true ||
-      (result.reason &&
-        (result.reason.includes('not found') ||
-          result.reason.includes('already completed')));
-
-    if (shouldClear) {
+    // Forget the stream only once it is settled — stopped, or already gone. On 'unconfirmed' the
+    // generation may still be running, so the streamId is the name a retry needs; and on a
+    // transport error (401/429/500) we never learned anything at all. Keep it in both cases.
+    if (result.code === 'aborted' || result.code === 'not_found') {
       activeStreams.delete(chatId);
     }
 
@@ -140,7 +205,7 @@ export const abortActiveStream = async ({
   } catch (error) {
     // Network error - keep streamId for retry
     console.error('Failed to abort stream:', error);
-    return { aborted: false, reason: 'Failed to call abort endpoint' };
+    return NETWORK_FAILURE;
   }
 };
 
@@ -148,16 +213,16 @@ export const abortActiveStreamByMessageId = async ({
   messageId,
 }: {
   messageId: string;
-}): Promise<{ aborted: boolean; reason: string }> => {
+}): Promise<AbortResult> => {
   try {
     const response = await fetchWithAuth('/api/ai/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId }),
     });
-    return await response.json();
+    return await parseAbortResult(response);
   } catch {
-    return { aborted: false, reason: 'Failed to call abort endpoint' };
+    return NETWORK_FAILURE;
   }
 };
 
