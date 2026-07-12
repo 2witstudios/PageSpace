@@ -39,11 +39,19 @@ export interface SandboxGetOrCreateArgs {
  * The provider-agnostic slice of the sandbox client this layer drives, injected
  * so this lifecycle owns no execution path (the Fly Sprites driver implements
  * it). `getOrCreate` auto-resumes by `name` (the session key); `get` reconnects
- * to a known id (null if it has vanished); `stop` tears down.
+ * to a known id (null if it has vanished); `stop` DESTROYS — see its own doc.
  */
 export interface SandboxClient {
   getOrCreate(args: SandboxGetOrCreateArgs): Promise<SandboxHandle>;
   get(args: { sandboxId: string }): Promise<SandboxHandle | null>;
+  /**
+   * Irreversible DESTROY — files, installed packages, and checkpoints are gone,
+   * with no undo (docs.sprites.dev/working-with-sprites). Call this ONLY for
+   * genuine teardown intent (a Machine/branch delete, or cleaning up a Sprite
+   * this process just failed to link to a session row) — NEVER as idle/billing
+   * cleanup. A paused sandbox already stops compute billing on its own and costs
+   * only bytes-written storage, so idleness alone is never a reason to call this.
+   */
   stop(args: { sandboxId: string }): Promise<void>;
 }
 
@@ -416,7 +424,9 @@ export async function acquireMachineSession(
       case 'teardown': {
         const stopped = await safeStop(deps.client, plan.sandboxId);
         if (!stopped) {
-          // VM may still be running — keep the link so the idle reaper can reclaim it.
+          // VM may still be running — keep the link so a later attempt (or an
+          // explicit retry) can still find it and finish the teardown. There is
+          // no separate reaper; nothing reclaims this but a future call here.
           return { ok: false, reason: 'error' };
         }
         await safeRemove(deps.store, key);
