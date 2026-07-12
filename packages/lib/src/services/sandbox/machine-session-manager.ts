@@ -410,10 +410,10 @@ export async function acquireMachineSession(
         return await provisionFreshMachine({ key, input });
 
       case 'resume':
-        return await reconnectExisting();
-
       case 'noop':
-        // Persistent-idle: existing is guaranteed (noop only arises with a session).
+        // 'resume' (warm) and 'noop' (hibernating-idle) both reconnect; `existing`
+        // is guaranteed for both — the planner only returns either action when
+        // an existing session was passed in.
         return existing
           ? await reconnectExisting()
           : { ok: false, reason: 'error' };
