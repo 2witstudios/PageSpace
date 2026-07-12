@@ -106,6 +106,14 @@ export interface MachineHandle {
   readFile(args: { path: string }): Promise<Buffer | null>;
   stream(args: MachineStreamOptions): Promise<MachineStream>;
   listStreams(): Promise<MachineStreamSessionInfo[]>;
+  /**
+   * Create a filesystem checkpoint tagged with `comment` (Sprites Platform
+   * Alignment 5-2). Optional — not every future backend need support it; the
+   * Sprite backend always does (see `sprite-machine-host.ts`). Callers that
+   * need it unconditionally go through `ExecutableSandbox.createCheckpoint`
+   * (`sandbox-client/types.ts`), which is always present.
+   */
+  createCheckpoint?(comment: string): Promise<void>;
 }
 
 /**

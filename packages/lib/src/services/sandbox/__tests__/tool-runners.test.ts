@@ -32,6 +32,7 @@ function makeSandbox(over: Partial<ExecutableSandbox> = {}): ExecutableSandbox {
     runCommand: async (): Promise<SandboxRunResult> => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from('file-contents'),
+    createCheckpoint: async () => {},
     ...over,
   };
 }
@@ -532,6 +533,131 @@ describe('runBashInSandbox', () => {
     });
     await runBashInSandbox({ command: 'echo hi', timeoutMs: 0, ctx: makeCtx(), deps });
     expect(seenTimeout).toBe(1);
+  });
+});
+
+describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 5-2)', () => {
+  function makeCheckpointDeps(over: Partial<NonNullable<SandboxRunDeps['checkpoint']>> = {}) {
+    const state = new Map<string, { lastCheckpointAt: Date | null; lastCheckpointTurnId: string | null }>();
+    const created: Array<{ sandboxId: string; comment: string }> = [];
+    const checkpoint: NonNullable<SandboxRunDeps['checkpoint']> = {
+      isEnabled: () => true,
+      getState: (sandboxId) => state.get(sandboxId) ?? { lastCheckpointAt: null, lastCheckpointTurnId: null },
+      recordCheckpoint: (sandboxId, s) => {
+        state.set(sandboxId, s);
+      },
+      createCheckpoint: async ({ sandbox, comment }) => {
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+      ...over,
+    };
+    return { checkpoint, created, state };
+  }
+
+  it('given the flag on and a turnId, should checkpoint before the command runs, tagged with the turn', async () => {
+    const order: string[] = [];
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async ({ sandbox, comment }) => {
+        order.push('checkpoint');
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+    });
+    const { deps } = makeDeps({
+      checkpoint,
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            order.push('run');
+            return { exitCode: 0, stdout: 'ok', stderr: '' };
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(created).toEqual([{ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' }]);
+    expect(order).toEqual(['checkpoint', 'run']);
+  });
+
+  it('given the flag off, should never call createCheckpoint', async () => {
+    const { checkpoint, created } = makeCheckpointDeps({ isEnabled: () => false });
+    const { deps } = makeDeps({ checkpoint });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(created).toEqual([]);
+  });
+
+  it('given no turnId on ctx, should skip checkpointing entirely (no turn boundary to key the throttle on)', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const { deps } = makeDeps({ checkpoint });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: undefined }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(created).toEqual([]);
+  });
+
+  it('given repeated batches within the SAME turn, should checkpoint at most once', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const { deps } = makeDeps({ checkpoint });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    await runBashInSandbox({ command: 'echo three', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(created).toHaveLength(1);
+  });
+
+  it('given a NEW turn well after the throttle window, should checkpoint again', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const { deps: deps1 } = makeDeps({ checkpoint, now: () => new Date('2026-07-12T12:00:00.000Z') });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps: deps1 });
+
+    const { deps: deps2 } = makeDeps({ checkpoint, now: () => new Date('2026-07-12T12:05:00.000Z') });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-2' }), deps: deps2 });
+
+    expect(created).toHaveLength(2);
+    expect(created[1]).toEqual({ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-2' });
+  });
+
+  it('given checkpoint creation throws, should proceed with the batch (fail-open) and log', async () => {
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async () => {
+        throw new Error('checkpoint API unavailable');
+      },
+    });
+    const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
+    const { deps } = makeDeps({
+      checkpoint,
+      logger: {
+        error: () => {},
+        warn: (message, metadata) => {
+          warnings.push([message, metadata]);
+        },
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true, stdout: 'ok' });
+    expect(created).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0][0]).toMatch(/checkpoint/i);
+  });
+
+  it('given no checkpoint dep configured, should run normally (seam fully optional)', async () => {
+    const { deps } = makeDeps();
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true });
+  });
+
+  it('does not record a checkpoint when the SDK call itself fails (a later batch in the same turn may retry)', async () => {
+    let attempts = 0;
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async ({ sandbox, comment }) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient failure');
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+    });
+    const { deps } = makeDeps({ checkpoint, logger: { error: () => {}, warn: () => {} } });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(attempts).toBe(2);
+    expect(created).toHaveLength(1);
   });
 });
 

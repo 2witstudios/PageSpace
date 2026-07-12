@@ -35,6 +35,11 @@ import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-s
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { lookupPageOwnerId } from '@pagespace/lib/billing/machine-payer';
+import {
+  isCheckpointBeforeAgentBatchEnabled,
+  getCheckpointState,
+  recordCheckpoint,
+} from '@pagespace/lib/services/sandbox/checkpoint-policy';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
   acquireCodeExecutionSlot,
@@ -187,6 +192,17 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         handle: { exec: (args) => sandbox.runCommand(args) },
         pageId,
       }),
+    // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
+    // an agent bash batch runs (fail-open, at most once per turn — see
+    // checkpoint-policy.ts). State is in-process, keyed by sandboxId; a
+    // process restart simply re-checkpoints on the next batch, which is
+    // harmless (COW, ~300ms).
+    checkpoint: {
+      isEnabled: isCheckpointBeforeAgentBatchEnabled,
+      getState: getCheckpointState,
+      recordCheckpoint,
+      createCheckpoint: ({ sandbox, comment }) => sandbox.createCheckpoint(comment),
+    },
   };
 }
 
@@ -194,6 +210,21 @@ const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'bus
 
 function toTier(value: string | null | undefined): SubscriptionTier {
   return value && VALID_TIERS.has(value) ? (value as SubscriptionTier) : 'free';
+}
+
+/**
+ * Lazily stamp a stable turn id onto `context` the first time it's read, then
+ * return it. `context` is the SAME object reference for every tool call
+ * within one streamText run (see `ToolExecutionContext.activeMachine`'s doc —
+ * same guarantee, same mutate-in-place pattern), so this stamps once per
+ * agent turn and every later bash call in the run sees the value already set.
+ * Undefined `context` (no tool-execution context at all) stays undefined —
+ * there is nothing to stamp onto.
+ */
+function stampTurnId(context: ToolExecutionContext | undefined): string | undefined {
+  if (!context) return undefined;
+  context.turnId ??= crypto.randomUUID();
+  return context.turnId;
 }
 
 /**
@@ -241,6 +272,7 @@ export function createResolveSandboxActorContext(
     if (!userId) return { error: 'Code execution requires an authenticated user.' };
     if (!conversationId) return { error: 'Code execution requires a conversation.' };
 
+    const turnId = stampTurnId(context);
     const chatSourceType = context?.chatSource?.type;
     const driveId =
       context?.locationContext?.currentDrive?.id ??
@@ -278,6 +310,7 @@ export function createResolveSandboxActorContext(
         aiProvider: context?.aiProvider,
         aiModel: context?.aiModel,
         tier: toTier(actorRow?.subscriptionTier),
+        turnId,
       };
     }
 
@@ -303,6 +336,7 @@ export function createResolveSandboxActorContext(
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
       tier: toTier(actorRow?.subscriptionTier),
+      turnId,
     };
   };
 }

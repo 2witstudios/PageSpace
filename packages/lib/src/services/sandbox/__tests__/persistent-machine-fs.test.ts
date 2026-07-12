@@ -99,6 +99,7 @@ function makeSpriteWorld() {
         const content = fs.get(path);
         return content === undefined ? null : Buffer.from(content, 'utf8');
       },
+      createCheckpoint: async () => {},
     };
   }
 

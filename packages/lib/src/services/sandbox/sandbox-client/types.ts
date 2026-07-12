@@ -52,6 +52,13 @@ export interface ExecutableSandbox extends SandboxHandle {
   runCommand(args: RunCommandArgs): Promise<SandboxRunResult>;
   writeFiles(files: WriteFileEntry[]): Promise<void>;
   readFileToBuffer(args: { path: string }): Promise<Buffer | null>;
+  /**
+   * Create a filesystem checkpoint tagged with `comment` (Sprites Platform
+   * Alignment 5-2: a safety net before destructive agent bash batches — see
+   * `checkpoint-policy.ts`). Resolves once the checkpoint is confirmed, or
+   * rejects on failure; the caller decides fail-open policy.
+   */
+  createCheckpoint(comment: string): Promise<void>;
 }
 
 /** Extends the PR2 lifecycle seam so one client serves both layers. */

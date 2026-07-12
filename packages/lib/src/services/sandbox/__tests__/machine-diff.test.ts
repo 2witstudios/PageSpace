@@ -39,6 +39,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
     },
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from(''),
+    createCheckpoint: async () => {},
   };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,

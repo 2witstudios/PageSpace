@@ -150,6 +150,50 @@ describe('resolveSandboxActorContext', () => {
       expect(result.tenantId).toBe('tenant-from-drive');
     });
   });
+
+  describe('turnId stamping (Sprites Platform Alignment 5-2)', () => {
+    // Deliberately fresh, standalone context objects per test (not the shared
+    // module-level `baseGlobalContext`, which sibling tests above mutate
+    // in-place via stamping — reusing it here would leak a turnId across
+    // tests and defeat the very thing being asserted).
+    function freshGlobalContext(): ToolExecutionContext {
+      return { userId: 'u1', conversationId: 'conv-1', chatSource: { type: 'global' } };
+    }
+
+    it('stamps a turnId onto the resolved ctx when the raw context has none yet', async () => {
+      const resolve = createResolveSandboxActorContext(makeDeps());
+      const result = await resolve(freshGlobalContext());
+      expect('error' in result).toBe(false);
+      if ('error' in result) return;
+      expect(result.turnId).toBeTruthy();
+    });
+
+    it('reuses the SAME turnId across multiple tool calls sharing one context object (one streamText run)', async () => {
+      const resolve = createResolveSandboxActorContext(makeDeps());
+      const sharedContext = freshGlobalContext();
+
+      const first = await resolve(sharedContext);
+      const second = await resolve(sharedContext);
+
+      expect('error' in first).toBe(false);
+      expect('error' in second).toBe(false);
+      if ('error' in first || 'error' in second) return;
+      expect(first.turnId).toBe(second.turnId);
+      // The stamp is visible on the raw context too — later non-sandbox code
+      // paths reading it (or a second resolve call) see the same value.
+      expect(sharedContext.turnId).toBe(first.turnId);
+    });
+
+    it('mints a DIFFERENT turnId for a different context object (a new streamText run)', async () => {
+      const resolve = createResolveSandboxActorContext(makeDeps());
+      const first = await resolve(freshGlobalContext());
+      const second = await resolve(freshGlobalContext());
+      expect('error' in first).toBe(false);
+      expect('error' in second).toBe(false);
+      if ('error' in first || 'error' in second) return;
+      expect(first.turnId).not.toBe(second.turnId);
+    });
+  });
 });
 
 function makeMachineDirectoryDeps(
