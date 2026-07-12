@@ -271,7 +271,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // ============================================
   const { user } = useAuth();
   const userId = user?.id ?? null;
-  const channelId = userId ? globalChannelId(userId) : undefined;
+  const channelId = userId ? globalChannelId(userId) : null;
 
   const setIsStreamingRef = useRef(setIsStreaming);
   setIsStreamingRef.current = setIsStreaming;
@@ -319,7 +319,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const claimedStopMessageIdRef = useRef<string | null>(null);
 
-  const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId, {
+  const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId ?? undefined, {
     // Cross-tab same-user events: signal surfaces to re-fetch rather than
     // updating context state that nobody renders from.
     onUserMessage: (_message, payload) => {

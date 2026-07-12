@@ -167,4 +167,53 @@ describe('takeOverConversationStreams', () => {
 
     expect(result).toEqual({ aborted: [], reconciled: [] });
   });
+
+  // Partial failure. The aborts land FIRST — real in-process generations are stopped — and only
+  // then does the reconcile UPDATE run. A single try/catch around the whole function reported
+  // `{aborted: [], reconciled: []}` when that UPDATE threw: "nothing happened", while streams had
+  // in fact been stopped. The caller and the logs were told the exact opposite of the truth.
+  describe('partial failure: aborts landed but the reconcile UPDATE throws', () => {
+    it('reports what it ACTUALLY aborted, rather than claiming nothing happened', async () => {
+      mockSelectWhere.mockResolvedValue([
+        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date() },
+      ]);
+      mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
+      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+
+      const result = await takeOverConversationStreams({
+        conversationId: 'conv-1',
+        channelId: 'page-1',
+      });
+
+      // The stream IS stopped. Saying otherwise is the bug.
+      expect(result.aborted).toEqual(['msg-live']);
+      // ...but its row was NOT driven terminal, and we must not pretend it was.
+      expect(result.reconciled).toEqual([]);
+    });
+
+    it('still does not block the send — a failed takeover must never lock the conversation', async () => {
+      mockSelectWhere.mockResolvedValue([
+        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date() },
+      ]);
+      mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
+      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(
+        takeOverConversationStreams({ conversationId: 'conv-1', channelId: 'page-1' }),
+      ).resolves.toBeDefined();
+    });
+
+    // The SELECT failing is different: nothing was stopped, so reporting nothing is correct.
+    it('given the SELECT itself fails, reports nothing aborted — because nothing was', async () => {
+      mockSelectWhere.mockRejectedValueOnce(new Error('db down'));
+
+      const result = await takeOverConversationStreams({
+        conversationId: 'conv-1',
+        channelId: 'page-1',
+      });
+
+      expect(result).toEqual({ aborted: [], reconciled: [] });
+    });
+  });
+
 });

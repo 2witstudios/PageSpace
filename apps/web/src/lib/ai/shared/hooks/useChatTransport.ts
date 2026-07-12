@@ -21,7 +21,24 @@ import { createStreamTrackingFetch } from '@/lib/ai/core/client';
 export function useChatTransport(
   conversationId: string | null,
   api: string,
-  channelId?: string,
+  /**
+   * REQUIRED, deliberately — `string | null`, never optional.
+   *
+   * This is the socket channel the server broadcasts this stream's lifecycle on, and every POST
+   * through this transport marks it as "being consumed by this browser context" for as long as
+   * the response body is being read. That mark is the ONE signal that stops the originating tab
+   * from also attaching to its own stream off the socket (see consumingChannels + AC1).
+   *
+   * When this was optional, a caller could simply forget it — and two did. The agent-mode
+   * transports omitted it, so their channel was never marked: the originator treated its own
+   * `chat:stream_start` as an attachable remote stream, joined its own multicast, and appended a
+   * synthesized assistant message on top of the one useChat already had. Every reply rendered
+   * twice, and nothing failed.
+   *
+   * A caller with genuinely no channel must say so explicitly by passing `null`. Forgetting is
+   * now a compile error, which is the only reliable way to keep it from happening again.
+   */
+  channelId: string | null,
 ): DefaultChatTransport<UIMessage> | null {
   const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null);
   const apiRef = useRef<string>(api);
@@ -36,7 +53,7 @@ export function useChatTransport(
   // looked like the keys were being refreshed when nothing downstream ever picked them up.
   // Build it once; let the keys follow the surface through the refs.
   const chatIdRef = useRef<string | null>(conversationId);
-  const channelIdRef = useRef<string | undefined>(channelId);
+  const channelIdRef = useRef<string | null>(channelId);
   chatIdRef.current = conversationId;
   channelIdRef.current = channelId;
 
@@ -52,7 +69,7 @@ export function useChatTransport(
       api,
       fetch: createStreamTrackingFetch({
         getChatId: () => chatIdRef.current,
-        getChannelId: () => channelIdRef.current,
+        getChannelId: () => channelIdRef.current ?? undefined,
       }),
     });
     apiRef.current = api;
