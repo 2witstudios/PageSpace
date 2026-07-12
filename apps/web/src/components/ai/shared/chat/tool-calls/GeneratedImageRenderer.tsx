@@ -52,9 +52,17 @@ export const GeneratedImageRenderer: React.FC<{ part: GeneratedImageToolPart }> 
   const parsedInput = safeJsonParse(part.input);
   const parsedOutput = safeJsonParse(part.output) as GeneratedImageOutput | null;
   const state = part.state ?? 'input-available';
+  const hasOutput = parsedOutput !== null;
 
-  const failed = state === 'output-error' || parsedOutput?.success === false || loadError;
-  const isLoading = !failed && !parsedOutput?.viewUrl;
+  // A completed call whose output has no viewUrl is a failure, not "still
+  // loading" — this also covers callers (e.g. the execute_tool wrapper used
+  // by search-mode agents) whose error responses carry `error` without an
+  // explicit `success: false`.
+  const failed =
+    state === 'output-error' ||
+    loadError ||
+    (hasOutput && (parsedOutput?.success === false || Boolean(parsedOutput?.error) || !parsedOutput?.viewUrl));
+  const isLoading = !hasOutput && !failed;
 
   if (isLoading) {
     return (
