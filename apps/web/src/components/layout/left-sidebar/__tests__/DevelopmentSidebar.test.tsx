@@ -23,14 +23,19 @@ vi.mock('next/navigation', () => ({
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 
+// Spied, not just stubbed: a null driveId is HOW the sidebar refuses to fetch for
+// a non-admin, so the argument is the security property — asserting only that no
+// machine renders would still pass if the gate were dropped, since the refusal
+// notice short-circuits the list anyway.
+const mockUseDriveMachines = vi.fn((driveId: string | null) => ({
+  machines: driveId ? [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }] : [],
+  isLoading: false,
+  error: undefined,
+  mutate: vi.fn(),
+}));
+
 vi.mock('@/hooks/useDriveMachines', () => ({
-  useDriveMachines: (driveId: string | null) => ({
-    // A null driveId is how the sidebar refuses to fetch for a non-admin.
-    machines: driveId ? [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }] : [],
-    isLoading: false,
-    error: undefined,
-    mutate: vi.fn(),
-  }),
+  useDriveMachines: (driveId: string | null) => mockUseDriveMachines(driveId),
 }));
 
 vi.mock('@/hooks/useMachineProjects', () => ({
@@ -76,13 +81,23 @@ describe('DevelopmentSidebar', () => {
     expect(await screen.findByText('Dev box')).toBeDefined();
   });
 
-  test('refuses a non-admin, and asks for no machines on their behalf', () => {
+  test('refuses a non-admin, and asks the API for no machines on their behalf', () => {
     mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
 
     render(<DevelopmentSidebar />);
 
     expect(screen.getByText(/administrator privileges/i)).toBeDefined();
     expect(screen.queryByText('Dev box')).toBeNull();
+    // The load-bearing half: the request is never made, rather than made and
+    // discarded. (The server rejects a non-admin too — this is the client half.)
+    expect(mockUseDriveMachines).toHaveBeenCalledWith(null);
+    expect(mockUseDriveMachines).not.toHaveBeenCalledWith('drive-1');
+  });
+
+  test('an admin does fetch the drive\'s machines', () => {
+    render(<DevelopmentSidebar />);
+
+    expect(mockUseDriveMachines).toHaveBeenCalledWith('drive-1');
   });
 
   test('says nothing about admin rights until auth has resolved', () => {
@@ -119,7 +134,7 @@ describe('DevelopmentSidebar', () => {
     // — an older intent must not follow the user here and take over the pane.
     const user = userEvent.setup();
     usePendingSessionStore.setState({
-      pending: { machineId: 'machine-1', scope: { name: 'old-session' }, createdAt: Date.now() },
+      pending: { machineId: 'machine-1', scope: { name: 'old-session' } },
     });
     render(<DevelopmentSidebar />);
 

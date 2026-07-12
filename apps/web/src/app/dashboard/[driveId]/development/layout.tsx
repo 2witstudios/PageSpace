@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useParams, usePathname } from 'next/navigation';
 import { Cpu } from 'lucide-react';
 import MachineKeepAliveHost from '@/components/layout/middle-content/MachineKeepAliveHost';
@@ -42,7 +42,7 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
   // the host's source of truth for what counts as a machine (its `machineIds`
   // prop): the surface must not disagree with itself about which machines exist.
   const { machines, isLoading, error } = useDriveMachines(isAdmin ? driveId ?? null : null);
-  const machineIds = useMemo(() => machines.map((machine) => machine.id), [machines]);
+  const machineIds = useStickyMachineIds(machines, driveId);
 
   useDrainPendingSession(selectedMachineId);
 
@@ -63,6 +63,41 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
       <MachineKeepAliveHost driveId={driveId} activePageId={selectedMachineId} machineIds={machineIds} />
     </div>
   );
+}
+
+/**
+ * The drive's machine ids, never shrinking while you stay in the drive.
+ *
+ * The host treats this list as the set of machines that still exist, and evicts
+ * (unmounting, and so DISCONNECTING) anything missing from it. But a machine can
+ * drop out of `/api/machines` without having been deleted: the per-page
+ * permission check swallows a DB error and returns "cannot view", so a transient
+ * hiccup silently omits a live machine. Shrinking the set on that would kill the
+ * terminal the user is watching — the precise failure the list was introduced to
+ * prevent.
+ *
+ * So ids are only ever added within a drive; a genuinely deleted machine simply
+ * ages out of the bounded LRU instead of being evicted on sight. Changing drive
+ * resets the set, which is what makes eviction across drives still happen (and
+ * that eviction is deliberate — a PTY stream must not outlive its drive context).
+ */
+function useStickyMachineIds(machines: { id: string }[], driveId: string | undefined): string[] {
+  const seenRef = useRef<{ driveId: string | undefined; ids: string[] }>({ driveId, ids: [] });
+  const fetchedIds = machines.map((machine) => machine.id).join('|');
+
+  return useMemo(() => {
+    const seen = seenRef.current;
+    const ids = seen.driveId === driveId ? [...seen.ids] : [];
+    for (const machine of machines) {
+      if (!ids.includes(machine.id)) ids.push(machine.id);
+    }
+    seenRef.current = { driveId, ids };
+    return ids;
+    // `fetchedIds` (not `machines`) is the dep: SWR hands back a fresh array on
+    // every revalidation, and recomputing on identity alone would allocate a new
+    // list each time — which the host would take as a changed machine set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchedIds, driveId]);
 }
 
 /**
@@ -147,7 +182,7 @@ function useDrainPendingSession(selectedMachineId: string | null) {
   );
 
   useEffect(() => {
-    const action = resolvePendingSession(pending, selectedMachineId, workspace, Date.now());
+    const action = resolvePendingSession(pending, selectedMachineId, workspace);
     if (action.type === 'open') openTerminal(action.machineId, action.scope);
     // A 'clear' with no pending intent is a no-op, so this cannot loop.
     else if (action.type === 'clear') clearPending();

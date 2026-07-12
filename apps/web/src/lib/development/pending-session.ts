@@ -1,23 +1,9 @@
 import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
-/**
- * How long a session-open intent stays live.
- *
- * The navigation it accompanies commits in milliseconds, and the machine's pane
- * region mounts within a second or so (`MachineWorkspace` is a dynamic import).
- * This is the backstop for an intent that never converges — the machine failed
- * to mount, or the user turned back mid-flight — so it cannot lie in wait and
- * later hijack the active pane of a machine they've since returned to. Generous
- * on purpose: it must never expire a navigation that is merely slow.
- */
-export const PENDING_SESSION_TTL_MS = 30_000;
-
 /** A session the user clicked in the Development sidebar, to be opened on the machine it belongs to. */
 export interface PendingSession {
   machineId: string;
   scope: OpenTerminalScope;
-  /** When the click happened — the intent expires `PENDING_SESSION_TTL_MS` later. */
-  createdAt: number;
 }
 
 export type PendingSessionAction =
@@ -71,28 +57,24 @@ function activePaneScope(workspace: WorkspaceState): OpenTerminalScope | null {
  *    the old pathname. An earlier version treated that commit as "navigated
  *    away" and dropped the intent before its own navigation landed — which
  *    silently broke every session click on a machine the user wasn't already
- *    viewing. So a mismatch WAITS, and staleness is bounded by time
- *    ({@link PENDING_SESSION_TTL_MS}) instead of by guessing at intent. The
- *    sidebar additionally clears the intent when the user picks a different
- *    machine outright, so the TTL is only ever the backstop.
+ *    viewing. So a mismatch WAITS.
  *
- * Once satisfied it is cleared, so the user's own later pane changes on that
- * machine are never clobbered by a stale intent.
+ * An intent that never converges is therefore held — but it cannot outlive its
+ * usefulness, because the two things that would make it stale both clear it
+ * outright: leaving the surface (the layout clears on unmount) and picking a
+ * machine ROW rather than one of its sessions (the sidebar clears, since that
+ * says "this machine as it is"). Once satisfied it clears too, so the user's own
+ * later pane changes are never clobbered.
  */
 export function resolvePendingSession(
   pending: PendingSession | null,
   selectedMachineId: string | null,
   workspace: WorkspaceState | undefined,
-  now: number,
 ): PendingSessionAction {
   if (!pending) return { type: 'clear' };
 
-  // Never converged (machine never mounted, user turned back). Drop it rather
-  // than let it fire into whatever pane is active whenever they next arrive.
-  if (now - pending.createdAt > PENDING_SESSION_TTL_MS) return { type: 'clear' };
-
   // Not there yet: either the click's own navigation hasn't committed, or the
-  // user is en route elsewhere. Holding is safe — the TTL bounds it.
+  // user is en route. Holding is safe — see the note above on what clears it.
   if (pending.machineId !== selectedMachineId) return { type: 'wait' };
 
   // On the machine, but its pane region hasn't mounted (and ensured a workspace).

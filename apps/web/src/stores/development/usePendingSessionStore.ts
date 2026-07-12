@@ -22,7 +22,7 @@ interface PendingSessionStoreState {
 
 export const usePendingSessionStore = create<PendingSessionStoreState>((set) => ({
   pending: null,
-  requestSession: (machineId, scope) => set({ pending: { machineId, scope, createdAt: Date.now() } }),
+  requestSession: (machineId, scope) => set({ pending: { machineId, scope } }),
   // Identity-stable when there's nothing to clear, so a no-op clear can't
   // re-render (and so the drain effect can call it unconditionally).
   clearPending: () => set((state) => (state.pending === null ? state : { pending: null })),

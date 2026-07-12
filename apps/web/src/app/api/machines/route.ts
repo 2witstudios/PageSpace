@@ -23,6 +23,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listDriveMachines } from '@/lib/machines/machine-list-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -48,6 +49,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Machines require administrator privileges' }, { status: 403 });
   }
 
-  const machines = await listDriveMachines(auth.userId, driveId);
-  return NextResponse.json({ machines });
+  try {
+    const machines = await listDriveMachines(auth.userId, driveId);
+    return NextResponse.json({ machines });
+  } catch (error) {
+    loggers.api.error('Error listing machines:', error as Error);
+    return NextResponse.json({ error: 'Failed to list machines' }, { status: 500 });
+  }
 }

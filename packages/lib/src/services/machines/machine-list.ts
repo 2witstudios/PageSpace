@@ -13,7 +13,7 @@
 export interface MachinePageSummary {
   id: string;
   title: string;
-  /** ISO-8601. Callers order by it or show it; the service itself preserves the scan's order. */
+  /** ISO-8601. Served for callers that want recency (the tree itself orders by title). */
   updatedAt: string;
 }
 
@@ -31,6 +31,12 @@ export interface MachineListDeps {
  * drive member. Every candidate is therefore re-checked against
  * `canUserViewPage` here, which is the same view-level gate every other machine
  * route applies before serving a machine's projects/branches/sessions.
+ *
+ * That check is per page, so this fans out N permission lookups for N machines.
+ * Fine at this scale — the surface is app-admin-only, machines are heavyweight
+ * things a drive has a handful of, and an owner/admin short-circuits early. If a
+ * drive ever holds enough machines for it to matter, resolve drive membership
+ * once and fall back to the per-page check only for the non-owner case.
  */
 export async function listMachinesInDrive(
   deps: MachineListDeps,

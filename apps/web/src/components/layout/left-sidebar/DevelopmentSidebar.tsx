@@ -88,6 +88,7 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
               isLoading={isLoading}
               error={error}
               selectedMachineId={selectedMachineId}
+              isSheetBreakpoint={isSheetBreakpoint}
             />
           </div>
         </ScrollArea>
@@ -116,6 +117,7 @@ function MachineList({
   isLoading,
   error,
   selectedMachineId,
+  isSheetBreakpoint,
 }: {
   authLoading: boolean;
   isAdmin: boolean;
@@ -124,6 +126,7 @@ function MachineList({
   isLoading: boolean;
   error: Error | undefined;
   selectedMachineId: string | null;
+  isSheetBreakpoint: boolean;
 }) {
   // Until auth resolves, `role` is simply unknown — saying "you're not an admin"
   // then would flash the refusal at an admin on every cold load.
@@ -147,6 +150,7 @@ function MachineList({
           machineId={machine.id}
           title={machine.title}
           selected={machine.id === selectedMachineId}
+          isSheetBreakpoint={isSheetBreakpoint}
         />
       ))}
     </>
@@ -170,14 +174,16 @@ function MachineTreeSection({
   machineId,
   title,
   selected,
+  isSheetBreakpoint,
 }: {
   driveId: string;
   machineId: string;
   title: string;
   selected: boolean;
+  /** Passed down rather than re-derived: one matchMedia listener for the sidebar, not one per machine. */
+  isSheetBreakpoint: boolean;
 }) {
   const router = useRouter();
-  const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const requestSession = usePendingSessionStore((state) => state.requestSession);
   const clearPending = usePendingSessionStore((state) => state.clearPending);
