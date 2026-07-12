@@ -257,4 +257,70 @@ describe('useMachineWorkspaceStore', () => {
       expected: { machine: undefined, active: undefined },
     });
   });
+
+  it('given a session whose pane was closed, should show it again when its row is clicked', () => {
+    store().ensureMachine('m1');
+    store().openTerminal('m1', SESSION);
+    const workspace = activeOf('m1')!;
+    // The user splits, then closes the pane the session was opened in.
+    store().splitRight('m1', workspace.id, workspace.activePaneId);
+    store().closePane('m1', workspace.id, workspace.activePaneId === workspace.id ? workspace.activePaneId : panesOf(selectWorkspace('m1', workspace.id)(store())!)[0].id);
+
+    store().openTerminal('m1', SESSION);
+
+    assert({
+      given: 'a session whose pane the user closed, then clicked its sidebar row again',
+      should:
+        'put it back on screen — selecting the workspace alone would show a grid that no longer contains it, stranding a PTY that is still running and billing',
+      actual: panesOf(activeOf('m1')!).some((pane) => pane.scope?.name === SESSION.name),
+      expected: true,
+    });
+  });
+
+  it('given a persisted machine whose active workspace is missing, should repair it instead of rendering nothing', () => {
+    // What a bad rehydrate (or a future shape change) can leave behind: the key
+    // exists, but the workspace it points at does not.
+    useMachineWorkspaceStore.setState({
+      machines: { m1: { workspaces: {}, order: [], activeWorkspaceId: 'gone' } },
+    });
+
+    store().ensureMachine('m1');
+
+    assert({
+      given: 'a machine whose active workspace does not resolve',
+      should:
+        'rebuild it — skipping on the mere presence of the key would leave the Machine page blank forever, with no way for a user to clear this storage from inside the app',
+      actual: { hasActive: activeOf('m1') !== undefined, panes: paneIds(activeOf('m1')).length },
+      expected: { hasActive: true, panes: 1 },
+    });
+  });
+
+  it('given the last workspace, should refuse to remove it', () => {
+    store().ensureMachine('m1');
+    const onlyId = activeOf('m1')!.id;
+
+    store().removeWorkspace('m1', onlyId);
+
+    assert({
+      given: 'the only workspace a machine has',
+      should: 'keep it — the middle view has to render something',
+      actual: activeOf('m1')?.id,
+      expected: onlyId,
+    });
+  });
+
+  it('given a removed workspace, should show a neighbour', () => {
+    store().ensureMachine('m1');
+    const firstId = activeOf('m1')!.id;
+    const secondId = store().createWorkspace('m1');
+
+    store().removeWorkspace('m1', secondId);
+
+    assert({
+      given: 'the active workspace removed',
+      should: 'drop it and show the one left',
+      actual: { active: activeOf('m1')?.id, count: workspacesOf(selectMachine('m1')(store())).length },
+      expected: { active: firstId, count: 1 },
+    });
+  });
 });

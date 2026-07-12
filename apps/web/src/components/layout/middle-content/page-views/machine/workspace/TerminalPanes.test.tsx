@@ -231,14 +231,13 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
     });
   });
 
-  test('a lone pane on a phone renders no control chip at all', async () => {
+  test('a lone EMPTY pane on a phone renders no control chip at all', async () => {
     onMobile();
-    workspace = SOLO_WORKSPACE;
+    workspace = EMPTY_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
-    await screen.findByTestId('xterm');
 
     assert({
-      given: 'the only pane on a narrow viewport, where it can neither split nor close',
+      given: 'the only pane on a narrow viewport, empty, where it can neither split nor detach anything',
       should:
         'render no control chip — the chip is opacity-100 on touch, so an empty bordered box would sit in the corner permanently',
       actual: {
@@ -247,6 +246,24 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
         chip: document.querySelector('.backdrop-blur-sm') !== null,
       },
       expected: { split: false, close: false, chip: false },
+    });
+  });
+
+  test('a lone pane HOLDING a terminal can still detach it, even on a phone', async () => {
+    onMobile();
+    workspace = SOLO_WORKSPACE;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    assert({
+      given: 'a workspace whose only pane shows a session — one that may no longer exist server-side',
+      should:
+        'offer close, which detaches the terminal and hands the pane back to the picker; without it that workspace is stuck forever on a terminal that will never connect again',
+      actual: {
+        canClose: screen.queryByTitle('Close pane') !== null,
+        canSplit: screen.queryByTitle('Split right') !== null,
+      },
+      expected: { canClose: true, canSplit: false },
     });
   });
 });

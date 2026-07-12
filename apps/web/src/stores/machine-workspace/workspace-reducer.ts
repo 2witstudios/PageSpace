@@ -224,15 +224,28 @@ export function splitDown(state: WorkspaceState, fromPaneId: string, newPaneId: 
   return { ...state, columns, activePaneId: newPaneId, pendingPickerPaneId: newPaneId };
 }
 
-/** Removing the very last remaining pane is a no-op — a workspace never has
- * zero panes. Closing the last pane in a column removes the column too;
- * closing the active pane re-targets active to the first remaining pane. */
+/**
+ * A workspace never has zero panes, so closing the LAST one empties it instead
+ * of removing it: the pane drops its terminal and goes back to offering the
+ * picker. Refusing outright (the old behaviour) was a dead end — a lone pane
+ * showing a session that no longer exists server-side could never be detached,
+ * and the workspace was stuck on a terminal that would never connect again.
+ *
+ * Closing the last pane in a column removes the column too; closing the active
+ * pane re-targets active to the first remaining pane.
+ */
 export function closePane(state: WorkspaceState, id: string): WorkspaceState {
   const location = findPaneLocation(state, id);
   if (!location) return state;
 
   const totalPanes = state.columns.reduce((sum, column) => sum + column.panes.length, 0);
-  if (totalPanes <= 1) return state;
+  if (totalPanes <= 1) {
+    return mapPane(state, id, (pane) =>
+      pane.scope === null && pane.pendingPrompt === undefined
+        ? pane
+        : { ...pane, scope: null, pendingPrompt: undefined }
+    );
+  }
 
   const columns = state.columns
     .map((column, columnIndex) =>
@@ -316,6 +329,149 @@ export function updateWorkspace(
 
 export function workspacesOf(state: MachineWorkspacesState): WorkspaceState[] {
   return state.order.map((id) => state.workspaces[id]).filter(Boolean);
+}
+
+/** Is this session already on screen in `workspace`? */
+function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): TerminalPaneState | undefined {
+  return panesOf(workspace).find(
+    (pane) =>
+      pane.scope?.name === scope.name &&
+      (pane.scope?.projectName ?? '') === (scope.projectName ?? '') &&
+      (pane.scope?.branchName ?? '') === (scope.branchName ?? '')
+  );
+}
+
+/**
+ * Puts `scope`'s session in front of the user inside its own workspace.
+ *
+ * Re-selecting the workspace is NOT enough on its own. The workspace is the
+ * unit, and its panes move: the user can split, spawn other agents, and close
+ * the very pane the session was opened in. Then clicking that session's sidebar
+ * row again would just show a grid that no longer contains it — the session
+ * would be unreachable from the sidebar for good, while its PTY kept running
+ * (and billing) on the server.
+ *
+ * So: focus the pane already showing it, or put it in an empty pane, or split a
+ * new pane for it.
+ */
+export function showSessionIn(
+  workspace: WorkspaceState,
+  scope: OpenTerminalScope,
+  newPaneId: string
+): WorkspaceState {
+  const showing = paneShowing(workspace, scope);
+  if (showing) return selectPane(workspace, showing.id);
+
+  const empty = panesOf(workspace).find((pane) => pane.scope === null);
+  if (empty) return assignPane(workspace, empty.id, scope);
+
+  return assignPane(splitDown(workspace, workspace.activePaneId, newPaneId), newPaneId, scope);
+}
+
+/**
+ * Removes a workspace and shows a neighbour. A machine always keeps at least
+ * one workspace, so removing the last one is a no-op — there would be nothing
+ * left to render. (A workspace whose only pane holds a dead terminal is not a
+ * dead end even then: closing that pane empties it back to the picker.)
+ */
+export function removeWorkspace(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
+  if (!state.workspaces[workspaceId] || state.order.length <= 1) return state;
+
+  const order = state.order.filter((id) => id !== workspaceId);
+  const workspaces = { ...state.workspaces };
+  delete workspaces[workspaceId];
+
+  // Falling back to the neighbour it sat next to, rather than to the first
+  // workspace — closing one item should not jump the view across the sidebar.
+  const removedIndex = state.order.indexOf(workspaceId);
+  const neighbour = order[Math.min(removedIndex, order.length - 1)];
+  const activeWorkspaceId = state.activeWorkspaceId === workspaceId ? neighbour : state.activeWorkspaceId;
+
+  return { workspaces, order, activeWorkspaceId };
+}
+
+// ---------------------------------------------------------------------------
+// Rehydration — what comes back out of localStorage is untrusted
+// ---------------------------------------------------------------------------
+
+function isPane(value: unknown): value is TerminalPaneState {
+  if (typeof value !== 'object' || value === null) return false;
+  const pane = value as Partial<TerminalPaneState>;
+  return typeof pane.id === 'string' && (pane.scope === null || typeof pane.scope === 'object');
+}
+
+function isWorkspace(value: unknown): value is WorkspaceState {
+  if (typeof value !== 'object' || value === null) return false;
+  const workspace = value as Partial<WorkspaceState>;
+  return (
+    typeof workspace.id === 'string' &&
+    typeof workspace.name === 'string' &&
+    typeof workspace.scope === 'object' &&
+    workspace.scope !== null &&
+    Array.isArray(workspace.columns) &&
+    workspace.columns.length > 0 &&
+    workspace.columns.every(
+      (column) =>
+        typeof column?.id === 'string' &&
+        Array.isArray(column.panes) &&
+        column.panes.length > 0 &&
+        column.panes.every(isPane)
+    ) &&
+    typeof workspace.activePaneId === 'string'
+  );
+}
+
+/**
+ * Scrubs a rehydrated `machines` blob down to what this code can actually
+ * render, dropping anything it can't.
+ *
+ * Persisted state is written by whatever version of this app the user last ran.
+ * A shape that no longer matches (a renamed field, a restructured column) would
+ * otherwise flow straight into render — `columns.flatMap` on an undefined
+ * `columns` throws, and a throw here takes the whole Machine page down for a
+ * returning user, permanently, with no in-app way to clear the storage. Dropping
+ * a stale workspace costs the user a pane layout; keeping it costs them the page.
+ *
+ * Transient UI intent is stripped on the way in as well: `pendingPickerPaneId`
+ * (a picker that auto-focused days ago must not steal the caret on load) and
+ * `pendingPrompt` (see `assignPane` — a prompt that was never delivered must
+ * never be typed at an agent that has been running ever since).
+ */
+export function sanitizeMachines(value: unknown): Record<string, MachineWorkspacesState> {
+  if (typeof value !== 'object' || value === null) return {};
+
+  const machines: Record<string, MachineWorkspacesState> = {};
+
+  for (const [machineId, machine] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof machine !== 'object' || machine === null) continue;
+    const candidate = machine as Partial<MachineWorkspacesState>;
+    if (typeof candidate.workspaces !== 'object' || candidate.workspaces === null) continue;
+
+    const workspaces: Record<string, WorkspaceState> = {};
+    for (const [workspaceId, workspace] of Object.entries(candidate.workspaces)) {
+      if (!isWorkspace(workspace)) continue;
+      workspaces[workspaceId] = {
+        ...workspace,
+        columns: workspace.columns.map((column) => ({
+          ...column,
+          panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
+        })),
+        pendingPickerPaneId: null,
+      };
+    }
+
+    const order = (Array.isArray(candidate.order) ? candidate.order : []).filter((id) => workspaces[id]);
+    if (order.length === 0) continue;
+
+    const activeWorkspaceId =
+      typeof candidate.activeWorkspaceId === 'string' && workspaces[candidate.activeWorkspaceId]
+        ? candidate.activeWorkspaceId
+        : order[0];
+
+    machines[machineId] = { workspaces, order, activeWorkspaceId };
+  }
+
+  return machines;
 }
 
 /**

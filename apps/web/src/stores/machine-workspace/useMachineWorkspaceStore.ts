@@ -24,6 +24,9 @@ import {
   initialMachineWorkspaces,
   addWorkspace,
   updateWorkspace,
+  removeWorkspace as removeWorkspaceTransition,
+  showSessionIn,
+  sanitizeMachines,
   sessionWorkspaceId,
   nextWorkspaceName,
   setActiveWorkspace as setActiveWorkspaceTransition,
@@ -65,6 +68,8 @@ interface MachineWorkspaceStoreState {
   createWorkspace: (machineId: string, scope?: MachineNodeScope) => string;
   /** THE FIX: switches the whole middle view to this workspace's grid. */
   setActiveWorkspace: (machineId: string, workspaceId: string) => void;
+  /** Drops a workspace and shows a neighbour. A machine keeps at least one. */
+  removeWorkspace: (machineId: string, workspaceId: string) => void;
   /** Opens an existing session: its own workspace, restored if it already has
    * one, and shown. */
   openTerminal: (machineId: string, scope: OpenTerminalScope) => void;
@@ -120,7 +125,14 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       machines: {},
 
       ensureMachine: (machineId) => {
-        if (get().machines[machineId]) return;
+        // REPAIRS, rather than merely skipping when the key exists. A machine
+        // whose active workspace doesn't resolve renders nothing at all, and if
+        // the only check were `machines[machineId]` that blank view would be
+        // permanent — there is no way for a user to clear this storage from
+        // inside the app.
+        const machine = get().machines[machineId];
+        if (machine && machine.workspaces[machine.activeWorkspaceId]) return;
+
         set((state) => ({
           machines: {
             ...state.machines,
@@ -153,16 +165,29 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
         set((state) => applyToMachine(state, machineId, (machine) => setActiveWorkspaceTransition(machine, workspaceId)));
       },
 
+      removeWorkspace: (machineId, workspaceId) => {
+        set((state) => applyToMachine(state, machineId, (machine) => removeWorkspaceTransition(machine, workspaceId)));
+      },
+
       openTerminal: (machineId, scope) => {
         get().ensureMachine(machineId);
         const machine = get().machines[machineId];
         const workspaceId = sessionWorkspaceId(scope);
 
-        // Already has a workspace: show it as the user last left it — panes they
-        // split into it and the agents in them, not just this one session.
+        // Already has a workspace: show it as the user last left it — the panes
+        // they split into it and the agents in them, not just this one session —
+        // and make sure the session they actually clicked is among them. It need
+        // not be: they may have closed the pane it was opened in, and without
+        // this the row would select a grid that no longer shows the session, with
+        // no way back to a PTY that is still running (and billing).
         if (machine.workspaces[workspaceId]) {
+          const newPaneId = crypto.randomUUID();
           set((state) =>
-            applyToMachine(state, machineId, (current) => setActiveWorkspaceTransition(current, workspaceId))
+            applyToMachine(state, machineId, (current) =>
+              updateWorkspace(setActiveWorkspaceTransition(current, workspaceId), workspaceId, (workspace) =>
+                showSessionIn(workspace, scope, newPaneId)
+              )
+            )
           );
           return;
         }
@@ -235,9 +260,23 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
     }),
     {
       name: 'machine-workspace-storage',
-      // Only the shape — the actions are rebuilt on every load. A restored grid
+      // Bump whenever the persisted shape changes in a way `sanitizeMachines`
+      // cannot already absorb.
+      version: 1,
+      // Only the state — the actions are rebuilt on every load. A restored grid
       // reattaches to its PTYs, which is the whole reason to persist it.
       partialize: (state) => ({ machines: state.machines }),
+      // What comes back out of storage was written by whichever version of this
+      // app the user last ran: treat it as untrusted input, not as our own state.
+      // Anything unrenderable is dropped — a lost pane layout is recoverable, a
+      // throw during render is a Machine page the user can never open again.
+      migrate: (persisted) => ({
+        machines: sanitizeMachines((persisted as { machines?: unknown } | null)?.machines),
+      }),
+      merge: (persisted, current) => ({
+        ...current,
+        machines: sanitizeMachines((persisted as { machines?: unknown } | null)?.machines),
+      }),
     }
   )
 );

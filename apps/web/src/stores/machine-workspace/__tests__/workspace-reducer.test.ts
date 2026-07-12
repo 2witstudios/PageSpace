@@ -18,6 +18,9 @@ import {
   closePane,
   selectPane,
   panesOf,
+  showSessionIn,
+  removeWorkspace,
+  sanitizeMachines,
   autoSessionName,
   MACHINE_NODE_SCOPE,
   type WorkspaceState,
@@ -427,6 +430,183 @@ describe('autoSessionName', () => {
       should: 'fall back to the bare agent type rather than emit a trailing dash the API would reject',
       actual: autoSessionName('claude', '----'),
       expected: 'claude',
+    });
+  });
+});
+
+describe('showSessionIn — a clicked session must actually be on screen', () => {
+  const SESSION = { ...BRANCH_SCOPE, name: 'claude-a1b2c3' };
+
+  it('given the session is already in a pane, should just focus that pane', () => {
+    const workspace = assignPane(splitRight(aWorkspace(), 'pane-1', 'col-2', 'pane-2'), 'pane-1', SESSION);
+
+    const actual = showSessionIn(workspace, SESSION, 'new-pane');
+
+    assert({
+      given: 'a session already showing in one pane of its workspace',
+      should: 'focus that pane and add nothing — clicking its row twice must not open it twice',
+      actual: { activePaneId: actual.activePaneId, panes: panesOf(actual).length },
+      expected: { activePaneId: 'pane-1', panes: 2 },
+    });
+  });
+
+  it('given the pane it was opened in was CLOSED, should put it back in an empty pane', () => {
+    // The user opened the session, split, then closed the session's own pane.
+    const workspace = closePane(
+      assignPane(splitRight(aWorkspace(), 'pane-1', 'col-2', 'pane-2'), 'pane-1', SESSION),
+      'pane-1'
+    );
+
+    const actual = showSessionIn(workspace, SESSION, 'new-pane');
+
+    assert({
+      given: 'a session whose pane the user closed, then clicked its sidebar row again',
+      should:
+        'show it again in the empty pane — merely re-selecting the workspace would leave the session unreachable from the sidebar while its PTY kept running, and billing',
+      actual: panesOf(actual).find((pane) => pane.scope?.name === SESSION.name)?.id,
+      expected: 'pane-2',
+    });
+  });
+
+  it('given every pane is full of other agents, should split a new pane for it', () => {
+    const full = assignPane(
+      assignPane(splitRight(aWorkspace(), 'pane-1', 'col-2', 'pane-2'), 'pane-1', { name: 'other-1' }),
+      'pane-2',
+      { name: 'other-2' }
+    );
+
+    const actual = showSessionIn(full, SESSION, 'new-pane');
+
+    assert({
+      given: 'a workspace whose panes all hold other agents',
+      should: 'split a pane for the session rather than evict one of them',
+      actual: {
+        panes: panesOf(actual).length,
+        session: panesOf(actual).find((pane) => pane.id === 'new-pane')?.scope,
+        othersKept: panesOf(actual).filter((pane) => pane.scope?.name.startsWith('other')).length,
+      },
+      expected: { panes: 3, session: SESSION, othersKept: 2 },
+    });
+  });
+});
+
+describe('closePane on a lone pane — detach, never dead-end', () => {
+  it('given the only pane holds a terminal, should empty it back to the picker', () => {
+    const workspace = assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1b2c3' }, 'a prompt');
+
+    const actual = closePane(workspace, 'pane-1');
+
+    assert({
+      given: 'a workspace whose ONLY pane shows a session (one that may no longer exist server-side)',
+      should:
+        'detach the terminal and hand the pane back to the picker — refusing outright left the workspace stuck forever on a terminal that would never connect again',
+      actual: panesOf(actual)[0],
+      expected: { id: 'pane-1', scope: null, pendingPrompt: undefined },
+    });
+  });
+
+  it('given the only pane is already empty, should be a no-op', () => {
+    const workspace = aWorkspace();
+
+    assert({
+      given: 'a lone pane that is already the picker',
+      should: 'be a no-op — there is nothing to detach',
+      actual: closePane(workspace, 'pane-1'),
+      expected: workspace,
+    });
+  });
+});
+
+describe('removeWorkspace', () => {
+  it('given the active workspace is removed, should show its neighbour', () => {
+    const machine = addWorkspace(
+      addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1')),
+      aWorkspace('ws-c', 'c1')
+    );
+
+    const actual = removeWorkspace(setActiveWorkspace(machine, 'ws-b'), 'ws-b');
+
+    assert({
+      given: 'the middle workspace of three, removed while it was on screen',
+      should: 'drop it and show the one that took its place, rather than jumping across the sidebar',
+      actual: { order: actual.order, active: actual.activeWorkspaceId },
+      expected: { order: ['ws-a', 'ws-c'], active: 'ws-c' },
+    });
+  });
+
+  it('given the last workspace, should be a no-op', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'the only workspace a machine has',
+      should: 'refuse — the middle view would have nothing to render (a broken pane can be emptied instead)',
+      actual: removeWorkspace(machine, 'ws-1'),
+      expected: machine,
+    });
+  });
+});
+
+describe('sanitizeMachines — what comes back from storage is untrusted', () => {
+  it('given a workspace from an older, incompatible shape, should drop it rather than crash on render', () => {
+    const persisted = {
+      m1: {
+        workspaces: {
+          good: aWorkspace('good', 'p1'),
+          // Written by a previous version: no `columns` at all. Rendering this
+          // throws (columns.flatMap of undefined), and a throw here means a
+          // Machine page the user can never open again.
+          stale: { id: 'stale', name: 'old', scope: {}, activePaneId: 'x' },
+        },
+        order: ['good', 'stale'],
+        activeWorkspaceId: 'stale',
+      },
+    };
+
+    const actual = sanitizeMachines(persisted);
+
+    assert({
+      given: 'a persisted blob holding one renderable workspace and one from an incompatible older shape',
+      should: 'keep what it can render, drop what it cannot, and re-point the active id at a workspace that exists',
+      actual: {
+        workspaces: Object.keys(actual.m1.workspaces),
+        order: actual.m1.order,
+        active: actual.m1.activeWorkspaceId,
+      },
+      expected: { workspaces: ['good'], order: ['good'], active: 'good' },
+    });
+  });
+
+  it('given transient UI state in storage, should strip it', () => {
+    const withTransient = {
+      m1: {
+        workspaces: {
+          'ws-1': {
+            ...assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1' }, 'fix the build'),
+            pendingPickerPaneId: 'pane-1',
+          },
+        },
+        order: ['ws-1'],
+        activeWorkspaceId: 'ws-1',
+      },
+    };
+
+    const actual = sanitizeMachines(withTransient).m1.workspaces['ws-1'];
+
+    assert({
+      given: 'a picker focus intent and an undelivered starting prompt, both written to storage',
+      should:
+        'strip both — a picker must not steal the caret on page load, and a prompt from a boot that already happened must never be typed at an agent that has been running ever since',
+      actual: { picker: actual.pendingPickerPaneId, prompt: panesOf(actual)[0].pendingPrompt },
+      expected: { picker: null, prompt: undefined },
+    });
+  });
+
+  it('given garbage, should yield an empty map rather than throw', () => {
+    assert({
+      given: 'a corrupt or absent storage blob',
+      should: 'come back empty, so the store rebuilds from scratch instead of exploding at import time',
+      actual: [sanitizeMachines(undefined), sanitizeMachines('nonsense'), sanitizeMachines({ m1: 7 })],
+      expected: [{}, {}, {}],
     });
   });
 });

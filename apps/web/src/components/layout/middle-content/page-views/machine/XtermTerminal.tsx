@@ -121,6 +121,16 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
          */
         let initialInputSent = false;
         let promptTimer: ReturnType<typeof setTimeout> | undefined;
+
+        /** Spends the prompt without writing it — for a session that is past
+         * taking one. The caller drops it either way, so it can never come back. */
+        const discardInitialInput = () => {
+          if (initialInputSent) return;
+          initialInputSent = true;
+          clearTimeout(promptTimer);
+          initialInputRef.current.onSent?.();
+        };
+
         const sendInitialInput = () => {
           const { input, onSent } = initialInputRef.current;
           if (!input || initialInputSent) return;
@@ -142,9 +152,20 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         };
         const handleReady = (payload: { scrollback?: string; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
-          if (payload.scrollback) terminal.write(payload.scrollback);
+          if (payload.scrollback !== undefined) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
-          if (initialInputRef.current.input && !initialInputSent && promptTimer === undefined) {
+
+          // A `scrollback` key at all — even an empty one — means this is a
+          // REATTACH: the PTY was already running before this pane connected.
+          // Its starting prompt (if it still has one) belongs to a boot that
+          // happened at some point in the past, possibly days ago, and the agent
+          // has been running ever since. Typing it now would drop a line plus a
+          // carriage return into a live session at whatever state it is in — a
+          // y/n confirmation, say — so it is discarded, not delivered. Only a
+          // COLD start (no scrollback key) is a boot this pane can prompt.
+          if (payload.scrollback !== undefined) {
+            discardInitialInput();
+          } else if (initialInputRef.current.input && !initialInputSent && promptTimer === undefined) {
             promptTimer = setTimeout(sendInitialInput, PROMPT_BACKSTOP_MS);
           }
           onReady?.();

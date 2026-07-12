@@ -118,7 +118,6 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   const { activePaneId, pendingPickerPaneId, columns } = workspace;
   const scopeLabel = scopeLabelOf(scope);
   const panes = panesOf(workspace);
-  const canClose = panes.length > 1;
 
   /** `activeId` is a parameter rather than read from the closure so the narrow
    * branch's fallback (below) drives the focus accent and the pane strip from the
@@ -129,7 +128,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     machineId,
     pane,
     isActive: pane.id === activeId,
-    canClose,
+    // A lone pane can still be closed when it holds a terminal — closing it
+    // detaches the terminal and hands the pane back to the picker. Without that,
+    // a workspace whose only pane shows a session that no longer exists could
+    // never be recovered.
+    canClose: panes.length > 1 || pane.scope !== null,
     // A split just made this pane, so its picker takes focus — the user asked
     // for a new agent, not for a blank rectangle to go find a control in.
     pickerFocused: pane.id === pendingPickerPaneId,
