@@ -103,24 +103,27 @@ describe('abortConversationStreams', () => {
     });
   });
 
+  // This function is the LOCAL step of Stop. It no longer renders a verdict — it reports what it
+  // actually aborted, and `abortStreamAnywhere` (which can also see the cross-instance outcome)
+  // decides what the user is told. An empty result here is not a failure; it is the signal to
+  // escalate to the instance that owns the stream.
   describe('honest reporting', () => {
-    it('given no in-flight stream, says so rather than claiming success', async () => {
+    it('given no in-flight stream, reports nothing aborted rather than claiming success', async () => {
       const result = await abortConversationStreams({ conversationId: 'conv-1', userId: 'user-1' });
 
       expect(result.aborted).toEqual([]);
-      expect(result.reason).toBe('No in-flight stream on this conversation');
     });
 
-    // The abort registry is in-process. A stream owned by another web instance is real and running
-    // but cannot be stopped from here — reporting that as success would be a lie.
-    it('given a stream that exists but could not be aborted from this instance, says so', async () => {
+    // The abort registry is in-process. A stream owned by another web instance is real and
+    // running, and cannot be stopped from here — so it must NOT be reported as aborted. The
+    // caller escalates on exactly this.
+    it('given a stream owned by another instance, reports it as NOT aborted', async () => {
       mockSelectWhere.mockResolvedValue([{ messageId: 'msg-elsewhere' }]);
       mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'not found' });
 
       const result = await abortConversationStreams({ conversationId: 'conv-1', userId: 'user-1' });
 
       expect(result.aborted).toEqual([]);
-      expect(result.reason).toContain('none could be aborted from this instance');
     });
 
     it('given the lookup throws, does not throw at the caller', async () => {
@@ -128,7 +131,7 @@ describe('abortConversationStreams', () => {
 
       await expect(
         abortConversationStreams({ conversationId: 'conv-1', userId: 'user-1' }),
-      ).resolves.toEqual({ aborted: [], reason: 'Lookup failed' });
+      ).resolves.toEqual({ aborted: [] });
     });
   });
 });

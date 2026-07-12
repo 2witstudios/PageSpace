@@ -74,7 +74,7 @@ import {
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
-import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
@@ -807,23 +807,26 @@ const GlobalAssistantView: React.FC = () => {
       // global Chat and a mid-stream conversation switch does NOT abort the POST. Name the
       // STREAM, not the surface — and abort by messageId, because the conversation-change
       // cleanup deletes this stream's entry from the client-side chatId map.
+      // LOCAL STOP FIRST. It used to run in a `finally`, to guarantee it happened even if the
+      // server abort threw. But the server abort is no longer instant: when the generation lives
+      // on another web instance it now marks the stream and WAITS to learn whether the owner
+      // actually stopped it. Awaiting that first would hang the Stop button for seconds with
+      // tokens still rendering. Running it up front guarantees it strictly harder than the
+      // `finally` did — and the server call is then awaited only to decide what to TELL the user.
       const stopFn = async () => {
-        try {
-          const messageId = globalStreamMsgIdRef.current;
-          const convId = globalStreamConvIdRef.current;
-          if (messageId) {
-            await abortActiveStreamByMessageId({ messageId });
-          } else if (convId) {
-            // Pre-first-chunk: no assistant id yet — and the chatId map is EMPTY here, not stale
-            // (setActiveStreamId only runs once the response headers land, 0.5-3s into a real
-            // send). Name the conversation too, or this abort is a guaranteed no-op while the
-            // server keeps generating and keeps billing. The agent-mode stop above already did
-            // this; this one was missed.
-            await abortActiveStream({ chatId: convId, conversationId: convId });
-          }
-        } finally {
-          // Call useChat's stop to abort client-side fetch
-          globalStop();
+        // Stops this client reading. Stops NOTHING on the server — streams are server-owned.
+        globalStop();
+
+        const messageId = globalStreamMsgIdRef.current;
+        const convId = globalStreamConvIdRef.current;
+        if (messageId) {
+          reportAbortOutcome(await abortActiveStreamByMessageId({ messageId }));
+        } else if (convId) {
+          // Pre-first-chunk: no assistant id yet — and the chatId map is EMPTY here, not stale
+          // (setActiveStreamId only runs once the response headers land, 0.5-3s into a real
+          // send). Name the conversation too, or this abort is a guaranteed no-op while the
+          // server keeps generating and keeps billing.
+          reportAbortOutcome(await abortActiveStream({ chatId: convId, conversationId: convId }));
         }
       };
       ownedGlobalStopFnRef.current = stopFn;
@@ -924,23 +927,21 @@ const GlobalAssistantView: React.FC = () => {
       // setAgentStop is a plain zustand VALUE setter, NOT a useState dispatch — so pass the
       // fn itself, never the `() => fn` updater form (which would be stored verbatim, and
       // calling it would merely return the inner fn: a Stop button that does nothing).
+      // Local stop first — see the note on the global handler above.
       const stopFn = async () => {
-        try {
-          // Read at CALL time: the messageId only exists once the first chunk lands.
-          const messageId = streamMsgIdRef.current;
-          if (messageId) {
-            await abortActiveStreamByMessageId({ messageId });
-          } else if (streamConvId) {
-            // Pre-first-chunk: no assistant id yet. The chatId map is NOT enough — it is empty
-            // until the response headers land, and the conversation-change cleanup deletes the
-            // running stream's entry on a mid-stream switch. Naming the conversation is what
-            // makes this abort actually reach the server instead of silently no-opping while the
-            // generation keeps running and keeps billing.
-            await abortActiveStream({ chatId: streamConvId, conversationId: streamConvId });
-          }
-        } finally {
-          // Call useChat's stop to abort client-side fetch
-          agentStop();
+        agentStop();
+
+        // Read at CALL time: the messageId only exists once the first chunk lands.
+        const messageId = streamMsgIdRef.current;
+        if (messageId) {
+          reportAbortOutcome(await abortActiveStreamByMessageId({ messageId }));
+        } else if (streamConvId) {
+          // Pre-first-chunk: no assistant id yet. The chatId map is NOT enough — it is empty
+          // until the response headers land, and the conversation-change cleanup deletes the
+          // running stream's entry on a mid-stream switch. Naming the conversation is what
+          // makes this abort actually reach the server instead of silently no-opping while the
+          // generation keeps running and keeps billing.
+          reportAbortOutcome(await abortActiveStream({ chatId: streamConvId, conversationId: streamConvId }));
         }
       };
       ownedAgentStopFnRef.current = stopFn;

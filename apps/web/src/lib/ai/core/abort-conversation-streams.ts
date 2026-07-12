@@ -21,8 +21,38 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
  * architecture. So cancelling the fetch stops NOTHING: the generation kept running, kept calling
  * write tools, and kept billing, while the UI told the user it had stopped.
  *
- * The conversationId is the one name the client holds from t=0. So Stop can now always say
- * something true.
+ * The conversationId is the one name the client holds from t=0, so Stop can name the stream long
+ * before the server tells it what the stream is called.
+ *
+ * ── THE WINDOW THIS DOES *NOT* CLOSE, WHICH THIS DOCBLOCK USED TO CLAIM IT DID ──────────────────
+ *
+ * It said "Stop can now always say something true". That is false, and stating it here is how the
+ * next person builds on a false premise.
+ *
+ * The conversationId is a name the CLIENT holds from t=0, but the thing it has to resolve against —
+ * the `ai_stream_sessions` row — is not written until `createStreamLifecycle`, which runs at the
+ * very END of the route's preflight, after auth, permissions, message persistence and context
+ * assembly. For most of that 0.5-3s window there is no row and no registry entry, so this SELECT
+ * matches nothing, the cross-instance mark matches nothing, and the caller is told `not_found` —
+ * which the UI stays SILENT about. The generation then starts a moment later and runs to
+ * completion: write tools, billing, the lot.
+ *
+ * So the window this closes is the tail between the row's INSERT and the response headers landing.
+ * The head of it — before the row exists — is still open, and it is still a silent Stop over a
+ * generation that goes on to run.
+ *
+ * Closing it needs the abort request to be able to OUTLIVE the absence of a row: a pending-abort
+ * intent, durable and keyed by conversation, that `createStreamLifecycle` consults at INSERT time
+ * (instead of unconditionally clearing `abortRequestedAt`) and honours by aborting immediately. It
+ * needs its own storage, its own expiry, and its own migration — its own change. Written down here
+ * rather than papered over.
+ *
+ * SCOPE — this is the LOCAL step only.
+ *
+ * It stops what this instance owns. Anything it could not stop lives on another web instance (the
+ * registry is in-process), and is handled by the cross-instance mark in `abortStreamAnywhere`,
+ * which calls this first. That is why this function no longer renders a verdict: it reports what
+ * it aborted, and the caller — which can see both halves — decides what the user is told.
  *
  * AUTHORIZATION — deliberately stricter than the takeover's.
  *
@@ -38,7 +68,7 @@ export const abortConversationStreams = async ({
 }: {
   conversationId: string;
   userId: string;
-}): Promise<{ aborted: string[]; reason: string }> => {
+}): Promise<{ aborted: string[] }> => {
   let rows: { messageId: string }[];
   try {
     rows = await db
@@ -55,7 +85,7 @@ export const abortConversationStreams = async ({
       conversationId,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return { aborted: [], reason: 'Lookup failed' };
+    return { aborted: [] };
   }
 
   const aborted: string[] = [];
@@ -65,17 +95,5 @@ export const abortConversationStreams = async ({
     if (result.aborted) aborted.push(row.messageId);
   }
 
-  if (aborted.length === 0) {
-    // Not an error. The stream may live on another web instance (the abort registry is
-    // in-process), or it may have finished between the SELECT and here. Reported honestly
-    // rather than as a success.
-    return {
-      aborted: [],
-      reason: rows.length > 0
-        ? 'In-flight stream(s) found but none could be aborted from this instance'
-        : 'No in-flight stream on this conversation',
-    };
-  }
-
-  return { aborted, reason: '' };
+  return { aborted };
 };

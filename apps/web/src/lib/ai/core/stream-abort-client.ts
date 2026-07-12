@@ -11,12 +11,82 @@
  * 3. Call abortActiveStream() when user clicks stop
  */
 
+import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getBrowserSessionId } from './browser-session-id';
 import {
   markChannelConsuming,
   unmarkChannelConsuming,
 } from '@/lib/ai/streams/consumingChannels';
+import type { AbortCode } from '@/lib/ai/core/stream-abort-decisions';
+
+/**
+ * What the server says happened.
+ *
+ * `code` exists because `aborted: false` used to mean two entirely different things, and every
+ * caller discarded it anyway (`void abortActiveStream(...)`) — so the button flipped back to Send
+ * no matter what actually happened on the server:
+ *
+ *   - 'not_found'   — nothing was in flight. The stream finished a beat before Stop was pressed.
+ *                     A BENIGN race. Must stay SILENT: it fires often, and a toast here would
+ *                     train users to ignore the one below.
+ *   - 'unconfirmed' — the stream was found, the abort was requested, and it is STILL GENERATING.
+ *                     Still calling write tools. Still billing. The user must be told.
+ *
+ * Codes, not `reason` substrings. The old code sniffed for 'not found' / 'already completed' in a
+ * prose string, which is a contract nobody can see they are breaking when they reword a log line.
+ */
+export interface AbortResult {
+  aborted: boolean;
+  code: AbortCode;
+  reason: string;
+}
+
+/**
+ * A failure to even reach the abort endpoint is not ambiguous: the server never heard the Stop, so
+ * the generation is definitely still running, and still billing. That is exactly 'unconfirmed'.
+ */
+const NETWORK_FAILURE: AbortResult = {
+  aborted: false,
+  code: 'unconfirmed',
+  reason: 'Failed to call abort endpoint',
+};
+
+const parseAbortResult = async (response: Response): Promise<AbortResult> => {
+  const body = await response.json();
+
+  if (!body || typeof body.code !== 'string') {
+    // The endpoint answered with something we do not understand (an error envelope, a proxy page).
+    // We cannot claim the stream stopped.
+    return { aborted: false, code: 'unconfirmed', reason: 'Unrecognized abort response' };
+  }
+
+  return body as AbortResult;
+};
+
+/**
+ * Surface an abort outcome to the user — and only when it is worth surfacing.
+ *
+ * Call this from USER-INITIATED Stop paths. It deliberately says nothing on 'not_found': the
+ * stream had already finished, which is not something the user did wrong and not something they
+ * can act on.
+ */
+export const reportAbortOutcome = (result: AbortResult): void => {
+  reportAbortOutcomes([result]);
+};
+
+/**
+ * The same, for a Stop that fires more than one abort (a surface that must name a stream under two
+ * possible keys). One toast at most, however many of them come back unconfirmed — they are all the
+ * same stream, and the user does not need to be told twice.
+ */
+export const reportAbortOutcomes = (results: readonly AbortResult[]): void => {
+  if (!results.some((result) => result.code === 'unconfirmed')) return;
+
+  toast.warning('Could not confirm the generation stopped', {
+    description: 'It may still be running. Reload to see its current state.',
+  });
+};
 
 // Track active streams by chat/conversation ID
 const activeStreams = new Map<string, string>();
@@ -80,16 +150,16 @@ export const abortActiveStreamByConversation = async ({
   conversationId,
 }: {
   conversationId: string;
-}): Promise<{ aborted: boolean; reason: string }> => {
+}): Promise<AbortResult> => {
   try {
     const response = await fetchWithAuth('/api/ai/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ conversationId }),
     });
-    return await response.json();
+    return await parseAbortResult(response);
   } catch {
-    return { aborted: false, reason: 'Failed to call abort endpoint' };
+    return NETWORK_FAILURE;
   }
 };
 
@@ -105,34 +175,43 @@ export const abortActiveStream = async ({
 }: {
   chatId: string;
   conversationId?: string | null;
-}): Promise<{ aborted: boolean; reason: string }> => {
+}): Promise<AbortResult> => {
   const streamId = activeStreams.get(chatId);
 
   if (!streamId) {
     if (conversationId) {
       return abortActiveStreamByConversation({ conversationId });
     }
-    return { aborted: false, reason: 'No active stream for this chat' };
+    return { aborted: false, code: 'not_found', reason: 'No active stream for this chat' };
   }
 
   try {
     const response = await fetchWithAuth('/api/ai/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ streamId }),
+      // Send the conversation ALONGSIDE the streamId, not instead of it. The server prefers the
+      // precise name, but a streamId can fail to resolve — a stream started by a worker running the
+      // previous image has no `stream_id` on its row at all. Without a second name to fall back to,
+      // that Stop is reported as "nothing in flight" and the client stays silent by design, while
+      // the generation runs on and bills. Exactly the rolling-deploy window this design claims to
+      // turn into a loud, honest warning.
+      body: JSON.stringify({ streamId, conversationId: conversationId ?? undefined }),
     });
 
-    const result = await response.json();
+    const result = await parseAbortResult(response);
 
-    // Only clear streamId when abort succeeded or stream is already gone
-    // Keep streamId on 401/429/500 errors so user can retry
-    const shouldClear =
-      result.aborted === true ||
-      (result.reason &&
-        (result.reason.includes('not found') ||
-          result.reason.includes('already completed')));
-
-    if (shouldClear) {
+    // Forget the stream only once it is settled — stopped, or already gone. On 'unconfirmed' the
+    // generation may still be running, so the streamId is the name a retry needs; and on a
+    // transport error (401/429/500) we never learned anything at all. Keep it in both cases.
+    //
+    // AND ONLY IF THE SLOT IS STILL OURS. The map is keyed by chatId, which is constant across
+    // turns, while this request can take seconds (a cross-instance Stop waits for the owner to
+    // confirm). The user can send turn 2 inside that window: its headers land, it claims the slot,
+    // and then THIS abort resolves and would delete the name of a generation that is still running.
+    // `forgetStream` already guards the same slot on the body-completion path; this is the other
+    // door into it.
+    const settled = result.code === 'aborted' || result.code === 'not_found';
+    if (settled && activeStreams.get(chatId) === streamId) {
       activeStreams.delete(chatId);
     }
 
@@ -140,7 +219,7 @@ export const abortActiveStream = async ({
   } catch (error) {
     // Network error - keep streamId for retry
     console.error('Failed to abort stream:', error);
-    return { aborted: false, reason: 'Failed to call abort endpoint' };
+    return NETWORK_FAILURE;
   }
 };
 
@@ -148,16 +227,16 @@ export const abortActiveStreamByMessageId = async ({
   messageId,
 }: {
   messageId: string;
-}): Promise<{ aborted: boolean; reason: string }> => {
+}): Promise<AbortResult> => {
   try {
     const response = await fetchWithAuth('/api/ai/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId }),
     });
-    return await response.json();
+    return await parseAbortResult(response);
   } catch {
-    return { aborted: false, reason: 'Failed to call abort endpoint' };
+    return NETWORK_FAILURE;
   }
 };
 
@@ -276,14 +355,37 @@ export const createStreamTrackingFetch = ({
       setActiveStreamId({ chatId, streamId });
     }
 
-    if (!channelId) return response;
+    // The streamId names THIS generation, and it dies with it. Forget it when the body ends.
+    //
+    // It used to be cleared only on a conversation switch or unmount, so from the SECOND turn of a
+    // conversation onward the map held the PREVIOUS turn's streamId until the new response headers
+    // landed. A Stop pressed in that window (the 0.5-3s TTFB gap — the single most likely moment
+    // for it) therefore named a stream that had already finished. The server now falls back to the
+    // conversation and stops the right generation regardless, but there is no reason to hand it a
+    // name we know is dead.
+    // Forget only OUR OWN stream. The map slot is keyed by chatId, which is constant across turns,
+    // so an unconditional delete would let a stream that is ENDING wipe the name of one that is
+    // still RUNNING: send turn 2 while turn 1 is still streaming (exactly what the takeover exists
+    // for), turn 2's headers land and claim the slot, then turn 1's body finally closes — and
+    // deletes turn 2's streamId. Stop would then have no precise name for a live generation.
+    const forgetStream = () => {
+      if (!chatId || !streamId) return;
+      if (getActiveStreamId({ chatId }) !== streamId) return;
+      clearActiveStreamId({ chatId });
+    };
+
+    if (!channelId) return withBodyCompletion(response, forgetStream);
+
+    const consumedChannelId = channelId;
     if (!response.ok) {
-      unmarkChannelConsuming(channelId);
+      unmarkChannelConsuming(consumedChannelId);
       return response;
     }
 
-    const consumedChannelId = channelId;
-    return withBodyCompletion(response, () => unmarkChannelConsuming(consumedChannelId));
+    return withBodyCompletion(response, () => {
+      unmarkChannelConsuming(consumedChannelId);
+      forgetStream();
+    });
   };
 };
 

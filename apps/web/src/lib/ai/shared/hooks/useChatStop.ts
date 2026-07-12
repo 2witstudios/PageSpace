@@ -1,14 +1,13 @@
 import { useCallback } from 'react';
-import { abortActiveStream } from '@/lib/ai/core/client';
+import { abortActiveStream, reportAbortOutcome } from '@/lib/ai/core/client';
 
 /**
- * Returns a memoized stop function that aborts the server-side stream
- * then stops the client-side fetch via useChat's stop.
+ * Returns a memoized stop function: stop reading locally, then stop the SERVER-side generation —
+ * which is the only one of the two that actually stops anything.
  *
- * Uses try/finally to guarantee client-side stop runs even if server abort fails.
+ * WHAT IT NAMES.
  *
  * `conversationId` is what makes this able to stop anything at all in the windows that matter.
- *
  * The `chatId` lookup is a client-side map (`activeStreams`) populated only once the response
  * HEADERS land — and a real agent send spends 0.5-3 seconds before that (auth, rate limit, DB
  * reads, context assembly, connecting to the provider). The same map is also torn down by the
@@ -17,15 +16,25 @@ import { abortActiveStream } from '@/lib/ai/core/client';
  * conversation — the map was EMPTY, the abort was a guaranteed no-op, and this cancelled the
  * local fetch and returned.
  *
- * Cancelling the fetch stops NOTHING. Streams are deliberately server-owned and survive a client
- * disconnect — that is the architecture. So the generation kept running, kept calling write
- * tools, and kept BILLING, while the button flipped back to Send and the user believed it had
- * stopped.
+ * The conversationId is the one name the client holds from t=0. Pass the STREAM's conversation,
+ * held from when it started — never the live one — so a mid-stream switch still names the
+ * generation that is actually running.
  *
- * The conversationId is the one name the client holds from t=0, and the server can abort by it
- * (the caller's OWN streams only — see abort-conversation-streams.ts). Pass the STREAM's
- * conversation, held from when it started — never the live one — so a mid-stream switch still
- * names the generation that is actually running.
+ * WHAT ORDER IT RUNS IN, which is the opposite of what it looks like.
+ *
+ * This used to `await abortActiveStream(...)` inside a `try` and call `chatStop()` in a `finally`,
+ * to guarantee the local stop ran even if the server call failed. But the server abort is no
+ * longer instant: when the generation lives on another web instance, it now marks the stream and
+ * WAITS to find out whether the owner actually stopped it. Awaiting that first would leave the
+ * Stop button visibly hung for seconds, with tokens still rendering underneath it.
+ *
+ * So the local stop goes first. It is synchronous and purely local, and running it before the
+ * await guarantees it strictly harder than the `finally` ever did.
+ *
+ * The server call is then awaited only to decide whether the user must be TOLD something.
+ * `chatStop()` alone stops nothing on the server: streams are deliberately server-owned and
+ * survive a client disconnect, so a stream we failed to abort is still generating, still calling
+ * write tools, and still billing — even though this UI now says "Send".
  */
 export function useChatStop(
   chatId: string | null,
@@ -33,15 +42,13 @@ export function useChatStop(
   conversationId?: string | null,
 ): () => Promise<void> {
   return useCallback(async () => {
-    try {
-      if (chatId) {
-        await abortActiveStream({ chatId, conversationId });
-      } else if (conversationId) {
-        // No transport key, but we still know which conversation is generating.
-        await abortActiveStream({ chatId: conversationId, conversationId });
-      }
-    } finally {
-      chatStop();
-    }
+    // Stops this client reading. Stops NOTHING on the server.
+    chatStop();
+
+    // No transport key, but we may still know which conversation is generating.
+    const streamKey = chatId ?? conversationId;
+    if (!streamKey) return;
+
+    reportAbortOutcome(await abortActiveStream({ chatId: streamKey, conversationId }));
   }, [chatId, chatStop, conversationId]);
 }

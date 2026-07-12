@@ -33,7 +33,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
-import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
+import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { holdForStream } from '@/lib/ai/streams/holdForStream';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
@@ -1111,7 +1111,10 @@ const SidebarChatTab: React.FC = () => {
         lastAssistantMessageId,
       });
       if (messageId) {
-        void abortActiveStreamByMessageId({ messageId });
+        // The outcome matters now: a stream that could NOT be confirmed stopped is still
+        // generating, still calling write tools, and still billing — and the user must be told,
+        // because this UI has already flipped back to Send.
+        void abortActiveStreamByMessageId({ messageId }).then(reportAbortOutcome);
         return;
       }
       // Key by the TRANSPORT's chatId, not the bare conversation id. In agent mode the
@@ -1130,9 +1133,9 @@ const SidebarChatTab: React.FC = () => {
       const abortChatId = selectedAgent ? sidebarChatId : currentConversationId;
       const abortConversationId = heldStreamConvIdRef.current ?? currentConversationId;
       if (abortChatId) {
-        await abortActiveStream({ chatId: abortChatId, conversationId: abortConversationId });
+        reportAbortOutcome(await abortActiveStream({ chatId: abortChatId, conversationId: abortConversationId }));
       } else if (abortConversationId) {
-        await abortActiveStream({ chatId: abortConversationId, conversationId: abortConversationId });
+        reportAbortOutcome(await abortActiveStream({ chatId: abortConversationId, conversationId: abortConversationId }));
       }
     }
   }, [

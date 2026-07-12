@@ -1,4 +1,11 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { assert } from './riteway';
+
+const { mockToastWarning } = vi.hoisted(() => ({ mockToastWarning: vi.fn() }));
+
+vi.mock('sonner', () => ({
+  toast: { warning: mockToastWarning },
+}));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
@@ -97,6 +104,7 @@ describe('stream-abort-client', () => {
       vi.mocked(fetchWithAuth).mockResolvedValueOnce({
         json: vi.fn().mockResolvedValueOnce({
           aborted: true,
+          code: 'aborted',
           reason: 'Stream aborted by user request',
         }),
       } as unknown as Response);
@@ -115,6 +123,82 @@ describe('stream-abort-client', () => {
 
       // Verify streamId was cleared
       expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBeUndefined();
+    });
+
+    // The rolling-deploy hole. A stream started by a worker running the previous image has no
+    // `stream_id` on its row, so the X-Stream-Id the client holds resolves to nothing. If the
+    // conversation is not sent alongside it, the server has no second name to fall back to, reports
+    // `not_found`, and the client stays SILENT by design — while the generation runs on and bills.
+    it('sends the conversation alongside the streamId, so a streamId that resolves to nothing can still be stopped', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.setActiveStreamId({ chatId: 'chat-123', streamId: 'stream-456' });
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValueOnce({ aborted: true, code: 'aborted', reason: '' }),
+      } as unknown as Response);
+
+      await client.abortActiveStream({ chatId: 'chat-123', conversationId: 'conv-1' });
+
+      assert({
+        given: 'a Stop naming a streamId, on a conversation the client also knows',
+        should: 'send BOTH names, so the server can fall back when the precise one resolves to nothing',
+        actual: JSON.parse(vi.mocked(fetchWithAuth).mock.calls[0][1]?.body as string),
+        expected: { streamId: 'stream-456', conversationId: 'conv-1' },
+      });
+    });
+
+    // The other half of the same guarantee: with no streamId in the map at all (the 0.5-3s TTFB
+    // window, where the map is EMPTY because the response headers have not landed), Stop must still
+    // reach the server by naming the conversation. Without this it was a guaranteed no-op.
+    it('falls back to the conversation when the client holds no streamId yet', async () => {
+      const client = await import('../stream-abort-client');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValueOnce({ aborted: true, code: 'aborted', reason: '' }),
+      } as unknown as Response);
+
+      const result = await client.abortActiveStream({ chatId: 'chat-none', conversationId: 'conv-1' });
+
+      expect(JSON.parse(vi.mocked(fetchWithAuth).mock.calls[0][1]?.body as string)).toEqual({ conversationId: 'conv-1' });
+      assert({
+        given: 'Stop pressed before the response headers land, so no streamId exists client-side',
+        should: 'still reach the server by naming the conversation',
+        actual: result.code,
+        expected: 'aborted',
+      });
+    });
+
+    // The OTHER door into the same shared slot. A cross-instance Stop can take seconds (it waits
+    // for the owning instance to confirm), and the user can send turn 2 inside that window — its
+    // headers land and claim the slot. When the turn-1 abort finally resolves, it must not delete
+    // the name of a generation that is now RUNNING.
+    it('does not forget a newer stream when an older abort finally resolves', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-1' });
+
+      let resolveAbort: ((r: unknown) => void) | undefined;
+      vi.mocked(fetchWithAuth).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveAbort = (r) => resolve({ json: async () => r } as unknown as Response);
+        }),
+      );
+
+      const abortPromise = client.abortActiveStream({ chatId: 'conv-1', conversationId: 'conv-1' });
+
+      // Turn 2 is sent while the turn-1 abort is still in flight, and claims the slot.
+      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-2' });
+
+      // Now the turn-1 abort comes back settled.
+      resolveAbort!({ aborted: true, code: 'aborted', reason: '' });
+      await abortPromise;
+
+      assert({
+        given: "an older Stop resolving after a newer turn has claimed the slot",
+        should: "leave the newer stream's name alone — it names a generation that is still running",
+        actual: client.getActiveStreamId({ chatId: 'conv-1' }),
+        expected: 'stream-turn-2',
+      });
     });
 
     it('returns failure when no active stream exists', async () => {
@@ -171,11 +255,7 @@ describe('stream-abort-client', () => {
 
     const drain = async (response: Response) => {
       const reader = response.body!.getReader();
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done } = await reader.read();
-        if (done) break;
-      }
+      while (!(await reader.read()).done) { /* drain */ }
     };
 
     it('given a POST in flight, should mark the channel as consuming BEFORE the request leaves (it must not lose the race against broadcastAiStreamStart)', async () => {
@@ -312,22 +392,85 @@ describe('stream-abort-client', () => {
   });
 
   describe('createStreamTrackingFetch', () => {
-    it('extracts X-Stream-Id header and stores it', async () => {
+    it('extracts X-Stream-Id header and stores it for as long as the stream is running', async () => {
       const client = await import('../stream-abort-client');
 
-      const mockResponse = {
-        headers: {
-          get: vi.fn().mockReturnValue('extracted-stream-id'),
-        },
-      } as unknown as Response;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new TextEncoder().encode('tok'));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { 'X-Stream-Id': 'extracted-stream-id' } },
+      );
 
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(response);
 
       const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
-      await trackingFetch('/api/ai/chat', { method: 'POST' });
+      const tracked = await trackingFetch('/api/ai/chat', { method: 'POST' });
 
-      expect(mockResponse.headers.get).toHaveBeenCalledWith('X-Stream-Id');
+      // The headers have landed but the tokens are still arriving: this is exactly the window in
+      // which Stop must be able to name the stream.
       expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBe('extracted-stream-id');
+
+      // Drain the body — the generation is now over.
+      const reader = tracked.body!.getReader();
+      while (!(await reader.read()).done) { /* drain */ }
+
+      // The streamId names THIS generation and dies with it. Keeping it meant that from the SECOND
+      // turn of a conversation onward, the map held the PREVIOUS turn's id until the new headers
+      // landed — so a Stop pressed in the TTFB window named a stream that had already finished.
+      assert({
+        given: 'a generation whose response body has ended',
+        should: 'forget its streamId, so no later Stop can name a stream that is already over',
+        actual: client.getActiveStreamId({ chatId: 'chat-123' }),
+        expected: undefined,
+      });
+    });
+
+    // The map slot is keyed by chatId, which is CONSTANT across turns. So an unconditional delete
+    // on body-end lets a stream that is ENDING wipe the name of one that is still RUNNING: send
+    // turn 2 while turn 1 is still streaming (exactly what the takeover exists for), turn 2's
+    // headers claim the slot, then turn 1's body finally closes — and deletes turn 2's streamId.
+    // Stop would then have no precise name for a live generation.
+    it('does not let a finishing stream forget the name of a newer one', async () => {
+      const client = await import('../stream-abort-client');
+
+      // Turn 1 is streaming; we hold its body open.
+      let releaseTurn1: (() => void) | undefined;
+      const turn1 = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            return new Promise<void>((resolve) => {
+              releaseTurn1 = () => { controller.close(); resolve(); };
+            });
+          },
+        }),
+        { status: 200, headers: { 'X-Stream-Id': 'stream-turn-1' } },
+      );
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(turn1);
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'conv-1', getChannelId: () => undefined });
+      const tracked1 = await trackingFetch('/api/ai/chat', { method: 'POST' });
+      const drain1 = (async () => {
+        const reader = tracked1.body!.getReader();
+        while (!(await reader.read()).done) { /* drain */ }
+      })();
+
+      // Turn 2 is sent while turn 1 is still open, and claims the slot.
+      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-2' });
+
+      // NOW turn 1's body finally ends.
+      releaseTurn1!();
+      await drain1;
+
+      assert({
+        given: "turn 1's body closing after turn 2 has already claimed the slot",
+        should: "leave turn 2's streamId alone — it names a generation that is still running",
+        actual: client.getActiveStreamId({ chatId: 'conv-1' }),
+        expected: 'stream-turn-2',
+      });
     });
 
     it('does not set streamId when header is missing', async () => {
@@ -434,4 +577,78 @@ describe('stream-abort-client', () => {
     });
   });
 
+  // `aborted: false` used to mean two completely different things, and every caller threw the
+  // result away — so the Stop button flipped back to Send regardless of what actually happened on
+  // the server. Now that a cross-instance abort can genuinely fail, that distinction has to reach
+  // the user, and ONLY when it is real.
+  describe('reportAbortOutcome', () => {
+    it('warns the user when the generation could not be confirmed stopped', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcome({ aborted: false, code: 'unconfirmed', reason: 'still running' });
+
+      assert({
+        given: 'a stream that was asked to stop and did not',
+        should: 'tell the user — it is still running, and still billing',
+        actual: mockToastWarning.mock.calls.length,
+        expected: 1,
+      });
+    });
+
+    // The benign race: the stream ended a beat before Stop was pressed. This is COMMON. A toast
+    // here would fire constantly, for a non-event the user cannot act on, and would teach them to
+    // dismiss the warning above without reading it — which is worse than showing nothing at all.
+    it('stays silent when there was no in-flight stream to stop', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcome({ aborted: false, code: 'not_found', reason: 'nothing in flight' });
+
+      assert({
+        given: 'a Stop pressed just after the stream finished on its own',
+        should: 'say nothing — a benign race is not a failure',
+        actual: mockToastWarning.mock.calls.length,
+        expected: 0,
+      });
+    });
+
+    it('stays silent when the stream stopped', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcome({ aborted: true, code: 'aborted', reason: '' });
+
+      expect(mockToastWarning).not.toHaveBeenCalled();
+    });
+
+    it('warns only once when one Stop fires several aborts at the same stream', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.reportAbortOutcomes([
+        { aborted: false, code: 'unconfirmed', reason: 'still running' },
+        { aborted: false, code: 'unconfirmed', reason: 'still running' },
+      ]);
+
+      assert({
+        given: 'a surface that names its stream under two keys, both unconfirmed',
+        should: 'warn once — they are the same stream',
+        actual: mockToastWarning.mock.calls.length,
+        expected: 1,
+      });
+    });
+
+    // A request that never reached the server means the server never heard the Stop. The
+    // generation is definitely still running. That is not "unknown" — it is the alarm case.
+    it('treats an unreachable abort endpoint as still running', async () => {
+      const client = await import('../stream-abort-client');
+      vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('offline'));
+
+      const result = await client.abortActiveStreamByMessageId({ messageId: 'msg-1' });
+
+      assert({
+        given: 'the abort request never reaching the server',
+        should: 'report the generation as unconfirmed rather than stopped',
+        actual: result.code,
+        expected: 'unconfirmed',
+      });
+    });
+  });
 });

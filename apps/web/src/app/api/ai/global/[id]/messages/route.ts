@@ -69,6 +69,7 @@ import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
+  attachStreamFinisher,
   createStreamAbortController,
   removeStream,
   STREAM_ID_HEADER,
@@ -1109,8 +1110,14 @@ MENTION PROCESSING:
       userId,
       displayName,
       browserSessionId,
+      streamId,
       isShared: conversation.isShared === true,
     });
+
+    // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
+    // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
+    // this row to settle before deciding what to tell the user. See attachStreamFinisher.
+    attachStreamFinisher({ streamId, finish: lifecycle.finish });
 
     // Outcome of the retry shell, shared from execute() to onFinish(). Carries the
     // summed usage/steps for billing plus the success flag, abort detection, and retry

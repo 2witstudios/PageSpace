@@ -1429,6 +1429,13 @@
       "when": 1783813639079,
       "tag": "0203_adorable_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 204,
+      "version": "7",
+      "when": 1783877348608,
+      "tag": "0204_next_mandroid",
+      "breakpoints": true
     }
   ]
 }

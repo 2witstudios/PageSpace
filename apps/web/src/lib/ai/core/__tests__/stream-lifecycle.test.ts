@@ -100,6 +100,7 @@ const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> 
   userId: 'user-1',
   displayName: 'Alice',
   browserSessionId: 'session-1',
+  streamId: 'stream-1',
   ...overrides,
 });
 
@@ -142,10 +143,40 @@ describe('createStreamLifecycle', () => {
         userId: 'user-1',
         displayName: 'Alice',
         browserSessionId: 'session-1',
+        streamId: 'stream-1',
         status: 'streaming',
         startedAt: expect.any(Date),
         lastHeartbeatAt: expect.any(Date),
       });
+    });
+
+    // The streamId is the name the client is handed in `X-Stream-Id`, and the ONLY reason a Stop
+    // that lands on another web instance can resolve which stream it means — the registry that
+    // mints it is in-process. Drop it here and every fresh row has stream_id = NULL: the mark
+    // matches zero rows, the endpoint reports `not_found`, the client stays SILENT by design, and
+    // the generation runs on and bills. The headline feature, dead, with nothing to show for it.
+    it('given a streamId, should persist it on the row so any instance can resolve the stream', async () => {
+      await createStreamLifecycle({ ...params(), streamId: 'stream-1' });
+
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ streamId: 'stream-1' }),
+      );
+    });
+
+    it('given a REUSED row, should record the streamId it now belongs to', async () => {
+      await createStreamLifecycle({ ...params(), streamId: 'stream-2' });
+
+      expect(mockInsertOnConflict.mock.calls[0][0].set).toMatchObject({ streamId: 'stream-2' });
+    });
+
+    // An abort request aimed at the PREVIOUS generation on this messageId must not be inherited by
+    // this one, or the abort watcher kills the fresh stream within a second of it starting — a
+    // generation cancelled by a Stop the user pressed on something else entirely. No error, no
+    // log; it would simply look like the model gave up.
+    it('given a REUSED row, should clear any abort request left over from the previous generation', async () => {
+      await createStreamLifecycle({ ...params(), streamId: 'stream-2' });
+
+      expect(mockInsertOnConflict.mock.calls[0][0].set).toMatchObject({ abortRequestedAt: null });
     });
 
     it('given a duplicate messageId, should refresh all fields via onConflictDoUpdate, including resetting parts to empty', async () => {

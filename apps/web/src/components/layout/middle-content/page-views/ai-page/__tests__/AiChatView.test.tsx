@@ -10,7 +10,11 @@ const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mock
   mockSetMessages: vi.fn(),
   mockSendMessage: vi.fn(),
   mockLocalStop: vi.fn(),
-  mockAbortByMessageId: vi.fn(),
+  mockAbortByMessageId: vi.fn(async (_args: { messageId: string }) => ({
+    aborted: true,
+    code: 'aborted' as const,
+    reason: '',
+  })),
 }));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -99,9 +103,14 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
 }));
 
 vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+// The abort functions must RESOLVE: Stop now chains the outcome into reportAbortOutcome, so that
+// a stream which could not be confirmed stopped (still running, still billing) reaches the user.
+const NOT_FOUND = { aborted: false, code: 'not_found' as const, reason: 'nothing in flight' };
 vi.mock('@/lib/ai/core/stream-abort-client', () => ({
-  abortActiveStream: vi.fn(),
+  abortActiveStream: vi.fn(async () => NOT_FOUND),
   abortActiveStreamByMessageId: mockAbortByMessageId,
+  reportAbortOutcome: vi.fn(),
+  reportAbortOutcomes: vi.fn(),
 }));
 vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
 

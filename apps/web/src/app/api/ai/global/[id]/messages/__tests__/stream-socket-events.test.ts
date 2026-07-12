@@ -294,6 +294,7 @@ vi.mock('@/lib/utils/query-params', () => ({
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
 
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',
@@ -456,6 +457,9 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
         userId: 'user-1',
         displayName: 'Display User',
         browserSessionId: 'session-y',
+        // Persisted on the row so an abort landing on ANY instance can resolve the streamId it was
+        // handed in X-Stream-Id back to a stream. The registry that mints it is in-process.
+        streamId: 'stream_123',
         // Rides the stream_start broadcast so page members can tell a stream they may
         // watch from a co-member's PRIVATE conversation, without firing a doomed join.
         isShared: false,

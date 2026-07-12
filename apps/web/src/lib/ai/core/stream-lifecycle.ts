@@ -3,6 +3,7 @@ import { eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
+import { ensureStreamAbortWatcher } from '@/lib/ai/core/stream-abort-watcher';
 import { broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
 import {
   streamMulticastRegistry,
@@ -16,6 +17,19 @@ export interface StreamLifecycleParams {
   userId: string;
   displayName: string;
   browserSessionId: string;
+  /**
+   * The abort registry's key for this generation. Persisted on the row so that an abort landing
+   * on ANY instance can resolve the streamId it was given in the `X-Stream-Id` header back to a
+   * stream — the registry that mints it is in-process, so without this the name is meaningless
+   * anywhere but here. It is also the epoch the abort watcher checks, so a Stop aimed at a
+   * previous attempt on this messageId can never kill the current one.
+   *
+   * REQUIRED, deliberately. It was optional, and both call sites happened to pass it — but nothing
+   * enforced that, and an omission would not fail: the column would simply be NULL. Cross-instance
+   * Stop for that stream would then degrade silently, with no error at build time and none at run
+   * time either. The type is the only thing that can catch this, so let it.
+   */
+  streamId: string;
   /**
    * Whether the conversation is explicitly shared. Rides the stream_start broadcast so
    * page members can tell, without asking, whether a stream is theirs to watch — see
@@ -82,7 +96,11 @@ const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
 ): Promise<StreamLifecycleHandle> => {
-  const { messageId, channelId, conversationId, userId, displayName, browserSessionId, isShared } = params;
+  const { messageId, channelId, conversationId, userId, displayName, browserSessionId, isShared, streamId } = params;
+
+  // Lazily started, and it stops itself when this instance owns no more streams. An instance that
+  // never generates never polls.
+  ensureStreamAbortWatcher();
 
   try {
     streamMulticastRegistry.register(messageId, {
@@ -113,6 +131,7 @@ export const createStreamLifecycle = async (
         userId,
         displayName,
         browserSessionId,
+        streamId,
         status: 'streaming',
         startedAt,
         lastHeartbeatAt: startedAt,
@@ -125,6 +144,7 @@ export const createStreamLifecycle = async (
           userId,
           displayName,
           browserSessionId,
+          streamId,
           status: 'streaming',
           startedAt,
           lastHeartbeatAt: startedAt,
@@ -134,6 +154,14 @@ export const createStreamLifecycle = async (
           // between here and the first checkpoint would serve the prior
           // attempt's stale parts as if they were a prefix of this attempt.
           parts: [],
+          // An abort request aimed at the PREVIOUS generation on this messageId must not be
+          // inherited by this one — the new stream would be killed the instant the abort watcher
+          // next ticked, by a Stop the user pressed on something else entirely. Silent, and
+          // catastrophic; there is a source-level test asserting this line still exists.
+          //
+          // The watcher independently refuses to act on a mark whose streamId names a superseded
+          // generation, so this is the braces to that belt.
+          abortRequestedAt: null,
         },
       });
   } catch (error) {

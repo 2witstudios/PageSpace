@@ -1,3 +1,5 @@
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
+
 /**
  * Liveness and takeover decisions for server-owned streams.
  *
@@ -40,6 +42,83 @@ export interface StreamLivenessRow {
   lastHeartbeatAt: Date | null;
   startedAt: Date;
 }
+
+/**
+ * Did this row stop beating because the CAP stopped it, rather than because its process died?
+ *
+ * The lifecycle caps the heartbeat at `startedAt + STREAM_MAX_LIFETIME_MS` — deliberately, as a
+ * backstop against a leaked interval (see MAX_HEARTBEAT_MS there). The GENERATION has no such cap:
+ * a long tool loop or a deep-research run can still be going at T+61min. So a silent heartbeat past
+ * the cap is the EXPECTED state of a perfectly healthy stream, and driving such a row terminal
+ * would write `status='aborted', parts=[]` over a stream that is still generating — hiding it from
+ * every subscriber, destroying its only crash-recovery snapshot, and leaving it calling write tools
+ * and billing.
+ *
+ * BUT "IS IT OLD?" IS THE WRONG QUESTION, and asking it that way is a trap I fell into: it makes
+ * every row older than the cap unreconcilable, INCLUDING one whose process crashed at minute five
+ * and which nobody looked at for an hour. That row is definitively dead, yet it would sit at
+ * 'streaming' forever — poisoning every future Stop on its conversation with a false "may still be
+ * running", and every future send with a warn. A permanent ghost. Trading a rare harm (a live >1h
+ * stream terminal-written) for a common one (any crash, plus an hour) is a bad trade.
+ *
+ * The right question is WHERE the beat stopped, and the row already tells us:
+ *
+ *   - A stream still alive at the cap beat right UP TO it   → lastHeartbeatAt ≈ startedAt + cap.
+ *   - A stream that crashed at minute five stopped there    → lastHeartbeatAt ≈ startedAt + 5min.
+ *
+ * So a beat that reached the cap is ambiguous (the silence is by design; we cannot prove death, so
+ * we do not touch it), while a beat that stopped short of it is proof the process died — at any
+ * age. One margin of slack, so the final beat before the cap is not mistaken for an early death.
+ */
+export const heartbeatStoppedAtCap = (
+  row: StreamLivenessRow,
+  staleAfterMs: number = STREAM_HEARTBEAT_STALE_MS,
+): boolean => {
+  const beat = row.lastHeartbeatAt ?? row.startedAt;
+  const beatAge = beat.getTime() - row.startedAt.getTime();
+  return beatAge >= STREAM_MAX_LIFETIME_MS - staleAfterMs;
+};
+
+/**
+ * The backstop. Nothing may be un-reapable FOREVER.
+ *
+ * `heartbeatStoppedAtCap` deliberately refuses to judge a row whose beat ran to the cap — it cannot
+ * tell a healthy long generation from a process that crashed in the last minutes before the cap.
+ * That protects the live one, but it leaves the crashed one at `status='streaming'` with nothing in
+ * the system able to reap it. A single permanent ghost is not a cosmetic wart: the abort path's
+ * batch verdict is pessimistic, so ONE such row makes every future Stop on its conversation report
+ * "may still be running" (about generations that stopped perfectly), and makes every future send
+ * pay the takeover's wait and log a warn. Forever.
+ *
+ * So there is an outer horizon, and past it we judge anyway. It is set well beyond the point where
+ * the rest of the system has already given up on the stream: the abort registry evicts its entry at
+ * STREAM_MAX_LIFETIME_MS, and so does the multicast registry — meaning a generation still running
+ * out here can no longer be stopped, joined, or watched by anyone. Its row claiming 'streaming' in
+ * perpetuity is a worse lie than declaring it over, and this is the only thing that converges.
+ */
+const RECONCILE_BACKSTOP_MS = 2 * STREAM_MAX_LIFETIME_MS;
+
+export const isBeyondReconcileBackstop = (row: StreamLivenessRow, now: number): boolean =>
+  now - row.startedAt.getTime() > RECONCILE_BACKSTOP_MS;
+
+/**
+ * May this row be driven TERMINAL on the strength of its heartbeat alone?
+ *
+ * The one predicate both terminal writers share (`decideStreamTakeover` and `decideAbortOutcome`),
+ * so they cannot drift apart on the one write that is unforgiving in both directions: reap a live
+ * stream and you erase it mid-flight; fail to reap a dead one and it haunts its conversation.
+ */
+export const isProvablyDead = (
+  row: StreamLivenessRow,
+  now: number,
+  staleAfterMs: number = STREAM_HEARTBEAT_STALE_MS,
+): boolean => {
+  if (isStreamRowLive(row, now, staleAfterMs)) return false;
+  // Its beat stopped short of the cap: a dead process, at any age.
+  if (!heartbeatStoppedAtCap(row, staleAfterMs)) return true;
+  // Its beat ran to the cap, so it is ambiguous — until the outer horizon, where we judge anyway.
+  return isBeyondReconcileBackstop(row, now);
+};
 
 export const isStreamRowLive = (
   row: StreamLivenessRow,
@@ -106,7 +185,13 @@ export const decideStreamTakeover = ({
   return {
     abort: rows.map((r) => r.messageId),
     reconcile: rows
-      .filter((r) => aborted.has(r.messageId) || !isStreamRowLive(r, now, staleAfterMs))
+      .filter((r) => (
+        // We stopped it. Proven finished, whatever its heartbeat says.
+        aborted.has(r.messageId)
+        // Or its heartbeat proves the process is gone. See isProvablyDead — the single predicate
+        // both terminal writers share, so they cannot drift apart on this one unforgiving write.
+        || isProvablyDead(r, now, staleAfterMs)
+      ))
       .map((r) => r.messageId),
   };
 };

@@ -7,6 +7,10 @@ const {
   mockAbortStreamByMessageId,
   mockLoggerInfo,
   mockLoggerWarn,
+  mockMarkAsOwner,
+  mockWasRecentlyFinishedHere,
+  mockAwaitAbortSettled,
+  mockReconcileDead,
 } = vi.hoisted(() => ({
   mockLoggerInfo: vi.fn(),
   mockLoggerWarn: vi.fn(),
@@ -14,6 +18,10 @@ const {
   mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
   mockUpdateSet: vi.fn(),
   mockAbortStreamByMessageId: vi.fn(),
+  mockMarkAsOwner: vi.fn(),
+  mockWasRecentlyFinishedHere: vi.fn(),
+  mockAwaitAbortSettled: vi.fn(),
+  mockReconcileDead: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -46,8 +54,19 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: mockLoggerInfo, warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
 }));
 
-vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+// The cross-instance mark is its own unit, with its own tests (stream-abort-mark.test.ts — where
+// the `user_id` predicate that authorizes the whole mechanism is asserted). Stubbed here so these
+// tests exercise what the TAKEOVER decides, not how the mark is written.
+vi.mock('@/lib/ai/core/stream-abort-mark', () => ({
+  markAbortRequestedAsOwner: mockMarkAsOwner,
+  awaitAbortSettled: mockAwaitAbortSettled,
+  reconcileDeadStreamRows: mockReconcileDead,
+}));
+
+vi.mock('@/lib/ai/core/stream-abort-registry', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   abortStreamByMessageId: mockAbortStreamByMessageId,
+  wasRecentlyFinishedHere: mockWasRecentlyFinishedHere,
 }));
 
 import { takeOverConversationStreams } from '../stream-takeover';
@@ -55,12 +74,34 @@ import { inArray } from '@pagespace/db/operators';
 
 const ARGS = { conversationId: 'conv-1', channelId: 'page-1' };
 
+const settled = (
+  over: Partial<{
+    aborted: string[];
+    reconcile: string[];
+    stillLive: string[];
+    code: 'aborted' | 'not_found' | 'unconfirmed';
+  }> = {},
+) => ({
+  aborted: [] as string[],
+  reconcile: [] as string[],
+  stillLive: [] as string[],
+  code: 'not_found' as 'aborted' | 'not_found' | 'unconfirmed',
+  ...over,
+});
+
 describe('takeOverConversationStreams', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
     mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
+    mockWasRecentlyFinishedHere.mockReturnValue(false);
+    mockMarkAsOwner.mockImplementation(async ({ messageIds }: { messageIds: string[] }) => ({
+      marked: messageIds,
+      failed: false,
+    }));
+    mockAwaitAbortSettled.mockResolvedValue(settled());
+    mockReconcileDead.mockResolvedValue(undefined);
   });
 
   it('given no in-flight stream on the conversation, should do nothing (the common case must be cheap)', async () => {
@@ -125,16 +166,39 @@ describe('takeOverConversationStreams', () => {
   // on another web instance, or the registry refused a cross-user abort on a shared
   // conversation). Marking it 'aborted' with parts=[] would hide a LIVE stream from
   // every subscriber and destroy its only crash-recovery snapshot.
-  it('given a LIVE row the abort registry would not stop, should leave its row untouched rather than lie about it', async () => {
+  // A live row the local registry cannot stop belongs to ANOTHER WEB INSTANCE. It is asked to stop
+  // (the mark), but until it confirms, its row must be left exactly as it is. Writing
+  // `status='aborted', parts=[]` over a stream that is still generating would hide it from every
+  // subscriber and destroy its only crash-recovery snapshot — while it kept calling tools and
+  // kept billing. The mark is the ONLY write allowed here.
+  it('given a LIVE row on another instance that has not stopped yet, should mark it but never terminal-write its row', async () => {
     mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
       { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date() },
     ]);
+    mockAwaitAbortSettled.mockResolvedValue(settled({ stillLive: ['msg-elsewhere'], code: 'unconfirmed' }));
 
     const result = await takeOverConversationStreams(ARGS);
 
+    expect(mockMarkAsOwner).toHaveBeenCalledWith({ messageIds: ['msg-elsewhere'] });
     expect(result).toEqual({ aborted: [], reconciled: [] });
+    // The reconcile UPDATE — the one that would write status/parts. It must not have run.
     expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+
+  // The capability this whole change exists to add. Before it, this send would have started a
+  // SECOND generation beside a first that was still running: two agents, two sets of write tools,
+  // two bills.
+  it('given a live row on another instance that DOES stop, should report it as taken over', async () => {
+    mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date() },
+    ]);
+    mockAwaitAbortSettled.mockResolvedValue(settled({ aborted: ['msg-elsewhere'], code: 'aborted' }));
+
+    const result = await takeOverConversationStreams(ARGS);
+
+    expect(result.aborted).toEqual(['msg-elsewhere']);
   });
 
   // On a SHARED conversation, user B sending must actually stop user A's generation.
@@ -229,14 +293,15 @@ describe('takeOverConversationStreams', () => {
   // A log that misreports is a signal that attests to nothing — the same defect as a test that
   // cannot fail. This one used to lie at exactly the moment an operator most needed the truth.
   describe('what the logs actually claim', () => {
-    it('given a live stream on ANOTHER instance that could not be stopped, must NOT claim it took over', async () => {
-      // The abort registry is in-process. A row belonging to another web instance is live, cannot
-      // be aborted from here, and (having a fresh heartbeat) must not be reconciled either — so
-      // we took over NOTHING, and this send is about to start a SECOND generation beside it.
+    it('given a stream that was asked to stop and has not, must NOT claim it took over', async () => {
+      // The successor to "could not be aborted from this instance". We CAN reach it now — but it
+      // has not confirmed, so it is still generating, and this send is about to start a second
+      // generation beside it. That is the moment an operator most needs the truth.
       mockSelectWhere.mockResolvedValue([
         { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date() },
       ]);
       mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'not found' });
+      mockAwaitAbortSettled.mockResolvedValue(settled({ stillLive: ['msg-elsewhere'], code: 'unconfirmed' }));
 
       const result = await takeOverConversationStreams({
         conversationId: 'conv-1',
@@ -247,7 +312,7 @@ describe('takeOverConversationStreams', () => {
 
       // The warn tells the truth...
       expect(mockLoggerWarn).toHaveBeenCalledWith(
-        expect.stringContaining('could not be aborted'),
+        expect.stringContaining('not confirmed stopped'),
         expect.objectContaining({ messageIds: ['msg-elsewhere'] }),
       );
       // ...and nothing may contradict it by claiming a takeover happened.

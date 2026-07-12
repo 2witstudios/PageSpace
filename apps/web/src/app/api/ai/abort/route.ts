@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { abortStream, abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
-import { abortConversationStreams } from '@/lib/ai/core/abort-conversation-streams';
+import { abortStreamAnywhere } from '@/lib/ai/core/abort-stream-anywhere';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
@@ -73,14 +72,16 @@ export async function POST(request: Request) {
       );
     }
 
-    // messageId is the most precise name, then streamId; conversationId is the fallback that
-    // works before either exists.
-    const result = hasMessageId
-      ? abortStreamByMessageId({ messageId: messageId as string, userId })
-      : hasStreamId
-        ? abortStream({ streamId: streamId as string, userId })
-        : await abortConversationStreams({ conversationId: conversationId as string, userId })
-            .then((r) => ({ aborted: r.aborted.length > 0, reason: r.reason }));
+    // Tries this instance's registry first (instant), then — because streams are server-owned and
+    // the registry is in-process — asks whichever instance actually owns the stream to abort it,
+    // and waits to find out whether it did. Precedence is unchanged: messageId, then streamId,
+    // then conversationId (the only name the client holds during the TTFB window).
+    const result = await abortStreamAnywhere({
+      messageId: hasMessageId ? (messageId as string) : undefined,
+      streamId: hasStreamId ? (streamId as string) : undefined,
+      conversationId: hasConversationId ? (conversationId as string) : undefined,
+      userId,
+    });
 
     const resourceId = hasMessageId
       ? (messageId as string)
@@ -93,12 +94,14 @@ export async function POST(request: Request) {
       messageId,
       userId,
       aborted: result.aborted,
+      code: result.code,
       reason: result.reason,
     });
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat_stream', resourceId, details: {
       action: 'abort',
       aborted: result.aborted,
+      code: result.code,
     } });
 
     return NextResponse.json(result);

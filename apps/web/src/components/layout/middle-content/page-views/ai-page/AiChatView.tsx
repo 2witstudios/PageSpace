@@ -28,7 +28,12 @@ import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
-import { abortActiveStream, abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import {
+  abortActiveStream,
+  abortActiveStreamByMessageId,
+  reportAbortOutcome,
+  reportAbortOutcomes,
+} from '@/lib/ai/core/stream-abort-client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isCapacitorApp } from '@/hooks/useCapacitor';
@@ -685,7 +690,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       lastAssistantMessageId,
     });
     if (messageId) {
-      void abortActiveStreamByMessageId({ messageId });
+      void abortActiveStreamByMessageId({ messageId }).then(reportAbortOutcome);
       return;
     }
     // No assistant id yet (submitted, before the first chunk). The chatId map is EMPTY here, not
@@ -694,9 +699,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // abort falls back to it. Without that, Stop in this window was a guaranteed no-op: the fetch
     // was cancelled, the button flipped back to Send, and the server (which deliberately survives
     // client disconnect) kept generating, kept running write tools, and kept billing.
+    //
+    // Both keys are tried, and they may resolve to the same stream — so their outcomes are
+    // reported together, and warn at most once. See reportAbortOutcomes.
     const conversationId = currentConversationIdRef.current;
-    if (streamTrackingId) void abortActiveStream({ chatId: streamTrackingId, conversationId });
-    if (streamTrackingId !== page.id) void abortActiveStream({ chatId: page.id, conversationId });
+    void Promise.all([
+      streamTrackingId ? abortActiveStream({ chatId: streamTrackingId, conversationId }) : null,
+      streamTrackingId !== page.id ? abortActiveStream({ chatId: page.id, conversationId }) : null,
+    ]).then((outcomes) => reportAbortOutcomes(outcomes.filter((o) => o !== null)));
   }, [chatStop, ownStreamMessageId, status, lastAssistantMessageId, streamTrackingId, page.id]);
 
   usePageSocketRoom(page.id);
