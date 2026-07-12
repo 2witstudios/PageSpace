@@ -290,7 +290,10 @@ describe('planReplayEmission corroboration bounds (pure)', () => {
   it('given a partial proof SHALLOWER than the floor, should refuse it', () => {
     // The floor binds where `at` runs past the history we hold: the proof can only ever be
     // partial there, so it must at least be deep. A shallow partial proof is no proof.
-    const shortSeen = deliver(lines('recent', 700)); // < MAX_ANCHOR_BYTES: the anchor IS the history
+    // 7,090 bytes — genuinely under MAX_ANCHOR_BYTES (8,192), so the anchor IS the whole of
+    // `seen` and the history in front of it is EMPTY. That is the regime an idle terminal
+    // lives in, and it makes every match at `at > 0` unprovable rather than merely shallow.
+    const shortSeen = deliver(lines('recent', 600));
     const neverSeen = lines('unseen', 40);
     const replay = Buffer.concat([neverSeen, shortSeen, buf('after\r\n')]);
 

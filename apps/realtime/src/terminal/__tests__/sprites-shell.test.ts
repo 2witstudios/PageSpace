@@ -979,7 +979,7 @@ describe('openPtyShell', () => {
       // Delete BOTH and the anchor is erased and the scrollback reprints: the bug this module
       // exists to remove, fired by a socket that said nothing at all. So what this test actually
       // discriminates is the emission — a silent socket must produce no output and leave the next
-      // attach still deduping. The history property it is named for is held twice over.
+      // attach still deduping. The history property the test was ORIGINALLY named for is held twice over, by both guards.
       const cmd = buildFakeCommand();
       const dies = buildFakeCommand();
       const replays = buildFakeCommand();
