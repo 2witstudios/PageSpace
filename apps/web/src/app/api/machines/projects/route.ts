@@ -119,8 +119,12 @@ export async function DELETE(request: Request) {
   const parsed = requireMachineId(url.searchParams.get('machineId'));
   if (!parsed.ok) return parsed.error;
 
+  // `.trim()` matters here as much as it does on POST: `removeProject` normalizes
+  // its lookup key, and a whitespace-only name normalizes to the FALLBACK — so a
+  // blank `?name=` would resolve to a project literally called `project` and
+  // `rm -rf` someone's checkout. A blank name is a missing field, not free text.
   const name = url.searchParams.get('name');
-  if (!name) {
+  if (!name || name.trim().length === 0) {
     return NextResponse.json({ error: 'name is required' }, { status: 400 });
   }
 

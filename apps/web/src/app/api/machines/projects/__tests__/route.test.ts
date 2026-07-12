@@ -199,6 +199,17 @@ describe('DELETE /api/machines/projects', () => {
     expect(res.status).toBe(400);
   });
 
+  it('given a whitespace-only name, returns 400 rather than rm -rf-ing the project called "project"', async () => {
+    // `removeProject` normalizes its lookup key, and "   " normalizes to the
+    // FALLBACK — so a blank ?name= would resolve to a real project literally
+    // named `project` and delete someone's checkout.
+    const res = await DELETE(
+      new Request('https://x.test/api/machines/projects?machineId=t1&name=%20%20%20', { method: 'DELETE' }),
+    );
+    expect(res.status).toBe(400);
+    expect(mockRemoveProject).not.toHaveBeenCalled();
+  });
+
   it('given no machineId, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/projects?name=repo', { method: 'DELETE' }));
     expect(res.status).toBe(400);
