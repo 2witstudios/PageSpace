@@ -425,6 +425,39 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(destroyed).toBeNull();
   });
 
+  it('given a FRESH create whose mkdir fails but whose policy already landed, should retry ONLY the mkdir — never re-push an already-confirmed policy', async () => {
+    let policyCalls = 0;
+    let mkdirAttempts = 0;
+    const sprite = fakeSprite({
+      name: 'k',
+      updateNetworkPolicy: async () => {
+        policyCalls += 1;
+      },
+      spawn: () => {
+        mkdirAttempts += 1;
+        // A POST-open failure (opened: true) so the inner exec-level wake retry
+        // does NOT swallow it — it must propagate out to applyEgressLockdown's
+        // own OUTER retry loop, which is what this test exercises.
+        return mkdirAttempts === 1
+          ? fakeCommand({ opened: true, error: new Error('mkdir transport dropped mid-command') })
+          : fakeCommand({ exitCode: 0 });
+      },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => {
+        throw new Error('not found');
+      },
+      createSprite: async () => sprite,
+      deleteSprite: async () => {},
+    };
+    const client = createSpritesSandboxClient({ sdk, sleep: async () => {} });
+    const handle = await client.getOrCreate({ name: 'k', options });
+    expect(handle.sandboxId).toBe('k');
+    // The policy call succeeded on its very first (and only) attempt — a later
+    // retry of the failed mkdir step must not re-push it.
+    expect(policyCalls).toBe(1);
+  });
+
   it('given a FRESH create whose lockdown fails PERSISTENTLY, should exhaust its bounded retry budget and THEN destroy it (never poisoned forever)', async () => {
     let destroyed: string | null = null;
     let policyCalls = 0;

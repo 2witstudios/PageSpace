@@ -20,12 +20,15 @@
  *    `../egress-lockdown.ts`. The crash window the old unconditional re-apply
  *    defended (a crash between `createSprite` and its lockdown) is closed by
  *    ORDERING instead: the caller links the session only after `getOrCreate`
- *    resolves, so an unlocked Sprite is never reachable from a session row. A
- *    lockdown failure — FRESH or RESUMED — never destroys the Sprite: it RETAINS
- *    it and refuses the hand-back, so the next `getOrCreate` under the same name
- *    retries against that same VM instead of paying to provision a new one (see
- *    `planProvisionFailure`). The call still rejects so no command runs without a
- *    confirmed policy.
+ *    resolves, so an unlocked Sprite is never reachable from a session row —
+ *    whether or not it is ever destroyed. A lockdown failure RETAINS and retries
+ *    the Sprite inline (with backoff) rather than destroying it on the first
+ *    flake; a RESUMED Sprite is never destroyed no matter how many failures (it
+ *    already has a session row a user can act on), while a FRESH one that
+ *    exhausts its bounded retry budget IS destroyed, so a genuinely broken VM
+ *    doesn't poison its session key forever with no persisted row to act on —
+ *    see `planProvisionFailure`. The call always rejects on a failure so no
+ *    command runs without a confirmed policy.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
  *    defaults.
@@ -809,12 +812,17 @@ export type ProvisionFailurePlan = 'retain-and-refuse' | 'destroy';
  * `maxAttempts`), is it still worth RETAINING (retry the SAME VM again), or has
  * it proven genuinely unusable and earned a DESTROY?
  *
- * A RESUMED Sprite (`fresh: false`) is never destroyed here, no matter how many
+ * A RESUMED Sprite (`fresh: false`) is NEVER destroyed here, no matter how many
  * attempts: this caller does not own its lifecycle, and a warm session with a
  * flaky lockdown is still cheaper to keep retrying than to throw away (sprites
  * are meant to be created once and reused — docs.sprites.dev/working-with-sprites).
- * It already has a persisted session row a user can act on, so there is no
- * "poisoned with no way out" risk in leaving it to retry indefinitely.
+ * It already has a persisted session row a user (or a future operator tool) can
+ * act on, so there is no "poisoned with no way out" risk in leaving it to retry
+ * indefinitely — this IS a deliberate asymmetry with the fresh case below, not
+ * an oversight: a resumed Sprite that stays permanently broken degrades to "this
+ * one Machine/branch needs a human to delete and re-provision it," which is a
+ * known, acceptable outcome, never a silent resource leak (see
+ * `applyEgressLockdown`'s doc for the loop that enforces this).
  *
  * A FRESH Sprite is different: on its VERY FIRST successful `getOrCreate`
  * (fresh create, no session row yet — see `provisionFreshMachine`), a
@@ -858,10 +866,52 @@ const PROVISION_LOCKDOWN_MAX_ATTEMPTS = 3;
  * The retry loop is what keeps a FRESH Sprite from being poisoned forever by a
  * transient flake without ALSO being destroyed the instant a genuinely broken
  * one fails: `planProvisionFailure` decides, on each failure, whether this was
- * merely attempt N of a bounded budget (retry again) or the last chance (destroy
- * — see its doc). A RESUMED Sprite's caller passes `maxAttempts: 1`, so its
- * first failure is immediately judged 'retain-and-refuse' by `fresh: false`
- * and never retried inline — it already has a session row to fall back on.
+ * merely attempt N of a bounded budget (retry again) or the last chance
+ * (destroy — see its doc). Only the step that actually failed is retried: once
+ * `updateNetworkPolicy` lands, it is not re-pushed on a later attempt whose
+ * `mkdir` alone failed — needless repeat control-plane calls would otherwise
+ * risk tripping the policy API's own rate limiting on an already-healthy step.
+ *
+ * A RESUMED Sprite's caller passes `maxAttempts: 1`, so its first failure hits
+ * the loop's ceiling immediately: `planProvisionFailure` never returns
+ * 'destroy' for `fresh: false` (see its doc), so the explicit
+ * `attempt >= maxAttempts` check below — not `planProvisionFailure` — is what
+ * actually bounds THAT case. Do not delete it as "redundant": for a fresh
+ * Sprite it is provably unreachable (planProvisionFailure already returns
+ * 'destroy' at that same boundary), but for a resumed one it is the only thing
+ * standing between a single failed attempt and an infinite retry loop.
+ *
+ * This deliberately does NOT reuse the file's `withWakeRetry` executor above:
+ * that one retries ONLY a structurally-detected pre-open wake-drop and never
+ * destroys anything, while this one retries any lockdown failure and destroys
+ * on exhaustion — different enough plans that sharing one generic executor
+ * would need threading a plan callback through `withWakeRetry` for a single
+ * caller, more indirection than the duplication it would save.
+ *
+ * Nested retry note: the `mkdir` step below goes through
+ * `runSpawnedWithWakeRetry`, which has its OWN bounded wake-drop retry
+ * (`MAX_EXEC_ATTEMPTS`, each capped at the 30s passed here). In the
+ * vanishingly rare worst case where a Sprite hits pre-open wake-drops on every
+ * inner attempt AND every outer attempt, the two bounds compound
+ * (`maxAttempts` × `MAX_EXEC_ATTEMPTS` × 30s, plus backoff) — several minutes,
+ * not the ~90s a glance at `maxAttempts` alone suggests. This is accepted: it
+ * requires a VM that is broken in a very specific, narrow way, this driver
+ * runs inside long-lived Fly services (not a hard-timeout serverless
+ * function), and the alternative — a shorter per-attempt timeout — risks
+ * misjudging a merely slow-to-wake but healthy cold boot as "unusable" (the
+ * exact failure mode this leaf exists to fix).
+ *
+ * Residual risk (accepted, out of scope): if the PROCESS itself is killed
+ * mid-loop (a Fly Machine restart/OOM, not a request timeout — see above),
+ * a fresh Sprite that hasn't yet exhausted its budget survives undestroyed. The
+ * NEXT `getOrCreate` for that name then finds it via `sdk.getSprite` (success,
+ * not not-found), so `fresh` becomes `false` and it is treated as a RESUMED
+ * Sprite from then on — retained and refused forever if still broken, same as
+ * any other persistently-broken resumed Sprite (see `planProvisionFailure`'s
+ * doc on that asymmetry). Closing this fully would need a durable,
+ * cross-acquire attempt counter (e.g. persisted on the session row) — that is
+ * the same class of work as the reaper this leaf explicitly declines to build.
+ *
  * Either way the error still propagates so the caller refuses to hand back a
  * Sprite without a confirmed policy.
  */
@@ -882,9 +932,13 @@ async function applyEgressLockdown({
   baseDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
 }): Promise<void> {
-  for (let attempt = 1; ; attempt += 1) {
+  let policyApplied = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await sprite.updateNetworkPolicy(policy);
+      if (!policyApplied) {
+        await sprite.updateNetworkPolicy(policy);
+        policyApplied = true;
+      }
       // Use spawn + runSpawned (30 s wall-clock) to create the workspace dir
       // instead of filesystem().mkdir(). The filesystem API uses a bare fetch()
       // with no AbortSignal — it hangs for 52–90 s when the Sprite VM is
@@ -904,7 +958,10 @@ async function applyEgressLockdown({
         }
         throw error;
       }
-      if (attempt >= maxAttempts) throw error; // matches planProvisionFailure's own ceiling; defensive only
+      // Reached for a RESUMED Sprite once its (single-attempt) budget is spent
+      // — see this function's doc on why this check, not planProvisionFailure,
+      // is what bounds that case.
+      if (attempt >= maxAttempts) throw error;
       await sleep(wakeRetryDelayMs(attempt, baseDelayMs));
     }
   }
