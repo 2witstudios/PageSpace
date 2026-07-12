@@ -137,30 +137,6 @@ export type ConnectPlan =
  * warm wake at 100-500ms, and this skips it entirely), and otherwise creates a
  * fresh one.
  */
-/**
- * Pure: decide whether the periodic re-auth tick should perform its DB-only
- * check this cycle. A detached session (no viewer attached) has nothing to
- * protect — nobody can read its output or type into it — so there is no
- * point spending a DB round trip re-checking authorization for an absent
- * user, every 60s, for the whole 30-min detached grace. Pausing here is safe
- * because a revoked-while-detached user is still caught: the NEXT reattach
- * re-runs `checkAuth` on its own (see `onConnect`), before ever deciding to
- * reattach, so nobody tabs back into a session they lost access to.
- *
- * `attached` and `detachedSinceMs` are two views of the same session state
- * (`detachedAt` unset vs set) — requiring them to agree is a cheap defense
- * against a caller passing a stale snapshot of one without the other.
- */
-export function shouldContinueReAuth({
-  attached,
-  detachedSinceMs,
-}: {
-  attached: boolean;
-  detachedSinceMs: number | undefined;
-}): boolean {
-  return attached && detachedSinceMs === undefined;
-}
-
 export function planConnect({
   accessResult,
   existingSession,
@@ -440,9 +416,6 @@ export function buildAgentTerminalHandlers({
     const { sessionKey } = session;
     session.outputFn = () => {};
     session.closedFn = () => {};
-    // Arms `shouldContinueReAuth`'s pause: no viewer is watching from this
-    // moment until a reattach clears it (or the idle reap kills the session).
-    session.detachedAt = Date.now();
     sessionMap.detach(connectionId);
     session.idleTimer = setTimeout(() => {
       session.releaseSlot();
@@ -468,10 +441,6 @@ export function buildAgentTerminalHandlers({
       clearTimeout(session.idleTimer);
       session.idleTimer = undefined;
     }
-    // A viewer is attached again — resume the re-auth tick (it was paused for
-    // the detached grace). `onConnect` already re-ran `checkAuth` to reach
-    // this call, so a revoked-while-detached user never gets here at all.
-    session.detachedAt = undefined;
     // This viewer now owns the PTY, so they are who re-auth must keep checking.
     session.viewerUserId = viewerUserId;
     session.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
@@ -709,14 +678,16 @@ export function buildAgentTerminalHandlers({
         const reAuthInterval = setInterval(async () => {
           const liveSession = sessionMap.getByKey(sessionKey);
           if (!liveSession) { clearInterval(reAuthInterval); return; }
-          // Pause while detached (see `shouldContinueReAuth`): no viewer is
-          // watching, so there is nothing to protect and no reason to spend a
-          // DB round trip on it. The interval itself is left running — cheap —
-          // so it picks back up on its own once `attachToLiveSession` clears
-          // `detachedAt`, without needing to be torn down and recreated here.
-          const attached = liveSession.detachedAt === undefined;
-          const detachedSinceMs = liveSession.detachedAt !== undefined ? Date.now() - liveSession.detachedAt : undefined;
-          if (!shouldContinueReAuth({ attached, detachedSinceMs })) return;
+          // Keeps ticking DB-only checks while DETACHED too. An earlier version
+          // of this paused the tick for a detached session on the theory that
+          // nobody is watching, so there is nothing to protect — but the PTY/
+          // agent process a detached session leaves running is not idle just
+          // because its viewer left, and it keeps the Sprite active regardless
+          // (docs.sprites.dev/concepts/lifecycle: "open sessions" count as
+          // activity on their own). Pausing bought no wake/billing benefit and
+          // cost a real guarantee: a revoked user's still-running process would
+          // keep executing, unsupervised, for up to the full 30-min detached
+          // grace instead of being torn down within one interval.
           // Re-check the session's CURRENT viewer, not whoever created it. A session
           // outlives its creator's connection: any authorized user may reattach, and
           // `attachToLiveSession` re-points the PTY's output at them. Checking the

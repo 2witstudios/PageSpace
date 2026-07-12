@@ -20,15 +20,6 @@ export type TerminalSession = {
   /** Heartbeat that settles the accrued active window mid-session (see agent-terminal-handler), bounding what a realtime restart can lose to one interval. */
   settleInterval?: ReturnType<typeof setInterval>;
   idleTimer?: ReturnType<typeof setTimeout>;
-  /**
-   * `Date.now()` of the last disconnect with no viewer reattached since, or
-   * undefined while a viewer is attached. Drives `shouldContinueReAuth` (see
-   * agent-terminal-handler): a detached session has no live viewer to protect,
-   * so the 60s re-auth tick is paused for the whole detached grace instead of
-   * spending a DB round trip on an absent user — a revoked-while-detached user
-   * is caught instead at the next reattach, which re-checks auth on its own.
-   */
-  detachedAt?: number;
   releaseSlot(): void;
   outputFn: (data: string) => void;
   closedFn: (exitCode: number) => void;
