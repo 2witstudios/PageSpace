@@ -92,7 +92,7 @@ describe('normalizeProjectName', () => {
   it.each([
     // [free text a user typed, the directory name it becomes]
     ['My Cool Feature', 'my-cool-feature'],
-    ['émoji 🚀 project', 'emoji-project-1v5fxn'],
+    ['émoji 🚀 project', 'emoji-project-4ijsbh'],
     ['émoji project', 'emoji-project'],
     ['repo!!!  name', 'repo-name'],
     // A project name is ONE segment — `/` carries no structure here.
@@ -125,6 +125,14 @@ describe('normalizeProjectName', () => {
     // stray space cannot force a needless rewrite of an already-fine name.
     expect(normalizeProjectName(' MyRepo ')).toBe('MyRepo');
     expect(normalizeProjectName('  my_repo.v2  ')).toBe('my_repo.v2');
+  });
+
+  it('given one name typed two ways, should NOT mint two directories just because it holds an emoji', () => {
+    // See normalizeBranchName: the digest hashes the name's IDENTITY, not raw text.
+    const canonical = normalizeProjectName('my 🚀 repo');
+    expect(normalizeProjectName('MY 🚀 REPO')).toBe(canonical);
+    expect(normalizeProjectName('my!🚀!repo')).toBe(canonical);
+    expect(normalizeProjectName('my 🎉 repo')).not.toBe(canonical);
   });
 
   it('given names the ASCII charset annihilates, should NOT collapse them onto one directory', () => {

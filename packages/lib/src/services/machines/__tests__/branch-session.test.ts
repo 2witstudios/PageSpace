@@ -131,7 +131,7 @@ describe('normalizeBranchName', () => {
     ['feat/JIRA-123 Fix!!', 'feat/jira-123-fix'],
     // The emoji is content the ASCII charset cannot express, so a digest keeps
     // this apart from a plain `emoji branch` (see the collision tests below).
-    ['émoji 🚀 branch', 'emoji-branch-7rmlpe'],
+    ['émoji 🚀 branch', 'emoji-branch-1rmtwag'],
     // ...but an accent alone folds losslessly to ASCII, so no digest is needed.
     ['émoji branch', 'emoji-branch'],
     // Free text git would REJECT still slugifies (lowercased, `_`→`-`).
@@ -176,7 +176,7 @@ describe('normalizeBranchName', () => {
     // to the SAME ref — so the cut reserves room for a digest of the original.
     ['a'.repeat(250), `${'a'.repeat(193)}-62a0y7`],
     [`${'a'.repeat(199)}-b-c`, `${'a'.repeat(192)}-1x5nok5`],
-    [`${'x'.repeat(195)}.lockdown`, `${'x'.repeat(193)}-px8620`],
+    [`${'x'.repeat(195)}.lockdown`, `${'x'.repeat(192)}-1js8qf5`],
   ])('given %j, should normalize to %j', (input, expected) => {
     expect(normalizeBranchName(input)).toBe(expected);
   });
@@ -197,6 +197,21 @@ describe('normalizeBranchName', () => {
     for (const name of ['main', 'feature/foo', 'fix-123', 'release/1.2.3', 'a', 'a-b-c.d']) {
       expect(normalizeBranchName(name)).toBe(name);
     }
+  });
+
+  it('given one name typed two ways, should NOT mint two branches just because it holds an emoji', () => {
+    // The digest hashes the name's IDENTITY (folded, lowercased, ASCII structure
+    // collapsed), NOT the raw text. Hashing raw text kept the "case and
+    // punctuation do not split a name" promise for pure-ASCII names only, and
+    // quietly broke it for everyone else: `MY 🚀 FEATURE` and `my 🚀 feature`
+    // would have been two branches, two Sprites, two clones — for exactly the
+    // non-ASCII users the digest exists to protect.
+    const canonical = normalizeBranchName('my 🚀 feature');
+    expect(normalizeBranchName('MY 🚀 FEATURE')).toBe(canonical);
+    expect(normalizeBranchName('my!🚀!feature')).toBe(canonical);
+    expect(normalizeBranchName('  my  🚀  feature  ')).toBe(canonical);
+    // ...while still keeping genuinely different names apart.
+    expect(normalizeBranchName('my 🎉 feature')).not.toBe(canonical);
   });
 
   it('given a name whose non-ASCII part is only PART of it, should still not collide', () => {

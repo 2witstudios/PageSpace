@@ -189,6 +189,16 @@ export async function addProject({
     return { ok: false, reason: 'clone_failed', detail: result.error };
   }
   if (result.exitCode !== 0) {
+    // A concurrent addProject for the same name may have already cloned into this
+    // exact path — in which case our clone failed BECAUSE theirs succeeded
+    // ("destination path already exists and is not empty"), and `rm -rf`ing it
+    // would delete the WINNER's checkout while their row lives on, leaving a
+    // project that points at an empty directory. Only clean up a path that no
+    // persisted project owns. (Normalization widens this race from "same text" to
+    // "same slug", so it is no longer reachable only by byte-identical names.)
+    const winner = await deps.store.findByName(machineId, plan.name);
+    if (winner) return { ok: false, reason: 'duplicate_name' };
+
     await safeRemoveDirectory(machineId, plan.path, deps);
     return { ok: false, reason: 'clone_failed', detail: result.stderr || result.stdout };
   }

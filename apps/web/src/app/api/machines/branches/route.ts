@@ -32,8 +32,10 @@ import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/mac
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
+// A blank name is a MISSING field, not free text to normalize. `.trim()` matters:
+// without it, `" "` would sail past this guard and normalize to the bare fallback.
 function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
     return { ok: false, error: NextResponse.json({ error: `${field} is required` }, { status: 400 }) };
   }
   return { ok: true, value };

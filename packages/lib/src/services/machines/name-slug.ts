@@ -71,6 +71,32 @@ export function hasNameContent(input: string): boolean {
 const CHARSET_RE = /[a-z0-9.-]/;
 /** ASCII whitespace and punctuation — STRUCTURE. Losing it does not change which name was meant. */
 const ASCII_STRUCTURE_RE = /[\s!-/:-@[-`{-~]/;
+/** The same class, as a run — for canonicalizing structure down to one separator. */
+const ASCII_STRUCTURE_RUN_RE = /[\s!-/:-@[-`{-~]+/g;
+const EDGE_DASHES_RE = /^-+|-+$/g;
+
+/**
+ * The canonical IDENTITY of a name: fold to ASCII where possible, lowercase, and
+ * collapse every run of ASCII structure to a single `-`. Characters no ASCII
+ * charset can express (`日本語`, `🚀`) are KEPT, because they are exactly what
+ * distinguishes one name from another.
+ *
+ * This — not the raw text — is what `slugDigest` hashes, and the distinction is
+ * load-bearing. The design promises that case and ASCII punctuation do not split
+ * a name in two (`MY FEATURE`, `my feature` and `my!feature` are one branch).
+ * Hashing raw text would keep that promise only for pure-ASCII names and quietly
+ * break it for everyone else: `MY 🚀 FEATURE` and `my 🚀 feature` would hash
+ * differently and mint two branches, two Sprites, two clones — for precisely the
+ * non-ASCII users the digest exists to protect.
+ */
+function nameIdentity(input: string): string {
+  return input
+    .normalize('NFKD')
+    .replace(DIACRITICS_RE, '')
+    .toLowerCase()
+    .replace(ASCII_STRUCTURE_RUN_RE, '-')
+    .replace(EDGE_DASHES_RE, '');
+}
 
 /**
  * Did slugification DESTROY identity-bearing content — a letter, digit, or
@@ -108,6 +134,10 @@ const FNV_PRIME = 16777619;
  * filesystem. Likewise `feature/日本語` must not silently become plain
  * `feature` and collide with a real `feature` branch.
  *
+ * Hashes the name's IDENTITY (see `nameIdentity`), never the raw text — so it
+ * splits `日本語` from `한국어` without also splitting `MY 🚀 FEATURE` from
+ * `my 🚀 feature`.
+ *
  * FNV-1a/base36, not a crypto hash: it disambiguates, it does not authenticate
  * (the Sprite name is a keyed HMAC — see `deriveBranchSessionKey`). Kept pure
  * and dependency-free on purpose, because the live-preview sub-task must run
@@ -115,7 +145,7 @@ const FNV_PRIME = 16777619;
  */
 export function slugDigest(input: string): string {
   let hash = FNV_OFFSET_BASIS;
-  const text = input.trim();
+  const text = nameIdentity(input);
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, FNV_PRIME);

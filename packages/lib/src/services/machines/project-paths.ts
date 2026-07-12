@@ -73,6 +73,9 @@ export function normalizeProjectName(rawInput: string): string {
   let name = slugifySegment(input);
 
   if (name.length === 0) {
+    // A content-free name (`..`, `//`, `   `) has no identity to preserve — every
+    // one of them means "no name", so sharing the fallback is correct rather than
+    // a collision. The routes reject blank names outright.
     if (!hasNameContent(input)) return PROJECT_NAME_FALLBACK;
     name = `x${slugDigest(input)}`;
   } else if (destroysNameContent(input)) {
