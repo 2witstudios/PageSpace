@@ -39,8 +39,26 @@ const GENERATION_ROUTES = [
   'app/api/ai/global/[id]/messages/route.ts',
 ];
 
-// `request.signal` / `req.signal`, in any member-access shape.
-const REQUEST_SIGNAL = /\b(request|req)\s*\.\s*signal\b/;
+// Every realistic way to get the request's abort signal.
+//
+// The first pattern alone was NOT enough, and I only found that by trying to defeat my own
+// guard: `const { signal } = request;` — the most natural way a developer would actually write
+// it — sailed straight past a member-access-only check. The test stayed green while
+// disconnect-immunity was destroyed, which is precisely the false comfort this file exists to
+// prevent. A tripwire that only catches the spelling you happened to think of is not a tripwire.
+const REQUEST_SIGNAL_PATTERNS = [
+  // request.signal / req.signal
+  /\b(request|req)\s*\.\s*signal\b/,
+  // const { signal } = request  /  const { signal: alias } = req
+  /\{[^}]*\bsignal\b[^}]*\}\s*=\s*(request|req)\b/,
+];
+
+// This is a heuristic, deliberately. It cannot catch every conceivable aliasing
+// (`const r = request; r.signal`), and it is not trying to be a type system. It catches the ways
+// this mistake actually gets made — a direct read and a destructure — and it fails loudly with an
+// explanation, which is worth far more than a proof nobody writes.
+const readsRequestSignal = (line: string): boolean =>
+  REQUEST_SIGNAL_PATTERNS.some((re) => re.test(line));
 
 describe('disconnect-immunity (AC7)', () => {
   describe.each(GENERATION_ROUTES)('%s', (relPath) => {
@@ -50,7 +68,7 @@ describe('disconnect-immunity (AC7)', () => {
       const offendingLines = source
         .split('\n')
         .map((line, i) => ({ line: line.trim(), lineNo: i + 1 }))
-        .filter(({ line }) => REQUEST_SIGNAL.test(line))
+        .filter(({ line }) => readsRequestSignal(line))
         // A comment explaining WHY we don't do this is exactly what we want to keep.
         .filter(({ line }) => !line.startsWith('//') && !line.startsWith('*') && !line.startsWith('/*'));
 
@@ -75,6 +93,6 @@ describe('disconnect-immunity (AC7)', () => {
       join(WEB_SRC, 'app/api/ai/chat/stream-join/[messageId]/route.ts'),
       'utf8',
     );
-    expect(REQUEST_SIGNAL.test(source)).toBe(true);
+    expect(readsRequestSignal(source)).toBe(true);
   });
 });
