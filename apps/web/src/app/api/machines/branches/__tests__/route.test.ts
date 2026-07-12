@@ -126,7 +126,7 @@ describe('POST /api/machines/branches', () => {
 
   it('given a fresh spawn, returns 201', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false });
+    mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', branchName: 'main', resumed: false });
     const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -138,7 +138,7 @@ describe('POST /api/machines/branches', () => {
 
   it('given a resumed spawn, returns 200', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: true });
+    mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', branchName: 'main', resumed: true });
     const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(200);
   });
@@ -155,6 +155,22 @@ describe('POST /api/machines/branches', () => {
     mockSpawnBranch.mockResolvedValue({ ok: false, reason: 'clone_failed', detail: 'fatal: repository not found' });
     const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'main' }));
     expect(res.status).toBe(502);
+  });
+
+  it('given free text, echoes the NORMALIZED name the service persisted — not the raw request text', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockSpawnBranch.mockResolvedValue({ ok: true, sandboxId: 'sbx-1', branchName: 'my-cool-feature', resumed: false });
+
+    const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName: 'My Cool Feature' }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.branch.branchName).toBe('my-cool-feature');
+    // The raw text is passed through to the service, which is the authority on
+    // normalization — the route never pre-normalizes or rejects it.
+    expect(mockSpawnBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ branchName: 'My Cool Feature' }),
+    );
   });
 
   it('given a missing branchName, returns 400 without checking access', async () => {

@@ -9,6 +9,11 @@
  * Session-only (no MCP/agent tokens) — this is a human/UI surface. Every
  * request re-checks access for the named Machine page (view-level for GET,
  * edit-level for POST/DELETE).
+ *
+ * `branchName` on POST is FREE TEXT. The server normalizes it into a valid git
+ * ref (`normalizeBranchName`, inside `spawnBranch`) rather than rejecting it,
+ * and the response echoes the canonical name. A client-side live preview of
+ * that same normalization is a convenience — this is the authority.
  */
 
 import { NextResponse } from 'next/server';
@@ -34,7 +39,6 @@ function requireString(value: unknown, field: string): { ok: true; value: string
 }
 
 const SPAWN_DENIAL_STATUS: Record<string, number> = {
-  invalid_branch_name: 400,
   kill_switch_off: 503,
   project_not_found: 404,
   code_execution_disabled: 503,
@@ -103,8 +107,10 @@ export async function POST(request: Request) {
       { status: SPAWN_DENIAL_STATUS[result.reason] ?? 500 },
     );
   }
+  // Echo the NORMALIZED name `spawnBranch` actually checked out and persisted —
+  // "My Cool Feature" in, `my-cool-feature` back — never the raw request text.
   return NextResponse.json(
-    { branch: { branchName: branchName.value, resumed: result.resumed } },
+    { branch: { branchName: result.branchName, resumed: result.resumed } },
     { status: result.resumed ? 200 : 201 },
   );
 }

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  planSpawnBranch,
   spawnBranch,
   attachBranch,
   killBranch,
@@ -176,16 +175,6 @@ function makeDeps(overrides: Partial<MachineBranchesDeps> = {}, storeSeed: Machi
   return { deps, store, host, auditCalls };
 }
 
-describe('planSpawnBranch', () => {
-  it('given a valid branch name, should accept', () => {
-    expect(planSpawnBranch({ branchName: 'feature/foo' })).toEqual({ ok: true });
-  });
-
-  it('given an invalid branch name, should reject', () => {
-    expect(planSpawnBranch({ branchName: '../etc' })).toEqual({ ok: false, reason: 'invalid_branch_name' });
-  });
-});
-
 describe('spawnBranch', () => {
   it('given a valid spawn, should provision exactly one Sprite, clone the repo, checkout the branch off origin, and persist the row', async () => {
     const { host, provisionCalls, byId } = makeFakeHost();
@@ -218,19 +207,51 @@ describe('spawnBranch', () => {
     expect(provisionCalls).toHaveLength(0);
   });
 
-  it('given an invalid branch name, should refuse before looking up the project', async () => {
-    let lookedUp = false;
-    const { deps } = makeDeps({
-      projectStore: {
-        findByName: async () => {
-          lookedUp = true;
-          return { repoUrl: REPO_URL };
-        },
-      },
+  it('given free text as the branch name, should NORMALIZE it rather than refuse — and check out the normalized ref', async () => {
+    const { host, byId } = makeFakeHost();
+    const { deps, store } = makeDeps({ host });
+
+    const result = await spawnBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'My Cool Feature',
+      actor,
+      deps,
     });
+
+    expect(result).toMatchObject({ ok: true, branchName: 'my-cool-feature' });
+    if (!result.ok) throw new Error('expected ok');
+
+    // The normalized name is what git sees, and what the tracking row holds —
+    // the raw text never reaches either.
+    const state = byId.get(result.sandboxId);
+    expect(state?.execLog[1]).toMatchObject({
+      args: ['checkout', '-b', 'my-cool-feature', 'origin/my-cool-feature'],
+    });
+    expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'my-cool-feature')).toMatchObject({
+      branchName: 'my-cool-feature',
+    });
+    expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'My Cool Feature')).toBeNull();
+  });
+
+  it('given a hostile branch name, should normalize it into a safe ref instead of erroring', async () => {
+    const { deps, store } = makeDeps({});
     const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: '../etc', actor, deps });
-    expect(result).toEqual({ ok: false, reason: 'invalid_branch_name' });
-    expect(lookedUp).toBe(false);
+
+    expect(result).toMatchObject({ ok: true, branchName: 'etc' });
+    expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'etc')).toMatchObject({ branchName: 'etc' });
+  });
+
+  it('given two spellings of the same name, should reattach to ONE branch-terminal rather than spawn two', async () => {
+    const { host, provisionCalls } = makeFakeHost();
+    const { deps } = makeDeps({ host });
+
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'My Cool Feature', actor, deps });
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'my---cool feature', actor, deps });
+
+    expect(first).toMatchObject({ ok: true, resumed: false });
+    expect(second).toMatchObject({ ok: true, resumed: true, branchName: 'my-cool-feature' });
+    expect(provisionCalls).toHaveLength(1);
   });
 
   it('given no such project on this machine, should refuse', async () => {
@@ -331,7 +352,7 @@ describe('spawnBranch', () => {
     const { deps } = makeDeps({ host, store });
 
     const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
-    expect(result).toEqual({ ok: true, sandboxId: 'sbx-other-winner', resumed: true });
+    expect(result).toEqual({ ok: true, sandboxId: 'sbx-other-winner', branchName: 'main', resumed: true });
     // Our own redundant Sprite is killed, but NEVER the winner's.
     expect(provisionCalls).toHaveLength(1);
     expect(killCalls).toHaveLength(1);
@@ -369,7 +390,7 @@ describe('spawnBranch', () => {
     armed = true;
 
     const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
-    expect(second).toEqual({ ok: true, sandboxId: 'sbx-concurrent-winner', resumed: true });
+    expect(second).toEqual({ ok: true, sandboxId: 'sbx-concurrent-winner', branchName: 'main', resumed: true });
     // Our own re-provisioned (now-redundant) Sprite is killed; the winner's never is.
     expect(killCalls).not.toContain('sbx-concurrent-winner');
   });
@@ -524,7 +545,29 @@ describe('attachBranch', () => {
     if (!spawned.ok) throw new Error('expected ok');
 
     const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
-    expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId });
+    expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId, branchName: 'main' });
+  });
+
+  it('given the free text the branch was CREATED with, should normalize the lookup and still find it', async () => {
+    const { host } = makeFakeHost();
+    const { deps, store } = makeDeps({ host });
+    const spawned = await spawnBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'My Cool Feature',
+      actor,
+      deps,
+    });
+    if (!spawned.ok) throw new Error('expected ok');
+
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'My Cool Feature',
+      store,
+      host,
+    });
+    expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId, branchName: 'my-cool-feature' });
   });
 
   it('given no tracked branch, should return not_found', async () => {

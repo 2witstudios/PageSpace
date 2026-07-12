@@ -32,26 +32,19 @@ import { adaptMachineHandleToExecutableSandbox } from '../sandbox/sandbox-client
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement, FullEgressDenialReason } from '../sandbox/containment';
 import type { CodeExecutionAuditInput } from '../sandbox/audit';
-import { deriveBranchSessionKey, isValidBranchName } from './branch-session';
+import { deriveBranchSessionKey, normalizeBranchName } from './branch-session';
 import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } from './machine-branches-store';
 
 /** The directory on a branch-terminal's OWN Sprite the project is cloned into. */
 export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
 
 export type SpawnBranchDenialReason =
-  | 'invalid_branch_name'
   | 'kill_switch_off'
   | 'project_not_found'
   | 'provision_failed'
   | 'clone_failed'
   | 'checkout_failed'
   | 'error';
-
-/** Pure decision: is this branch name safe to use as a git ref / Sprite name component? */
-export function planSpawnBranch(input: { branchName: string }): { ok: true } | { ok: false; reason: 'invalid_branch_name' } {
-  if (!isValidBranchName(input.branchName)) return { ok: false, reason: 'invalid_branch_name' };
-  return { ok: true };
-}
 
 export interface MachineActorContext {
   userId: string;
@@ -87,7 +80,8 @@ export interface MachineBranchesDeps {
 }
 
 export type SpawnBranchResult =
-  | { ok: true; sandboxId: string; resumed: boolean }
+  /** `branchName` is the NORMALIZED name — what was persisted and checked out, which the caller must echo back. */
+  | { ok: true; sandboxId: string; branchName: string; resumed: boolean }
   | { ok: false; reason: SpawnBranchDenialReason | FullEgressDenialReason; detail?: string };
 
 /**
@@ -211,10 +205,10 @@ async function reconcileProvisionCollision({
   projectName: string;
   branchName: string;
   handle: MachineHandle;
-}): Promise<{ ok: true; sandboxId: string; resumed: true } | { row: MachineBranchRecord | null }> {
+}): Promise<{ ok: true; sandboxId: string; branchName: string; resumed: true } | { row: MachineBranchRecord | null }> {
   const row = await deps.store.findByName(machineId, projectName, branchName);
   if (row && row.sandboxId === handle.machineId) {
-    return { ok: true, sandboxId: row.sandboxId, resumed: true };
+    return { ok: true, sandboxId: row.sandboxId, branchName: row.branchName, resumed: true };
   }
   await safeKillSprite(deps.host, handle.machineId);
   return { row };
@@ -226,11 +220,17 @@ async function reconcileProvisionCollision({
  * projectName, branchName) — a second call reattaches to the same Sprite
  * (or transparently re-provisions under the same name if it has since
  * vanished) instead of creating a duplicate.
+ *
+ * `branchName` is free text: it is NORMALIZED here (not rejected — see
+ * `normalizeBranchName`), and the normalized form is what gets checked out,
+ * hashed into the session key, persisted, and returned. This is the
+ * authoritative normalization point — a client's live preview is a
+ * convenience, never the source of truth.
  */
 export async function spawnBranch({
   machineId,
   projectName,
-  branchName,
+  branchName: requestedBranchName,
   actor,
   deps,
 }: {
@@ -242,8 +242,7 @@ export async function spawnBranch({
 }): Promise<SpawnBranchResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'kill_switch_off' };
 
-  const plan = planSpawnBranch({ branchName });
-  if (!plan.ok) return plan;
+  const branchName = normalizeBranchName(requestedBranchName);
 
   const project = await deps.projectStore.findByName(machineId, projectName);
   if (!project) return { ok: false, reason: 'project_not_found' };
@@ -256,7 +255,7 @@ export async function spawnBranch({
 
   if (existing) {
     const handle = await deps.host.attach({ machineId: existing.sandboxId });
-    if (handle) return { ok: true, sandboxId: handle.machineId, resumed: true };
+    if (handle) return { ok: true, sandboxId: handle.machineId, branchName, resumed: true };
     // Vanished — fall through and re-provision under the SAME session key.
   }
 
@@ -294,10 +293,12 @@ export async function spawnBranch({
       // branch — do not silently overwrite; the winner already wrote its own.
       const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
       if ('ok' in reconciled) return reconciled;
-      if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
+      if (reconciled.row) {
+        return { ok: true, sandboxId: reconciled.row.sandboxId, branchName: reconciled.row.branchName, resumed: true };
+      }
       return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
     }
-    return { ok: true, sandboxId: handle.machineId, resumed: false };
+    return { ok: true, sandboxId: handle.machineId, branchName, resumed: false };
   }
 
   try {
@@ -315,19 +316,27 @@ export async function spawnBranch({
       // Lost a race against a concurrent spawn of the same branch.
       const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
       if ('ok' in reconciled) return reconciled;
-      if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
+      if (reconciled.row) {
+        return { ok: true, sandboxId: reconciled.row.sandboxId, branchName: reconciled.row.branchName, resumed: true };
+      }
     }
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 
-  return { ok: true, sandboxId: handle.machineId, resumed: false };
+  return { ok: true, sandboxId: handle.machineId, branchName, resumed: false };
 }
 
 export type AttachBranchResult =
-  | { ok: true; sandboxId: string }
+  | { ok: true; sandboxId: string; branchName: string }
   | { ok: false; reason: 'not_found' | 'vanished' };
 
-/** Reconnect to a branch-terminal's existing Sprite without provisioning a new one. */
+/**
+ * Reconnect to a branch-terminal's existing Sprite without provisioning a new
+ * one. The lookup key is normalized the same way `spawnBranch` normalizes
+ * before persisting, so the free text a user typed to create a branch still
+ * finds it — and a name read back from `listBranches` (already canonical)
+ * passes through untouched, because normalization is idempotent.
+ */
 export async function attachBranch({
   machineId,
   projectName,
@@ -341,12 +350,13 @@ export async function attachBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<AttachBranchResult> {
-  const existing = await store.findByName(machineId, projectName, branchName);
+  const normalized = normalizeBranchName(branchName);
+  const existing = await store.findByName(machineId, projectName, normalized);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   const handle = await host.attach({ machineId: existing.sandboxId });
   if (!handle) return { ok: false, reason: 'vanished' };
-  return { ok: true, sandboxId: handle.machineId };
+  return { ok: true, sandboxId: handle.machineId, branchName: normalized };
 }
 
 export async function listBranches({

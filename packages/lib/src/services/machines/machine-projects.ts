@@ -34,12 +34,19 @@ import type { SandboxActorContext, SandboxQuotaDeps } from '../sandbox/tool-runn
 import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from '../sandbox/execution-policy';
 import type { ExecutableSandbox } from '../sandbox/sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../sandbox/audit';
-import { resolveProjectPath, isValidRepoUrl } from './project-paths';
+import { resolveProjectPath, isValidRepoUrl, normalizeProjectName } from './project-paths';
 import { isUniqueViolation, type MachineProjectStore, type MachineProjectRecord } from './machine-projects-store';
 
 export type AddProjectDenialReason = 'invalid_name' | 'invalid_repo_url' | 'duplicate_name';
 
-/** Pure decision: is this (name, repoUrl) addable to a machine with these existing project names? */
+/**
+ * Pure decision: is this (name, repoUrl) addable to a machine with these
+ * existing project names? The name is free text — it is NORMALIZED into a
+ * directory-safe slug rather than rejected (`normalizeProjectName`), and the
+ * normalized form is what the duplicate check, the clone path, and the
+ * persisted row all use. The repo URL still rejects, since there is no
+ * meaningful way to normalize a non-HTTPS remote into an HTTPS one.
+ */
 export function planAddProject({
   name,
   repoUrl,
@@ -48,12 +55,19 @@ export function planAddProject({
   name: string;
   repoUrl: string;
   existingNames: string[];
-}): { ok: true; path: string } | { ok: false; reason: AddProjectDenialReason } {
+}): { ok: true; name: string; path: string } | { ok: false; reason: AddProjectDenialReason } {
   if (!isValidRepoUrl(repoUrl)) return { ok: false, reason: 'invalid_repo_url' };
-  const path = resolveProjectPath(name);
+
+  const normalized = normalizeProjectName(name);
+  // Unreachable given the normalizer's invariant (its output always satisfies
+  // `isValidProjectName`); kept as the second confinement gate, so a regression
+  // in either the normalizer or `resolvePathWithinSync` fails closed here
+  // rather than escaping PROJECTS_ROOT.
+  const path = resolveProjectPath(normalized);
   if (!path) return { ok: false, reason: 'invalid_name' };
-  if (existingNames.includes(name)) return { ok: false, reason: 'duplicate_name' };
-  return { ok: true, path };
+
+  if (existingNames.includes(normalized)) return { ok: false, reason: 'duplicate_name' };
+  return { ok: true, name: normalized, path };
 }
 
 export interface MachineActorContext {
@@ -183,7 +197,9 @@ export async function addProject({
     const project = await deps.store.create({
       ownerId: actor.userId,
       machineId,
-      name,
+      // The normalized name — never the raw text the caller typed. Persisting
+      // anything else would desync the row from the directory just cloned.
+      name: plan.name,
       repoUrl,
       path: plan.path,
       now: deps.now(),

@@ -11,6 +11,11 @@
  * Session-only (no MCP/agent tokens) — this is a human/UI surface; the agent
  * has its own `git_clone` tool. Every request re-checks access for the named
  * page (view-level for GET, edit-level for POST/DELETE).
+ *
+ * `name` on POST is FREE TEXT. The server normalizes it into a valid directory
+ * slug (`normalizeProjectName`, inside `addProject`) rather than rejecting it,
+ * and the response echoes the canonical name. A client-side live preview of
+ * that same normalization is a convenience — this is the authority.
  */
 
 import { NextResponse } from 'next/server';

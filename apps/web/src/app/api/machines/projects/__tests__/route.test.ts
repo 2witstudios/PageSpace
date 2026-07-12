@@ -119,6 +119,26 @@ describe('POST /api/machines/projects', () => {
     expect(mockAddProject).toHaveBeenCalledWith(expect.objectContaining({ machineId: 't1', name: 'repo' }));
   });
 
+  it('given free text, echoes the NORMALIZED name the service persisted — not the raw request text', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockAddProject.mockResolvedValue({
+      ok: true,
+      project: {
+        name: 'my-cool-feature',
+        repoUrl: 'https://github.com/o/r.git',
+        path: '/workspace/projects/my-cool-feature',
+      },
+    });
+
+    const res = await POST(req({ machineId: 't1', name: 'My Cool Feature', repoUrl: 'https://github.com/o/r.git' }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.project.name).toBe('my-cool-feature');
+    // The raw text goes to the service, which is the authority on normalization.
+    expect(mockAddProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'My Cool Feature' }));
+  });
+
   it('given a duplicate name, returns 409', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockAddProject.mockResolvedValue({ ok: false, reason: 'duplicate_name' });

@@ -12,6 +12,7 @@
  */
 
 import { createHmac } from 'crypto';
+import { slugifySegment } from './name-slug';
 
 export interface BranchSessionKeyInput {
   tenantId: string;
@@ -58,4 +59,50 @@ export function isValidBranchName(name: string): boolean {
   if (!BRANCH_NAME_RE.test(name)) return false;
   if (FORBIDDEN_SEGMENT_RE.test(name)) return false;
   return true;
+}
+
+/** Every separator a ref may carry, for trimming an edge the length cut exposed. */
+const TRAILING_REF_SEPARATORS_RE = /[./-]+$/;
+
+const LOCK_SUFFIX = '.lock';
+
+/** What an input with nothing sluggable left in it becomes ("   ", "🚀", "..."). */
+export const BRANCH_NAME_FALLBACK = 'branch';
+
+/**
+ * Normalize free text into a valid git branch name — type "My Cool Feature",
+ * get `my-cool-feature`. This is the normalize-and-accept counterpart to
+ * `isValidBranchName`, which stays exactly as it is: the predicate remains the
+ * CONTRACT, and this function's job is to satisfy it for any input at all,
+ * rather than to reject the user.
+ *
+ * `/` is structural — it is how git namespaces refs — so it survives as a
+ * segment separator and each segment is slugified independently
+ * (`feat/JIRA-123 Fix!!` → `feat/jira-123-fix`). Empty segments vanish, which
+ * is what disarms `../escape` (→ `escape`) and `a//b` (→ `a/b`).
+ *
+ * INVARIANT: `isValidBranchName(normalizeBranchName(x)) === true` for EVERY
+ * string x, and the function is idempotent. The closing guard makes the first
+ * half of that total rather than merely intended — a slug that somehow still
+ * fails the predicate degrades to the fallback instead of reaching git.
+ */
+export function normalizeBranchName(input: string): string {
+  const segments = input
+    .split('/')
+    .map(slugifySegment)
+    .filter((segment) => segment.length > 0);
+
+  let name = segments.join('/');
+
+  if (name.length > MAX_BRANCH_NAME_LENGTH) {
+    name = name.slice(0, MAX_BRANCH_NAME_LENGTH).replace(TRAILING_REF_SEPARATORS_RE, '');
+  }
+
+  // A `.lock` suffix is a forbidden ref name — and the cut above can itself
+  // mint one (`hotfix.lockdown` truncated at the limit), so this runs last.
+  if (name.endsWith(LOCK_SUFFIX)) {
+    name = `${name.slice(0, -LOCK_SUFFIX.length)}-lock`;
+  }
+
+  return isValidBranchName(name) ? name : BRANCH_NAME_FALLBACK;
 }

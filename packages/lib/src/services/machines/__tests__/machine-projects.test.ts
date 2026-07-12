@@ -100,6 +100,7 @@ describe('planAddProject', () => {
   it('given a valid name and https repoUrl, should accept and resolve the path', () => {
     expect(planAddProject({ name: 'my-repo', repoUrl: 'https://github.com/o/r.git', existingNames: [] })).toEqual({
       ok: true,
+      name: 'my-repo',
       path: `${PROJECTS_ROOT}/my-repo`,
     });
   });
@@ -111,11 +112,26 @@ describe('planAddProject', () => {
     });
   });
 
-  it('given an invalid name, should reject', () => {
-    expect(planAddProject({ name: '../etc', repoUrl: 'https://github.com/o/r.git', existingNames: [] })).toEqual({
-      ok: false,
-      reason: 'invalid_name',
+  it('given free text as the name, should NORMALIZE it rather than reject, and clone into the normalized path', () => {
+    expect(planAddProject({ name: 'My Cool Feature', repoUrl: 'https://github.com/o/r.git', existingNames: [] })).toEqual({
+      ok: true,
+      name: 'my-cool-feature',
+      path: `${PROJECTS_ROOT}/my-cool-feature`,
     });
+  });
+
+  it('given a traversal attempt as the name, should normalize it into a confined slug rather than reject', () => {
+    expect(planAddProject({ name: '../etc', repoUrl: 'https://github.com/o/r.git', existingNames: [] })).toEqual({
+      ok: true,
+      name: 'etc',
+      path: `${PROJECTS_ROOT}/etc`,
+    });
+  });
+
+  it('given a name that normalizes onto an existing project, should reject as duplicate', () => {
+    expect(
+      planAddProject({ name: 'My Repo', repoUrl: 'https://github.com/o/r.git', existingNames: ['my-repo'] }),
+    ).toEqual({ ok: false, reason: 'duplicate_name' });
   });
 
   it('given a name already on the machine, should reject as duplicate', () => {
@@ -148,6 +164,29 @@ describe('addProject', () => {
     // The clone ran against THIS machine's backing page (machineId) — the same
     // persistent session a live Terminal shell already reconnects to.
     expect(acquireCalls).toEqual([TERMINAL_ID]);
+  });
+
+  it('given free text as the name, should clone into the NORMALIZED path and persist the normalized name', async () => {
+    const { deps, store, runCommandCalls } = makeDeps();
+    const result = await addProject({
+      machineId: TERMINAL_ID,
+      actor,
+      name: 'My Cool Feature',
+      repoUrl: 'https://github.com/o/r.git',
+      deps,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      project: { name: 'my-cool-feature', path: `${PROJECTS_ROOT}/my-cool-feature` },
+    });
+    expect(runCommandCalls[0]).toMatchObject({
+      args: ['clone', 'https://github.com/o/r.git', `${PROJECTS_ROOT}/my-cool-feature`],
+    });
+    // The persisted row must match the directory that was actually cloned —
+    // storing the raw text would desync the two.
+    expect(await store.findByName(TERMINAL_ID, 'my-cool-feature')).toMatchObject({ name: 'my-cool-feature' });
+    expect(await store.findByName(TERMINAL_ID, 'My Cool Feature')).toBeNull();
   });
 
   it('given no GitHub token available (public repo), should still clone without token env vars', async () => {
