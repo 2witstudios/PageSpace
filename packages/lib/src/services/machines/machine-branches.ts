@@ -383,9 +383,9 @@ export async function killBranch({
   try {
     await host.kill({ machineId: existing.sandboxId });
   } catch {
-    // Sprite may still be running — keep the tracking row so a retry (or the
-    // idle reaper) can still find and reclaim it. An untracked-but-live
-    // Sprite would otherwise be an unkillable orphan.
+    // Sprite may still be running — keep the tracking row so a retry can still
+    // find and kill it later. There is no reaper: an untracked-but-live Sprite
+    // would otherwise be an unkillable orphan.
     return { ok: false, reason: 'error' };
   }
 

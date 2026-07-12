@@ -4,6 +4,7 @@ import {
   createSpritesSandboxClient,
   isSpriteNotFoundError,
   classifyProvisionError,
+  planProvisionFailure,
   readSessionInfoId,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
@@ -394,7 +395,7 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(handle.egressPolicyToken).toBeUndefined();
   });
 
-  it('given the egress lockdown fails, should destroy the Sprite and reject (never hand back open egress)', async () => {
+  it('given a FRESH create whose lockdown fails (transient flake), should retain the Sprite and reject WITHOUT destroying it', async () => {
     let destroyed: string | null = null;
     const sprite = fakeSprite({
       name: 'k',
@@ -415,7 +416,90 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     const error = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
     expect(error).toBeInstanceOf(SandboxProvisionError);
     expect(String((error as SandboxProvisionError).providerCause)).toContain('policy api down');
-    expect(destroyed).toBe('k');
+    // A cold-start flake must never throw away a reusable VM — the next acquire
+    // under the same name retries against this SAME retained Sprite.
+    expect(destroyed).toBeNull();
+  });
+
+  it('given a FRESH create whose lockdown failed and was retained, the next acquire under the same name should retry against it and succeed', async () => {
+    let policyCalls = 0;
+    let spriteExists = false;
+    const created: string[] = [];
+    const deleted: string[] = [];
+    const sprite = fakeSprite({
+      name: 'k',
+      updateNetworkPolicy: async () => {
+        policyCalls += 1;
+        if (policyCalls === 1) throw new Error('policy api down');
+      },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => {
+        if (!spriteExists) throw new Error('not found');
+        return sprite;
+      },
+      createSprite: async (name) => {
+        created.push(name);
+        spriteExists = true;
+        return sprite;
+      },
+      deleteSprite: async (name) => {
+        deleted.push(name);
+        spriteExists = false;
+      },
+    };
+    const client = createSpritesSandboxClient({ sdk });
+
+    // First acquire: fresh create, lockdown fails, retained (not destroyed).
+    const firstError = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
+    expect(firstError).toBeInstanceOf(SandboxProvisionError);
+    expect(created).toEqual(['k']);
+    expect(deleted).toEqual([]);
+
+    // Second acquire, same name: the Sprite still exists (retained), so this
+    // resolves via resume (not a second create) and the lockdown succeeds.
+    const handle = await client.getOrCreate({ name: 'k', options });
+    expect(handle.sandboxId).toBe('k');
+    expect(created).toEqual(['k']); // still only ONE create across both acquires
+    expect(deleted).toEqual([]); // never destroyed
+    expect(policyCalls).toBe(2); // retried, and this time it landed
+  });
+});
+
+describe('planProvisionFailure (pure)', () => {
+  assert({
+    given: 'a fresh Sprite failing its first lockdown attempt',
+    should: 'retain the VM and refuse the hand-back rather than destroy a reusable Sprite',
+    actual: planProvisionFailure({ fresh: true, attempt: 1, maxAttempts: 3 }),
+    expected: 'retain-and-refuse',
+  });
+
+  assert({
+    given: 'a fresh Sprite still short of its attempt ceiling',
+    should: 'keep retaining it',
+    actual: planProvisionFailure({ fresh: true, attempt: 2, maxAttempts: 3 }),
+    expected: 'retain-and-refuse',
+  });
+
+  assert({
+    given: 'a fresh Sprite that has exhausted every allotted attempt',
+    should: 'treat it as genuinely unusable and destroy it',
+    actual: planProvisionFailure({ fresh: true, attempt: 3, maxAttempts: 3 }),
+    expected: 'destroy',
+  });
+
+  assert({
+    given: 'a fresh Sprite past its ceiling',
+    should: 'still destroy — never loop forever provisioning against a broken VM',
+    actual: planProvisionFailure({ fresh: true, attempt: 5, maxAttempts: 3 }),
+    expected: 'destroy',
+  });
+
+  assert({
+    given: 'a RESUMED Sprite (not fresh) failing its lockdown, no matter the attempt count',
+    should: 'never destroy a warm session this caller does not own the lifecycle of',
+    actual: planProvisionFailure({ fresh: false, attempt: 10, maxAttempts: 3 }),
+    expected: 'retain-and-refuse',
   });
 });
 

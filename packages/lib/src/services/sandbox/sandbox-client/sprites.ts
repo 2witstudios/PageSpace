@@ -20,10 +20,11 @@
  *    `../egress-lockdown.ts`. The crash window the old unconditional re-apply
  *    defended (a crash between `createSprite` and its lockdown) is closed by
  *    ORDERING instead: the caller links the session only after `getOrCreate`
- *    resolves, so an unlocked Sprite is never reachable from a session row. On a
- *    FRESH Sprite a lockdown failure destroys it and rejects; on a RESUMED one we
- *    never destroy a warm session we don't own the lifecycle of, but we still
- *    refuse to hand it back — the call rejects so no command runs without a
+ *    resolves, so an unlocked Sprite is never reachable from a session row. A
+ *    lockdown failure — FRESH or RESUMED — never destroys the Sprite: it RETAINS
+ *    it and refuses the hand-back, so the next `getOrCreate` under the same name
+ *    retries against that same VM instead of paying to provision a new one (see
+ *    `planProvisionFailure`). The call still rejects so no command runs without a
  *    confirmed policy.
  *  - **Caps** — RAM / vCPUs / storage / region come from the resolved policy
  *    (`SpriteConfig`), set explicitly per Sprite rather than relying on the quota
@@ -32,8 +33,13 @@
  *    `buildSandboxEnv`; this driver injects none. v1 brokers no outbound
  *    credentials (a Fly Tokenizer proxy is the future path, out of scope).
  *
- * `stop` DESTROYS the Sprite (not a checkpoint) so there is no orphaned/idle
- * billing.
+ * `stop` is a USER-INITIATED, irreversible DESTROY — files, installed packages,
+ * and checkpoints are all gone with no undo (docs.sprites.dev/working-with-sprites).
+ * Call it only for genuine teardown intent (a Machine/branch delete, or cleaning
+ * up a Sprite this process just failed to link to a session row) — never as
+ * idle/billing cleanup: a paused Sprite already stops compute billing on its own
+ * and costs only bytes-written storage, so idleness alone is never a reason to
+ * destroy one (docs.sprites.dev/concepts/lifecycle).
  *
  * The SDK's promise-based `exec`/`execFile` expose neither a per-command timeout
  * nor a handle to abort a running command, so the run is driven through `spawn`
@@ -42,8 +48,9 @@
  * the SDK's own `execFile` stream collection (stdout/stderr `data` listeners,
  * `maxBuffer` cap, `exit` event) and add a HARD wall-clock timer that SIGKILLs
  * the command on expiry. The command, not the Sprite, is killed — the warm
- * conversation session survives a single slow run and the idle reaper reclaims
- * an abandoned VM.
+ * conversation session survives a single slow run; if the conversation goes
+ * quiet afterward, the Sprite simply hibernates on its own (the platform's idle
+ * pause), never destructively reclaimed.
  *
  * The SDK is injected (`sdk`) so the mapping — create/resume, policy lockdown,
  * exit/stdout/stderr surfacing, hard-timeout SIGKILL, get→null on a vanished
@@ -349,7 +356,9 @@ function runSpawned(
         try {
           command.kill('SIGKILL');
         } catch {
-          // Best-effort kill; the wall-clock timer / idle reaper still bound it.
+          // Best-effort kill; if the signal is dropped, the run's own wall-clock
+          // timeout (when set) or the Sprite's own idle hibernation is the
+          // eventual backstop — there is no separate reaper.
         }
         fail(new SandboxOutputLimitError(maxBuffer));
         return len;
@@ -399,7 +408,8 @@ function runSpawned(
         try {
           command.kill('SIGKILL');
         } catch {
-          // Best-effort; an unkillable command is reclaimed by the idle reaper.
+          // Best-effort; if SIGKILL is dropped, the Sprite's own idle
+          // hibernation is the eventual backstop — there is no separate reaper.
         }
         fail(new SandboxCommandTimeoutError(timeoutMs));
       }, timeoutMs);
@@ -791,25 +801,66 @@ export function classifyProvisionError(error: unknown): SandboxProvisionError {
   return new SandboxProvisionError('unavailable', retryAfterSeconds, error);
 }
 
+/** The outcome of a failed lockdown attempt: keep the VM around, or give up on it. */
+export type ProvisionFailurePlan = 'retain-and-refuse' | 'destroy';
+
+/**
+ * Pure: after a Sprite fails its `attempt`-th lockdown, is it still worth
+ * RETAINING (so the next `getOrCreate` under the same name retries against this
+ * SAME VM instead of paying to provision a new one), or has it proven genuinely
+ * unusable and earned a DESTROY?
+ *
+ * A RESUMED Sprite (`fresh: false`) is never destroyed here, no matter how many
+ * attempts: this caller does not own its lifecycle, and a warm session with a
+ * flaky lockdown is still cheaper to keep retrying than to throw away (sprites
+ * are meant to be created once and reused — docs.sprites.dev/working-with-sprites).
+ *
+ * `attempt`/`maxAttempts` model a bounded retry budget for a caller that tracks
+ * failed lockdown attempts ACROSS separate acquires (e.g. a counter persisted on
+ * the session row). `applyEgressLockdown` below has no such counter today — every
+ * real call passes `attempt: 1` against a `maxAttempts` greater than one, so a
+ * genuine transient flake (a cold-start mkdir/network hiccup) always retains.
+ * The `destroy` branch is fully exercised in tests and stands ready for a future
+ * caller that supplies a real, persisted attempt count.
+ */
+export function planProvisionFailure({
+  fresh,
+  attempt,
+  maxAttempts,
+}: {
+  fresh: boolean;
+  attempt: number;
+  maxAttempts: number;
+}): ProvisionFailurePlan {
+  if (!fresh) return 'retain-and-refuse';
+  return attempt >= maxAttempts ? 'destroy' : 'retain-and-refuse';
+}
+
+// No caller yet persists a failed-lockdown attempt count across separate
+// acquires, so every real call to `applyEgressLockdown` is "attempt 1" against
+// this ceiling — which `planProvisionFailure` always resolves to
+// 'retain-and-refuse'. Kept > 1 so a transient flake is never destroyed; see
+// `planProvisionFailure`'s doc for the future caller this budget is reserved for.
+const PROVISION_LOCKDOWN_MAX_ATTEMPTS = 3;
+
 // Apply the deny-by-default egress policy and ensure the sandbox root exists.
 // Called only when the policy is NOT already known-good on this Sprite (fresh
 // create, hash mismatch, or unknown recorded state — see `shouldApplyPolicy`), so
 // a Sprite is never returned with open/unknown egress and a warm resume pays no
-// redundant control-plane round-trip. When `destroyOnFailure` is set (a FRESH
-// create), a lockdown failure destroys the just-created Sprite before
-// propagating; on a resumed Sprite we never destroy a warm session, but the error
-// still propagates so the caller refuses to hand back a Sprite without a
-// confirmed policy.
+// redundant control-plane round-trip. A lockdown failure NEVER destroys the
+// Sprite on a transient flake — see `planProvisionFailure` — it only destroys a
+// genuinely exhausted, unusable one. Either way the error still propagates so
+// the caller refuses to hand back a Sprite without a confirmed policy.
 async function applyEgressLockdown({
   sdk,
   sprite,
   policy,
-  destroyOnFailure,
+  fresh,
 }: {
   sdk: SpritesSdk;
   sprite: SpriteInstanceLike;
   policy: NetworkPolicy;
-  destroyOnFailure: boolean;
+  fresh: boolean;
 }): Promise<void> {
   try {
     await sprite.updateNetworkPolicy(policy);
@@ -821,7 +872,8 @@ async function applyEgressLockdown({
     // SIGKILLs if the Sprite never becomes ready.
     await runSpawnedWithWakeRetry(() => sprite.spawn('mkdir', ['-p', SANDBOX_ROOT]), DEFAULT_MAX_OUTPUT_BYTES, 30_000);
   } catch (error) {
-    if (destroyOnFailure) {
+    const plan = planProvisionFailure({ fresh, attempt: 1, maxAttempts: PROVISION_LOCKDOWN_MAX_ATTEMPTS });
+    if (plan === 'destroy') {
       try {
         await sdk.deleteSprite(sprite.name);
       } catch {
@@ -926,7 +978,7 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
         });
         const desiredToken = egressLockdownToken({ spriteId: sprite.id, policyHash: hashPolicy(policy) });
         if (shouldApplyPolicy({ fresh, appliedToken: appliedEgressToken, desiredToken })) {
-          await applyEgressLockdown({ sdk, sprite, policy, destroyOnFailure: fresh });
+          await applyEgressLockdown({ sdk, sprite, policy, fresh });
         }
         // wrap sets sandboxId = sprite.name = spriteName (truncated). The token is
         // now CONFIRMED for this VM (freshly applied, or already proven) — the
@@ -956,7 +1008,8 @@ export function createSpritesSandboxClient({ sdk }: { sdk: SpritesSdk }): ExecSa
     },
 
     async stop({ sandboxId }) {
-      // DESTROY, not checkpoint — no orphaned/idle billing.
+      // Irreversible DESTROY, never a checkpoint — see the file header. Callers
+      // must only invoke this for genuine teardown intent, never idle cleanup.
       await sdk.deleteSprite(sandboxId);
     },
   };
