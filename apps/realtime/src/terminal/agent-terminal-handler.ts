@@ -617,6 +617,15 @@ export function buildAgentTerminalHandlers({
 
         const { sandboxId, sprite } = sandbox;
 
+        // Resolved BEFORE the shell opens, deliberately. It is the answer to
+        // "was this agent already running", and it must be in hand by the time
+        // `ready` is emitted — which has to leave with NO await between it and
+        // `openShell`, or the shell's first output can reach the client before
+        // `ready` does. A client that types a starting prompt on first output
+        // would then type it without yet knowing the agent was resumed, which is
+        // precisely the hazard `resumed` exists to prevent.
+        const resumed = await isSessionLive(sprite, sandbox.streamSessionId);
+
         const session: TerminalSession = {
           command: null as unknown as PtyShell,
           sandboxId,
@@ -771,7 +780,7 @@ export function buildAgentTerminalHandlers({
         // its prompt had already been taken, and the agent would sit there having
         // never been given its task. So we ask the Sprite which sessions it
         // actually has.
-        socket.emit('agent-terminal:ready', { connectionId, resumed: await isSessionLive(sprite, sandbox.streamSessionId) });
+        socket.emit('agent-terminal:ready', { connectionId, resumed });
       } finally {
         // Release the key claim on EVERY exit from the cold path — success, denial
         // or throw — so a failed create never wedges the key against future connects.

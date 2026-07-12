@@ -139,6 +139,15 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
          */
         let initialInputSent = false;
         let promptTimer: ReturnType<typeof setTimeout> | undefined;
+        // Nothing may be typed before `ready` has been SEEN, because `ready` is
+        // what carries `resumed` — the answer to "is this agent already running".
+        // Output can beat it here (it is the server's ordering, not ours, and the
+        // server does work between opening the shell and announcing it), and
+        // typing on first output alone would type into an agent whose state we had
+        // not yet been told.
+        let readySeen = false;
+        /** Has the agent drawn anything? Proof it is up and reading its stdin. */
+        let outputSeen = false;
 
         /** Spends the prompt without writing it — for a session that is past
          * taking one. The caller drops it either way, so it can never come back. */
@@ -151,7 +160,7 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
 
         const sendInitialInput = () => {
           const { input, onSent } = initialInputRef.current;
-          if (!input || initialInputSent) return;
+          if (!input || initialInputSent || !readySeen) return;
           initialInputSent = true;
           clearTimeout(promptTimer);
           for (const chunk of toPtyInput(input)) {
@@ -165,11 +174,14 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const handleOutput = (payload: { data: string; connectionId?: string }) => {
           if (!isMine(payload)) return;
           terminal.write(payload.data);
-          // The agent is alive and drawing; it can take its prompt.
+          outputSeen = true;
+          // The agent is alive and drawing; it can take its prompt — but only once
+          // `ready` has told us WHICH agent this is (see `readySeen`).
           sendInitialInput();
         };
         const handleReady = (payload: { scrollback?: string; resumed?: boolean; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
+          readySeen = true;
           if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
 
@@ -177,6 +189,10 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
           const alreadyRunning = payload.resumed === true || Boolean(payload.scrollback);
           if (alreadyRunning) {
             discardInitialInput();
+          } else if (outputSeen) {
+            // It was already drawing before this arrived: it is up, and now we know
+            // it is a fresh boot. No reason to make the user wait out the backstop.
+            sendInitialInput();
           } else if (initialInputRef.current.input && !initialInputSent && promptTimer === undefined) {
             promptTimer = setTimeout(sendInitialInput, PROMPT_BACKSTOP_MS);
           }

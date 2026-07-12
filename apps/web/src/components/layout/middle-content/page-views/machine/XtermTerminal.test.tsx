@@ -291,4 +291,49 @@ describe('XtermTerminal — starting-prompt delivery', () => {
       expected: [],
     });
   });
+
+  test('output arriving BEFORE ready does not get typed at — the prompt waits to learn what it is talking to', async () => {
+    const fake = fakeSocket();
+    render(
+      <XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} initialInput="fix the build" />
+    );
+    await waitFor(() => expect(fake.hasHandlers()).toBe(true));
+    const connectionId = fake.connectionId();
+
+    // The server does work between opening the shell and announcing it, so the
+    // agent's output can reach us first. `ready` is what carries `resumed` — until
+    // it lands we do not know whether this agent has been running for hours.
+    fake.server('agent-terminal:output', { data: 'y/n? ', connectionId });
+    const beforeReady = inputs(fake.emitted);
+
+    fake.server('agent-terminal:ready', { resumed: true, connectionId });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    assert({
+      given: 'a resumed agent whose output beat its ready to the client',
+      should:
+        'type NOTHING — delivering on first output alone would type into an agent whose state we had not been told yet, which is the whole hazard `resumed` exists to prevent',
+      actual: { beforeReady, afterReady: inputs(fake.emitted) },
+      expected: { beforeReady: [], afterReady: [] },
+    });
+  });
+
+  test('a FRESH agent whose output beat its ready is prompted as soon as ready lands', async () => {
+    const fake = fakeSocket();
+    render(
+      <XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} initialInput="fix the build" />
+    );
+    await waitFor(() => expect(fake.hasHandlers()).toBe(true));
+    const connectionId = fake.connectionId();
+
+    fake.server('agent-terminal:output', { data: 'claude> ', connectionId });
+    fake.server('agent-terminal:ready', { resumed: false, connectionId });
+
+    assert({
+      given: 'a cold boot that started drawing before its ready arrived',
+      should: 'deliver at once — it is demonstrably up, and no reason to make the user wait out the backstop',
+      actual: inputs(fake.emitted),
+      expected: ['fix the build', '\r'],
+    });
+  });
 });
