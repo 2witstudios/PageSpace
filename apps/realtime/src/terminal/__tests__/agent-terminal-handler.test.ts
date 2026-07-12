@@ -1917,5 +1917,75 @@ describe('buildAgentTerminalHandlers', () => {
       expect(first.releaseSlot).toHaveBeenCalled();
       expect(shell.kill).toHaveBeenCalled();
     });
+
+    it('must not take the session away from a pane that is still WATCHING it', async () => {
+      // The trap in "tear it down on arrival": attaching is not free. It STEALS the
+      // session — `sessionMap.reattach` drops the previous owner's socket entry and
+      // re-points the PTY's output at the new pane. So a connect that attaches and
+      // THEN tears down (because its own pane left) takes a live pane's terminal
+      // away from it and kills the PTY 30 minutes later, with the user still
+      // watching. An abandoned connect must therefore DECLINE to attach, not attach
+      // and undo: the session it was joining already has an owner.
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      // Pane A creates the terminal and is watching it.
+      await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
+
+      // The same terminal is opened in a second pane (a double-mount), whose access
+      // check is slow — and that pane is closed before it completes.
+      const authGate = deferred<void>();
+      checkAuth = vi.fn(async () => {
+        await authGate.promise;
+        return makeAuthSuccess();
+      }) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const second = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const connecting = second.onConnect({ ...validPayload, connectionId: 'pane-b' });
+      await vi.advanceTimersByTimeAsync(0);
+      second.onDisconnect({ connectionId: 'pane-b' });
+      authGate.resolve();
+      await connecting;
+      await vi.advanceTimersByTimeAsync(0);
+
+      const session = sessionMap.getByKey('branch1:agent:cli');
+      // Pane A still owns it: not stolen, not detached, no reap armed…
+      expect(sessionMap.getBySocket('pane-a')).toBe(session);
+      expect(session?.idleTimer).toBeUndefined();
+      // …and it is still alive long after the reap would have fired.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(auth.releaseSlot).not.toHaveBeenCalled();
+    });
+
+    it('refuses a connectionId that is already in use on this socket', async () => {
+      // Everything the lifecycle does is keyed on this client-minted id: which
+      // disconnect means what, and which session a socket owns. A second concurrent
+      // connect reusing it would have the first connect's `finally` clear the abandon
+      // mark the second relies on, and `setNew` overwrite the socket entry of a
+      // session that is still running — orphaning its PTY, its concurrency slot and
+      // its billing heartbeat for the life of the process. That bill is the MACHINE
+      // owner's, not the caller's, so this is refused rather than trusted.
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
+      openShell.mockClear();
+      await handlers.onConnect({ ...validPayload, name: 'other', connectionId: 'pane-a' });
+
+      assert({
+        given: 'a second connect reusing a live connectionId',
+        should: 'be refused, opening no second PTY that nothing could ever collect',
+        actual: {
+          opened: openShell.mock.calls.length,
+          errored: socket.emit.mock.calls.some(
+            ([event, payload]) =>
+              event === 'agent-terminal:error' &&
+              (payload as { message: string }).message.includes('already in use'),
+          ),
+        },
+        expected: { opened: 0, errored: true },
+      });
+    });
   });
 });

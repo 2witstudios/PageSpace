@@ -494,16 +494,33 @@ export function buildAgentTerminalHandlers({
    * further disconnect can arrive for a socket that has already left. It runs for
    * the life of the process. On the free tier (one terminal) that locks the user out.
    *
-   * So the window must be the WHOLE of `onConnect`, not merely the create: the
-   * abandonment is settled on every path that binds a session, by `settleAbandon`.
+   * So the window must be the WHOLE of `onConnect`, not merely the create.
+   *
+   * How it is settled depends on what the connect was about to do, and the two are
+   * NOT interchangeable:
+   *
+   *   - A connect that CREATED the session owns it outright — nobody else is
+   *     watching a PTY that did not exist a moment ago — so it detaches it and arms
+   *     the reap (`settleAbandon`).
+   *   - A connect that was about to ATTACH must simply NOT ATTACH (`abandoned`).
+   *     Attaching-then-tearing-down is not equivalent: `attachToLiveSession` STEALS
+   *     the session (`sessionMap.reattach` drops the previous owner's socket entry),
+   *     so a dead pane would take a LIVE pane's terminal away from it and then kill
+   *     the PTY 30 minutes later. Declining leaves the session exactly as it was,
+   *     with whatever it already had — a live viewer, or a reap already ticking.
    */
   const connectingConnectionIds = new Set<string>();
-  /** Connects whose pane went away before they had bound a session — torn down on arrival. */
+  /** Connects whose pane went away before they had bound a session. */
   const abandonedWhileConnecting = new Set<string>();
 
+  /** The pane behind this connect is already gone — see `connectingConnectionIds`. */
+  function abandoned(connectionId: string): boolean {
+    return abandonedWhileConnecting.has(connectionId);
+  }
+
   /**
-   * Call immediately after a connect binds a session (create or attach). If the
-   * pane left while we were getting here, the disconnect it sent found nothing to
+   * Call immediately after a connect CREATES a session. If the pane left while we
+   * were getting here, the disconnect it sent found nothing to
    * act on — so act on it now, exactly as a normal disconnect would: detach the
    * viewer and arm the idle reap that releases the slot and settles the billing.
    */
@@ -596,8 +613,11 @@ export function buildAgentTerminalHandlers({
       // No slot to release: reattaching starts no PTY, so the access check
       // reserved none. The live session still holds the one it was created
       // with, and keeps it until it is torn down or reaped.
+      // Gone already: decline rather than attach. Attaching would take the session
+      // away from whoever has it (a live pane, or a pending reap) on behalf of a
+      // socket that no longer exists — see `abandoned`.
+      if (abandoned(connectionId)) return;
       attachToLiveSession(plan.session, sessionKey, connectionId, userId);
-      settleAbandon(connectionId);
       return;
     }
 
@@ -616,8 +636,10 @@ export function buildAgentTerminalHandlers({
       await inFlight.catch(() => {});
       const created = sessionMap.getByKey(sessionKey);
       if (created !== undefined) {
+        // Same as the reattach path: a pane that has left must not take the session
+        // the creator is watching. The creator settles its own abandonment.
+        if (abandoned(connectionId)) return;
         attachToLiveSession(created, sessionKey, connectionId, userId);
-        settleAbandon(connectionId);
         return;
       }
       // That create failed and installed nothing — see if another is in flight,
@@ -910,9 +932,26 @@ export function buildAgentTerminalHandlers({
         return;
       }
       const connectionId = validation.value.connectionId ?? socket.id;
+
+      // A connectionId is a UUID the CLIENT mints, and the whole lifecycle below is
+      // keyed on it: the sets that decide what a disconnect means, and the session
+      // map's socket→session entry. Reusing one for a second concurrent connect
+      // therefore does not merely confuse the bookkeeping, it defeats it — the first
+      // connect's `finally` clears the abandon mark the second is relying on, and
+      // `setNew` overwrites the socket entry of a session that is still running,
+      // orphaning its PTY, its concurrency slot and its billing heartbeat for the
+      // life of the process. Since a session is billed to the MACHINE's payer, that
+      // is someone else's money and someone else's tier limit. The real client mints
+      // a fresh id per mount and disconnects on unmount, so this never fires for
+      // honest traffic — but "the client wouldn't do that" is not an invariant.
+      if (activeConnectionIds.has(connectionId) || connectingConnectionIds.has(connectionId)) {
+        socket.emit('agent-terminal:error', { message: 'Agent terminal connectionId already in use', connectionId });
+        return;
+      }
+
       // Held for the WHOLE connect, not just the create: a pane can leave while the
       // access check is still running, and the attach paths below would otherwise
-      // cancel a pending idle reap on behalf of a socket that is already gone.
+      // take a live pane's session away from it on behalf of a socket that is gone.
       connectingConnectionIds.add(connectionId);
       try {
         await establishConnection(validation.value, connectionId);
