@@ -1125,7 +1125,7 @@ describe('ExecutableSandbox.createCheckpoint', () => {
     await expect(handle!.createCheckpoint('c')).rejects.toThrow(/quota exceeded/);
   });
 
-  it('resolves cleanly when the SDK call itself rejects (caller decides fail-open policy)', async () => {
+  it('propagates the SDK\'s rejection (caller decides fail-open policy)', async () => {
     const { sdk } = makeSdk({
       getSprite: async () =>
         fakeSprite({
