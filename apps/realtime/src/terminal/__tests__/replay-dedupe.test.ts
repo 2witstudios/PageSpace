@@ -93,19 +93,26 @@ describe('planReplayEmission (pure)', () => {
     expected: { emit: '', pending: 'totally different scrollback\r\n', resolved: false },
   });
 
-  it('given more buffered bytes than the scan bound, should give up and emit them UNALIGNED', () => {
-    // `aligned: false` is the whole contract of a give-up: it tells the caller these bytes may
-    // duplicate history it already holds, so they must RESTART the history rather than extend
-    // it. Appending them is what latched the original bug permanently. (The flag happens to be
-    // unobservable on THIS producer — an emission this large evicts the history either way —
-    // which is exactly why it has to be asserted here rather than through the shell.)
+  it('given more buffered bytes than the scan bound, should give up: emit them, RESTART the history, and say why', () => {
+    // `history: 'restart'` is the whole contract of a give-up: it tells the caller these bytes
+    // may duplicate history it already holds, so they must REPLACE that history rather than
+    // extend it. Appending them is what latched the original bug permanently. (The flag happens
+    // to be unobservable on THIS producer — an emission this large evicts the history either
+    // way — which is exactly why it has to be asserted here rather than through the shell.)
+    // `giveUp` carries the cause out of the module, so the caller reports it instead of
+    // inferring it from whichever branch happens to produce a give-up today.
     const anchor = buf(BANNER);
     const chunk = Buffer.alloc(MAX_PENDING_BYTES + 1, 0x61); // no anchor anywhere in it
-    const { emit, state, aligned } = planReplayEmission({ seen: anchor, chunk, state: freshReplayState() });
+    const { emit, state, history, giveUp } = planReplayEmission({
+      seen: anchor,
+      chunk,
+      state: freshReplayState(),
+    });
 
     expect(emit.length).toBe(chunk.length);
     expect(state.resolved).toBe(true);
-    expect(aligned).toBe(false);
+    expect(history).toBe('restart');
+    expect(giveUp).toBe('pending-cap');
   });
 
   // The anchor is matched on BYTES, not JS string indices: a UTF-8 code point is
@@ -432,10 +439,32 @@ describe('flushReplay (pure)', () => {
     given: 'buffered bytes the search could never align',
     should: 'emit them all, UNALIGNED — never hold output hostage, and never extend the history with it',
     actual: (() => {
-      const { emit, state, aligned } = flushReplay({ pending: buf('unaligned output\r\n'), scanned: 0, resolved: false });
-      return { emit: emit.toString('utf8'), resolved: state.resolved, aligned };
+      const { emit, state, history, giveUp } = flushReplay({
+        pending: buf('unaligned output\r\n'),
+        scanned: 0,
+        resolved: false,
+      });
+      return { emit: emit.toString('utf8'), resolved: state.resolved, history, giveUp };
     })(),
-    expected: { emit: 'unaligned output\r\n', resolved: true, aligned: false },
+    expected: {
+      emit: 'unaligned output\r\n',
+      resolved: true,
+      history: 'restart' as const,
+      giveUp: 'window-closed' as const,
+    },
+  });
+
+  assert({
+    given: 'a window that closes over an attach which never received a byte (a socket that died pre-open)',
+    should: 'NOT call that a give-up — there is nothing to restart the history from',
+    actual: (() => {
+      const { emit, history, giveUp } = flushReplay(freshReplayState());
+      return { emit: emit.length, history, giveUp };
+    })(),
+    // 'restart' here would wipe the anchor from an EMPTY emission and reprint the whole
+    // scrollback on the next attach — the bug this module exists to remove, fired by a
+    // socket that said nothing at all.
+    expected: { emit: 0, history: 'append' as const, giveUp: undefined },
   });
 
   assert({

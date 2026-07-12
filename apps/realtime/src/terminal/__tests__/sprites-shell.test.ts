@@ -1180,7 +1180,7 @@ describe('openPtyShell', () => {
       // The terminal is reprinting its scrollback rather than deduping, and an operator can
       // only see that if we say so. This path had no test: deleting the report left the whole
       // suite green.
-      const info = vi.spyOn(loggers.realtime, 'info');
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1195,10 +1195,10 @@ describe('openPtyShell', () => {
       attachCmd._stdout.emit('data', 'a ring that never carries the anchor');
       await vi.advanceTimersByTimeAsync(2000); // settle, then the window deadline
 
-      const reported = info.mock.calls.filter(
+      const reported = warn.mock.calls.filter(
         ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'window-closed',
       );
-      info.mockRestore(); // before the assertion: a failing expect must not leak the spy
+      warn.mockRestore(); // before the assertion: a failing expect must not leak the spy
       expect(reported.length).toBeGreaterThan(0);
     });
 
@@ -1208,7 +1208,7 @@ describe('openPtyShell', () => {
       // on every reconnect until the cap is raised past the ring. It is also the give-up that
       // resolves inside the pure core — `closeReplayWindow`, and its log, never run. If it did
       // not report here, the failure the cap exists to catch would be the only silent one.
-      const info = vi.spyOn(loggers.realtime, 'info');
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1226,10 +1226,10 @@ describe('openPtyShell', () => {
       for (let i = 0; i < 9; i += 1) attachCmd._stdout.emit('data', `frame ${i} ${frame}`);
       await vi.advanceTimersByTimeAsync(2000);
 
-      const reported = info.mock.calls.filter(
+      const reported = warn.mock.calls.filter(
         ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'pending-cap',
       );
-      info.mockRestore(); // before the assertion: a failing expect must not leak the spy
+      warn.mockRestore(); // before the assertion: a failing expect must not leak the spy
       expect(reported.length).toBeGreaterThan(0); // it says so, instead of failing silently
     });
 

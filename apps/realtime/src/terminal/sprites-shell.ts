@@ -13,6 +13,7 @@ import {
   materializeSeen,
   planReplayEmission,
   rememberDelivered,
+  type GiveUpCause,
   type ReplayState,
   type SeenTail,
 } from './replay-dedupe';
@@ -256,9 +257,11 @@ export function openPtyShell({
   // counter, an id we never learn produces a fresh orphan on every keepalive
   // cycle, forever.
   let abandonedUnnamedSessions = 0;
-  // The tail of what this client has actually been shown — what each attach matches
-  // its replayed scrollback against, so a transparent reconnect delivers only the
-  // part the client is missing (see `replay-dedupe`). Empty means "nothing to dedupe
+  // The tail of the REPLAYABLE stream this client has been shown — the bound session's
+  // stdout, and only that (stderr and a foreign session's drain are shown but never
+  // recorded; see `deliver`). It is what each attach matches its replayed scrollback
+  // against, so a transparent reconnect delivers only the part the client is missing
+  // (see `replay-dedupe`). Empty means "nothing to dedupe
   // against": a fresh viewer, or a brand-new shell — either way every replayed byte
   // is new to this xterm and passes straight through, which is what keeps the
   // cold-attach scrollback UX intact.
@@ -426,8 +429,12 @@ export function openPtyShell({
      *   its scrollback", not as "raise the cap" — a ring over the cap is the diagnosis only if
      *   the shell was quiet, and neither field here can tell you that.
      */
-    const reportUnaligned = (cause: 'window-closed' | 'pending-cap', bytes: number) => {
-      loggers.realtime.info('Agent terminal replay unaligned (scrollback may reprint)', {
+    const reportUnaligned = (cause: GiveUpCause, bytes: number) => {
+      // WARN, not info: this is the whole safety net under two constants that bracket a
+      // server value nobody has measured, and `.env.example` tells operators to run
+      // production at LOG_LEVEL=warn. At info, the one signal that this feature has
+      // silently reverted to the bug it exists to fix is filtered out of production.
+      loggers.realtime.warn('Agent terminal replay unaligned (scrollback may reprint)', {
         cause,
         unalignedBytes: bytes,
         seenBytes: seenTail.bytes,
@@ -438,12 +445,11 @@ export function openPtyShell({
     const closeReplayWindow = () => {
       cancelTimers();
       if (closed) return;
-      const held = replay.pending.length;
-      const { emit, state, aligned } = flushReplay(replay);
+      const { emit, state, history, giveUp } = flushReplay(replay);
       replay = state;
-      if (held > 0) reportUnaligned('window-closed', held);
-      // A give-up: these bytes RESTART the history rather than extending it — see `deliver`.
-      deliver(emit, aligned ? 'append' : 'restart');
+      if (giveUp !== undefined) reportUnaligned(giveUp, emit.length);
+      // A give-up RESTARTS the history rather than extending it — see `deliver`.
+      deliver(emit, history);
       releaseOutOfBand();
     };
 
@@ -505,15 +511,15 @@ export function openPtyShell({
         wiredReplayStarted = true;
       }
 
-      const { emit, state, aligned } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
+      const { emit, state, history, giveUp } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
-      // An unaligned emission is a give-up: it re-emits bytes the history may already hold, so
-      // it RESTARTS that history instead of extending it (see `deliver`). It also has to be
-      // REPORTED — this is the byte-cap give-up, and it resolves the window inside the pure
-      // core, so `closeReplayWindow` (and its log) never runs. Without this line the one
-      // failure the cap exists to catch is the only one that happens silently.
-      if (!aligned) reportUnaligned('pending-cap', emit.length);
-      deliver(emit, aligned ? 'append' : 'restart');
+      // A give-up re-emits bytes the history may already hold, so it RESTARTS that history
+      // instead of extending it (see `deliver`). It also has to be REPORTED here: the byte-cap
+      // give-up resolves the window inside the pure core, so `closeReplayWindow` — and its log
+      // — never runs. Without this the one failure the cap exists to catch would be the only
+      // one that happens silently.
+      if (giveUp !== undefined) reportUnaligned(giveUp, emit.length);
+      deliver(emit, history);
       if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over: on the
       // next quiet gap, and on a deadline a chatty shell cannot push out by talking.

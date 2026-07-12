@@ -13,9 +13,9 @@
  *
  * The dedupe is a pure stream transformer over BYTES (a UTF-8 code point is 1-4
  * bytes, so arithmetic on decoded-string lengths cuts in the wrong place). Its
- * inputs are `seen` — a rolling tail of what the client has actually been shown —
- * and the replayed chunks. Its job is to find where `seen` ENDS inside the replay
- * and emit only what follows.
+ * inputs are `seen` — a rolling tail of the REPLAYABLE stream (the bound session's
+ * stdout) this client has been shown — and the replayed chunks. Its job is to find
+ * where `seen` ENDS inside the replay and emit only what follows.
  *
  * ## Why content, and not a byte counter
  *
@@ -156,26 +156,37 @@ export const MAX_MATCH_CANDIDATES = 8;
  */
 export const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
-/**
- * `aligned` is the difference between "these bytes continue the stream" and "we gave up
- * and re-emitted bytes the history may already hold".
- *
- * It exists because `seen` must stay a CONTIGUOUS RUN of the session's stream — that is
- * the whole basis of the anchor. An unaligned emission is a replay we could not place, so
- * appending it to the history splices a duplicate of the past into it, and the run breaks.
- * For an idle terminal — where `seen` is smaller than the anchor bound, so the anchor IS
- * the whole history, which is the exact shape the 45s watchdog cycles on — a broken run can
- * never match any future replay, and the banner reprints on every cycle from then on. One
- * transient blip would permanently restore the bug this module exists to remove.
- *
- * So an unaligned emission does not extend the history: it REPLACES it (see the caller).
- * The bytes of a replay are themselves a contiguous run of the session's stream, so taking
- * them as the new history restores the invariant instead of corrupting it.
- */
+/** Why a replay could not be placed. Both are reported by the caller; see `history`. */
+export type GiveUpCause =
+  /** The held bytes outgrew MAX_PENDING_BYTES before the anchor arrived. Decided here. */
+  | 'pending-cap'
+  /** The caller's window shut with the anchor still unseen. Decided by `flushReplay`. */
+  | 'window-closed';
+
 export type ReplayEmission = {
   emit: Buffer;
   state: ReplayState;
-  aligned: boolean;
+  /**
+   * What the caller must do with its history — and the reason this type is not just a
+   * buffer. `seen` must stay a CONTIGUOUS RUN of the session's stream; that is the whole
+   * basis of the anchor. A give-up re-emits bytes the history may already hold, so
+   * APPENDING those splices a duplicate of the past into the run and breaks it. For an idle
+   * terminal — where `seen` is smaller than the anchor bound, so the anchor IS the whole
+   * history, the exact shape the 45s watchdog cycles on — a broken run matches no future
+   * replay, and the banner reprints on every cycle from then on. One transient blip would
+   * permanently restore the bug this module exists to remove.
+   *
+   * So a give-up REPLACES the history instead of extending it. A replay's bytes are
+   * themselves a contiguous run of the stream, so taking them as the new history restores
+   * the invariant rather than corrupting it.
+   */
+  history: 'append' | 'restart';
+  /**
+   * Present exactly when this emission is a give-up (and so exactly when `history` is
+   * 'restart'). The module knows WHY it gave up; the caller would otherwise have to infer
+   * it from the one branch that produces it today, and would silently mislabel the next.
+   */
+  giveUp?: GiveUpCause;
 };
 
 /**
@@ -393,7 +404,7 @@ export function planReplayEmission({
     // `pending` is empty on every path that reaches here today (`seen` is frozen
     // for the life of an attach). Emitting it rather than assuming that keeps a
     // future caller who DOES recompute it from silently dropping buffered output.
-    return { emit: concat(state.pending, chunk), state: RESOLVED, aligned: true };
+    return { emit: concat(state.pending, chunk), state: RESOLVED, history: 'append' };
   }
 
   const { pending, arena } = appendPending(state, chunk);
@@ -407,15 +418,16 @@ export function planReplayEmission({
   // replay simply goes out verbatim.
   //
   // Rescanning from zero on every chunk is one of the two ways this went quadratic in the
-  // bytes a sandbox chose to emit — a shell pushing 1 MiB in 256-byte frames across an
-  // unalignable reconnect cost ~570ms of solid event loop, on the process every terminal
-  // shares. `appendPending` closes the other (the per-chunk re-copy). Bounding the candidate
-  // count without bounding the scan would have left this one open one line down.
+  // bytes a sandbox chose to emit — restoring it costs ~100ms of solid event loop for a 1 MiB
+  // unalignable replay in 256-byte frames, and ~1650ms for a 4 MiB one (it is quadratic, so
+  // the cap is where it hurts), on the process every terminal shares. `appendPending` closes
+  // the other way (the per-chunk re-copy). Bounding the candidate count without bounding the
+  // scan would have left this one open, one line down.
   const from = state.scanned;
   let at = pending.indexOf(anchor, from);
   for (let tried = 0; at !== -1 && tried < MAX_MATCH_CANDIDATES; tried += 1) {
     if (corroborated({ seen, pending, at, anchorLength: anchor.length })) {
-      return { emit: pending.subarray(at + anchor.length), state: RESOLVED, aligned: true };
+      return { emit: pending.subarray(at + anchor.length), state: RESOLVED, history: 'append' };
     }
     // Not the boundary — the anchor's bytes merely recur here. Keep looking past it.
     at = pending.indexOf(anchor, at + 1);
@@ -424,12 +436,12 @@ export function planReplayEmission({
   // Unalignable. Hold the bytes until the caller closes the window — and if they
   // overflow first, emit them: duplication is survivable, losing them is not.
   if (pending.length > MAX_PENDING_BYTES) {
-    return { emit: pending, state: RESOLVED, aligned: false };
+    return { emit: pending, state: RESOLVED, history: 'restart', giveUp: 'pending-cap' };
   }
   // A match can still begin in the last `anchor.length - 1` bytes: those are the only
   // start positions the next chunk could complete.
   const scanned = Math.max(0, pending.length - anchor.length + 1);
-  return { emit: EMPTY, state: { pending, arena, scanned, resolved: false }, aligned: true };
+  return { emit: EMPTY, state: { pending, arena, scanned, resolved: false }, history: 'append' };
 }
 
 /**
@@ -444,6 +456,12 @@ export function planReplayEmission({
  * unalignable replay costs a redraw. That is the whole trade.
  */
 export function flushReplay(state: ReplayState): ReplayEmission {
-  if (state.resolved) return { emit: EMPTY, state, aligned: true };
-  return { emit: state.pending, state: RESOLVED, aligned: false };
+  // Nothing held is not a give-up. A window can close over an attach that never received a
+  // byte — a socket that died before it opened — and calling THAT a give-up would tell the
+  // caller to restart its history from an empty emission, wiping the anchor and reprinting
+  // the whole scrollback on the next attach. Nothing was given up on; say so.
+  if (state.resolved || state.pending.length === 0) {
+    return { emit: EMPTY, state: RESOLVED, history: 'append' };
+  }
+  return { emit: state.pending, state: RESOLVED, history: 'restart', giveUp: 'window-closed' };
 }
