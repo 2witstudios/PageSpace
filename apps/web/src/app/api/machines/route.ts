@@ -11,9 +11,13 @@
  * App-admin only, matching the rest of the Machine feature: creating a MACHINE
  * page requires `admin` (see POST /api/pages) and `MachineView` refuses to mount
  * its tabs for anyone else. Without this, a non-admin drive member who can VIEW a
- * Machine page could enumerate the drive's machines from the Development surface
- * and, through the tree, their projects/branches/terminal sessions — structure
- * the Machine page deliberately withholds from them.
+ * Machine page could enumerate the drive's machines from the Development surface.
+ *
+ * Note this route is STRICTER than its siblings, not a system-wide guarantee:
+ * /api/machines/{projects,branches,agent-terminals} gate on `canViewMachine`, not
+ * on admin, so a non-admin with view access on a Machine page can still call them
+ * directly. This surface simply declines to be the thing that hands them the list
+ * of machines to call them with.
  *
  * Admin is necessary but not sufficient: the list is still filtered per page
  * through `canUserViewPage`, so a Machine withheld from this admin by a
