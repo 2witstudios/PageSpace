@@ -1391,7 +1391,7 @@ describe('openPtyShell', () => {
     it('given a drain that arrives BEFORE the replay, delivers it exactly once (the replay recognises it)', async () => {
       // The ordinary shape: a dying socket flushes its buffer at once, while the new one
       // still has a backoff and a handshake ahead of it. So the drain lands first — and
-      // because the history is snapshotted on the new command's FIRST inbound byte, those
+      // because the history is snapshotted on the new command's first STDOUT byte, those
       // bytes are already in the anchor. The replay that also carries them recognises them
       // and suppresses them. Delivered once, in order, with no bookkeeping to get wrong.
       const cmd = buildFakeCommand();
