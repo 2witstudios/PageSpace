@@ -277,6 +277,13 @@ export function openPtyShell({
   // actually been processed (`replayAccountedForDrain`), and handed over if a fresh
   // session supersedes them instead (`launchFreshSession`).
   let unreplayedDrain: Buffer[] = [];
+  // Whether the WIRED command has already processed a replay. Once it has, that replay
+  // carried everything the dead socket could still drain — those bytes came FROM the
+  // server, so they were in its ring at attach time. A drain arriving after that point
+  // must therefore be dropped, not held: holding it strands bytes the client already
+  // has, and a later fresh session would flush them a second time. The hold has to be
+  // decided by STATE at push time, not by an event that already fired.
+  let wiredReplayProcessed = false;
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -308,6 +315,7 @@ export function openPtyShell({
     // once, here, so the history can't shift underneath a replay that is still being
     // classified — and per-command, so each (re)establishment gets a clean slate.
     const seen = materializeSeen(seenTail);
+    wiredReplayProcessed = false;
     let replay: ReplayState = freshReplayState();
     // The replay window closes on whichever comes first: a quiet gap (`settleTimer`,
     // re-armed per chunk) or the hard deadline (`windowTimer`, armed at the first
@@ -407,10 +415,21 @@ export function openPtyShell({
         // is still streaming. So hold it, and let the replay do the delivering — but HOLD
         // it, don't drop it: that attach can die before its replay ever lands, and if the
         // next reconnect creates a fresh session, nothing would ever have delivered it.
-        if (wiredSessionReplaysPriorOutput) { unreplayedDrain.push(toBuf(chunk)); return; }
+        if (wiredSessionReplaysPriorOutput) {
+          // Its replay has already been processed, so it already carried these bytes.
+          if (wiredReplayProcessed) return;
+          unreplayedDrain.push(toBuf(chunk));
+          return;
+        }
         // A fresh session replays nothing, so these last words of the dead shell — its
         // panic, its stack trace — exist nowhere else. Emit them, queued behind whatever
         // the new session is holding so they cannot render ahead of it.
+        //
+        // They can still land AFTER the new shell's banner, which is out of order with
+        // respect to the old session's stream. That is inherent and deliberate: the bytes
+        // physically arrived late, the banner is already on the user's screen, and the
+        // only alternative — withholding a live session's output until a dead socket
+        // finishes draining — trades a cosmetic seam for a stalled terminal.
         emitOutOfBand(toBuf(chunk));
         return;
       }
@@ -514,6 +533,7 @@ export function openPtyShell({
   // replacing a dangling one).
   /** The wired session's replay has been handled — anything it was carrying is delivered. */
   function replayAccountedForDrain(): void {
+    wiredReplayProcessed = true;
     unreplayedDrain = [];
   }
 
