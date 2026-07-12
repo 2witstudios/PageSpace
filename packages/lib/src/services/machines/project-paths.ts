@@ -36,7 +36,7 @@ export function isValidProjectName(name: string): boolean {
 const TRAILING_SEPARATORS_RE = /[.-]+$/;
 
 /** What an input with nothing sluggable left in it becomes ("   ", "🚀", "../"). */
-export const PROJECT_NAME_FALLBACK = 'project';
+const PROJECT_NAME_FALLBACK = 'project';
 
 /**
  * Normalize free text into a valid project directory name — type

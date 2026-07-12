@@ -76,7 +76,7 @@ const TRAILING_REF_SEPARATORS_RE = /[./-]+$/;
 const LOCK_SUFFIX = '.lock';
 
 /** What an input with nothing sluggable left in it becomes ("   ", "🚀", "..."). */
-export const BRANCH_NAME_FALLBACK = 'branch';
+const BRANCH_NAME_FALLBACK = 'branch';
 
 /**
  * Rewrite a `.lock` ending into `-lock`. Applied PER SEGMENT, because git

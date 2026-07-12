@@ -189,54 +189,59 @@ describe('addProject', () => {
     expect(await store.findByName(TERMINAL_ID, 'My Cool Feature')).toBeNull();
   });
 
-  it("given a concurrent add that already cloned this path, should NOT rm -rf the winner's checkout", async () => {
-    // The loser's clone fails BECAUSE the winner's succeeded ("destination path
-    // already exists"). Blindly cleaning up would `rm -rf` the WINNER's checkout
-    // while their row lives on, leaving a project that points at an empty
-    // directory. Normalization widens this race from "same text" to "same slug".
-    const winner: MachineProjectRecord = {
-      id: 'proj-winner',
-      ownerId: 'other-user',
-      machineId: TERMINAL_ID,
-      name: 'my-cool-feature',
-      repoUrl: 'https://github.com/o/r.git',
-      path: `${PROJECTS_ROOT}/my-cool-feature`,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
+  it("given two concurrent adds whose names normalize alike, should NOT rm -rf the winner's checkout", async () => {
+    // The real interleaving, not a convenient one: B's clone fails the INSTANT
+    // A's directory appears — long before A's row is committed. Any guard that
+    // looks for A's row at cleanup time therefore sees nothing and deletes A's
+    // freshly cloned files. The only fix is to reserve the name BEFORE cloning,
+    // so B loses on the unique constraint and never touches the filesystem.
+    // Normalization widens this race from "same text" to "same slug".
+    const { store } = makeStore();
+    const dirs = new Set<string>();
+    const rmCalls: string[] = [];
 
-    // The clone fails: git refuses to clone into a non-empty directory.
-    const { sandbox, runCommandCalls } = makeSandbox(async (opts) =>
-      opts.cmd === 'git'
-        ? { exitCode: 128, stdout: '', stderr: "fatal: destination path already exists and is not empty" }
-        : { exitCode: 0, stdout: '', stderr: '' },
-    );
+    function depsFor() {
+      const { sandbox } = makeSandbox(async (opts) => {
+        if (opts.cmd === 'rm') {
+          const target = opts.args?.[1] ?? '';
+          rmCalls.push(target);
+          dirs.delete(target);
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        const dest = opts.args?.[2] ?? '';
+        if (dirs.has(dest)) {
+          // git fails the INSTANT the destination exists — it does not wait for
+          // the other clone to finish.
+          return { exitCode: 128, stdout: '', stderr: 'fatal: destination path already exists and is not empty' };
+        }
+        // Real git creates the directory immediately and finishes cloning later;
+        // the row is only written after THAT. This delay is the point of the test —
+        // it puts the loser's failure and cleanup strictly BEFORE the winner's row
+        // exists, which is precisely the ordering a post-clone guard cannot see.
+        dirs.add(dest);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { exitCode: 0, stdout: '', stderr: '' };
+      });
+      const { deps } = makeDeps({ store, reconnect: async () => sandbox });
+      return deps;
+    }
 
-    const { deps } = makeDeps({
-      reconnect: async () => sandbox,
-      // A STALE list read is what lets both callers past planAddProject — but by
-      // the time we clean up, findByName can see the winner's row.
-      store: {
-        list: async () => [],
-        findByName: async (_machineId: string, name: string) => (name === winner.name ? winner : null),
-        create: async () => {
-          throw new Error('should not reach create — the clone failed');
-        },
-        remove: async () => undefined,
-      },
-    });
+    // "My Repo" and "my repo" both normalize to `my-repo` — one directory, one row.
+    const [a, b] = await Promise.all([
+      addProject({ machineId: TERMINAL_ID, actor, name: 'My Repo', repoUrl: 'https://github.com/o/r.git', deps: depsFor() }),
+      addProject({ machineId: TERMINAL_ID, actor, name: 'my repo', repoUrl: 'https://github.com/o/r.git', deps: depsFor() }),
+    ]);
 
-    const result = await addProject({
-      machineId: TERMINAL_ID,
-      actor,
-      name: 'My Cool Feature',
-      repoUrl: 'https://github.com/o/r.git',
-      deps,
-    });
+    const outcomes = [a, b];
+    expect(outcomes.filter((r) => r.ok)).toHaveLength(1);
+    expect(outcomes.filter((r) => !r.ok && r.reason === 'duplicate_name')).toHaveLength(1);
 
-    expect(result).toMatchObject({ ok: false, reason: 'duplicate_name' });
-    // The winner's checkout survives — no `rm -rf` was issued.
-    expect(runCommandCalls.some((c) => c.cmd === 'rm')).toBe(false);
+    // The winner's checkout survives, and the surviving row points at it.
+    const rows = await store.list(TERMINAL_ID);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ name: 'my-repo', path: `${PROJECTS_ROOT}/my-repo` });
+    expect(dirs.has(`${PROJECTS_ROOT}/my-repo`)).toBe(true);
+    expect(rmCalls).toEqual([]);
   });
 
   it('given no GitHub token available (public repo), should still clone without token env vars', async () => {

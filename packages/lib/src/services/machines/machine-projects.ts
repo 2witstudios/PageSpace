@@ -175,6 +175,39 @@ export async function addProject({
   const plan = planAddProject({ name, repoUrl, existingNames: existing.map((p) => p.name) });
   if (!plan.ok) return plan;
 
+  // RESERVE THE NAME BEFORE CLONING. The unique constraint on (machineId, name)
+  // is what makes two concurrent adds safe: the loser fails right here, instantly,
+  // and never touches the filesystem — so it cannot delete the winner's checkout.
+  //
+  // Reserving AFTER the clone (as this used to) could not be made safe by any
+  // amount of checking: the winner's row only lands once its clone finishes,
+  // while the loser's clone fails the moment the directory appears, so the loser
+  // looked for a winner's row that did not exist yet, saw none, and `rm -rf`'d the
+  // winner's freshly cloned files out from under them — leaving a project row
+  // pointing at an empty directory. Normalization widens that race from "same
+  // text" to "same slug", so it is no longer only reachable by two callers typing
+  // byte-identical names.
+  //
+  // The cost is a row that exists for the duration of the clone. That is the
+  // right trade: a row with no directory is visible and deletable, whereas a
+  // directory with no row is an orphan nobody can reach.
+  let project: MachineProjectRecord;
+  try {
+    project = await deps.store.create({
+      ownerId: actor.userId,
+      machineId,
+      // The normalized name — never the raw text the caller typed. Persisting
+      // anything else would desync the row from the directory we are about to clone.
+      name: plan.name,
+      repoUrl,
+      path: plan.path,
+      now: deps.now(),
+    });
+  } catch (error) {
+    if (isUniqueViolation(error)) return { ok: false, reason: 'duplicate_name' };
+    return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
+  }
+
   const ctx = buildCtx(machineId, actor);
   const gitDeps = buildGitRunDeps(machineId, deps);
 
@@ -185,40 +218,21 @@ export async function addProject({
     deps: gitDeps,
   });
 
-  if (!result.success) {
-    return { ok: false, reason: 'clone_failed', detail: result.error };
-  }
-  if (result.exitCode !== 0) {
-    // A concurrent addProject for the same name may have already cloned into this
-    // exact path — in which case our clone failed BECAUSE theirs succeeded
-    // ("destination path already exists and is not empty"), and `rm -rf`ing it
-    // would delete the WINNER's checkout while their row lives on, leaving a
-    // project that points at an empty directory. Only clean up a path that no
-    // persisted project owns. (Normalization widens this race from "same text" to
-    // "same slug", so it is no longer reachable only by byte-identical names.)
-    const winner = await deps.store.findByName(machineId, plan.name);
-    if (winner) return { ok: false, reason: 'duplicate_name' };
-
+  if (!result.success || result.exitCode !== 0) {
+    // We hold the reservation, so this path is OURS — cleaning it up cannot touch
+    // anyone else's checkout. Roll back both the directory and the row.
     await safeRemoveDirectory(machineId, plan.path, deps);
-    return { ok: false, reason: 'clone_failed', detail: result.stderr || result.stdout };
+    try {
+      await deps.store.remove(machineId, plan.name);
+    } catch {
+      // Best-effort: a stranded row is recoverable (the user can delete it); a
+      // failure to report the clone error is not.
+    }
+    const detail = result.success ? result.stderr || result.stdout : result.error;
+    return { ok: false, reason: 'clone_failed', detail };
   }
 
-  try {
-    const project = await deps.store.create({
-      ownerId: actor.userId,
-      machineId,
-      // The normalized name — never the raw text the caller typed. Persisting
-      // anything else would desync the row from the directory just cloned.
-      name: plan.name,
-      repoUrl,
-      path: plan.path,
-      now: deps.now(),
-    });
-    return { ok: true, project };
-  } catch (error) {
-    if (isUniqueViolation(error)) return { ok: false, reason: 'duplicate_name' };
-    return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
-  }
+  return { ok: true, project };
 }
 
 export async function listProjects({
