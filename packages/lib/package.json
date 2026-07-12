@@ -517,6 +517,11 @@
       "import": "./dist/services/sandbox/egress.js",
       "require": "./dist/services/sandbox/egress.js"
     },
+    "./services/sandbox/egress-lockdown": {
+      "types": "./dist/services/sandbox/egress-lockdown.d.ts",
+      "import": "./dist/services/sandbox/egress-lockdown.js",
+      "require": "./dist/services/sandbox/egress-lockdown.js"
+    },
     "./services/sandbox/sandbox-paths": {
       "types": "./dist/services/sandbox/sandbox-paths.d.ts",
       "import": "./dist/services/sandbox/sandbox-paths.js",

@@ -29,6 +29,7 @@ const {
   mockClearPageStreams,
   mockConsumeStreamJoin,
   mockAbortActiveStreamByMessageId,
+  mockClearActiveStreamId,
   mockGetBrowserSessionId,
 } = vi.hoisted(() => {
   const handlers: Record<string, ((...args: unknown[]) => void)[]> = {};
@@ -62,6 +63,7 @@ const {
     mockClearPageStreams: vi.fn(),
     mockConsumeStreamJoin: vi.fn().mockResolvedValue(undefined),
     mockAbortActiveStreamByMessageId: vi.fn().mockResolvedValue({ aborted: true, reason: '' }),
+    mockClearActiveStreamId: vi.fn(),
     mockGetBrowserSessionId: vi.fn(() => SESSION_ID_LOCAL),
   };
 });
@@ -96,6 +98,7 @@ vi.mock('@/lib/ai/core/stream-join-client', () => ({
 
 vi.mock('@/lib/ai/core/stream-abort-client', () => ({
   abortActiveStreamByMessageId: mockAbortActiveStreamByMessageId,
+  clearActiveStreamId: mockClearActiveStreamId,
 }));
 
 vi.mock('@/lib/ai/core/browser-session-id', () => ({
@@ -133,8 +136,9 @@ vi.mock('@/lib/ai/shared', async (importOriginal) => ({
   useStreamingRegistration: vi.fn(),
 }));
 
-import { GlobalChatProvider, useGlobalChatConversation, useGlobalChatStream } from '../GlobalChatContext';
+import { GlobalChatProvider, useGlobalChatConversation, useGlobalChatStream, useGlobalChatConfig } from '../GlobalChatContext';
 import { useStreamingRegistration } from '@/lib/ai/shared';
+import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
 
 // --- Helpers ---
 
@@ -166,6 +170,8 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     vi.clearAllMocks();
     mockSocket._reset();
     mockStreams.clear();
+    // Module state — a real reload clears it; a test file must too.
+    resetConsumingChannels();
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: mockConnectionStatus })
     );
@@ -316,6 +322,8 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     vi.clearAllMocks();
     mockSocket._reset();
     mockStreams.clear();
+    // Module state — a real reload clears it; a test file must too.
+    resetConsumingChannels();
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'disconnected' })
     );
@@ -452,6 +460,8 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     vi.clearAllMocks();
     mockSocket._reset();
     mockStreams.clear();
+    // Module state — a real reload clears it; a test file must too.
+    resetConsumingChannels();
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'connected' })
     );
@@ -489,6 +499,213 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     });
   });
 
+  // The SSE join can fail benignly — the stream lives on another web instance, whose
+  // in-process multicast registry we cannot reach. It finished fine and the reply IS
+  // durably persisted; the store entry was dropped because whatever parts we held were a
+  // stale snapshot. Keying purely on "is there still a store entry?" would fall through
+  // to "our useChat already has it" and silently lose the reply.
+  it('given the SSE join failed and the stream completes for the active conversation, should refresh to load the persisted reply', async () => {
+    const { result } = renderProvider();
+    await waitFor(() => expect(mockSocket._handlerCount('chat:stream_complete')).toBeGreaterThan(0));
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+
+    const before = result.current.refreshSignal;
+
+    // A remote stream arrives, and the SSE join rejects — the stream lives on another
+    // web instance whose multicast registry we cannot reach.
+    let rejectJoin!: (err: Error) => void;
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise((_res, rej) => { rejectJoin = rej; }));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    act(() => {
+      mockSocket._trigger('chat:stream_start', {
+        messageId: 'msg-join-failed',
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: CONV_ID,
+        triggeredBy: { userId: 'user-other', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+      });
+    });
+    await act(async () => { rejectJoin(new Error('404 — other instance')); await Promise.resolve(); });
+
+    // The stream finished server-side; the reply is persisted.
+    act(() => {
+      mockSocket._trigger('chat:stream_complete', {
+        messageId: 'msg-join-failed',
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: CONV_ID,
+      });
+    });
+
+    await waitFor(() => expect(result.current.refreshSignal).toBe(before + 1));
+    errorSpy.mockRestore();
+  });
+
+  // BUG SEVEN, from the other side. GlobalAssistantView is the one writer that never joined
+  // the claim protocol: its stop-registration effects nulled the shared slot
+  // UNCONDITIONALLY, on an else-branch and a cleanup that both fire whenever the chat
+  // status is 'ready' — which it is for the ENTIRE life of a bootstrapped stream, and whose
+  // deps resolve asynchronously right after the claim BY DESIGN. So it destroyed a live
+  // Stop button belonging to the stream socket, leaving isStreaming:true with
+  // stopStreaming:null — Stop renders and does nothing while the stream keeps billing.
+  //
+  // This test guards the contract from the context side: once a bootstrap claim is in the
+  // slot, a foreign `setStopStreaming(null)` is the caller's bug — but the claim itself
+  // must survive as a working Stop until the stream actually ends.
+  it('given a bootstrapped claim, the installed stop fn must remain callable and abort the stream it named', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url.includes('/api/ai/chat/active-streams')) {
+        return okResponse({
+          streams: [{
+            messageId: 'msg-claimed',
+            conversationId: CONV_ID,
+            triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        });
+      }
+      return defaultFetch(url);
+    });
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise(() => {}));
+
+    const { result } = renderHook(() => useGlobalChatStream(), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(true));
+
+    const stop = result.current.stopStreaming;
+    expect(typeof stop).toBe('function');
+
+    // It must ACT, not merely return another function (the updater/value trap).
+    const returned = stop!() as unknown;
+
+    expect(mockAbortActiveStreamByMessageId).toHaveBeenCalledWith({ messageId: 'msg-claimed' });
+    expect(typeof returned).not.toBe('function');
+  });
+
+  // The bootstrap claim is deliberately allowed to land BEFORE this surface has resolved its
+  // conversation — rejecting on a null id there would drop the very stream we are about to
+  // render. But a claim made in ignorance must be re-examined once the answer arrives: if it
+  // names a DIFFERENT conversation, holding it would keep the Stop button lit and the
+  // composer disabled for a stream the user is not looking at.
+  it('given a claim landed before identity resolved, and identity resolves to a DIFFERENT conversation, the claim should be released', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url.includes('/api/ai/chat/active-streams')) {
+        return okResponse({
+          streams: [{
+            messageId: 'msg-other-conv',
+            conversationId: 'a-different-conversation',
+            triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        });
+      }
+      // Identity resolves to CONV_ID — NOT the stream's conversation.
+      return defaultFetch(url);
+    });
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise(() => {}));
+
+    const { result } = renderHook(
+      () => ({ conv: useGlobalChatConversation(), stream: useGlobalChatStream() }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => expect(result.current.conv.currentConversationId).toBe(CONV_ID));
+
+    // The claim named another conversation, so it must not be holding our Stop.
+    await waitFor(() => expect(result.current.stream.isStreaming).toBe(false));
+    expect(result.current.stream.stopStreaming).toBeNull();
+  });
+
+  // A NULL slot is free, not foreign. GlobalAssistantView nulls the stop fn on ordinary
+  // paths (its effect's else-branch and cleanup fire whenever globalStatus is 'ready' —
+  // which it is for the entire life of a BOOTSTRAPPED stream) without ever touching
+  // isStreaming. Treating that as "not ours" skips setIsStreaming(false) and strands it
+  // true forever: ChatInput then renders Stop instead of Send, disables the textarea, and
+  // the Stop is a no-op. The Global Assistant composer is bricked until a full reload.
+  it('given the stop fn was nulled by another surface, finalizing must still clear isStreaming', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url.includes('/api/ai/chat/active-streams')) {
+        return okResponse({
+          streams: [{
+            messageId: 'msg-boot',
+            conversationId: CONV_ID,
+            triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        });
+      }
+      return defaultFetch(url);
+    });
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise(() => {}));
+
+    const { result } = renderHook(
+      () => ({ stream: useGlobalChatStream(), config: useGlobalChatConfig() }),
+      { wrapper: Wrapper },
+    );
+
+    await waitFor(() => expect(result.current.stream.isStreaming).toBe(true));
+
+    // GlobalAssistantView's effect cleanup nulls the stop fn — it never touches isStreaming.
+    act(() => { result.current.config.setStopStreaming(null); });
+    await waitFor(() => expect(result.current.stream.stopStreaming).toBeNull());
+
+    act(() => {
+      mockSocket._trigger('chat:stream_complete', {
+        messageId: 'msg-boot',
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: CONV_ID,
+      });
+    });
+
+    await waitFor(() => expect(result.current.stream.isStreaming).toBe(false));
+  });
+
+  // The isStreaming/stopStreaming pair is a single shared slot that GlobalAssistantView
+  // also writes directly from its local chat status, outside the claim protocol. The
+  // takeover makes the clobber DETERMINISTIC: a reloaded tab bootstraps own stream M and
+  // claims the slot; the user sends again; the server takes over and aborts M; M's
+  // chat:stream_complete then arrives — and releasing on the messageId alone would kill
+  // the Stop button and streaming flag of the NEW, live stream (and with them its
+  // SWR-clobber protection), with no effect left to restore them.
+  it('given the slot was taken over by a newer stream, finalizing the OLD claimed stream must not clear it', async () => {
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url.includes('/api/ai/chat/active-streams')) {
+        return okResponse({
+          streams: [{
+            messageId: 'msg-old',
+            conversationId: CONV_ID,
+            triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        });
+      }
+      return defaultFetch(url);
+    });
+    mockConsumeStreamJoin.mockReturnValueOnce(new Promise(() => {}));
+
+    const { result } = renderHook(
+      () => ({ stream: useGlobalChatStream(), config: useGlobalChatConfig() }),
+      { wrapper: Wrapper },
+    );
+
+    // Bootstrap claims the slot for the old stream.
+    await waitFor(() => expect(result.current.stream.isStreaming).toBe(true));
+    const claimedStop = result.current.stream.stopStreaming;
+    expect(typeof claimedStop).toBe('function');
+
+    // A newer stream takes the slot over (this is what GlobalAssistantView does directly).
+    const newerStop = vi.fn();
+    act(() => { result.current.config.setStopStreaming(() => newerStop); });
+    await waitFor(() => expect(result.current.stream.stopStreaming).toBe(newerStop));
+
+    // The server's takeover aborts the old stream; its completion now arrives.
+    act(() => {
+      mockSocket._trigger('chat:stream_complete', {
+        messageId: 'msg-old',
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: CONV_ID,
+      });
+    });
+
+    expect(result.current.stream.stopStreaming).toBe(newerStop);
+    expect(result.current.stream.isStreaming).toBe(true);
+  });
+
   // AC2 — own bootstrap stream
   it('given a bootstrapped own stream, should addStream isOwn=true and surface stop via context', async () => {
     mockFetchWithAuth.mockImplementation((url: string) => {
@@ -496,7 +713,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
         return okResponse({
           streams: [{
             messageId: 'msg-own',
-            conversationId: 'conv-own',
+            conversationId: CONV_ID,
             triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
           }],
         });
@@ -598,7 +815,8 @@ describe('GlobalChatProvider — global channel stream socket', () => {
   });
 
   // AC5 — own-tab live event filtered
-  it('given chat:stream_start from the own browser session, should ignore the event', async () => {
+  it('given chat:stream_start from the own browser session while this context is CONSUMING the POST body, should ignore the event', async () => {
+    markChannelConsuming(GLOBAL_CHANNEL_ID);
     renderProvider();
 
     await waitFor(() => expect(mockSocket._handlerCount('chat:stream_start')).toBeGreaterThan(0));
@@ -614,6 +832,29 @@ describe('GlobalChatProvider — global channel stream socket', () => {
 
     expect(mockAddStream).not.toHaveBeenCalledWith(expect.objectContaining({ messageId: 'msg-self' }));
     expect(mockConsumeStreamJoin).not.toHaveBeenCalledWith('msg-self', expect.anything(), expect.anything());
+  });
+
+  // The reload case: browserSessionId lives in sessionStorage and survives a reload,
+  // but the consuming set is module state and does not. A reloaded tab must attach to
+  // the stream it started rather than dropping it forever.
+  it('given chat:stream_start from the own browser session while NOT consuming (i.e. after a reload), should attach and reclaim the Stop button', async () => {
+    renderProvider();
+
+    await waitFor(() => expect(mockSocket._handlerCount('chat:stream_start')).toBeGreaterThan(0));
+
+    act(() => {
+      mockSocket._trigger('chat:stream_start', {
+        messageId: 'msg-self',
+        pageId: GLOBAL_CHANNEL_ID,
+        conversationId: 'conv-1',
+        triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+      });
+    });
+
+    expect(mockAddStream).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-self', isOwn: true }),
+    );
+    expect(mockConsumeStreamJoin).toHaveBeenCalledWith('msg-self', expect.anything(), expect.anything());
   });
 
   // AC6 — channel filter
@@ -757,7 +998,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
         return okResponse({
           streams: [{
             messageId: 'msg-own',
-            conversationId: 'conv-own',
+            conversationId: CONV_ID,
             triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
           }],
         });
@@ -795,7 +1036,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
         return okResponse({
           streams: [{
             messageId: 'msg-own',
-            conversationId: 'conv-own',
+            conversationId: CONV_ID,
             triggeredBy: { userId: USER_ID, displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
           }],
         });
@@ -905,6 +1146,8 @@ describe('GlobalChatProvider — editing-store registration', () => {
     vi.clearAllMocks();
     mockSocket._reset();
     mockStreams.clear();
+    // Module state — a real reload clears it; a test file must too.
+    resetConsumingChannels();
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'connected' })
     );

@@ -702,6 +702,21 @@ export interface AiStreamStartPayload {
    * event without the field, and consumers degrade to a timestamp-less bubble.
    */
   startedAt?: string;
+  /**
+   * Whether the stream's conversation is explicitly shared.
+   *
+   * A page room contains every member of the page, but conversations are PRIVATE by
+   * default (`listConversations` shows you only `userId = you OR isShared`). Without
+   * this flag every member's client would try to join every stream on the page and be
+   * refused — a wasted request and an `authz.access.denied` audit row per member per
+   * assistant message, on entirely routine private chat.
+   *
+   * Optional for the same cross-version reason as `startedAt`: during a rolling deploy
+   * an originator on the previous build emits no field, so consumers must treat
+   * `undefined` as "unknown, ask the server" and only skip on an explicit `false`.
+   * The server remains the authority either way (see stream-subscription-authz.ts).
+   */
+  isShared?: boolean;
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 

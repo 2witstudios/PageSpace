@@ -88,7 +88,56 @@ export function generateTitle(preview: string): string {
   return preview.length > 50 ? preview.substring(0, 50) + '...' : preview;
 }
 
+/**
+ * True when messages already exist under this `conversationId` — ON ANY PAGE — that belong to
+ * someone OTHER than `userId`.
+ *
+ * The "legacy conversation" shape: messages written before the conversations table was
+ * populated have no `conversations` row, so an existence check alone cannot tell you who
+ * owns them. Callers that authorize on the row therefore have to consult this too, or
+ * they fail OPEN on exactly the conversations they cannot see.
+ *
+ * DELIBERATELY NOT SCOPED BY PAGE. It was, and that made it answerable only about the page the
+ * caller happened to be standing on — which is the one page an attacker would simply not stand
+ * on. A conversation belongs to exactly one page, so "who owns this conversation" is not a
+ * per-page question, and asking it per-page let a caller squat a conversation from OUTSIDE it:
+ *
+ *   1. Victim has a legacy conversation C (real messages under page X, no `conversations` row).
+ *   2. Attacker, on their OWN page Y, POSTs {chatId: Y, conversationId: C}. Scoped to page Y,
+ *      this check saw no messages and returned false — so the send was allowed and
+ *      `createConversation` (which consults the same guard) INSERTED a row `id=C` owned by the
+ *      ATTACKER.
+ *   3. The victim's next send on page X now finds a row it does not own and that is not shared:
+ *      403, permanently. They are locked out of their own conversation, and ownership-gated
+ *      actions elsewhere (deletion) now trust `conversations.userId = attacker`.
+ *
+ * The attacker reads nothing (history loads are page-scoped), so this is integrity and
+ * availability rather than disclosure — but a permanent lockout of a victim's own history is
+ * not a defensible failure mode, and the row-squat is what makes it permanent.
+ *
+ * Asking the question across all pages costs nothing and answers it correctly: a legitimate
+ * caller's own legacy conversation contains only their messages and still passes.
+ *
+ * Module-level rather than a `this.`-method: `this` inside an object literal breaks the
+ * moment any caller destructures a method off the repository.
+ */
+async function hasConflictingMessageOwner(
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const priorMessages = await db
+    .select({ userId: chatMessages.userId })
+    .from(chatMessages)
+    .where(and(
+      eq(chatMessages.conversationId, conversationId),
+      eq(chatMessages.isActive, true),
+    ));
+  return priorMessages.some((m) => m.userId !== null && m.userId !== userId);
+}
+
 export const conversationRepository = {
+  hasConflictingMessageOwner,
+
   /**
    * Eagerly create a conversations row when a conversation session is started
    * or continued. This establishes ownership (userId) and sets isShared=false
@@ -102,6 +151,7 @@ export const conversationRepository = {
    * conversations.userId. Centralized here (rather than at each call site)
    * so every caller — including pre-existing ones — gets this guarantee.
    */
+
   async createConversation(conversationId: string, userId: string, pageId: string): Promise<void> {
     const [existing] = await db
       .select({ id: conversations.id })
@@ -110,15 +160,7 @@ export const conversationRepository = {
       .limit(1);
     if (existing) return;
 
-    const priorMessages = await db
-      .select({ userId: chatMessages.userId })
-      .from(chatMessages)
-      .where(and(
-        eq(chatMessages.pageId, pageId),
-        eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true),
-      ));
-    const hasConflictingOwner = priorMessages.some((m) => m.userId !== null && m.userId !== userId);
+    const hasConflictingOwner = await hasConflictingMessageOwner(conversationId, userId);
     if (hasConflictingOwner) return;
 
     await db

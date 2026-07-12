@@ -32,6 +32,7 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
@@ -87,7 +88,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
 import { userProfiles } from '@pagespace/db/schema/members';
-import { createId } from '@paralleldrive/cuid2';
+import { createId, isCuid } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -386,6 +387,79 @@ export async function POST(request: Request) {
       includeDrivePrompt: page.includeDrivePrompt,
       hasDrivePrompt: !!drivePromptPrefix
     });
+
+    // conversationId is caller-supplied, and the history load below is keyed on
+    // (pageId, conversationId) with NO user filter — so an id that resolves to
+    // someone else's conversation reads their private history into the model context
+    // and appends this user's message to it. Two rules, both enforced here:
+    //
+    //  1. A conversation may only ever be CREATED from a cuid. The client used to
+    //     send a `${pageId}-default` sentinel for a brand-new chat and this route
+    //     accepted it unvalidated, minting a real conversations row under it — which
+    //     the client then refused to load, stranding the history. Those rows exist in
+    //     production and the client now loads and keeps using them, so a bare isCuid
+    //     reject would lock those users out of the history we just gave them back.
+    //     Hence: a non-cuid id is accepted only if its row ALREADY exists.
+    //
+    //  2. An EXISTING conversation must be one this user may actually write to —
+    //     their own, or an explicitly shared one — and must belong to this page.
+    //     Without this, `${pageId}-default` is a guessable id (it is derived from the
+    //     page id) that any member with edit access could use to read a co-member's
+    //     private conversation. Conversations are private by default.
+    let existingConversation: Awaited<ReturnType<typeof conversationRepository.getConversation>> = null;
+    if (requestConversationId) {
+      // Deliberately un-caught. A DB error here must not degrade into "no row exists",
+      // which is the branch that lets a fresh cuid through — an authorization check that
+      // fails open on a blip is not a check. A throw lands in the route's 500 handler.
+      existingConversation = await conversationRepository.getConversation(requestConversationId);
+
+      if (!existingConversation) {
+        if (!isCuid(requestConversationId)) {
+          loggers.ai.warn('AI Chat API: rejected non-cuid conversationId with no existing row', {
+            userId,
+            requestConversationId,
+          });
+          return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 });
+        }
+        // No `conversations` row does NOT prove the conversation is new. A LEGACY
+        // conversation (messages written before the conversations table was populated)
+        // has messages under its id and no row — and the ownership check below would be
+        // skipped for it entirely, so a caller supplying someone else's legacy cuid would
+        // read that history into their model context, append to it, and now (since
+        // takeover aborts as the stream's owner) be able to abort its stream too. Fail
+        // closed on the same signal `createConversation` uses for the row itself.
+        // No `.catch(() => false)` here: this is an authorization check, and swallowing a
+        // DB error into "no conflict" would fail OPEN on exactly the blip an attacker
+        // would like to cause. A throw here lands in the route's 500 handler.
+        const hasConflictingOwner = await conversationRepository
+          .hasConflictingMessageOwner(requestConversationId, userId!);
+        if (hasConflictingOwner) {
+          loggers.ai.warn('AI Chat API: rejected legacy conversationId owned by another user', {
+            userId,
+            requestConversationId,
+          });
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      } else {
+        const ownsIt = existingConversation.userId === userId;
+        const isSharedConversation = existingConversation.isShared === true;
+        // contextId is nullable in the schema (null for global conversations), so only
+        // enforce the page match when it is actually set — an owner must never be
+        // locked out of their own row by a historically-unset column.
+        const belongsToThisPage =
+          !existingConversation.contextId || existingConversation.contextId === chatId;
+        if ((!ownsIt && !isSharedConversation) || !belongsToThisPage) {
+          loggers.ai.warn('AI Chat API: rejected conversationId the caller may not write to', {
+            userId,
+            requestConversationId,
+            ownsIt,
+            isSharedConversation,
+            belongsToThisPage,
+          });
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      }
+    }
 
     // Auto-generate conversationId if not provided (seamless UX)
     conversationId = requestConversationId || createId();
@@ -1099,11 +1173,15 @@ export async function POST(request: Request) {
     const [userProfile] = await userProfilePromise;
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
+    // Reuse the row the conversationId validation above already fetched. A conversation
+    // that did NOT exist then was created by this request, so it is private by
+    // definition (createConversation inserts isShared: false) — which is also the
+    // fail-closed answer. Saves a second (and third) read of the same row per message.
+    isConversationShared = existingConversation?.isShared === true;
+
     if (userMessage && userMessage.role === 'user') {
       // Only broadcast to the page channel if the conversation is explicitly shared.
       // Fail closed: no broadcast if the row is missing or private.
-      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
-      isConversationShared = convRow?.isShared === true;
       const shouldBroadcast = isConversationShared;
       if (shouldBroadcast) {
         broadcastChatUserMessage({
@@ -1113,15 +1191,31 @@ export async function POST(request: Request) {
           triggeredBy: { userId: userId!, displayName, browserSessionId },
         }).catch(() => {});
       }
-    } else if (userMessage?.role === 'assistant') {
-      // ask_user resume turn: no new user message to broadcast, but
-      // isConversationShared still gates the mention-notify call below for
-      // the agent's reply — must still be computed here, or it silently
-      // stays at its initial `false` and mention notifications are dropped
-      // for every turn that follows an answered ask_user question.
-      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
-      isConversationShared = convRow?.isShared === true;
     }
+
+    // Per-conversation in-flight guard. A second send takes the conversation OVER — aborts
+    // whatever is live, reconciles its row — rather than being rejected, because a row whose
+    // terminal write never landed (crashed process; the write is fire-and-forget) would
+    // otherwise lock the user out of their own chat. See stream-liveness.ts.
+    //
+    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
+    // comment used to claim that it did. It is a check-then-act with no serialization: the SELECT
+    // inside takeOverConversationStreams and the INSERT inside createStreamLifecycle (a few
+    // statements below) are not atomic together. Two near-simultaneous sends can BOTH see zero
+    // in-flight rows and BOTH proceed — two generations, two sets of tool calls, two bills.
+    //
+    // Deliberately not closed here: it needs DB-level serialization (an advisory lock spanning
+    // takeover+insert, or a partial unique index on (conversation_id) WHERE status='streaming' —
+    // whose migration would fail outright on any pre-existing duplicate rows, so it needs a
+    // reconciliation step first). That is its own change with its own migration risk, and `master`
+    // has no takeover at all — concurrent sends there ALWAYS double-generate — so this is a strict
+    // improvement, not a regression.
+    //
+    // Do not read what follows as if the race were closed. It is narrow, not absent.
+    await takeOverConversationStreams({
+      conversationId: conversationId!,
+      channelId: chatId,
+    });
 
     lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,
@@ -1130,6 +1224,7 @@ export async function POST(request: Request) {
       userId: userId!,
       displayName,
       browserSessionId,
+      isShared: isConversationShared,
     });
 
     try {

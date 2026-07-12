@@ -8,6 +8,7 @@ import {
   type SandboxClient,
 } from '../machine-session-manager';
 import { resolveSandboxNetworkOptions } from '../network-options';
+import { assert } from './riteway';
 
 const SECRET = 'x'.repeat(32);
 const NOW = new Date('2026-06-01T12:00:00.000Z');
@@ -37,12 +38,19 @@ function makeStore(seed?: MachineSessionRecord) {
         userId: input.userId,
         sandboxId: input.sandboxId,
         lastActiveAt: input.now,
+        egressPolicyToken: input.egressPolicyToken,
       });
     },
-    touch: async ({ sessionKey, now }) => {
+    touch: async ({ sessionKey, now, egressPolicyToken }) => {
       calls.touch += 1;
       const row = rows.get(sessionKey);
-      if (row) rows.set(sessionKey, { ...row, lastActiveAt: now });
+      if (row) {
+        rows.set(sessionKey, {
+          ...row,
+          lastActiveAt: now,
+          egressPolicyToken: egressPolicyToken ?? row.egressPolicyToken,
+        });
+      }
     },
     remove: async (sessionKey) => {
       calls.remove += 1;
@@ -54,14 +62,19 @@ function makeStore(seed?: MachineSessionRecord) {
 
 function makeClient(overrides: Partial<SandboxClient> = {}) {
   const calls = {
-    getOrCreate: [] as Array<{ name: string; options: import('../sandbox-options').SandboxCreateOptions }>,
+    getOrCreate: [] as Array<{
+      name: string;
+      options: import('../sandbox-options').SandboxCreateOptions;
+      appliedEgressToken?: string | null;
+    }>,
     get: [] as string[],
     stop: [] as string[],
   };
   const client: SandboxClient = {
-    getOrCreate: async ({ name, options }) => {
-      calls.getOrCreate.push({ name, options });
-      return { sandboxId: 'sbx-new' };
+    getOrCreate: async ({ name, options, appliedEgressToken }) => {
+      calls.getOrCreate.push({ name, options, appliedEgressToken });
+      // The driver confirms the lockdown and reports the token it proved.
+      return { sandboxId: 'sbx-new', egressPolicyToken: TOKEN };
     },
     get: async ({ sandboxId }) => {
       calls.get.push(sandboxId);
@@ -82,9 +95,13 @@ function seedRecord(over: Partial<MachineSessionRecord> = {}): MachineSessionRec
     userId: 'u1',
     sandboxId: 'sbx-existing',
     lastActiveAt: new Date('2026-06-01T11:59:00.000Z'),
+    egressPolicyToken: null,
     ...over,
   };
 }
+
+/** A lockdown token as the driver would return it: (sprite instance id, policy hash). */
+const TOKEN = 'sprite-abc:policy-hash-1';
 
 describe('deriveMachineSessionKey', () => {
   it('given the same inputs, returns the same key every time', () => {
@@ -380,6 +397,93 @@ describe('acquireMachineSession', () => {
     expect(calls.getOrCreate).toMatchObject([{ name: keyFor() }]);
     expect(storeCalls.remove).toBe(0);
     expect(storeCalls.touch).toBe(1);
+  });
+});
+
+describe('acquireMachineSession — egress policy record', () => {
+  const acquire = (store: MachineSessionStore, client: SandboxClient) =>
+    acquireMachineSession({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
+    });
+
+  it('records the lockdown token the driver confirmed when provisioning fresh', async () => {
+    const { store, rows } = makeStore();
+    const { client } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a fresh provision',
+      should: 'persist the token the driver proved for THIS VM (not the policy we asked for)',
+      actual: rows.get(keyFor())?.egressPolicyToken,
+      expected: TOKEN,
+    });
+  });
+
+  it('records nothing when the driver could not prove the lockdown', async () => {
+    const { store, rows } = makeStore();
+    // No token: the platform reported no Sprite identity, so the lockdown is
+    // unprovable and must not be recorded as proven.
+    const { client } = makeClient({ getOrCreate: async () => ({ sandboxId: 'sbx-new' }) });
+    await acquire(store, client);
+    assert({
+      given: 'a driver that returns no lockdown token',
+      should: 'record null, so the next hand-back re-applies (fail closed)',
+      actual: rows.get(keyFor())?.egressPolicyToken,
+      expected: null,
+    });
+  });
+
+  it('links the session only after the driver confirms the lockdown', async () => {
+    const { store, calls: storeCalls } = makeStore();
+    const { client } = makeClient({
+      getOrCreate: async () => {
+        throw new Error('policy api down');
+      },
+    });
+    const result = await acquire(store, client);
+    assert({
+      given: 'a fresh provision whose lockdown fails',
+      should: 'refuse the hand-back and write NO session row (never link an unlocked sandbox)',
+      actual: { ok: result.ok, saves: storeCalls.save },
+      expected: { ok: false, saves: 0 },
+    });
+  });
+
+  it('hands the recorded token to the driver on reconnect', async () => {
+    const { store } = makeStore(seedRecord({ egressPolicyToken: TOKEN }));
+    const { client, calls } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a reconnect to a session whose lockdown is already recorded',
+      should: 'pass that token to getOrCreate so a proven policy is not re-applied',
+      actual: calls.getOrCreate.map((c) => c.appliedEgressToken),
+      expected: [TOKEN],
+    });
+  });
+
+  it('reports no recorded token for a legacy session', async () => {
+    const { store } = makeStore(seedRecord({ egressPolicyToken: null }));
+    const { client, calls } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a reconnect to a session that predates the record',
+      should: 'pass a null token so the driver fails closed and re-applies',
+      actual: calls.getOrCreate.map((c) => c.appliedEgressToken),
+      expected: [null],
+    });
+  });
+
+  it('records the new token when the lockdown moved (new VM, or changed policy)', async () => {
+    const { store, rows, calls: storeCalls } = makeStore(seedRecord({ egressPolicyToken: 'sprite-DEAD:policy-hash-1' }));
+    const { client } = makeClient();
+    await acquire(store, client);
+    assert({
+      given: 'a reconnect whose recorded token names a replaced VM',
+      should: 'record the token the driver just confirmed, so the NEXT hand-back can skip the push',
+      actual: { token: rows.get(keyFor())?.egressPolicyToken, touches: storeCalls.touch },
+      expected: { token: TOKEN, touches: 1 },
+    });
   });
 });
 
