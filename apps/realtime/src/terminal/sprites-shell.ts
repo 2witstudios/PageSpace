@@ -218,7 +218,6 @@ export function openPtyShell({
   onExit,
   onSessionId,
 }: OpenPtyShellArgs): PtyShell {
-  const toStr = (chunk: unknown) => (typeof chunk === 'string' ? chunk : (chunk as Buffer).toString('utf8'));
   const toBuf = (chunk: unknown): Buffer => (typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer));
 
   // Definite-assignment asserted: every construction path (initial attach,

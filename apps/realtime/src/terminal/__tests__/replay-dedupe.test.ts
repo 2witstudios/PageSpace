@@ -280,12 +280,12 @@ describe('empty inputs (pure)', () => {
 describe('flushReplay (pure)', () => {
   assert({
     given: 'buffered bytes the search could never align',
-    should: 'emit them all — never hold real output hostage',
+    should: 'emit them all, UNALIGNED — never hold output hostage, and never extend the history with it',
     actual: (() => {
-      const { emit, state } = flushReplay({ pending: buf('unaligned output\r\n'), scanned: 0, resolved: false });
-      return { emit: emit.toString('utf8'), resolved: state.resolved };
+      const { emit, state, aligned } = flushReplay({ pending: buf('unaligned output\r\n'), scanned: 0, resolved: false });
+      return { emit: emit.toString('utf8'), resolved: state.resolved, aligned };
     })(),
-    expected: { emit: 'unaligned output\r\n', resolved: true },
+    expected: { emit: 'unaligned output\r\n', resolved: true, aligned: false },
   });
 
   assert({
