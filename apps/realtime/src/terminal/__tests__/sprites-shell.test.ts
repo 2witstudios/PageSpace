@@ -129,35 +129,35 @@ describe('planWatchdogResponse (pure)', () => {
   assert({
     given: 'no viewer attached',
     should: 'go quiet — no reconnect attempt',
-    actual: planWatchdogResponse({ viewersAttached: 0, closed: false, consecutiveFailures: 0 }),
+    actual: planWatchdogResponse({ viewersAttached: false, closed: false, consecutiveFailures: 0 }),
     expected: 'detach-quiet' as const,
   });
 
   assert({
     given: 'no viewer attached, even past the reconnect failure budget',
     should: 'still go quiet rather than declare fatal — nobody is watching to receive the exit, and a later viewer must still be able to reattach',
-    actual: planWatchdogResponse({ viewersAttached: 0, closed: false, consecutiveFailures: 99 }),
+    actual: planWatchdogResponse({ viewersAttached: false, closed: false, consecutiveFailures: 99 }),
     expected: 'detach-quiet' as const,
   });
 
   assert({
     given: 'the shell already closed',
     should: 'go quiet — there is nothing left to reconnect',
-    actual: planWatchdogResponse({ viewersAttached: 1, closed: true, consecutiveFailures: 0 }),
+    actual: planWatchdogResponse({ viewersAttached: true, closed: true, consecutiveFailures: 0 }),
     expected: 'detach-quiet' as const,
   });
 
   assert({
     given: 'an attached viewer and failures within the budget',
     should: 'reattach transparently',
-    actual: planWatchdogResponse({ viewersAttached: 1, closed: false, consecutiveFailures: 1 }),
+    actual: planWatchdogResponse({ viewersAttached: true, closed: false, consecutiveFailures: 1 }),
     expected: 'reattach' as const,
   });
 
   assert({
     given: 'an attached viewer but the failure budget is exhausted',
     should: 'go fatal',
-    actual: planWatchdogResponse({ viewersAttached: 1, closed: false, consecutiveFailures: 6 }),
+    actual: planWatchdogResponse({ viewersAttached: true, closed: false, consecutiveFailures: 6 }),
     expected: 'fatal' as const,
   });
 });
@@ -376,6 +376,173 @@ describe('viewer attach/detach gates the watchdog reconnect (leaf 3-2)', () => {
 
     expect(sprite.attachSession).not.toHaveBeenCalled();
     expect(sprite.listSessions).not.toHaveBeenCalled();
+  });
+
+  it('given a viewer detaches DURING the reconnect backoff (before the delay resolves), never reaches listSessions/attachSession — and a later return resumes it', async () => {
+    // Closes a gap the entry-only gate missed: the drop trips while ATTACHED
+    // (so reconnect() begins normally), but the viewer leaves mid-backoff,
+    // before any Sprite SDK call has actually happened.
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout')); // attached — reconnect() begins its backoff
+
+    shell.setViewerAttached(false); // detach WHILE still inside the backoff delay
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(sprite.listSessions).not.toHaveBeenCalled();
+    expect(sprite.attachSession).not.toHaveBeenCalled();
+
+    shell.setViewerAttached(true); // the swallowed reconnect resumes lazily
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+  });
+
+  it('given a viewer detaches DURING the listSessions() await, does not proceed to attach — and resumes lazily once a viewer returns', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+    const d = deferred<SpriteSessionInfo[]>();
+    sprite.listSessions.mockReturnValue(d.promise);
+    sprite.attachSession.mockReturnValue(attachCmd);
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(300); // past the backoff; now suspended at await listSessions()
+
+    shell.setViewerAttached(false); // detach WHILE listSessions is still in flight
+    d.resolve([liveSession]); // the session is actually still alive
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(sprite.attachSession).not.toHaveBeenCalled(); // must not attach for a viewer that's gone
+
+    shell.setViewerAttached(true);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+  });
+
+  it('given the retry budget was exhausted right as the viewer detached, a later reattach still gets a fresh attempt rather than an instant fatal with zero retries', async () => {
+    // Without resetting the budget on a lazy reattach, `setViewerAttached(true)`
+    // would call reconnect(), which increments the STALE consecutiveFailures
+    // straight past MAX_RECONNECT_ATTEMPTS and fatals immediately — even though
+    // the underlying flap may be long over by the time a human reattaches.
+    const attached: FakeCommand[] = [];
+    const sprite = buildFakeSprite(buildFakeCommand(), { sessions: [liveSession] });
+    sprite.attachSession.mockImplementation(() => {
+      const next = buildFakeCommand();
+      attached.push(next);
+      return next; // never spawns — every attempt fails outright
+    });
+    const onExit = vi.fn();
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, sessionId: 'sess-1', onOutput: vi.fn(), onExit });
+
+    // Drive exactly MAX_RECONNECT_ATTEMPTS (5) consecutive attached failures —
+    // right up to, but not past, the budget.
+    for (let i = 0; i < 5; i += 1) {
+      attached[attached.length - 1]._emitter.emit('error', new Error('keepalive'));
+      await vi.advanceTimersByTimeAsync(2000);
+    }
+    expect(onExit).not.toHaveBeenCalled();
+
+    // The viewer detaches right as the NEXT trip fires — must go quiet, not fatal.
+    shell.setViewerAttached(false);
+    attached[attached.length - 1]._emitter.emit('error', new Error('keepalive'));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onExit).not.toHaveBeenCalled();
+
+    // The viewer returns. A real attempt happens (attachSession called again),
+    // not an instant fatal(-1) with zero attempts.
+    shell.setViewerAttached(true);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(onExit).not.toHaveBeenCalled();
+    expect(sprite.attachSession.mock.calls.length).toBeGreaterThan(6);
+  });
+});
+
+/**
+ * `@fly/sprites`' `writeStdin` THROWS on a closed socket; `SpriteCommand`
+ * catches that and re-emits it as 'error' on the SAME (already-stale) command,
+ * which `wire()`'s error listener then drops silently (`if (stale) return;`).
+ * Without buffering, anything written to `shell.write()` between a command
+ * going stale and its replacement opening — whether an ordinary attached
+ * reconnect's backoff, or leaf 3-2's lazy reattach after an arbitrarily long
+ * detached gap — is lost with no error surfaced anywhere.
+ */
+describe('input queued across a reconnect (no silent stdin loss)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('given the wired command goes stale, buffers writes instead of handing them to the dead socket, and flushes them once the replacement opens', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+
+    // Written WHILE the reconnect is in flight — the wired command is stale,
+    // its replacement hasn't opened yet.
+    shell.write('echo hi\n');
+    expect(cmd.stdin!.write).not.toHaveBeenCalledWith('echo hi\n'); // never handed to the dead socket
+    expect(attachCmd.stdin!.write).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(500); // backoff + listSessions resolve; attachSession called
+    attachCmd._emitter.emit('spawn'); // the replacement confirms open
+
+    expect(attachCmd.stdin!.write).toHaveBeenCalledWith('echo hi\n');
+  });
+
+  it('given a viewer tabs back after a detached watchdog trip and types immediately, the keystrokes are not lost', async () => {
+    // The exact scenario flagged in review: `attachToLiveSession` calls
+    // `setViewerAttached(true)` and emits `agent-terminal:ready` synchronously,
+    // before the lazy `reconnect()` (backoff + listSessions + attachSession)
+    // has actually run.
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    shell.setViewerAttached(false);
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(2000); // detached watchdog trip swallowed
+
+    shell.setViewerAttached(true); // tab-back — lazy reconnect starts, asynchronously
+    shell.write('ls\n'); // the client types immediately, before it completes
+
+    await vi.advanceTimersByTimeAsync(500); // reconnect resolves; attachSession called
+    attachCmd._emitter.emit('spawn');
+
+    expect(attachCmd.stdin!.write).toHaveBeenCalledWith('ls\n');
+  });
+
+  it('given several keystrokes arrive while detached, flushes them to the replacement in order', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+
+    shell.write('a');
+    shell.write('b');
+    shell.write('c');
+
+    await vi.advanceTimersByTimeAsync(500);
+    attachCmd._emitter.emit('spawn');
+
+    const writeMock = attachCmd.stdin!.write as ReturnType<typeof vi.fn>;
+    expect(writeMock.mock.calls.map(([data]) => data)).toEqual(['a', 'b', 'c']);
   });
 });
 

@@ -107,6 +107,20 @@ export type PtyShell = {
    * `planWatchdogResponse`. `false` on a detach stops the watchdog from
    * reconnecting an idle shell nobody is watching; `true` on a return
    * reattaches lazily if a reconnect was swallowed while detached.
+   *
+   * Scope, stated explicitly: this only gates whether WE reconnect after the
+   * SDK's own keepalive declares the socket dead — it never closes a
+   * currently-healthy exec connection on our own initiative. A detached shell
+   * whose process keeps producing output (an agent actively working) never
+   * trips the 45s no-inbound-frame watchdog in the first place, so it stays
+   * connected — and correctly so: an actively-producing session is doing real
+   * work regardless of whether a viewer is watching, and the Sprite's own
+   * activity-based pause decision should govern that case, not viewer
+   * presence. Only a genuinely IDLE detached shell — the wasteful case this
+   * leaf targets, an idle prompt reconnecting every ~45s for nobody —
+   * benefits from (and needs) this gate. A chatty detached shell is bounded
+   * only by the existing 30-min idle reap (`disconnectConnection`), same as
+   * before this leaf.
    */
   setViewerAttached(attached: boolean): void;
 };
@@ -191,18 +205,33 @@ export type WatchdogAction = 'reattach' | 'detach-quiet' | 'fatal';
  * down there is nothing left to reconnect, and treating it as an ordinary
  * `reattach`/`fatal` case would just repeat a decision that has already been
  * made.
+ *
+ * `viewersAttached` is boolean, not a count: `terminal-session-map.ts`'s
+ * `reattach` STEALS the previous socket entry on every new attach, so at most
+ * one viewer can ever be bound to a session at a time — there is no refcount
+ * anywhere in this architecture for a number to represent. A multi-viewer
+ * feature would need that map reworked long before this signature could mean
+ * anything other than boolean.
+ *
+ * `consecutiveFailures` must be the count AFTER `reconnect()`'s own increment
+ * — this is the single place that decision is made (the error handler, the
+ * internal retry recursion, and the lazy `setViewerAttached(true)` reattach
+ * all funnel through `reconnect()`, which consults this function once, right
+ * after incrementing). Passing the pre-increment count would let this
+ * function's `'fatal'` verdict disagree with the actual budget it exists to
+ * enforce.
  */
 export function planWatchdogResponse({
   viewersAttached,
   closed,
   consecutiveFailures,
 }: {
-  viewersAttached: number;
+  viewersAttached: boolean;
   closed: boolean;
   consecutiveFailures: number;
 }): WatchdogAction {
   if (closed) return 'detach-quiet';
-  if (viewersAttached <= 0) return 'detach-quiet';
+  if (!viewersAttached) return 'detach-quiet';
   return consecutiveFailures > MAX_RECONNECT_ATTEMPTS ? 'fatal' : 'reattach';
 }
 
@@ -323,7 +352,37 @@ export function openPtyShell({
   // to trip a FUTURE keepalive on that dead command, so the next
   // `setViewerAttached(true)` has to trigger the reattach itself rather than wait
   // for one that will never come.
+  //
+  // Distinct from `wire()`'s per-command `stale` flag, not a duplicate of it:
+  // `stale` is closure-private to ONE wired command and resets to false the
+  // moment a new one is wired, so it cannot outlive a single `wire()` call.
+  // This has to survive across the WHOLE detached window — however long that
+  // is — until a viewer actually returns, which is exactly the span `stale`
+  // was never built to cover.
   let needsLazyReattach = false;
+  // Whether the CURRENTLY WIRED command is known to actually accept stdin right
+  // now. `false` from the instant that command goes `stale` (its socket errored;
+  // see the 'error' handler below) until its replacement confirms open (`spawn`,
+  // or — for parity with how `opened`/the reconnect budget already treat the
+  // two as equivalent evidence — its first stdout byte). Needed because
+  // `@fly/sprites`' `writeStdin` THROWS on a closed socket, and `SpriteCommand`
+  // catches that throw and re-emits it as an 'error' on the SAME command — which
+  // is already `stale`, so `wire()`'s `error` listener drops it silently
+  // (`if (stale) return;`). Without this flag `write()` would hand bytes straight
+  // to `current.stdin`, which is still the DEAD command for the whole reconnect
+  // window (attached-reconnect's ~200ms-1s backoff, or this leaf's lazy
+  // reattach — which can follow a detached gap of up to 30 minutes) — and every
+  // one of those bytes is lost with no error surfaced anywhere.
+  let inputReady = true;
+  // Input written while `!inputReady`, held in order and flushed to the
+  // replacement command's stdin the moment it opens.
+  let pendingInput: string[] = [];
+  const flushPendingInput = () => {
+    if (pendingInput.length === 0) return;
+    const queued = pendingInput;
+    pendingInput = [];
+    for (const chunk of queued) current.stdin?.write(chunk);
+  };
   // The tail of the REPLAYABLE stream this client has been shown — the bound session's
   // stdout, and only that (stderr and a foreign session's drain are shown but never
   // recorded; see `deliver`). It is what each attach matches its replayed scrollback
@@ -614,6 +673,10 @@ export function openPtyShell({
       // Any inbound data proves the connection recovered; reset the failure budget.
       opened = true;
       consecutiveFailures = 0;
+      // Confirms this command accepts stdin now (see `inputReady`'s doc) — for a
+      // silent shell that never gets a distinct 'spawn' in some SDK/test doubles,
+      // this is the same evidence `opened` already treats it as.
+      if (cmd === current) { inputReady = true; flushPendingInput(); }
       // The first byte of this attach freezes the history it will be matched against.
       if (seen === undefined) {
         seen = materializeSeen(seenTail);
@@ -661,6 +724,8 @@ export function openPtyShell({
     cmd.on('spawn', () => {
       opened = true;
       consecutiveFailures = 0;
+      // Confirms this command accepts stdin now — see `inputReady`'s doc.
+      if (cmd === current) { inputReady = true; flushPendingInput(); }
       // A confirmed open retires the previous failure's classification. Without
       // this, a later reconnect entered WITHOUT a fresh error (listSessions
       // unavailable, or the catch-all retry) would consult a stale verdict from
@@ -698,6 +763,12 @@ export function openPtyShell({
       // them, that replay dedupes against them.
       closeReplayWindow();
       stale = true;
+      // From this instant, writing to `current.stdin` would silently lose the
+      // bytes: `writeStdin` throws on a closed socket, `SpriteCommand` catches
+      // that and re-emits it as 'error' on this SAME (now-stale) command, and
+      // this very listener drops it (`if (stale) return;`, above). Queue
+      // instead — `flushPendingInput` delivers it once the replacement opens.
+      if (cmd === current) inputReady = false;
       // Remember WHY this command died, STRUCTURALLY: if it never reported an open
       // (no 'spawn', no byte of output), its socket never came up, so the session
       // was never started — re-creating it is safe (that is the cold Sprite wake)
@@ -709,15 +780,6 @@ export function openPtyShell({
       // FIRST — the SDK's own `closed before open` string is only emitted
       // afterwards, and a substring test would miss the real cold-start drop.
       lastErrorWasPreOpenDrop = !opened;
-      const action = planWatchdogResponse({
-        viewersAttached: viewerAttached ? 1 : 0,
-        closed,
-        consecutiveFailures,
-      });
-      if (action === 'detach-quiet') {
-        needsLazyReattach = true;
-        return;
-      }
       void reconnect();
     });
   }
@@ -784,7 +846,29 @@ export function openPtyShell({
     if (closed || reconnecting) return;
     reconnecting = true;
     consecutiveFailures += 1;
-    if (consecutiveFailures > MAX_RECONNECT_ATTEMPTS) {
+
+    // The SOLE consult of `planWatchdogResponse` — every entry point funnels
+    // through here: the error handler's direct call, this function's own
+    // recursive retry (the `catch` block below), and the lazy reattach
+    // `setViewerAttached(true)` triggers. Passing the count AFTER the
+    // increment above matches exactly what this decision has always been
+    // keyed on (the inline check this replaces compared the same
+    // post-increment value), so a 'fatal' verdict here is the real one, not
+    // a preview of one `reconnect()` would recompute differently.
+    const action = planWatchdogResponse({ viewersAttached: viewerAttached, closed, consecutiveFailures });
+    if (action === 'detach-quiet') {
+      // No viewer: proceeding would only place a fresh exec connection on the
+      // Sprite to relay output nobody is watching — exactly the churn this
+      // gate exists to remove. Undo the speculative increment above: no
+      // attempt actually ran, so it must not count against the budget.
+      // Remember one is owed; `setViewerAttached(true)` resumes it (with a
+      // fresh budget of its own — see there).
+      consecutiveFailures -= 1;
+      needsLazyReattach = true;
+      reconnecting = false;
+      return;
+    }
+    if (action === 'fatal') {
       reconnecting = false;
       fatal(-1, 'lost connection to shell');
       return;
@@ -792,6 +876,16 @@ export function openPtyShell({
     try {
       await delay(RECONNECT_BASE_DELAY_MS * consecutiveFailures);
       if (closed) { reconnecting = false; return; }
+      if (!viewerAttached) {
+        // Detached during the backoff itself — still nothing to reattach for.
+        // Same bookkeeping as the entry-gate detach-quiet branch: no attempt
+        // actually ran (we never even reached listSessions), so it must not
+        // count against the budget.
+        consecutiveFailures -= 1;
+        needsLazyReattach = true;
+        reconnecting = false;
+        return;
+      }
 
       // No id in hand means the session we are about to replace never announced
       // itself, so replacing it STRANDS it (see `abandonedUnnamedSessions`). The
@@ -830,6 +924,18 @@ export function openPtyShell({
         // session for a terminal the user already closed (that would leak a running,
         // billable Sprite shell with no client attached).
         if (closed) { reconnecting = false; return; }
+        // Same reasoning, for a detach: listSessions can be slow (a rate-limited or
+        // cold-waking control plane), long enough for the viewer to leave mid-await.
+        // Attaching or creating now would be exactly the churn this gate exists to
+        // remove, just discovered a beat later than the entry check above.
+        if (!viewerAttached) {
+          // listSessions itself is not free — it counts toward this attempt
+          // even though nothing further ran. Undo it, same as the earlier checks.
+          consecutiveFailures -= 1;
+          needsLazyReattach = true;
+          reconnecting = false;
+          return;
+        }
         if (listed === undefined) {
           // The control-plane listSessions is transiently unavailable (rate-limited
           // / cold-waking). Don't burn the retry budget killing a shell that's fine:
@@ -897,7 +1003,14 @@ export function openPtyShell({
   wire(current, 'fresh');
 
   return {
-    write: (data) => { if (!closed) current.stdin?.write(data); },
+    write: (data) => {
+      if (closed) return;
+      // The wired command is known-stale (a reconnect — attached or lazy — is
+      // in flight) and its replacement hasn't opened yet: queue rather than
+      // hand bytes to a socket that would silently swallow them.
+      if (!inputReady) { pendingInput.push(data); return; }
+      current.stdin?.write(data);
+    },
     resize: (c, r) => { lastCols = c; lastRows = r; if (!closed) current.resize?.(c, r); },
     // Anything still held (an unresolved replay, queued stderr) is dropped with it: the
     // viewer is gone, and `closed` stops every listener from speaking after this point.
@@ -909,6 +1022,15 @@ export function openPtyShell({
       // (nothing ever tripped) is a no-op here, correctly: output is already flowing.
       if (attached && needsLazyReattach && !closed) {
         needsLazyReattach = false;
+        // A deliberate, viewer-initiated reattach after a (possibly long) detached
+        // gap is a FRESH attempt, not a continuation of whatever consecutive
+        // failures triggered the original quiet-down. Reset both budgets so a
+        // shell that happened to be at/near its cap when it went quiet gets a
+        // real attempt instead of an instant fatal(-1) with zero retries —
+        // "consecutive" is meant to bound rapid retries close together in time,
+        // not something spanning a human-timescale detached window.
+        consecutiveFailures = 0;
+        abandonedUnnamedSessions = 0;
         void reconnect();
       }
     },
