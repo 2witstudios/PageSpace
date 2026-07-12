@@ -328,6 +328,15 @@ export function openPtyShell({
       cancelTimers();
       if (closed) return;
       const held = replay.pending.length;
+      // Nothing held means the window has nothing to hand over — and must NOT be
+      // resolved. A window is resolved by CLOSING it, and a resolved window searches
+      // nothing: every later byte of the attach passes straight through. So resolving
+      // one that has not yet received a byte would disable the dedupe for that whole
+      // attach. That is reachable, and common: a dead socket's drain closes the LIVE
+      // window (to keep ordering), and it almost always arrives before the successor's
+      // replay, which still has a WebSocket to open. The banner would reprint — this
+      // bug, resurrected by the fix for the ordering one.
+      if (held === 0 && heldStderr.length === 0) return;
       const { emit, state } = flushReplay(replay);
       replay = state;
       if (held > 0) {
@@ -399,6 +408,10 @@ export function openPtyShell({
       // tearing the very banner we are trying to suppress. So it queues behind the
       // held bytes and goes out when the window closes. On a tty the shell's stderr is
       // folded into stdout anyway, so this listener is defensive rather than hot.
+      // A dead command that has been superseded: its own window is long closed, so the
+      // bytes it is still draining would jump whatever the LIVE command is holding —
+      // the same reordering the stdout drain guards against.
+      if (stale && cmd !== current) { closeCurrentReplayWindow(); onOutput(toStr(chunk)); return; }
       if (!replay.resolved && replay.pending.length > 0) { heldStderr.push(toBuf(chunk)); return; }
       onOutput(toStr(chunk));
     });

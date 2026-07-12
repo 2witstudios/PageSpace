@@ -1172,6 +1172,36 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toContain('segfault: dumping core\r\n');
     });
 
+    it('given a dead socket drains a byte AFTER its replacement is wired, the REATTACH still dedupes its replay', async () => {
+      // The drain has to flush the live command's held bytes before it speaks (else it
+      // renders ahead of them) — but flushing a window that is holding NOTHING resolves
+      // it, and a resolved window searches nothing. The successor's replay would then
+      // pass through whole. And the drain almost always DOES arrive first: it is bytes
+      // already buffered on the dying socket, while the replay still has a WebSocket to
+      // open. This is the attach path, where `seen` survives — the create path resets it
+      // and would hide the bug entirely.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // attachCmd is wired, but has sent nothing
+      cmd._stdout.emit('data', 'X'); // the dead socket drains, late
+      attachCmd._stdout.emit('data', BANNER); // ...and only THEN does the replay land
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // The drained byte reached the user; the banner did not reprint.
+      const shown = outputs(onOutput).join('');
+      expect(shown).toContain('X');
+      expect(shown.split(BANNER).length - 1).toBe(1);
+    });
+
     it('given a dead socket drains a byte AFTER its replacement is wired, keeps deduping on every later cycle', async () => {
       // The poisoning case. A stale command's late drain must not be recorded into
       // the history: the replacement already took its snapshot (and, on the create

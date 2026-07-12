@@ -23,11 +23,15 @@ function assert<T>({ given, should, actual, expected }: { given: string; should:
 const buf = (s: string) => Buffer.from(s, 'utf8');
 
 /** What a caller actually cares about: the text emitted, and whether dedupe is done. */
-const plan = (args: { anchor: string; chunk: string; pending?: string; resolved?: boolean }) => {
+const plan = (args: { anchor: string; chunk: string; pending?: string; scanned?: number; resolved?: boolean }) => {
   const result = planReplayEmission({
     seen: buf(args.anchor),
     chunk: buf(args.chunk),
-    state: { pending: buf(args.pending ?? ''), resolved: args.resolved ?? false },
+    state: {
+      pending: buf(args.pending ?? ''),
+      scanned: args.scanned ?? 0,
+      resolved: args.resolved ?? false,
+    },
   });
   return {
     emit: result.emit.toString('utf8'),
@@ -207,12 +211,51 @@ describe('planReplayEmission corroboration (pure)', () => {
   });
 });
 
+/**
+ * The search resumes from `scanned` instead of rescanning the whole buffer on every
+ * chunk (which was quadratic). What it must never do is skip a GENUINE match.
+ */
+describe('planReplayEmission incremental scan (pure)', () => {
+  const lines = (prefix: string, n: number) =>
+    Buffer.from(Array.from({ length: n }, (_, i) => `${prefix} ${i}\r\n`).join(''), 'utf8');
+  const deliver = (...parts: Buffer[]) =>
+    materializeSeen(parts.reduce((tail, part) => rememberDelivered(tail, part), EMPTY_SEEN));
+  const seen = deliver(lines('history', 3000), lines('recent', 800));
+
+  it('given a genuine replay fed in MANY small chunks, should still find the boundary', () => {
+    // The anchor is 8 KiB and the chunks are 512 B, so the match spans ~16 of them: if
+    // the resumed scan skipped a start position, the boundary would be missed and the
+    // whole scrollback would reprint.
+    const replay = Buffer.concat([seen, buf('the new tail\r\n')]);
+    let state = freshReplayState();
+    const emitted: Buffer[] = [];
+    for (let off = 0; off < replay.length; off += 512) {
+      const result = planReplayEmission({ seen, chunk: replay.subarray(off, off + 512), state });
+      state = result.state;
+      emitted.push(result.emit);
+    }
+
+    expect(Buffer.concat(emitted).toString('utf8')).toBe('the new tail\r\n');
+    expect(state.resolved).toBe(true);
+  });
+
+  it('given a buffer longer than the anchor with no match, should not rescan what it already rejected', () => {
+    // A match can still BEGIN in the last (anchor - 1) bytes — the next chunk could
+    // complete it — so exactly those positions stay in the search region.
+    const first = Buffer.alloc(20 * 1024, 0x2e); // no anchor in it
+    const { state } = planReplayEmission({ seen, chunk: first, state: freshReplayState() });
+
+    expect(state.resolved).toBe(false);
+    expect(state.scanned).toBe(first.length - 8 * 1024 + 1);
+  });
+});
+
 describe('flushReplay (pure)', () => {
   assert({
     given: 'buffered bytes the search could never align',
     should: 'emit them all — never hold real output hostage',
     actual: (() => {
-      const { emit, state } = flushReplay({ pending: buf('unaligned output\r\n'), resolved: false });
+      const { emit, state } = flushReplay({ pending: buf('unaligned output\r\n'), scanned: 0, resolved: false });
       return { emit: emit.toString('utf8'), resolved: state.resolved };
     })(),
     expected: { emit: 'unaligned output\r\n', resolved: true },
@@ -222,7 +265,7 @@ describe('flushReplay (pure)', () => {
     given: 'an already-resolved state',
     should: 'emit nothing',
     actual: (() => {
-      const { emit } = flushReplay({ pending: Buffer.alloc(0), resolved: true });
+      const { emit } = flushReplay({ pending: Buffer.alloc(0), scanned: 0, resolved: true });
       return emit.toString('utf8');
     })(),
     expected: '',
@@ -234,7 +277,7 @@ describe('flushReplay (pure)', () => {
     // would delete a line the client never saw — indistinguishable, from content
     // alone, from the replay it looks like. Duplication is survivable; this is not.
     const heartbeat = '########## build heartbeat ##########\r\n';
-    const { emit } = flushReplay({ pending: buf(heartbeat), resolved: false });
+    const { emit } = flushReplay({ pending: buf(heartbeat), scanned: 0, resolved: false });
 
     expect(emit.toString('utf8')).toBe(heartbeat);
   });
