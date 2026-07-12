@@ -642,6 +642,11 @@
       "import": "./dist/services/machines/machine-access.js",
       "require": "./dist/services/machines/machine-access.js"
     },
+    "./services/machines/machine-list": {
+      "types": "./dist/services/machines/machine-list.d.ts",
+      "import": "./dist/services/machines/machine-list.js",
+      "require": "./dist/services/machines/machine-list.js"
+    },
     "./services/sandbox/tool-gate": {
       "types": "./dist/services/sandbox/tool-gate.d.ts",
       "import": "./dist/services/sandbox/tool-gate.js",
@@ -1748,6 +1753,9 @@
       ],
       "services/machines/machine-access": [
         "./dist/services/machines/machine-access.d.ts"
+      ],
+      "services/machines/machine-list": [
+        "./dist/services/machines/machine-list.d.ts"
       ],
       "services/sandbox/sandbox-client/types": [
         "./dist/services/sandbox/sandbox-client/types.d.ts"
