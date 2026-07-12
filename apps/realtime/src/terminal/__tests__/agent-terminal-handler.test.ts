@@ -221,7 +221,7 @@ describe('buildAgentTerminalHandlers', () => {
       expect(openShell).toHaveBeenCalledWith(
         expect.objectContaining({ cols: 80, rows: 24, command: 'pagespace-cli', args: [] }),
       );
-      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1' });
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: false });
     });
 
     it('given a branch-scoped agent terminal, should launch inside the branch\'s cloned repo cwd resolved by checkAuth', async () => {
@@ -352,6 +352,22 @@ describe('buildAgentTerminalHandlers', () => {
       expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-existing' }));
       // Already-known session id — nothing new to discover/persist.
       expect(persistStreamSessionId).not.toHaveBeenCalled();
+    });
+
+    it('given a known streamSessionId, should tell the client the agent was RESUMED, not freshly booted', async () => {
+      // This process holds no session for it (a restart empties the map), so the
+      // connect takes the cold CREATE path — but the Sprite still has the agent
+      // running, and `openShell` picks it back up. The client cannot tell those
+      // apart on its own, and a client that types a starting prompt into a
+      // terminal MUST: a line plus a carriage return delivered to an agent that
+      // has been running for hours, sitting at a confirmation prompt, is
+      // destructive.
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ streamSessionId: 'sess-existing' })) as unknown as ReturnType<typeof vi.fn> &
+        AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
     });
 
     it('given a FRESH session whose shell reports its authoritative id, should persist that id', async () => {
@@ -531,7 +547,7 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(auth.resolveSandbox).toHaveBeenCalledTimes(1);
       expect(openShell).toHaveBeenCalledTimes(1);
-      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1' });
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: false });
     });
 
     it('given a denied user with a live session, should refuse and NOT reattach (auth gates the fast path)', async () => {

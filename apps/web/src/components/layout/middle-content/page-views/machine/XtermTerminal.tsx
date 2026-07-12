@@ -116,18 +116,23 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
          * write waits for the agent's FIRST OUTPUT (it is up and drawing), with a
          * timer as the backstop for an agent that prints nothing on boot.
          *
-         * THE PROMPT ONLY EVER LANDS IN THE BOOT THIS PANE CONNECTED. It is spent
-         * on unmount whether or not it was written (see teardown), so it cannot
-         * survive to a later connect. That is deliberate, and it is the only way
-         * to be *sure*: a connect cannot tell a cold boot from a resume. `ready`
-         * carrying scrollback means the PTY was already running (a reattach) —
-         * but after a realtime restart the in-memory session map is empty, so a
-         * connect to an agent that has been running for hours takes the CREATE
-         * path and looks exactly like a cold boot. Deliver on that and the line
-         * plus a carriage return lands in a live agent at whatever state it has
-         * reached — a `y/n` confirmation, say. A prompt the user has to retype is
-         * a far smaller cost than one typed into a running agent, so an
-         * undelivered prompt is dropped rather than carried forward.
+         * IT ONLY EVER LANDS IN A FRESH BOOT. An agent that is already running has
+         * reached some state of its own — a half-typed answer, a `y/n`
+         * confirmation — and a line plus a carriage return arriving there is
+         * destructive. Two signals say the PTY was already alive, and the prompt
+         * is DISCARDED (spent, not written) on either:
+         *
+         *   - `resumed`, from the bridge: it picked up a Sprite exec session that
+         *     was still running. This is the one the client cannot infer — after a
+         *     realtime restart, a connect to an agent running for hours takes the
+         *     bridge's CREATE path and would otherwise look exactly like a cold
+         *     boot.
+         *   - a NON-EMPTY `scrollback`: a reattach to a PTY that has already
+         *     printed. (An empty scrollback is a reattach to a PTY that has
+         *     emitted nothing — the boot this pane is waiting for, reached through
+         *     a re-mount. React's StrictMode does exactly that in development, so
+         *     treating every reattach as unsafe would mean the prompt never worked
+         *     while developing this feature.)
          *
          * Latched, because `ready` can fire more than once for one terminal and
          * output certainly can.
@@ -163,20 +168,14 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
           // The agent is alive and drawing; it can take its prompt.
           sendInitialInput();
         };
-        const handleReady = (payload: { scrollback?: string; connectionId?: string } = {}) => {
+        const handleReady = (payload: { scrollback?: string; resumed?: boolean; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
-          if (payload.scrollback !== undefined) terminal.write(payload.scrollback);
+          if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
 
-          // A `scrollback` key at all — even an empty one — means this is a
-          // REATTACH: the PTY was already running before this pane connected.
-          // Its starting prompt (if it still has one) belongs to a boot that
-          // happened at some point in the past, possibly days ago, and the agent
-          // has been running ever since. Typing it now would drop a line plus a
-          // carriage return into a live session at whatever state it is in — a
-          // y/n confirmation, say — so it is discarded, not delivered. Only a
-          // COLD start (no scrollback key) is a boot this pane can prompt.
-          if (payload.scrollback !== undefined) {
+          // Already running (see above): the prompt is spent, never written.
+          const alreadyRunning = payload.resumed === true || Boolean(payload.scrollback);
+          if (alreadyRunning) {
             discardInitialInput();
           } else if (initialInputRef.current.input && !initialInputSent && promptTimer === undefined) {
             promptTimer = setTimeout(sendInitialInput, PROMPT_BACKSTOP_MS);
@@ -214,12 +213,13 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const resize: { observer?: ResizeObserver } = {};
         teardown = () => {
           resize.observer?.disconnect();
-          // Spend the prompt even though it was never written. This pane is going
-          // away mid-boot (the user switched workspace, closed the pane, left the
-          // page); when they come back, the agent will have been running for who
-          // knows how long, and no connect can tell that apart from a cold boot
-          // (see above). So the prompt dies with the connect that owned it.
-          discardInitialInput();
+          // The pending write is cancelled, but the prompt is NOT spent: this pane
+          // may be going away only for a moment (StrictMode remounts it in
+          // development; a workspace switch remounts it later), and the agent it
+          // was meant for may still be booting. Whether the next connect may
+          // deliver it is decided there, from `resumed`/`scrollback` — not guessed
+          // here.
+          clearTimeout(promptTimer);
           onData.dispose();
           socket.off('agent-terminal:output', handleOutput);
           socket.off('agent-terminal:ready', handleReady);

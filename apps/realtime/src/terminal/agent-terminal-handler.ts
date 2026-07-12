@@ -707,7 +707,16 @@ export function buildAgentTerminalHandlers({
 
         session.reAuthInterval = reAuthInterval;
 
-        socket.emit('agent-terminal:ready', { connectionId });
+        // `resumed` says whether this PTY is a fresh boot or an agent that was
+        // ALREADY RUNNING — `openShell` picks up `sandbox.streamSessionId` when
+        // the Sprite still holds an exec session for it. The client cannot infer
+        // this: after a restart of THIS process the in-memory session map is
+        // empty, so a connect to an agent that has been running for hours takes
+        // this create path and is otherwise indistinguishable from a cold boot.
+        // A caller that types a starting prompt into a terminal has to know the
+        // difference — a line plus a carriage return delivered to a live agent
+        // sitting at a confirmation prompt is destructive.
+        socket.emit('agent-terminal:ready', { connectionId, resumed: sandbox.streamSessionId != null });
       } finally {
         // Release the key claim on EVERY exit from the cold path — success, denial
         // or throw — so a failed create never wedges the key against future connects.

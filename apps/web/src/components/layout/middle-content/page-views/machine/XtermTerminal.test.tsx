@@ -129,7 +129,61 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     });
   });
 
-  test('a REATTACHED agent is never typed at — the prompt is discarded, not delivered', async () => {
+  test('an agent the bridge RESUMED is never typed at, even though the connect looks cold', async () => {
+    const fake = fakeSocket();
+    const onSent = vi.fn();
+    render(
+      <XtermTerminal
+        socket={fake.socket}
+        sessionId="s1"
+        connectPayload={CONNECT}
+        initialInput="fix the build"
+        onInitialInputSent={onSent}
+      />
+    );
+    await waitFor(() => expect(fake.hasHandlers()).toBe(true));
+    const connectionId = fake.connectionId();
+
+    // After a realtime restart the in-memory session map is empty, so connecting
+    // to an agent that has been running for hours takes the bridge's CREATE path:
+    // no scrollback, exactly like a cold boot. Only `resumed` tells them apart.
+    fake.server('agent-terminal:ready', { resumed: true, connectionId });
+    fake.server('agent-terminal:output', { data: 'y/n? ', connectionId });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    assert({
+      given: 'a connect the bridge served by resuming an agent that was already running',
+      should:
+        'write nothing and spend the prompt — this is the case the client CANNOT infer, and delivering here drops a line + CR into a live agent sitting at a confirmation',
+      actual: { typed: inputs(fake.emitted), promptDropped: onSent.mock.calls.length },
+      expected: { typed: [], promptDropped: 1 },
+    });
+  });
+
+  test('a re-mount onto a still-silent booting agent DOES deliver — StrictMode must not eat the prompt', async () => {
+    const fake = fakeSocket();
+    render(
+      <XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} initialInput="fix the build" />
+    );
+    await waitFor(() => expect(fake.hasHandlers()).toBe(true));
+    const connectionId = fake.connectionId();
+
+    // A reattach to a PTY that has emitted NOTHING: the boot this pane is waiting
+    // for, reached through a re-mount. React StrictMode does exactly this in dev,
+    // so treating every reattach as unsafe would mean the prompt never worked
+    // while developing the feature.
+    fake.server('agent-terminal:ready', { scrollback: '', resumed: false, connectionId });
+    fake.server('agent-terminal:output', { data: 'claude> ', connectionId });
+
+    assert({
+      given: 'a re-mount that reattaches to an agent which has printed nothing yet',
+      should: 'still deliver the prompt — an agent that has emitted zero bytes cannot be sitting mid-confirmation',
+      actual: inputs(fake.emitted),
+      expected: ['fix the build', '\r'],
+    });
+  });
+
+  test('a REATTACHED agent that has already printed is never typed at', async () => {
     const fake = fakeSocket();
     const onSent = vi.fn();
     render(
@@ -218,17 +272,10 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     });
   });
 
-  test('a pane unmounted mid-boot types nothing later, and SPENDS its undelivered prompt', async () => {
+  test('a pane unmounted mid-boot never types at the agent afterwards', async () => {
     const fake = fakeSocket();
-    const onSent = vi.fn();
     const { unmount } = render(
-      <XtermTerminal
-        socket={fake.socket}
-        sessionId="s1"
-        connectPayload={CONNECT}
-        initialInput="fix the build"
-        onInitialInputSent={onSent}
-      />
+      <XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} initialInput="fix the build" />
     );
     await waitFor(() => expect(fake.hasHandlers()).toBe(true));
 
@@ -239,9 +286,9 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     assert({
       given: 'a pane closed (or a workspace switched away from) while its agent was still booting',
       should:
-        'write nothing afterwards AND drop the prompt — carrying it to a later connect is unsafe, because no connect can tell a cold boot from a resume (after a realtime restart, a connect to an agent running for hours looks exactly like a cold one)',
-      actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length },
-      expected: { typed: [], promptSpent: 1 },
+        'cancel the pending write — a timer left armed would type into a terminal whose pane is gone. Whether the NEXT connect may deliver the prompt is decided there, from resumed/scrollback',
+      actual: inputs(fake.emitted),
+      expected: [],
     });
   });
 });
