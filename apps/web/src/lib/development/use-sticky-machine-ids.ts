@@ -1,0 +1,41 @@
+'use client';
+
+import { useState } from 'react';
+
+/**
+ * Every machine id seen so far within a scope — the set a keep-alive host is
+ * allowed to keep MOUNTED. Add-only within a scope, so a machine can drop out
+ * of the latest fetch (a transient permission-check blip, not a deletion)
+ * without losing its mounted terminal — see the drive-scoped Development
+ * layout's doc comment for why that matters.
+ *
+ * `scopeKey` bounds that add-only behaviour: changing it resets the set,
+ * because a PTY stream must not outlive the context it was opened in (the
+ * drive-scoped surface scopes to `driveId`; the global surface passes a single
+ * constant, since it has no such context to leave).
+ *
+ * Derived with React's "adjust state during render" pattern rather than a
+ * ref: state — unlike a ref — is discarded if a concurrent render is
+ * abandoned, so an interrupted navigation can't leave a never-committed
+ * machine behind. `key` guards against a re-render loop, since SWR hands back
+ * a fresh array identity on every revalidation even when its contents match.
+ */
+export function useStickyMachineIds(machines: { id: string }[], scopeKey: string | undefined): string[] {
+  const key = `${scopeKey ?? ''}\u0000${machines.map((machine) => machine.id).join('|')}`;
+  const [sticky, setSticky] = useState<{ key: string; scopeKey: string | undefined; ids: string[] }>({
+    key: '',
+    scopeKey,
+    ids: [],
+  });
+
+  if (sticky.key !== key) {
+    const ids = sticky.scopeKey === scopeKey ? [...sticky.ids] : [];
+    for (const machine of machines) {
+      if (!ids.includes(machine.id)) ids.push(machine.id);
+    }
+    setSticky({ key, scopeKey, ids });
+    return ids;
+  }
+
+  return sticky.ids;
+}

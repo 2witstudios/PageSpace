@@ -12,10 +12,12 @@ const DMS_PATH = /^\/dashboard\/dms(\/|$)/;
 const CHANNELS_PATH = /^\/dashboard\/channels(\/|$)/;
 const DRIVE_CHANNELS_PATH = /^\/dashboard\/[^/]+\/channels(\/|$)/;
 /**
- * ONE matcher for both Development shapes: the driveless entry
- * (`/dashboard/development`, which redirects) and the real drive-scoped tree
- * (`/dashboard/{driveId}/development[/{machineId}]`). The surface keeps the
- * drive in the path, so unlike Channels it needs no driveless twin.
+ * ONE matcher for both Development shapes: the driveless GLOBAL entry
+ * (`/dashboard/development[/{machineId}]` — every machine across every
+ * accessible drive, grouped by drive) and the drive-scoped tree
+ * (`/dashboard/{driveId}/development[/{machineId}]` — that one drive's
+ * machines). Both are real views with their own route tree; unlike Channels,
+ * neither is a redirect or a `?driveId=` twin of the other.
  *
  * The optional drive segment is why this is anchored and segment-bounded: a
  * drive's ordinary page route (`/dashboard/{driveId}/{pageId}`) must not match.

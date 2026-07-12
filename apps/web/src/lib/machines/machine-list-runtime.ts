@@ -10,14 +10,18 @@ import { and, asc, eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
   listMachinesInDrive as listMachinesInDriveCore,
+  listMachinesAcrossDrives as listMachinesAcrossDrivesCore,
   type MachineListDeps,
+  type GlobalMachineListDeps,
   type MachinePageSummary,
+  type DriveMachineGroup,
 } from '@pagespace/lib/services/machines/machine-list';
 
-export type { MachinePageSummary };
+export type { MachinePageSummary, DriveMachineGroup };
 
 function buildMachineListDeps(): MachineListDeps {
   return {
@@ -42,7 +46,30 @@ function buildMachineListDeps(): MachineListDeps {
   };
 }
 
+function buildGlobalMachineListDeps(): GlobalMachineListDeps {
+  return {
+    ...buildMachineListDeps(),
+    // Same drive universe `GET /api/drives` hands DriveSwitcher — owned,
+    // member, or page-permission drives. Not the `tokenScopable` variant,
+    // since this is a session-only human surface, not something scoped to an
+    // MCP token.
+    findAccessibleDrives: async (actorUserId) => {
+      const drives = await listAccessibleDrives(actorUserId);
+      return drives.map((drive) => ({ id: drive.id, name: drive.name }));
+    },
+  };
+}
+
 /** The Machine pages in `driveId` that the actor may view, ordered by title. */
 export async function listDriveMachines(actorUserId: string, driveId: string): Promise<MachinePageSummary[]> {
   return listMachinesInDriveCore(buildMachineListDeps(), actorUserId, driveId);
+}
+
+/**
+ * The Machine pages the actor may view across every drive they can access,
+ * grouped by drive — the Development surface's GLOBAL (driveless) command
+ * center. See `listMachinesAcrossDrives` for the guarantees this preserves.
+ */
+export async function listAllMachines(actorUserId: string): Promise<DriveMachineGroup[]> {
+  return listMachinesAcrossDrivesCore(buildGlobalMachineListDeps(), actorUserId);
 }
