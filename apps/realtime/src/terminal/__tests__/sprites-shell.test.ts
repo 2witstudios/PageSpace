@@ -1288,6 +1288,108 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(`${BANNER}last words\r\n`);
     });
 
+    it('given the replay ALREADY delivered the drain, a later fresh session does not repeat it', async () => {
+      // The other half of holding the drain: once a replay has actually carried those
+      // bytes to the client, the hold must be released. Otherwise the next fresh session
+      // — which flushes what it is holding, on the grounds that nothing will replay it —
+      // would hand the user the same bytes a second time.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      cmd._stdout.emit('data', 'X'); // drained late; held for the replay
+      attachCmd._stdout.emit('data', `${BANNER}X`); // the replay delivers it
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // Now the session dies for real and the next reconnect starts a fresh shell.
+      sprite.listSessions.mockResolvedValue([]);
+      attachCmd._emitter.emit('spawn');
+      attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(1000);
+      freshCmd._stdout.emit('data', '$ ');
+
+      const shown = outputs(onOutput).join('');
+      expect(shown.split('X').length - 1).toBe(1); // delivered once, by the replay
+      expect(shown).toBe(`${BANNER}X$ `);
+    });
+
+    it('given an UNALIGNABLE replay delivered the drain verbatim, a later fresh session does not repeat it', async () => {
+      // The other way a replay delivers the drain: it could not be aligned, so the window
+      // closed and handed the whole thing over verbatim. Those bytes reached the client
+      // just the same, so the hold must be released here too — otherwise the next fresh
+      // session repeats them.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      cmd._stdout.emit('data', 'X'); // drained late; held for the replay
+      // The server's ring trimmed past our anchor, so this replay cannot be aligned — it
+      // is emitted verbatim, drained byte and all.
+      attachCmd._stdout.emit('data', 'unalignable scrollback X');
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(outputs(onOutput).join('')).toContain('unalignable scrollback X');
+
+      // The session then dies and a fresh shell replaces it.
+      sprite.listSessions.mockResolvedValue([]);
+      attachCmd._emitter.emit('spawn');
+      attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(1000);
+      freshCmd._stdout.emit('data', '$ ');
+
+      // The held drain was accounted for by that verbatim flush: not repeated here.
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}unalignable scrollback X$ `);
+    });
+
+    it('given the REATTACH dies before replaying, and the next reconnect creates fresh, still delivers the drain', async () => {
+      // The reason the drain is HELD rather than dropped. We withhold it because the
+      // reattach's replay is expected to carry it — but that attach can die before its
+      // replay ever lands, and if the session is gone by the next reconnect, the
+      // scrollback that held those bytes died with it. Nobody would ever deliver them.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // reattached to sess-1
+      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // drained late; the replay will carry it
+
+      // ...but the reattach dies before replaying anything, and by now the session is gone.
+      sprite.listSessions.mockResolvedValue([]);
+      attachCmd._emitter.emit('spawn');
+      attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(outputs(onOutput).join('')).toContain('panic: goodbye\r\n');
+    });
+
     it('given a drain that lands BETWEEN replay frames, neither tears the replay nor poisons the history', async () => {
       // A scrollback burst is not one WebSocket frame, and the dead socket's events are
       // separate macrotasks from the new socket's — so a straggling drain lands in the

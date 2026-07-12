@@ -270,6 +270,13 @@ export function openPtyShell({
   // nothing, so there the same bytes exist nowhere else and MUST be emitted. Same drain,
   // opposite handling: the difference is whether a replay is coming for it.
   let wiredSessionReplaysPriorOutput = sessionId !== undefined;
+  // A drain we are holding because a REATTACH is expected to replay it. Held, not
+  // dropped: the reattach can die before its replay ever lands, and if the reconnect
+  // after that creates a fresh session, the session that held these bytes is gone and
+  // nothing will ever deliver them. So they are discarded only once a replay has
+  // actually been processed (`replayAccountedForDrain`), and handed over if a fresh
+  // session supersedes them instead (`launchFreshSession`).
+  let unreplayedDrain: Buffer[] = [];
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -365,6 +372,10 @@ export function openPtyShell({
       }
       deliver(emit);
       releaseOutOfBand();
+      // Only bytes that ACTUALLY arrived can have carried the drain. A window that closes
+      // without ever receiving one (the socket died first) has delivered nothing, so the
+      // drain is still nobody's — keep holding it.
+      if (held > 0) replayAccountedForDrain();
     };
 
     cmd.stdout.on('data', (chunk) => {
@@ -393,8 +404,10 @@ export function openPtyShell({
         // Superseded. If the successor REATTACHED, the session's scrollback still holds
         // this drain and the replay is already carrying it: emitting it here would show
         // it twice, and (once that window resolves) in the middle of the tail the replay
-        // is still streaming. Drop it — the replay is the delivery.
-        if (wiredSessionReplaysPriorOutput) return;
+        // is still streaming. So hold it, and let the replay do the delivering — but HOLD
+        // it, don't drop it: that attach can die before its replay ever lands, and if the
+        // next reconnect creates a fresh session, nothing would ever have delivered it.
+        if (wiredSessionReplaysPriorOutput) { unreplayedDrain.push(toBuf(chunk)); return; }
         // A fresh session replays nothing, so these last words of the dead shell — its
         // panic, its stack trace — exist nowhere else. Emit them, queued behind whatever
         // the new session is holding so they cannot render ahead of it.
@@ -408,7 +421,7 @@ export function openPtyShell({
       const { emit, state } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
       deliver(emit);
-      if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
+      if (replay.resolved) { cancelTimers(); releaseOutOfBand(); replayAccountedForDrain(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over:
       // on the next quiet gap, and on a deadline a chatty shell cannot push out by
       // talking.
@@ -499,9 +512,24 @@ export function openPtyShell({
   // ambiguous. Reported via `onSessionId` so the caller persists THIS session's
   // id (whether this is the terminal's first shell or a reconnect fallback
   // replacing a dangling one).
+  /** The wired session's replay has been handled — anything it was carrying is delivered. */
+  function replayAccountedForDrain(): void {
+    unreplayedDrain = [];
+  }
+
   function launchFreshSession(): void {
     currentSessionId = undefined;
     wiredSessionReplaysPriorOutput = false;
+    // No replay is coming for the drain we were holding: the session that produced it is
+    // gone, and a fresh shell's scrollback knows nothing about it. These are the dead
+    // shell's last words — hand them over now, or they are lost for good. Not recorded
+    // into `seen`: they are no part of the new session's stream, and splicing them in
+    // would leave the anchor unmatchable.
+    if (unreplayedDrain.length > 0 && !closed) {
+      const out = Buffer.concat(unreplayedDrain);
+      unreplayedDrain = [];
+      onOutput(out.toString('utf8'));
+    }
     // A brand-new shell shares no history with the one the client was watching, so
     // there is nothing of ITS output on the client's screen: clear the history, or
     // the replacement's opening banner would be mistaken for a replay of the dead
