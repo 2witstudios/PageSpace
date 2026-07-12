@@ -205,6 +205,18 @@ export function useChannelStreamSocket(
     // chat:stream_complete and reload the (durably persisted) message from the
     // DB, which is what this set enables in handleStreamComplete below.
     const joinFailed = new Set<string>();
+    // Streams whose SSE join actually DELIVERED at least one part.
+    //
+    // `joinFailed` alone is not enough, because it is populated in an ASYNC `.catch`. A join
+    // commonly 404s *because* the stream just ended — and `chat:stream_complete` can land before
+    // that rejection settles. In that window the store still holds only the seeded DB snapshot,
+    // which is debounced and can be SHORTER than what useChat already has. Consumers would then
+    // replace a longer visible reply with a truncated one AND skip the reload-from-DB branch, so
+    // the full persisted message was never fetched. Content loss.
+    //
+    // A join that delivered nothing is not authoritative, whatever the catch has managed to
+    // record yet. This is the synchronous fact that says so.
+    const joinDelivered = new Set<string>();
 
     const { addStream, appendPart, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
@@ -242,6 +254,7 @@ export function useChannelStreamSocket(
           chunksToSkip -= 1;
           return;
         }
+        joinDelivered.add(messageId);
         appendPart(messageId, part);
       })
         .then(() => {
@@ -449,11 +462,15 @@ export function useChannelStreamSocket(
       // — the authoritative message is in the DB. Dropping the store entry BEFORE
       // firing makes consumers take their reload-from-DB branch
       // (shouldReloadOnComountComplete) instead of synthesizing a truncated bubble.
-      const didJoinFail = joinFailed.has(payload.messageId);
+      // `|| !joinDelivered` closes the race described at joinDelivered: the catch that would have
+      // set joinFailed may not have settled yet, but a join that delivered nothing cannot be the
+      // authoritative copy either way. Treat both as "reload from the DB".
+      const didJoinFail = joinFailed.has(payload.messageId) || !joinDelivered.has(payload.messageId);
       if (didJoinFail) {
         joinFailed.delete(payload.messageId);
         removeStream(payload.messageId);
       }
+      joinDelivered.delete(payload.messageId);
       try {
         fireComplete(payload.messageId, payload.conversationId, { joinFailed: didJoinFail });
       } finally {

@@ -263,6 +263,7 @@ illustrate an image, logo, diagram, or picture. Currently restricted to app admi
       return {
         success: true,
         pageId: created.pageId,
+        driveId: created.driveId,
         viewUrl: `/api/files/${created.pageId}/view`,
         title,
         mediaType: image.mediaType,
