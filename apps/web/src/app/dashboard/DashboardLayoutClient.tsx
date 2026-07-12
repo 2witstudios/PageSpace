@@ -15,6 +15,7 @@ const FULL_PAGE_ROUTES = [
   '/dashboard/calendar',
   '/dashboard/channels',
   '/dashboard/connections',
+  '/dashboard/development',
   '/dashboard/dms',
   '/dashboard/drives',
   '/dashboard/storage',
@@ -32,7 +33,7 @@ export default function DashboardLayoutClient({ children, nonce }: { children: R
   // Also match /dashboard/[driveId]/activity pattern
   const isFullPageRoute = FULL_PAGE_ROUTES.some(route =>
     pathname === route || pathname?.startsWith(route + '/')
-  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|channels|files|tasks|trash|settings|members|workflows)/);
+  ) || pathname?.match(/^\/dashboard\/[^/]+\/(activity|calendar|channels|development|files|tasks|trash|settings|members|workflows)/);
 
 
   return (

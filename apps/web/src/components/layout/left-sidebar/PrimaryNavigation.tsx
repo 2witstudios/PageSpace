@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare } from "lucide-react";
+import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare, SquareTerminal } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useLayoutStore } from "@/stores/useLayoutStore";
@@ -62,6 +62,15 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
             icon: Calendar,
             exact: false,
             badge: badges.calendar,
+        },
+        // Driveless href hits a redirect, not a second implementation of the
+        // surface — the drive always ends up in the path.
+        {
+            name: "Development",
+            href: driveId ? `/dashboard/${driveId}/development` : "/dashboard/development",
+            icon: SquareTerminal,
+            exact: false,
+            badge: 0,
         },
     ];
 
