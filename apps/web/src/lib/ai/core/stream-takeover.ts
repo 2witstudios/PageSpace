@@ -161,12 +161,25 @@ export const takeOverConversationStreams = async ({
       });
     }
 
-    loggers.ai.info('AI Chat API: took over in-flight stream(s) on this conversation', {
-      conversationId,
-      channelId,
-      aborted,
-      reconciled: reconcile,
-    });
+    // Only claim a takeover when one actually happened.
+    //
+    // This used to log "took over in-flight stream(s)" unconditionally — including the case
+    // where `aborted` and `reconciled` are BOTH empty, which means we took over nothing: the
+    // live row belongs to another web instance (the abort registry is in-process), it is still
+    // generating, and this send is about to start a SECOND generation alongside it.
+    //
+    // That is the exact moment an operator most needs the truth, and the log was saying the
+    // opposite. The `unstoppable` warn above already states it; this line was quietly
+    // contradicting it in the same breath. A log that misreports is a signal that attests to
+    // nothing, which is the same defect as a test that cannot fail.
+    if (aborted.length > 0 || reconcile.length > 0) {
+      loggers.ai.info('AI Chat API: took over in-flight stream(s) on this conversation', {
+        conversationId,
+        channelId,
+        aborted,
+        reconciled: reconcile,
+      });
+    }
 
     return { aborted, reconciled: reconcile };
   } catch (error) {

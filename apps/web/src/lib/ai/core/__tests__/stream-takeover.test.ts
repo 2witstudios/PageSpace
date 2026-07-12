@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockSelectWhere, mockUpdateWhere, mockUpdateSet, mockAbortStreamByMessageId } = vi.hoisted(() => ({
+const {
+  mockSelectWhere,
+  mockUpdateWhere,
+  mockUpdateSet,
+  mockAbortStreamByMessageId,
+  mockLoggerInfo,
+  mockLoggerWarn,
+} = vi.hoisted(() => ({
+  mockLoggerInfo: vi.fn(),
+  mockLoggerWarn: vi.fn(),
   mockSelectWhere: vi.fn(),
   mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
   mockUpdateSet: vi.fn(),
@@ -34,7 +43,7 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
+  loggers: { ai: { info: mockLoggerInfo, warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
 }));
 
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
@@ -213,6 +222,53 @@ describe('takeOverConversationStreams', () => {
       });
 
       expect(result).toEqual({ aborted: [], reconciled: [] });
+    });
+  });
+
+
+  // A log that misreports is a signal that attests to nothing — the same defect as a test that
+  // cannot fail. This one used to lie at exactly the moment an operator most needed the truth.
+  describe('what the logs actually claim', () => {
+    it('given a live stream on ANOTHER instance that could not be stopped, must NOT claim it took over', async () => {
+      // The abort registry is in-process. A row belonging to another web instance is live, cannot
+      // be aborted from here, and (having a fresh heartbeat) must not be reconciled either — so
+      // we took over NOTHING, and this send is about to start a SECOND generation beside it.
+      mockSelectWhere.mockResolvedValue([
+        { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date() },
+      ]);
+      mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'not found' });
+
+      const result = await takeOverConversationStreams({
+        conversationId: 'conv-1',
+        channelId: 'page-1',
+      });
+
+      expect(result).toEqual({ aborted: [], reconciled: [] });
+
+      // The warn tells the truth...
+      expect(mockLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining('could not be aborted'),
+        expect.objectContaining({ messageIds: ['msg-elsewhere'] }),
+      );
+      // ...and nothing may contradict it by claiming a takeover happened.
+      const claimedTakeover = mockLoggerInfo.mock.calls.some(
+        ([msg]) => typeof msg === 'string' && msg.includes('took over'),
+      );
+      expect(claimedTakeover).toBe(false);
+    });
+
+    it('given a stream it DID stop, says so', async () => {
+      mockSelectWhere.mockResolvedValue([
+        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date() },
+      ]);
+      mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
+
+      await takeOverConversationStreams({ conversationId: 'conv-1', channelId: 'page-1' });
+
+      expect(mockLoggerInfo).toHaveBeenCalledWith(
+        expect.stringContaining('took over'),
+        expect.objectContaining({ aborted: ['msg-live'] }),
+      );
     });
   });
 
