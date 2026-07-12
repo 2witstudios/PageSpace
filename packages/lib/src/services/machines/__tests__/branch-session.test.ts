@@ -59,6 +59,9 @@ describe('isValidBranchName', () => {
     'a//b',
     'a.lock',
     'feature/a.lock',
+    // git forbids a `.lock` ending on EVERY component, not just the last one.
+    'a.lock/b',
+    'feature/a.lock/foo',
     '/leading-slash',
     'trailing-slash/',
     'trailing-dot.',
@@ -102,6 +105,8 @@ const GNARLY_INPUTS = [
   'a~b^c:d?e*f[g\\h',
   'hotfix.lock',
   'feature/a.lock',
+  'feature/a.lock /foo',
+  'a.lock/b',
   'trailing-slash/',
   'trailing-dot.',
   '.hidden',
@@ -136,9 +141,12 @@ describe('normalizeBranchName', () => {
     ['trailing-slash/', 'trailing-slash'],
     ['trailing-dot.', 'trailing-dot'],
     ['feature/-foo-', 'feature/foo'],
-    // `.lock` is a forbidden ref suffix, at the end of the ref as a whole.
+    // `.lock` is forbidden at the end of EVERY slash-separated component, not
+    // just the ref as a whole — `git checkout -b feature/a.lock/foo` is fatal.
     ['hotfix.lock', 'hotfix-lock'],
     ['feature/a.lock', 'feature/a-lock'],
+    ['a.lock/b', 'a-lock/b'],
+    ['feature/a.lock /foo', 'feature/a-lock/foo'],
     // Nothing sluggable left → the deterministic fallback.
     ['', 'branch'],
     ['   ', 'branch'],

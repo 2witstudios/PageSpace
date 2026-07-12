@@ -45,11 +45,14 @@ const MAX_BRANCH_NAME_LENGTH = 200;
 // Mirrors `git check-ref-format --branch` intent without shelling out: the
 // allowed charset already excludes whitespace/control chars and
 // `~^:?*[\` — the remaining checks below rule out `..`, doubled `/`, a path
-// segment starting with `.`, and a `.lock` suffix. Conservative on purpose —
+// segment starting with `.`, and a `.lock` segment. Conservative on purpose —
 // this becomes both a Sprite name component and a literal `git checkout -b`
 // argument (never shell-interpreted, but still worth confining tightly).
 const BRANCH_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-const FORBIDDEN_SEGMENT_RE = /(^|\/)\.|\.\.|\/{2,}|\.lock$/;
+// `\.lock(\/|$)` — NOT just `\.lock$`: git forbids a `.lock` ending on EVERY
+// slash-separated component, so `a.lock/b` is as fatal to `git checkout -b` as
+// a trailing one is (git-check-ref-format(1)).
+const FORBIDDEN_SEGMENT_RE = /(^|\/)\.|\.\.|\/{2,}|\.lock(\/|$)/;
 
 export function isValidBranchName(name: string): boolean {
   if (typeof name !== 'string' || name.length === 0 || name.length > MAX_BRANCH_NAME_LENGTH) {
@@ -68,6 +71,17 @@ const LOCK_SUFFIX = '.lock';
 
 /** What an input with nothing sluggable left in it becomes ("   ", "🚀", "..."). */
 export const BRANCH_NAME_FALLBACK = 'branch';
+
+/**
+ * Rewrite a `.lock` ending into `-lock`. Applied PER SEGMENT, because git
+ * forbids the suffix on every slash-separated component, not merely on the ref
+ * as a whole — `feature/a.lock/foo` is fatal to `git checkout -b` even though
+ * the ref doesn't end in `.lock`. Length-preserving, so it can safely run after
+ * the length cut too (which can itself mint one).
+ */
+function rewriteLockSuffix(segment: string): string {
+  return segment.endsWith(LOCK_SUFFIX) ? `${segment.slice(0, -LOCK_SUFFIX.length)}-lock` : segment;
+}
 
 /**
  * Normalize free text into a valid git branch name — type "My Cool Feature",
@@ -89,19 +103,16 @@ export const BRANCH_NAME_FALLBACK = 'branch';
 export function normalizeBranchName(input: string): string {
   const segments = input
     .split('/')
-    .map(slugifySegment)
+    .map((segment) => rewriteLockSuffix(slugifySegment(segment)))
     .filter((segment) => segment.length > 0);
 
   let name = segments.join('/');
 
   if (name.length > MAX_BRANCH_NAME_LENGTH) {
-    name = name.slice(0, MAX_BRANCH_NAME_LENGTH).replace(TRAILING_REF_SEPARATORS_RE, '');
-  }
-
-  // A `.lock` suffix is a forbidden ref name — and the cut above can itself
-  // mint one (`hotfix.lockdown` truncated at the limit), so this runs last.
-  if (name.endsWith(LOCK_SUFFIX)) {
-    name = `${name.slice(0, -LOCK_SUFFIX.length)}-lock`;
+    // The cut only ever lands in the LAST surviving segment (it drops a
+    // suffix), so re-trimming and re-checking `.lock` there is enough — the cut
+    // can mint one out of thin air (`hotfix.lockdown` truncated at the limit).
+    name = rewriteLockSuffix(name.slice(0, MAX_BRANCH_NAME_LENGTH).replace(TRAILING_REF_SEPARATORS_RE, ''));
   }
 
   return isValidBranchName(name) ? name : BRANCH_NAME_FALLBACK;
