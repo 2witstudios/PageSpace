@@ -3,7 +3,10 @@ import type { WorkspaceState } from '@/stores/machine-workspace/useMachineWorksp
 import { resolvePendingSession, type PendingSession } from '../pending-session';
 
 const SCOPE = { projectName: 'repo', branchName: 'main', name: 'agent-1' };
-const PENDING: PendingSession = { machineId: 'machine-1', scope: SCOPE };
+/** Clicked on machine-1's tree while machine-1 was already the open machine. */
+const PENDING: PendingSession = { machineId: 'machine-1', scope: SCOPE, fromMachineId: 'machine-1' };
+/** Clicked on machine-1's tree while machine-9 was the open machine — the navigation is in flight. */
+const PENDING_FROM_ELSEWHERE: PendingSession = { machineId: 'machine-1', scope: SCOPE, fromMachineId: 'machine-9' };
 
 /** A workspace whose active pane holds `scope` (null = a fresh, empty pane). */
 const workspaceWith = (scope: WorkspaceState['columns'][number]['panes'][number]['scope']): WorkspaceState => ({
@@ -52,8 +55,30 @@ describe('resolvePendingSession', () => {
     });
   });
 
-  test('drops the intent when the user navigated to a different machine', () => {
-    expect(resolvePendingSession(PENDING, 'machine-2', workspaceWith(null))).toEqual({ type: 'clear' });
+  test('HOLDS the intent while the click\'s own navigation is still in flight', () => {
+    // The bug this guards, and the reason the surface's headline flow was
+    // silently dead: the click (a store write) lands in the SYNC lane, while
+    // router.push dispatches inside a TRANSITION. React commits the sync update
+    // first, so there is an intermediate commit holding the new intent and the
+    // OLD pathname — selectedMachineId is still the machine we came FROM.
+    // Reading that as "the user navigated away" threw the intent away before the
+    // navigation it was waiting for ever arrived.
+    expect(resolvePendingSession(PENDING_FROM_ELSEWHERE, 'machine-9', undefined)).toEqual({ type: 'wait' });
+  });
+
+  test('opens once that navigation lands', () => {
+    expect(resolvePendingSession(PENDING_FROM_ELSEWHERE, 'machine-1', workspaceWith(null))).toEqual({
+      type: 'open',
+      machineId: 'machine-1',
+      scope: SCOPE,
+    });
+  });
+
+  test('drops the intent when the user genuinely goes to a THIRD machine', () => {
+    // Neither the target nor the origin — a real navigation away, not a pending one.
+    expect(resolvePendingSession(PENDING_FROM_ELSEWHERE, 'machine-2', workspaceWith(null))).toEqual({
+      type: 'clear',
+    });
   });
 
   test('drops the intent when the user left the surface entirely', () => {

@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useParams, usePathname } from 'next/navigation';
+import { Cpu } from 'lucide-react';
 import MachineKeepAliveHost from '@/components/layout/middle-content/MachineKeepAliveHost';
 import { useMachineWorkspaceStore } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { useDriveMachines } from '@/hooks/useDriveMachines';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
 import { resolvePendingSession } from '@/lib/development/pending-session';
 
@@ -31,12 +33,51 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
   const selectedMachineId = parseSelectedMachineId(pathname, driveId);
 
+  // The same SWR key the sidebar uses, so this is a cache read, not a second
+  // request. It is also the host's source of truth for what counts as a machine
+  // (see its `machineIds` prop) — the surface must not disagree with itself
+  // about which machines exist.
+  const { machines, isLoading } = useDriveMachines(driveId ?? null);
+  const machineIds = useMemo(() => machines.map((machine) => machine.id), [machines]);
+
   useDrainPendingSession(selectedMachineId);
+
+  const isKnownMachine = selectedMachineId !== null && machineIds.includes(selectedMachineId);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {children}
-      <MachineKeepAliveHost driveId={driveId} activePageId={selectedMachineId} />
+
+      {/* Sits UNDER the host (which is `absolute inset-0 z-10` and opaque), so
+          it shows only while the machine has yet to mount, and is covered the
+          moment it does. Without it the pane is blank for that beat. */}
+      {selectedMachineId && isLoading && (
+        <DetailNotice title="Opening machine…" />
+      )}
+
+      {/* A machine id that isn't in this drive's machines — deleted, trashed, or
+          simply wrong. The host declines to mount it and the route renders null,
+          so without this the user would sit on a silently empty pane. */}
+      {selectedMachineId && !isLoading && !isKnownMachine && (
+        <DetailNotice
+          title="Machine not found"
+          description="It may have been deleted, or you may not have access to it."
+        />
+      )}
+
+      <MachineKeepAliveHost driveId={driveId} activePageId={selectedMachineId} machineIds={machineIds} />
+    </div>
+  );
+}
+
+function DetailNotice({ title, description }: { title: string; description?: string }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
+      <Cpu className="size-10 text-muted-foreground" />
+      <div>
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </div>
     </div>
   );
 }

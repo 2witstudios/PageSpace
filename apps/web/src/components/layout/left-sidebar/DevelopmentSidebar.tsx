@@ -140,6 +140,7 @@ function MachineList({
           machineId={machine.id}
           title={machine.title}
           selected={machine.id === selectedMachineId}
+          selectedMachineId={selectedMachineId}
         />
       ))}
     </>
@@ -163,11 +164,14 @@ function MachineTreeSection({
   machineId,
   title,
   selected,
+  selectedMachineId,
 }: {
   driveId: string;
   machineId: string;
   title: string;
   selected: boolean;
+  /** The machine currently open — recorded on a session intent so the drain can tell a pending navigation from a real one. */
+  selectedMachineId: string | null;
 }) {
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
@@ -185,8 +189,9 @@ function MachineTreeSection({
       // once that machine's pane region exists. Writing the pane straight into
       // the workspace store from here would not survive — MachineWorkspace
       // disposes its workspace on unmount and rebuilds it on mount, destroying
-      // anything authored ahead of it.
-      requestSession(machineId, scope);
+      // anything authored ahead of it. `selectedMachineId` rides along so the
+      // drain can tell this in-flight navigation from the user going elsewhere.
+      requestSession(machineId, scope, selectedMachineId);
       openMachine();
       // KNOWN GAP: if the user is already on THIS machine with a non-Terminal tab
       // active, the session lands in the pane but stays behind that tab —
@@ -195,7 +200,7 @@ function MachineTreeSection({
       // controlled, left to the follow-up rather than fought over with the
       // in-flight terminal-UX work (#2017).
     },
-    [requestSession, machineId, openMachine],
+    [requestSession, machineId, selectedMachineId, openMachine],
   );
 
   const renderNodeChildren = useCallback(

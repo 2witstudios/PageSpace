@@ -4,6 +4,22 @@ import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspa
 export interface PendingSession {
   machineId: string;
   scope: OpenTerminalScope;
+  /**
+   * The machine that was selected when the click happened (null = none).
+   *
+   * This is what lets "my navigation hasn't landed yet" be told apart from "the
+   * user went somewhere else" — two states that otherwise look identical, since
+   * both simply have `selectedMachineId !== pending.machineId`.
+   *
+   * They must be told apart, because the click and the navigation land in
+   * DIFFERENT React lanes: `requestSession` is a plain store write (sync lane),
+   * while `router.push` dispatches inside a transition. React commits the sync
+   * update first, so there is an intermediate commit holding the NEW intent and
+   * the OLD pathname. Treating that commit as "navigated away" drops the intent
+   * before the navigation it is waiting for ever arrives — which silently broke
+   * every session click on a machine the user wasn't already viewing.
+   */
+  fromMachineId: string | null;
 }
 
 export type PendingSessionAction =
@@ -60,8 +76,16 @@ export function resolvePendingSession(
   workspace: WorkspaceState | undefined,
 ): PendingSessionAction {
   if (!pending) return { type: 'clear' };
-  // The user went somewhere else before the machine ever mounted — the intent is moot.
-  if (pending.machineId !== selectedMachineId) return { type: 'clear' };
+
+  if (pending.machineId !== selectedMachineId) {
+    // Still where we were when the session was clicked: the router's transition
+    // simply hasn't committed yet. Hold — this is NOT the user navigating away.
+    if (selectedMachineId === pending.fromMachineId) return { type: 'wait' };
+    // A different machine than either the target or the origin: the user chose
+    // to go elsewhere, so the intent is moot.
+    return { type: 'clear' };
+  }
+
   if (!workspace) return { type: 'wait' };
   // Satisfied: the session is in the active pane.
   if (sameScope(activePaneScope(workspace), pending.scope)) return { type: 'clear' };

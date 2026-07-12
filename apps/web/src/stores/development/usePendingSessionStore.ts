@@ -16,12 +16,13 @@ import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWor
  */
 interface PendingSessionStoreState {
   pending: PendingSession | null;
-  requestSession: (machineId: string, scope: OpenTerminalScope) => void;
+  /** `fromMachineId` is the machine selected at click time — see `PendingSession`. */
+  requestSession: (machineId: string, scope: OpenTerminalScope, fromMachineId: string | null) => void;
   clearPending: () => void;
 }
 
 export const usePendingSessionStore = create<PendingSessionStoreState>((set) => ({
   pending: null,
-  requestSession: (machineId, scope) => set({ pending: { machineId, scope } }),
+  requestSession: (machineId, scope, fromMachineId) => set({ pending: { machineId, scope, fromMachineId } }),
   clearPending: () => set((state) => (state.pending === null ? state : { pending: null })),
 }));
