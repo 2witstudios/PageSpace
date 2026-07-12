@@ -85,13 +85,13 @@ describe('generate_image execute', () => {
     const res = (await run(
       { prompt: 'a red panda astronaut' },
       { userId: 'u1', isAdmin: true, subscriptionTier: 'pro', imageGenerationModel: 'google/gemini-3.1-flash-image-preview' },
-    )) as { success: boolean; pageId: string; viewUrl: string };
+    )) as { success: boolean; pageId: string; driveId: string; viewUrl: string };
 
     assert({
       given: 'an admin user and a working model',
-      should: 'return success with the file view URL',
-      actual: { success: res.success, viewUrl: res.viewUrl },
-      expected: { success: true, viewUrl: '/api/files/page-9/view' },
+      should: 'return success with the file view URL and drive ID',
+      actual: { success: res.success, viewUrl: res.viewUrl, driveId: res.driveId },
+      expected: { success: true, viewUrl: '/api/files/page-9/view', driveId: 'home-1' },
     });
     expect(trackUsage).toHaveBeenCalledOnce();
     const usage = trackUsage.mock.calls[0][0] as { holdId: string; providerCostDollars: number; source: string };

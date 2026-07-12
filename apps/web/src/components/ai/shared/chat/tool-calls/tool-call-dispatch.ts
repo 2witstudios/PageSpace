@@ -10,6 +10,11 @@ import { isIntegrationTool, parseIntegrationToolName } from '@pagespace/lib/inte
 import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 
+// Not imported from image-generation-tools.ts: that module pulls in the DB
+// client and billing services (server-only) and must never reach the client
+// bundle. Matches the existing 'ask_agent' literal below.
+const GENERATE_IMAGE_TOOL_NAME = 'generate_image';
+
 export interface DispatchToolPart {
   type: string;
   toolName?: string;
@@ -25,6 +30,7 @@ export type ToolCallDispatchResult<TPart extends DispatchToolPart> =
   | { kind: 'task'; part: TPart }
   | { kind: 'agent'; part: TPart }
   | { kind: 'question'; part: TPart }
+  | { kind: 'image'; part: TPart }
   | { kind: 'generic'; part: TPart; toolName: string };
 
 const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
@@ -71,6 +77,7 @@ export function dispatchToolCall<TPart extends DispatchToolPart>(
   if (taskToolNames.has(toolName)) return { kind: 'task', part: resolvedPart };
   if (toolName === 'ask_agent') return { kind: 'agent', part: resolvedPart };
   if (toolName === ASK_USER_TOOL_NAME) return { kind: 'question', part: resolvedPart };
+  if (toolName === GENERATE_IMAGE_TOOL_NAME) return { kind: 'image', part: resolvedPart };
   return { kind: 'generic', part: resolvedPart, toolName };
 }
 
