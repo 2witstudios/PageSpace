@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   EMPTY_SEEN,
   MAX_ANCHOR_BYTES,
+  MAX_DISCARDABLE_GIVEUP_BYTES,
   MAX_MATCH_CANDIDATES,
   MAX_PENDING_BYTES,
   MAX_SEEN_BYTES,
@@ -740,26 +741,53 @@ describe('buffering an unalignable replay (pure)', () => {
  * The give-up TERMINAL ACTION — what a caller does with an unaligned replay's bytes once
  * `planReplayEmission`/`flushReplay` have already decided they cannot be placed. Detection is
  * unchanged (both still hand back the whole burst); this is the decision built on top of it.
+ *
+ * The server session keeps running while the client is disconnected — only the socket died —
+ * so an unaligned burst on a transparent reconnect can legitimately contain output the shell
+ * produced DURING the reconnect gap, not just a stale redraw of what the viewer already saw
+ * (see the function's own doc). `burstBytes` bounds how much of that risk this leaf accepts:
+ * small (redraw-shaped) bursts are discarded, large (active-output-shaped) ones are still shown.
  */
 describe('resolveGiveUpAction (pure)', () => {
   assert({
-    given: 'a transparent in-place attach reconnect (the viewer never left)',
-    should: 'discard the burst — every byte it could carry has already been shown, live',
-    actual: resolveGiveUpAction({ attachKind: 'transparent-attach' }),
+    given: 'a SMALL burst on a transparent in-place attach reconnect (the viewer never left)',
+    should: 'discard it — small enough to be a plausible redraw of what is already on screen',
+    actual: resolveGiveUpAction({ attachKind: 'transparent-attach', burstBytes: 100 }),
     expected: 'discard',
   });
 
   assert({
-    given: 'a fresh session create (the old one is gone, nothing of it is on screen)',
-    should: 'emit the burst verbatim — today\'s baseline give-up behavior',
-    actual: resolveGiveUpAction({ attachKind: 'fresh' }),
+    given: 'a burst EXACTLY at the discardable bound, on a transparent attach reconnect',
+    should: 'still discard it — the bound is inclusive',
+    actual: resolveGiveUpAction({ attachKind: 'transparent-attach', burstBytes: MAX_DISCARDABLE_GIVEUP_BYTES }),
+    expected: 'discard',
+  });
+
+  assert({
+    given: 'a burst ONE BYTE over the discardable bound, on a transparent attach reconnect',
+    should: 'emit it — too large to plausibly be a mere redraw; treat it as real output',
+    actual: resolveGiveUpAction({ attachKind: 'transparent-attach', burstBytes: MAX_DISCARDABLE_GIVEUP_BYTES + 1 }),
     expected: 'emit',
   });
 
   assert({
-    given: 'a fresh-viewer attach (a cold connect, or this shell\'s very first wire())',
+    given: 'a LARGE burst on a transparent in-place attach reconnect (e.g. a build, a log flood)',
+    should: 'emit it — the "silently lose build/log output" case must still be shown, not dropped',
+    actual: resolveGiveUpAction({ attachKind: 'transparent-attach', burstBytes: 4 * 1024 * 1024 }),
+    expected: 'emit',
+  });
+
+  assert({
+    given: 'a fresh session create (the old one is gone, nothing of it is on screen), any burst size',
+    should: 'emit the burst verbatim — today\'s baseline give-up behavior, regardless of size',
+    actual: resolveGiveUpAction({ attachKind: 'fresh', burstBytes: 10 }),
+    expected: 'emit',
+  });
+
+  assert({
+    given: 'a fresh-viewer attach (a cold connect, or this shell\'s very first wire()), any burst size',
     should: 'emit the burst verbatim — discard is scoped to transparent reconnects only',
-    actual: resolveGiveUpAction({ attachKind: 'fresh' }),
+    actual: resolveGiveUpAction({ attachKind: 'fresh', burstBytes: 10 * 1024 * 1024 }),
     expected: 'emit',
   });
 });

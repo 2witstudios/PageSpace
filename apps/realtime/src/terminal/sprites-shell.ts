@@ -449,10 +449,11 @@ export function openPtyShell({
     };
 
     /**
-     * A give-up's terminal action, resolved by `attachKind` (see `resolveGiveUpAction`): shown
-     * (today's baseline — a fresh session, or this shell's first attach), or discarded (a
-     * transparent in-place reconnect, where the viewer has already been shown every byte the
-     * replay could carry, so reprinting it is pure noise, not a safety margin).
+     * A give-up's terminal action, resolved by `attachKind` AND burst size (see
+     * `resolveGiveUpAction`): shown (today's baseline — a fresh session, this shell's first
+     * attach, or a burst too large to plausibly be a mere redraw), or discarded (a small give-up
+     * on a transparent in-place reconnect, where the viewer has already been shown every byte a
+     * redraw-sized replay could carry).
      *
      * Either way the history RESTARTS to these bytes: a give-up's bytes ARE a contiguous run
      * of the stream regardless of whether they are shown, and recording them (via
@@ -460,7 +461,7 @@ export function openPtyShell({
      * dedupe working instead of latching an empty-then-broken history.
      */
     const settleGiveUp = (emit: Buffer, cause: GiveUpCause) => {
-      const action = resolveGiveUpAction({ attachKind });
+      const action = resolveGiveUpAction({ attachKind, burstBytes: emit.length });
       reportUnaligned(cause, emit.length, action);
       if (action === 'discard') recordHistory(emit, 'restart');
       else deliver(emit, 'restart');

@@ -1246,13 +1246,18 @@ describe('openPtyShell', () => {
       expect((reported[0][1] as { outcome?: string }).outcome).toBe('discarded');
     });
 
-    it('given a replay that overflows the byte cap, REPORTS it (and says it was discarded)', async () => {
+    it('given a replay that overflows the byte cap, REPORTS it (and says it was shown, not discarded)', async () => {
       // A ring bigger than MAX_PENDING_BYTES is the cause that does not heal: the anchor sits
       // at a replay's END, so the cap trips before it ever arrives, and the scrollback would
-      // reprint (or now, discard) on every reconnect until the cap is raised past the ring. It
-      // is also the give-up that resolves inside the pure core — `closeReplayWindow`, and its
-      // log, never run. If it did not report here, the failure the cap exists to catch would
-      // be the only silent one.
+      // reprint on every reconnect until the cap is raised past the ring. It is also the
+      // give-up that resolves inside the pure core — `closeReplayWindow`, and its log, never
+      // run. If it did not report here, the failure the cap exists to catch would be the only
+      // silent one.
+      //
+      // `outcome` is 'reprinted' here, not 'discarded': a burst this large (megabytes) is far
+      // past `MAX_DISCARDABLE_GIVEUP_BYTES` — see `resolveGiveUpAction` — so leaf 2-5's discard
+      // never applies to it. A give-up this size is the shape of real, active output (a build,
+      // a verbose command), which must still reach the user, not the shape of a stale redraw.
       const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
@@ -1276,16 +1281,18 @@ describe('openPtyShell', () => {
       );
       warn.mockRestore(); // before the assertion: a failing expect must not leak the spy
       expect(reported.length).toBeGreaterThan(0); // it says so, instead of failing silently
-      expect((reported[0][1] as { outcome?: string }).outcome).toBe('discarded');
+      expect((reported[0][1] as { outcome?: string }).outcome).toBe('reprinted');
     });
 
-    it('given a replay that overflows the byte cap on a transparent reconnect, discards it and leaves a usable history', async () => {
+    it('given a replay that overflows the byte cap on a transparent reconnect, STILL shows it (too large to be a mere redraw) and leaves a usable history', async () => {
       // The other give-up path: the replay never aligns and grows past MAX_PENDING_BYTES, so
-      // the pure core resolves inside `planReplayEmission` rather than the window timer. 2-4's
-      // baseline emitted it verbatim; leaf 2-5 discards it on THIS attach kind (see
-      // `resolveGiveUpAction`) — same as the window-closed give-up, just triggered by the byte
-      // cap instead of a timer. What this pins is what the shell must still guarantee: the
-      // history that comes out the other side still dedupes.
+      // the pure core resolves inside `planReplayEmission` rather than the window timer.
+      // Unlike a SMALL give-up, this one is NOT discarded even on a transparent reconnect: a
+      // multi-megabyte burst is far past what a mere screen redraw could produce, so
+      // `resolveGiveUpAction` treats it as real, active output (a build, a verbose command)
+      // and shows it — the exact "silently lose build/log output" case a P1 review flagged
+      // against a blanket discard. What this pins is what the shell must still guarantee: the
+      // bytes reach the user, and the history that comes out the other side still dedupes.
       const cmd = buildFakeCommand();
       const attach1 = buildFakeCommand();
       const attach2 = buildFakeCommand();
@@ -1305,29 +1312,30 @@ describe('openPtyShell', () => {
       const flood = `unalignable ${Array.from({ length: 220_000 }, (_, i) => `line ${i} of the flood\r\n`).join('')}`;
       attach1._stdout.emit('data', flood);
       await vi.advanceTimersByTimeAsync(2000);
-      expect(outputs(onOutput).join('')).not.toContain('unalignable'); // discarded, not shown
+      expect(outputs(onOutput).join('')).toContain('unalignable'); // shown, not swallowed
 
       const afterOverflow = outputs(onOutput).join('');
 
-      // The history restarted from those bytes even though they were never shown (see
-      // `recordHistory`), so replaying them again dedupes. Note this fake delivers the whole
-      // flood in ONE frame, and the anchor search runs before the overflow check — so it is
-      // found. A real over-cap ring arrives in many frames and overflows first, and THAT
-      // reprints (silently, since it is discarded) on every cycle: which is why the cap has to
-      // exceed the server's ring (see MAX_PENDING_BYTES). What this pins is the recovery, not
-      // a claim that an over-cap ring heals.
+      // The history restarted from those bytes, so replaying them again dedupes. Note this
+      // fake delivers the whole flood in ONE frame, and the anchor search runs before the
+      // overflow check — so it is found. A real over-cap ring arrives in many frames and
+      // overflows first, and THAT reprints on every cycle: which is why the cap has to exceed
+      // the server's ring (see MAX_PENDING_BYTES). What this pins is the recovery, not a claim
+      // that an over-cap ring heals.
       attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
       attach2._stdout.emit('data', flood);
       await vi.advanceTimersByTimeAsync(2000);
 
-      expect(outputs(onOutput).join('')).toBe(afterOverflow); // nothing reprinted
+      expect(outputs(onOutput).join('')).toBe(afterOverflow); // nothing reprinted a SECOND time
     });
 
-    it('given a pending-cap give-up on a transparent reconnect, discards the overflow but still forwards output that arrives right after', async () => {
+    it('given a pending-cap give-up on a transparent reconnect, still shows it (too large to discard) and keeps forwarding what arrives right after', async () => {
       // The pending-cap give-up resolves SYNCHRONOUSLY inside the chunk that pushed it over —
-      // unlike the window-closed give-up, there is no timer in between. Discard must not
-      // swallow whatever the SAME command sends next, once the replay state is resolved.
+      // unlike the window-closed give-up, there is no timer in between. A burst this size is
+      // always past `MAX_DISCARDABLE_GIVEUP_BYTES`, so it is shown (see the test above); what
+      // this test pins is that showing it does not somehow re-enter dedupe state and swallow
+      // whatever the SAME command sends next, once the replay has resolved.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1343,10 +1351,10 @@ describe('openPtyShell', () => {
 
       const flood = `unalignable ${Array.from({ length: 220_000 }, (_, i) => `line ${i} of the flood\r\n`).join('')}`;
       attachCmd._stdout.emit('data', flood); // overflows MAX_PENDING_BYTES in one chunk
-      expect(outputs(onOutput).join('')).toBe(BANNER); // discarded synchronously
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}${flood}`); // shown synchronously
 
       attachCmd._stdout.emit('data', 'genuinely live output\r\n'); // same command, after resolution
-      expect(outputs(onOutput).join('')).toBe(`${BANNER}genuinely live output\r\n`);
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}${flood}genuinely live output\r\n`);
     });
 
     it('given a CHATTY shell across the reconnect, discards the held burst on its deadline but keeps forwarding afterward', async () => {
@@ -1383,17 +1391,15 @@ describe('openPtyShell', () => {
       expect(seen).toContain('build step 19\r\n'); // arrived after the window resolved
     });
 
-    it('given an unalignable replay whose anchor RECURS in live output moments later, refuses the false match and reports the give-up', async () => {
+    it('given an unalignable replay whose anchor RECURS in live output moments later, swallows nothing (burst too large to discard)', async () => {
       // The corroboration guard (replay-dedupe.test.ts) still refuses to WRONGLY suppress
       // here: an unanchored match landing past the true boundary would silently drop output
       // nobody has ever seen, with no report — the one failure mode this module can never
-      // accept. What changes under leaf 2-5 is what happens to the correctly-identified
-      // give-up that results: on a TRANSPARENT reconnect it is now discarded rather than
-      // reprinted (a DELIBERATE, REPORTED tradeoff — see `resolveGiveUpAction`), not silently
-      // dropped by a wrong match. The distinction that matters is wrong-suppression (silent,
-      // unbounded, never acceptable) vs. a reported give-up discard (bounded, observable,
-      // the accepted cost of not repainting an idle agent TUI).
-      const warn = vi.spyOn(loggers.realtime, 'warn');
+      // accept. The resulting give-up is ~8.2 KiB (the never-seen line plus a full
+      // anchor-sized repaint) — just OVER `MAX_DISCARDABLE_GIVEUP_BYTES` (8 KiB) — so leaf
+      // 2-5's size bound keeps it on the SHOW side: it is too large to plausibly be a mere
+      // redraw, so it is shown rather than risk it being the "output the client never saw"
+      // it explicitly is here.
       const line = (p: string, n: number) =>
         Array.from({ length: n }, (_, i) => `${p} ${i}\r\n`).join('');
       const cmd = buildFakeCommand();
@@ -1411,16 +1417,46 @@ describe('openPtyShell', () => {
       cmd._stdout.emit('data', history + tail);
       const delivered = outputs(onOutput).join('');
       const repaint = delivered.slice(-8 * 1024); // exactly the bytes the anchor holds
-      const beforeReconnect = outputs(onOutput).join('');
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
-      // Content the client has never seen (the ring trimmed past our anchor)...
+      // The replay the client has never seen (the ring trimmed past our anchor)...
       attachCmd._stdout.emit('data', 'work the client never saw\r\n');
       await vi.advanceTimersByTimeAsync(50); // still well inside the replay window
       // ...immediately followed by a repaint of the anchor's exact bytes.
       attachCmd._stdout.emit('data', `${repaint}after repaint\r\n`);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const shown = outputs(onOutput).join('');
+      expect(shown).toContain('work the client never saw\r\n'); // NOT swallowed
+      expect(shown).toContain('after repaint\r\n');
+    });
+
+    it('given an unalignable replay whose anchor RECURS in live output, but the burst is SMALL, discards it (the residual risk leaf 2-5 accepts)', async () => {
+      // The flip side of the test above, pinned deliberately: a false-match-refused give-up
+      // that stays under `MAX_DISCARDABLE_GIVEUP_BYTES` IS discarded, even though — as far as
+      // this module can prove — it might contain a short line of genuinely new output rather
+      // than a redraw. This is the residual risk documented on `resolveGiveUpAction`: no
+      // byte-level heuristic can fully distinguish the two for a SHORT burst, and the size
+      // bound only protects the large-loss end of that risk. Reported via WARN either way, so
+      // the tradeoff stays observable rather than silent.
+      const warn = vi.spyOn(loggers.realtime, 'warn');
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+      const beforeReconnect = outputs(onOutput).join('');
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      // A short line the client never saw — well under the discardable bound.
+      attachCmd._stdout.emit('data', 'a short new line\r\n');
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(outputs(onOutput).join('')).toBe(beforeReconnect); // discarded, not shown

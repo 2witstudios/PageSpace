@@ -585,6 +585,20 @@ export function planReplayEmission({
 export type AttachKind = 'transparent-attach' | 'fresh';
 
 /**
+ * The largest give-up burst leaf 2-5 will discard rather than show, on a transparent attach.
+ * Set to `MAX_ANCHOR_BYTES` deliberately, not a fresh magic number: this module's own docs
+ * already treat that bound as "about the size of an idle terminal's whole history" — "the
+ * shape the 45s watchdog cycles on" (see `anchorOf`, and the corroboration doc's "NO history
+ * at all behind the match" case). A give-up burst that fits under it is consistent with "a TUI
+ * redrew what's already roughly on screen"; a burst LARGER than it has grown past anything a
+ * mere redraw explains.
+ *
+ * This is a size heuristic, not a proof — see `resolveGiveUpAction`'s doc for what it does and
+ * does not guarantee.
+ */
+export const MAX_DISCARDABLE_GIVEUP_BYTES = MAX_ANCHOR_BYTES;
+
+/**
  * A give-up's TERMINAL ACTION: show the unaligned bytes (today's baseline — see the give-up
  * doc above, "duplication is survivable"), or drop them.
  *
@@ -593,17 +607,43 @@ export type AttachKind = 'transparent-attach' | 'fresh';
  * `attachSession`'s own `{cols,rows}`) violates byte-equality on almost every ~45s keepalive
  * cycle, so "reprint rather than risk losing a byte" becomes "repaint on top of itself every
  * 45s" for exactly the terminals that need the dedupe most. On THAT reconnect the viewer has
- * been continuously attached, so nothing is actually at risk: the replay is redundant, not
- * unverifiable, and can be dropped outright.
+ * been continuously attached, so a SMALL give-up is very likely pure redraw noise and can be
+ * dropped outright.
+ *
+ * "Very likely," not "provably" — and that gap is real, not glossed over. The server session
+ * keeps running while the client is disconnected (sessions survive client drops; only the
+ * SOCKET died), so the replay a reattach carries is "history the client already saw" PLUS
+ * "whatever the shell produced during the gap," concatenated, with no marker between them —
+ * see the module header's "cannot tell a replay from an EXACT reproduction." An unaligned
+ * give-up therefore CAN legitimately contain new output (a build line, a crash message) that
+ * arrived during the reconnect gap, and discarding loses it for good.
+ *
+ * `burstBytes` is the mitigation, not a fix for that: a mere redraw is bounded by roughly what
+ * is already on screen (`MAX_DISCARDABLE_GIVEUP_BYTES`), while active new output — a build, a
+ * verbose command, exactly the "silently lose build/log output" case a reattach-timing gap can
+ * produce — accumulates without that bound and is shown, not dropped, once the burst outgrows
+ * it. This closes the large-loss end of the risk (megabytes of real output are never silently
+ * eaten) without pretending to close the small end (a short message racing the reconnect,
+ * indistinguishable byte-for-byte from a short redraw, can still be discarded). That residual
+ * is the same shape this module already accepts elsewhere: "violently periodic output... where
+ * the dropped bytes are indistinguishable from their neighbours anyway" — bounded and
+ * understood, not eliminated.
  *
  * Detection is unchanged — `planReplayEmission`/`flushReplay` still decide alignment purely
- * from bytes, with no notion of where the attach came from. This is the decision layered on
- * top of a give-up they already produced, so the caller can still record the bytes as history
- * (a give-up is itself a contiguous run of the stream — see `deliver`'s `restart` doc) without
- * being forced to also show them.
+ * from bytes, with no notion of where the attach came from or how large the burst is. This is
+ * the decision layered on top of a give-up they already produced, so the caller can still
+ * record the bytes as history (a give-up is itself a contiguous run of the stream — see
+ * `deliver`'s `restart` doc) without being forced to also show them.
  */
-export function resolveGiveUpAction({ attachKind }: { attachKind: AttachKind }): 'emit' | 'discard' {
-  return attachKind === 'transparent-attach' ? 'discard' : 'emit';
+export function resolveGiveUpAction({
+  attachKind,
+  burstBytes,
+}: {
+  attachKind: AttachKind;
+  burstBytes: number;
+}): 'emit' | 'discard' {
+  if (attachKind !== 'transparent-attach') return 'emit';
+  return burstBytes <= MAX_DISCARDABLE_GIVEUP_BYTES ? 'discard' : 'emit';
 }
 
 export function flushReplay(state: ReplayState): ReplayEmission {
