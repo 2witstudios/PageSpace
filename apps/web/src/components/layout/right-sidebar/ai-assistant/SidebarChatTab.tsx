@@ -971,6 +971,15 @@ const SidebarChatTab: React.FC = () => {
   // Stop abort a message that finished minutes ago while the real generation kept running and
   // kept billing — on every turn after the first.
   const isActuallyStreaming = status === 'streaming';
+  // The conversation the CURRENT stream belongs to, held from when it starts. The surface moves
+  // independently of the stream — switching conversation mid-stream does NOT abort the POST — so
+  // the abort must name the conversation the generation is actually running on.
+  const heldStreamConvIdRef = useRef<string | null>(null);
+  heldStreamConvIdRef.current = holdForStream({
+    current: heldStreamConvIdRef.current,
+    isStreaming,
+    liveValue: currentConversationId,
+  });
   const heldStreamMsgIdRef = useRef<string | null>(null);
   heldStreamMsgIdRef.current = holdForStream({
     current: heldStreamMsgIdRef.current,
@@ -1113,9 +1122,17 @@ const SidebarChatTab: React.FC = () => {
       // because the abort registry deliberately lets streams survive a client disconnect.
       // Reachable in the pre-first-chunk window, where there is no assistant messageId yet
       // and this fallback is the only route to a server-side abort.
+      // Name the CONVERSATION as well as the transport key. The chatId map is empty until the
+      // response headers land (0.5-3s into a real send) and is torn down by the conversation-change
+      // cleanup on a mid-stream switch — so on both of the paths a user actually takes, the chatId
+      // abort was a guaranteed no-op. It cancelled the local fetch and returned, while the server
+      // (which deliberately survives client disconnect) kept generating and kept billing.
       const abortChatId = selectedAgent ? sidebarChatId : currentConversationId;
+      const abortConversationId = heldStreamConvIdRef.current ?? currentConversationId;
       if (abortChatId) {
-        await abortActiveStream({ chatId: abortChatId });
+        await abortActiveStream({ chatId: abortChatId, conversationId: abortConversationId });
+      } else if (abortConversationId) {
+        await abortActiveStream({ chatId: abortConversationId, conversationId: abortConversationId });
       }
     }
   }, [

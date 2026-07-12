@@ -50,7 +50,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useGlobalChatConfig, useGlobalChatStream, useGlobalChatConversation } from '@/contexts/GlobalChatContext';
-import { usePageAgentDashboardStore, agentStreamKey, type AgentStreamKey } from '@/stores/page-agents';
+import { usePageAgentDashboardStore, agentStreamKey, selectIsAgentStreaming, selectAgentStop, type AgentStreamKey } from '@/stores/page-agents';
 import { holdForStream } from '@/lib/ai/streams/holdForStream';
 import { selectLiveAssistantIds } from '@/lib/ai/streams/selectLiveAssistantIds';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
@@ -367,30 +367,9 @@ const GlobalAssistantView: React.FC = () => {
   useEffect(() => {
     latestGlobalMessagesRef.current = globalLocalMessages;
   }, [globalLocalMessages]);
-  const stop = useChatStop(currentConversationId, rawStop);
-
-  // The stable assistant messageId of the live stream (the rendered streaming
-  // bubble === serverAssistantMessageId). Used to abort authoritatively by
-  // messageId rather than the fragile chatId→streamId map.
-  //
-  // Resolved ONLY during 'streaming' — never 'submitted'. This is the difference between
-  // aborting THIS stream and aborting the previous turn's finished reply.
-  //
-  // useChat sets `status: 'submitted'` BEFORE it issues the request, and only pushes the new
-  // assistant message inside `write()`, which flips the status to 'streaming' in the same
-  // synchronous job (see ai/dist/index.mjs: setStatus('submitted') at the top of sendMessage;
-  // the pushMessage + setStatus('streaming') together in write()). So for the whole submitted
-  // window the array's last assistant message is THE PREVIOUS TURN'S.
-  //
-  // That matters because `holdForStream` below latches this value on the first render where the
-  // stream is live — which is a 'submitted' render. Gated on the looser `isStreaming` (which
-  // includes 'submitted'), it therefore captured and held the id of a reply that finished
-  // minutes ago, on every turn after the first: Stop aborted a messageId the server registry no
-  // longer knew, the local fetch stopped, the button looked like it worked, and the real
-  // generation kept running its write tools and kept billing.
-  //
-  // At the first 'streaming' render the push has already happened, so the last assistant IS the
-  // stream's. Before that we return undefined, and callers correctly fall back to the chatId map.
+  // The STREAM's conversation, not the surface's. `heldStopConversationId` is computed below from
+  // the hold-refs; before a stream exists it falls back to the live id, which is correct because
+  // there is nothing else to name. See useChatStop for why the chatId map alone is not enough.
   // PER-MODE, and that is the whole point.
   //
   // This surface hosts TWO independent chats (agent and global), and both can be in flight at
@@ -470,10 +449,55 @@ const GlobalAssistantView: React.FC = () => {
   // purely by declaration order, did not.
   const heldStreamMsgId = (selectedAgent ? streamMsgIdRef.current : globalStreamMsgIdRef.current) ?? undefined;
 
+  // The conversation the Stop button must NAME. The held one while a stream is running — never
+  // the live one, or a mid-stream conversation switch would abort the wrong generation (or
+  // none). Falls back to the live id before any stream exists, which is correct: there is
+  // nothing else to name, and the server simply reports that nothing was in flight.
+  const heldStopConversationId =
+    (selectedAgent ? streamConvIdRef.current : globalStreamConvIdRef.current) ?? currentConversationId;
+
+  const stop = useChatStop(currentConversationId, rawStop, heldStopConversationId);
+
+  // The stable assistant messageId of the live stream (the rendered streaming
+  // bubble === serverAssistantMessageId). Used to abort authoritatively by
+  // messageId rather than the fragile chatId→streamId map.
+  //
+  // Resolved ONLY during 'streaming' — never 'submitted'. This is the difference between
+  // aborting THIS stream and aborting the previous turn's finished reply.
+  //
+  // useChat sets `status: 'submitted'` BEFORE it issues the request, and only pushes the new
+  // assistant message inside `write()`, which flips the status to 'streaming' in the same
+  // synchronous job (see ai/dist/index.mjs: setStatus('submitted') at the top of sendMessage;
+  // the pushMessage + setStatus('streaming') together in write()). So for the whole submitted
+  // window the array's last assistant message is THE PREVIOUS TURN'S.
+  //
+  // That matters because `holdForStream` below latches this value on the first render where the
+  // stream is live — which is a 'submitted' render. Gated on the looser `isStreaming` (which
+  // includes 'submitted'), it therefore captured and held the id of a reply that finished
+  // minutes ago, on every turn after the first: Stop aborted a messageId the server registry no
+  // longer knew, the local fetch stopped, the button looked like it worked, and the real
+  // generation kept running its write tools and kept billing.
+  //
+  // At the first 'streaming' render the push has already happened, so the last assistant IS the
+  // stream's. Before that we return undefined, and callers correctly fall back to the chatId map.
+
   // After a refresh mid-stream, useChat starts at idle — but the
   // GlobalChatContext bootstrap may have detected an own in-flight stream
   // and registered a stop function. Surface either source so the UI shows
   // a stop button + streaming indicator from both bootstrap and live paths.
+  // A bootstrap-restored AGENT stream (after a refresh mid-stream). useAgentChannelMultiplayer
+  // claims this slot; the sidebar has always read it, and the DASHBOARD never did — so the surface
+  // that started the stream rendered Send while the sidebar showed a working Stop. Keyed by the
+  // STREAM's conversation, not the surface's.
+  const agentBootstrapKey: AgentStreamKey = {
+    agentId: selectedAgent?.id ?? null,
+    conversationId: streamConvIdRef.current ?? agentConversationId,
+  };
+  const agentBootstrapIsStreaming = usePageAgentDashboardStore(
+    selectIsAgentStreaming(agentBootstrapKey),
+  );
+  const agentBootstrapStop = usePageAgentDashboardStore(selectAgentStop(agentBootstrapKey));
+
   const { effectiveIsStreaming, effectiveStop } = useGlobalEffectiveStream({
     localIsStreaming: isStreaming,
     rawStop: stop,
@@ -481,6 +505,8 @@ const GlobalAssistantView: React.FC = () => {
     contextIsStreaming,
     contextStopStreaming,
     activeMessageId: heldStreamMsgId,
+    agentBootstrapIsStreaming,
+    agentBootstrapStop,
   });
 
   const remoteStreamingUser = !effectiveIsStreaming
@@ -901,8 +927,12 @@ const GlobalAssistantView: React.FC = () => {
           if (messageId) {
             await abortActiveStreamByMessageId({ messageId });
           } else if (streamConvId) {
-            // Pre-first-chunk: no assistant id yet, so the chatId map is all we have.
-            await abortActiveStream({ chatId: streamConvId });
+            // Pre-first-chunk: no assistant id yet. The chatId map is NOT enough — it is empty
+            // until the response headers land, and the conversation-change cleanup deletes the
+            // running stream's entry on a mid-stream switch. Naming the conversation is what
+            // makes this abort actually reach the server instead of silently no-opping while the
+            // generation keeps running and keeps billing.
+            await abortActiveStream({ chatId: streamConvId, conversationId: streamConvId });
           }
         } finally {
           // Call useChat's stop to abort client-side fetch
