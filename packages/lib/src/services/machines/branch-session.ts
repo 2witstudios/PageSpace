@@ -12,7 +12,7 @@
  */
 
 import { createHmac } from 'crypto';
-import { slugifySegment } from './name-slug';
+import { slugifySegment, hasNameContent, slugDigest } from './name-slug';
 
 export interface BranchSessionKeyInput {
   tenantId: string;
@@ -89,40 +89,60 @@ function rewriteLockSuffix(segment: string): string {
   return segment.endsWith(LOCK_SUFFIX) ? `${segment.slice(0, -LOCK_SUFFIX.length)}-lock` : segment;
 }
 
+function normalizeBranchSegment(segment: string): string {
+  const slug = rewriteLockSuffix(slugifySegment(segment));
+  if (slug.length > 0) return slug;
+  // The charset annihilated a segment that DID carry a name (`日本語`, `🚀`).
+  // Dropping it would collapse every such name onto one ref — and the ref is
+  // the branch-terminal's identity, so the next user would silently attach to
+  // the previous one's Sprite. Structural noise (`..`, `.`) has no content and
+  // is still dropped, which is what keeps `../escape` → `escape`.
+  return hasNameContent(segment) ? `x${slugDigest(segment)}` : '';
+}
+
 /**
  * Normalize free text into a valid git branch name — type "My Cool Feature",
  * get `my-cool-feature`. This is the normalize-and-accept counterpart to
- * `isValidBranchName`, which stays exactly as it is: the predicate remains the
- * CONTRACT, and this function's job is to satisfy it for any input at all,
- * rather than to reject the user.
+ * `isValidBranchName`, which stays as it is: the predicate remains the CONTRACT,
+ * and this function's job is to satisfy it for any input at all rather than to
+ * reject the user.
  *
- * A name git ALREADY accepts is returned untouched. This is not a shortcut —
- * it is load-bearing. Git refs are case-sensitive, so slugifying `Release-2.0`
- * to `release-2.0` would make `git checkout -b release-2.0 origin/release-2.0`
- * miss the real upstream branch, and `cloneAndCheckoutBranch`'s fallback would
- * then silently hand the user a NEW EMPTY branch off HEAD while
- * `origin/Release-2.0` sat there untouched. Same for `_`, which git allows.
- * Normalization exists to accept text git would REJECT — never to rewrite text
- * git would have honored.
+ * A name `isValidBranchName` ALREADY accepts is returned untouched, and that is
+ * load-bearing, not a shortcut. Git refs are case-sensitive: slugifying
+ * `Release-2.0` to `release-2.0` made `git checkout -b release-2.0
+ * origin/release-2.0` miss the real upstream branch, and
+ * `cloneAndCheckoutBranch`'s fallback then silently handed the user a NEW EMPTY
+ * branch off HEAD while `origin/Release-2.0` sat there untouched. Uppercase and
+ * `_` both pass the predicate, so both now survive.
+ *
+ * CAVEAT, deliberately accepted: the predicate is NARROWER than git's own rule.
+ * Git would accept `_wip`, `fix#123`, `v1.0+build`, `日本語`; we do not, because
+ * this charset is a confinement boundary (the name lands in `git checkout -b`
+ * argv, a store key, and a scope key). Such names are therefore still rewritten,
+ * and if one of them names an EXISTING upstream branch the user gets a new empty
+ * branch instead — so `spawnBranch` reports `createdNew`, turning that from a
+ * silent wrong answer into a stated one. Widening the charset to git's full rule
+ * is a separate, security-reviewable change.
  *
  * `/` is structural — it is how git namespaces refs — so it survives as a
- * segment separator and each segment is slugified independently
- * (`feat/JIRA-123 Fix!!` → `feat/jira-123-fix`). Empty segments vanish, which
- * is what disarms `../escape` (→ `escape`) and `a//b` (→ `a/b`).
+ * segment separator and each segment is normalized independently
+ * (`feat/JIRA-123 Fix!!` → `feat/jira-123-fix`). Content-free segments vanish,
+ * which is what disarms `../escape` (→ `escape`) and `a//b` (→ `a/b`); a segment
+ * that DID carry a name the charset cannot express keeps a digest token instead
+ * of vanishing (see `normalizeBranchSegment`).
  *
  * INVARIANT: `isValidBranchName(normalizeBranchName(x)) === true` for EVERY
- * string x, and the function is idempotent (which the pass-through above makes
- * immediate: the output is always valid, so a second pass is the identity).
- * The closing guard makes the invariant total rather than merely intended — a
- * slug that somehow still fails the predicate degrades to the fallback instead
- * of reaching git.
+ * string x, and the function is idempotent (immediate from the pass-through: the
+ * output is always valid, so a second pass is the identity). The closing guard
+ * makes the invariant total rather than merely intended — a slug that somehow
+ * still fails the predicate degrades to the fallback instead of reaching git.
  */
 export function normalizeBranchName(input: string): string {
   if (isValidBranchName(input)) return input;
 
   const segments = input
     .split('/')
-    .map((segment) => rewriteLockSuffix(slugifySegment(segment)))
+    .map(normalizeBranchSegment)
     .filter((segment) => segment.length > 0);
 
   let name = segments.join('/');

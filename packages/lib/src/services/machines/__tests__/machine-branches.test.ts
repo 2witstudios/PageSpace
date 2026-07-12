@@ -234,6 +234,34 @@ describe('spawnBranch', () => {
     expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'My Cool Feature')).toBeNull();
   });
 
+  it('given a name with no upstream branch, should report createdNew so an empty checkout is never silent', async () => {
+    // Normalization can rewrite a name that DOES exist upstream into one that
+    // does not (`_wip` → `wip`: git allows a leading `_`, our narrower charset
+    // does not). git's fallback then creates a NEW EMPTY branch off HEAD. The
+    // caller must be able to SEE that, rather than be told "here's your branch".
+    const { host } = makeFakeHost((_state, args) => {
+      // No `origin/wip` upstream — the `origin/`-tracking checkout fails.
+      const tracksOrigin = args.args.some((a) => a.startsWith('origin/'));
+      return tracksOrigin
+        ? { exitCode: 1, stdout: '', stderr: "fatal: 'origin/wip' is not a commit" }
+        : { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const { deps } = makeDeps({ host });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: '_wip', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, branchName: 'wip', createdNew: true });
+  });
+
+  it('given a branch that DOES exist upstream, should report createdNew: false', async () => {
+    const { host } = makeFakeHost();
+    const { deps } = makeDeps({ host });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+
+    expect(result).toMatchObject({ ok: true, branchName: 'main', createdNew: false });
+  });
+
   it('given free text as the PROJECT name, should normalize the lookup and find the project', async () => {
     // `addProject` persists the canonical project name, so free text that
     // created a project must also be able to spawn a branch in it.

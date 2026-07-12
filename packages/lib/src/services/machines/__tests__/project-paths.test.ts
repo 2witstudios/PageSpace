@@ -81,6 +81,8 @@ const GNARLY_INPUTS = [
   'émoji 🚀 project',
   '.git',
   'a'.repeat(150),
+  '日本語',
+  '한국어',
   'my-repo',
   'PageSpace',
   'my_repo.v2',
@@ -109,12 +111,26 @@ describe('normalizeProjectName', () => {
     ['', 'project'],
     ['   ', 'project'],
     ['..', 'project'],
-    ['🚀', 'project'],
     // Length cap, with the separator the cut exposes trimmed off.
     ['a'.repeat(150), 'a'.repeat(100)],
     [`${'a'.repeat(99)}-bc`, 'a'.repeat(99)],
   ])('given %j, should normalize to %j', (input, expected) => {
     expect(normalizeProjectName(input)).toBe(expected);
+  });
+
+  it('given names the ASCII charset annihilates, should NOT collapse them onto one directory', () => {
+    // Otherwise two distinct repos fight over one clone path and the second is
+    // rejected as a duplicate.
+    const jp = normalizeProjectName('日本語');
+    const kr = normalizeProjectName('한국어');
+    const rocket = normalizeProjectName('🚀');
+
+    expect(new Set([jp, kr, rocket, 'project']).size).toBe(4);
+    for (const name of [jp, kr, rocket]) {
+      expect(isValidProjectName(name)).toBe(true);
+      expect(normalizeProjectName(name)).toBe(name);
+      expect(resolveProjectPath(name)).toBe(`${PROJECTS_ROOT}/${name}`);
+    }
   });
 
   it.each(GNARLY_INPUTS)(

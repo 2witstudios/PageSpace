@@ -110,8 +110,11 @@ export async function POST(request: Request) {
   }
   // Echo the NORMALIZED name `spawnBranch` actually checked out and persisted —
   // "My Cool Feature" in, `my-cool-feature` back — never the raw request text.
+  // `createdNew` says whether this is a brand-new branch off the default HEAD or
+  // an existing upstream one, so a normalized name that no longer matches an
+  // upstream branch is a STATED outcome rather than a silent empty checkout.
   return NextResponse.json(
-    { branch: { branchName: result.branchName, resumed: result.resumed } },
+    { branch: { branchName: result.branchName, resumed: result.resumed, createdNew: result.createdNew } },
     { status: result.resumed ? 200 : 201 },
   );
 }

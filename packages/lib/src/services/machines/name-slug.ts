@@ -46,3 +46,46 @@ export function slugifySegment(input: string): string {
     .replace(LEADING_SEPARATORS_RE, '')
     .replace(TRAILING_SEPARATORS_RE, '');
 }
+
+/** Nothing but separators and whitespace — structural noise (`..`, `.`, `   `, `//`), not a name. */
+const NOISE_ONLY_RE = /^[\s._/-]*$/;
+
+/**
+ * Does this text carry any actual name content, as opposed to being pure
+ * structure? `..` and `   ` carry none and are safe to DROP; `日本語` and `🚀`
+ * carry plenty even though the ASCII charset annihilates them, and dropping
+ * those would be a correctness bug — see `slugDigest`.
+ */
+export function hasNameContent(input: string): boolean {
+  return !NOISE_ONLY_RE.test(input);
+}
+
+const FNV_OFFSET_BASIS = 2166136261;
+const FNV_PRIME = 16777619;
+
+/**
+ * A short, deterministic, charset-safe token derived from text the ASCII slug
+ * charset wiped out entirely.
+ *
+ * This exists for CORRECTNESS, not cosmetics. A branch name IS a
+ * branch-terminal's identity — it is hashed into the Sprite session key and is
+ * the store's lookup key — so if every non-Latin name collapsed onto one
+ * fallback, `spawnBranch('日本語')` followed by `spawnBranch('한국어')` would
+ * report `resumed: true` and handt the second user the FIRST user's Sprite and
+ * filesystem. Likewise `feature/日本語` must not silently become plain
+ * `feature` and collide with a real `feature` branch.
+ *
+ * FNV-1a/base36, not a crypto hash: it disambiguates, it does not authenticate
+ * (the Sprite name is a keyed HMAC — see `deriveBranchSessionKey`). Kept pure
+ * and dependency-free on purpose, because the live-preview sub-task must run
+ * this exact function in the browser.
+ */
+export function slugDigest(input: string): string {
+  let hash = FNV_OFFSET_BASIS;
+  const text = input.trim();
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, FNV_PRIME);
+  }
+  return (hash >>> 0).toString(36);
+}

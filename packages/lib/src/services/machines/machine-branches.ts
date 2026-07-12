@@ -81,8 +81,19 @@ export interface MachineBranchesDeps {
 }
 
 export type SpawnBranchResult =
-  /** `branchName` is the NORMALIZED name — what was persisted and checked out, which the caller must echo back. */
-  | { ok: true; sandboxId: string; branchName: string; resumed: boolean }
+  /**
+   * `branchName` is the NORMALIZED name — what was persisted and checked out,
+   * which the caller must echo back rather than the text the user typed.
+   *
+   * `createdNew` says whether the branch was CREATED off the clone's default
+   * HEAD (no `origin/<branchName>` existed) or checked out from an existing
+   * upstream branch. It matters because normalization can rewrite a name that
+   * DOES exist upstream into one that doesn't (`_wip` → `wip`: git allows a
+   * leading `_`, our narrower charset does not), and git's fallback then hands
+   * the user a new empty branch. Reporting it makes that outcome visible rather
+   * than silent. `undefined` on a pure reattach, where nothing was cloned.
+   */
+  | { ok: true; sandboxId: string; branchName: string; resumed: boolean; createdNew?: boolean }
   | { ok: false; reason: SpawnBranchDenialReason | FullEgressDenialReason; detail?: string };
 
 /**
@@ -126,7 +137,10 @@ function buildGitDepsForHandle(handle: MachineHandle, deps: MachineBranchesDeps)
   };
 }
 
-type CloneResult = { ok: true } | { ok: false; reason: 'clone_failed' | 'checkout_failed'; detail?: string };
+/** `createdNew`: no `origin/<branch>` existed, so the branch was created off the clone's default HEAD. */
+type CloneResult =
+  | { ok: true; createdNew: boolean }
+  | { ok: false; reason: 'clone_failed' | 'checkout_failed'; detail?: string };
 
 async function cloneAndCheckoutBranch({
   handle,
@@ -159,7 +173,7 @@ async function cloneAndCheckoutBranch({
     ctx,
     deps: gitDeps,
   });
-  if (checkoutExisting.success && checkoutExisting.exitCode === 0) return { ok: true };
+  if (checkoutExisting.success && checkoutExisting.exitCode === 0) return { ok: true, createdNew: false };
 
   const checkoutNew = await runGitInSandbox({
     cmd: 'git',
@@ -172,7 +186,7 @@ async function cloneAndCheckoutBranch({
   if (checkoutNew.exitCode !== 0) {
     return { ok: false, reason: 'checkout_failed', detail: checkoutNew.stderr || checkoutNew.stdout };
   }
-  return { ok: true };
+  return { ok: true, createdNew: true };
 }
 
 async function safeKillSprite(host: MachineHost, machineId: string): Promise<void> {
@@ -305,7 +319,7 @@ export async function spawnBranch({
       }
       return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
     }
-    return { ok: true, sandboxId: handle.machineId, branchName, resumed: false };
+    return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
   }
 
   try {
@@ -330,7 +344,7 @@ export async function spawnBranch({
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 
-  return { ok: true, sandboxId: handle.machineId, branchName, resumed: false };
+  return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
 }
 
 export type AttachBranchResult =

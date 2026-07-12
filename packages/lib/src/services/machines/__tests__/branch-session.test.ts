@@ -116,6 +116,9 @@ const GNARLY_INPUTS = [
   `${'x'.repeat(195)}.lockdown`,
   'main',
   'release/1.2.3',
+  '日本語',
+  '한국어',
+  'feature/日本語',
   'Release-2.0',
   'feature_x',
   'HEAD',
@@ -165,7 +168,6 @@ describe('normalizeBranchName', () => {
     ['   ', 'branch'],
     ['...', 'branch'],
     ['//', 'branch'],
-    ['🚀', 'branch'],
     // Length cap, and the separator the cut exposes gets trimmed...
     ['a'.repeat(250), 'a'.repeat(200)],
     [`${'a'.repeat(199)}-b-c`, 'a'.repeat(199)],
@@ -191,6 +193,38 @@ describe('normalizeBranchName', () => {
     for (const name of ['main', 'feature/foo', 'fix-123', 'release/1.2.3', 'a', 'a-b-c.d']) {
       expect(normalizeBranchName(name)).toBe(name);
     }
+  });
+
+  it('given names the ASCII charset annihilates, should NOT collapse them onto one ref', () => {
+    // THE severe case. The branch name IS the branch-terminal's identity: it is
+    // hashed into the Sprite session key and is the store's lookup key. If every
+    // non-Latin name fell back to `branch`, spawning `日本語` and then `한국어`
+    // would report `resumed: true` and hand the second user the FIRST user's
+    // Sprite and filesystem. Each keeps a deterministic digest token instead.
+    const jp = normalizeBranchName('日本語');
+    const kr = normalizeBranchName('한국어');
+    const rocket = normalizeBranchName('🚀');
+
+    expect(new Set([jp, kr, rocket, 'branch']).size).toBe(4);
+    for (const name of [jp, kr, rocket]) {
+      expect(isValidBranchName(name)).toBe(true);
+      expect(normalizeBranchName(name)).toBe(name);
+    }
+    // Deterministic across calls — the same input must always find the same branch.
+    expect(normalizeBranchName('日本語')).toBe(jp);
+    // ...and whitespace around it is not a different branch.
+    expect(normalizeBranchName('  日本語  ')).toBe(jp);
+  });
+
+  it('given a wiped segment inside a path, should keep a token rather than silently becoming its parent', () => {
+    // `feature/日本語` must not collapse to plain `feature` — that would collide
+    // with a real `feature` branch and attach the user to someone else's work.
+    const nested = normalizeBranchName('feature/日本語');
+    expect(nested).not.toBe('feature');
+    expect(nested.startsWith('feature/')).toBe(true);
+    expect(isValidBranchName(nested)).toBe(true);
+    // Structural noise still vanishes — this is what keeps `../escape` → `escape`.
+    expect(normalizeBranchName('feature/../foo')).toBe('feature/foo');
   });
 
   it('given a name git already accepts, should NOT rewrite it — case and `_` are load-bearing', () => {

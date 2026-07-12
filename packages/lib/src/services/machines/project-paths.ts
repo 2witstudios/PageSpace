@@ -12,7 +12,7 @@
  */
 
 import { resolvePathWithinSync } from '../../security/path-validator';
-import { slugifySegment } from './name-slug';
+import { slugifySegment, hasNameContent, slugDigest } from './name-slug';
 
 /** Root directory on a Machine's filesystem under which every Project is cloned. */
 export const PROJECTS_ROOT = '/workspace/projects';
@@ -62,7 +62,14 @@ export const PROJECT_NAME_FALLBACK = 'project';
 export function normalizeProjectName(input: string): string {
   if (isValidProjectName(input)) return input;
 
+  // A name the charset annihilated (`日本語`, `🚀`) keeps a deterministic token
+  // rather than collapsing onto the shared fallback — otherwise two distinct
+  // repos would fight over one directory and the second would be rejected as a
+  // duplicate. Structural noise (`..`, `   `) has no content and does fall back.
   let name = slugifySegment(input);
+  if (name.length === 0 && hasNameContent(input)) {
+    name = `x${slugDigest(input)}`;
+  }
 
   if (name.length > MAX_PROJECT_NAME_LENGTH) {
     name = name.slice(0, MAX_PROJECT_NAME_LENGTH).replace(TRAILING_SEPARATORS_RE, '');
