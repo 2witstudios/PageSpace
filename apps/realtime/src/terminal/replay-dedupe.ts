@@ -129,7 +129,7 @@ export const MIN_CORROBORATION_BYTES = 4 * 1024;
  *
  * It bounds the CORROBORATION work — 8 candidates, each a compare of at most `seen`. It does
  * NOT bound the SEARCH, and that distinction was worth ~600ms of blocked event loop: see
- * SEARCH_PROBE_BYTES.
+ * HASH_BASE.
  */
 export const MAX_MATCH_CANDIDATES = 8;
 
@@ -149,6 +149,12 @@ export const MAX_MATCH_CANDIDATES = 8;
  * candidate, verified with one `equals` (a memcmp that quits on the first differing byte)
  * before corroboration runs. Candidates stay charged to MAX_MATCH_CANDIDATES, so a collision
  * attack can still cost us a suppression — never a byte, and never the event loop.
+ *
+ * The honest cost of the trade: `indexOf` is native (a SIMD memmem) and this is a JS byte loop,
+ * so the BENIGN unalignable case got slower — a 4 MiB replay in 256-byte frames goes 9ms -> 25ms,
+ * worst chunk 1ms -> 3ms. That is throughput spread across 16k handlers. It buys away a 588ms
+ * stall inside ONE of them, on input an adversary picks. Worth it, but it is a cost, not a free
+ * win, and the numbers belong here rather than in the commit that made them.
  */
 const HASH_BASE = 131;
 
