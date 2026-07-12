@@ -242,9 +242,12 @@ const anchorOf = (seen: Buffer): Buffer =>
  * recurring in live output? Everything in front of a genuine match is the stream's
  * own history, so it must equal the history we hold in front of our anchor.
  *
- * - `at === 0`: nothing is being suppressed except the anchor itself, which
- *   matched. Sound, and the only judgement available — there is nothing in front
- *   of it to compare.
+ * - `at === 0`: nothing precedes the match, so nothing can corroborate it — the compare
+ *   below would run over zero bytes and pass. Stated explicitly rather than left to
+ *   emerge from the arithmetic, because it is this scheme's weakest point and a reader
+ *   deserves to see it plainly: a replica of the anchor alone, at a replay's head, IS
+ *   accepted (see the module header's bound). Nothing is suppressed here but the anchor
+ *   itself, which matched.
  * - Otherwise the `at` bytes in front of the match are about to be dropped, so they
  *   must be PROVEN: either every one of them matches the history (`depth === at`),
  *   or at least MIN_CORROBORATION_BYTES of them do. A shorter proof is no proof —
