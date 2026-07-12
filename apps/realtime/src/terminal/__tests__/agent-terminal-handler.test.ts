@@ -318,6 +318,20 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
       expect(checkAuth).not.toHaveBeenCalled();
+    })
+
+    it('given an invalid payload, should tag the error with the CONNECTION it came from', async () => {
+      // One socket carries every pane of the grid, and a client treats an untagged
+      // event as its own — so an untagged error is rendered by EVERY pane at once,
+      // covering healthy running terminals with a failure that belongs to one.
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { name: _omit, ...rest } = validPayload;
+      await onConnect({ ...rest, connectionId: 'pane-b' });
+
+      expect(socket.emit).toHaveBeenCalledWith(
+        'agent-terminal:error',
+        expect.objectContaining({ connectionId: 'pane-b' }),
+      );
     });
 
     it('given a payload with neither projectName nor branchName (machine scope), should call checkAuth with both undefined', async () => {

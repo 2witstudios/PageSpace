@@ -490,7 +490,17 @@ export function buildAgentTerminalHandlers({
     async onConnect(payload: unknown) {
       const validation = validateAgentTerminalConnectPayload(payload);
       if (!validation.ok) {
-        socket.emit('agent-terminal:error', { message: validation.error });
+        // Tagged like every other emit, even though the payload it is complaining
+        // about is malformed. ONE socket carries every pane in the grid, and a
+        // client treats an untagged event as its own — so an untagged error is
+        // rendered by every pane at once, covering healthy running terminals with
+        // a failure that belongs to one of them. Read straight off the raw payload:
+        // the id is the client's own, and it survives a payload this validator
+        // rejects for any other reason.
+        socket.emit('agent-terminal:error', {
+          message: validation.error,
+          connectionId: readConnectionId(payload) ?? socket.id,
+        });
         return;
       }
       const { machineId, projectName, branchName, name, cols, rows } = validation.value;
