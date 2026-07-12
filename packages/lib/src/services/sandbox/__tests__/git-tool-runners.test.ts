@@ -37,6 +37,7 @@ function makeSandbox(over: Partial<ExecutableSandbox> = {}): {
     },
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from(''),
+    createCheckpoint: async () => {},
     ...over,
   };
   return { sandbox, runCommandCalls };
@@ -73,6 +74,7 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
     },
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from(''),
+    createCheckpoint: async () => {},
   };
   const slots = { acquired: 0, released: 0 };
   const deps: GitSandboxRunDeps = {
@@ -225,6 +227,7 @@ describe('runGitInSandbox', () => {
       runCommand: async () => { throw new Error('run failed'); },
       writeFiles: async () => {},
       readFileToBuffer: async () => null,
+      createCheckpoint: async () => {},
     });
     const result = await runGitInSandbox({ cmd: 'git', args: ['status'], ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false });

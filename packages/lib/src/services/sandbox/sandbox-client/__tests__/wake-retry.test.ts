@@ -185,6 +185,7 @@ function fakeSprite(name: string): SpriteInstanceLike {
     listSessions: async () => [],
     filesystem: () => { throw new Error('not used'); },
     updateNetworkPolicy: async () => {},
+    createCheckpoint: async () => { throw new Error('not used'); },
     destroy: async () => {},
   };
 }

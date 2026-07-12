@@ -65,6 +65,7 @@ function makeSandbox(runCommandImpl?: (opts: Parameters<ExecutableSandbox['runCo
       throw new Error('writeFiles should never be called by clone/remove — no persisted credentials');
     },
     readFileToBuffer: async () => null,
+    createCheckpoint: async () => {},
   };
   return { sandbox, runCommandCalls };
 }
@@ -250,6 +251,7 @@ describe('addProject', () => {
       },
       writeFiles: async () => {},
       readFileToBuffer: async () => null,
+      createCheckpoint: async () => {},
     };
     const { deps, store } = makeDeps({ reconnect: async () => sandbox });
     const result = await addProject({

@@ -35,6 +35,7 @@ export function adaptMachineHandleToExecutableSandbox(handle: MachineHandle): Ex
     runCommand: (args) => handle.exec(args),
     writeFiles: (files) => handle.writeFiles(files),
     readFileToBuffer: (args) => handle.readFile(args),
+    createCheckpoint: (comment) => handle.createCheckpoint(comment),
   };
 }
 

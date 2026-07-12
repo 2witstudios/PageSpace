@@ -82,4 +82,14 @@ export interface ToolExecutionContext {
   // same turn see the new active machine. Undefined means "not yet
   // switched" — callers fall back to the configured machines[0].
   activeMachine?: MachineRef;
+
+  // Sprites Platform Alignment 5-2: a stable id for THIS agent turn (one
+  // streamText run), lazily stamped once by `resolveSandboxActorContext`
+  // (apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts) the first time a
+  // sandbox tool call reads this context, then reused by every later bash
+  // call in the same run — same mutate-in-place pattern as `activeMachine`
+  // above. Threads into `SandboxActorContext.turnId`, which gates the
+  // pre-batch checkpoint's "at most once per turn" throttle
+  // (`checkpoint-policy.ts`). Undefined until first stamped.
+  turnId?: string;
 }

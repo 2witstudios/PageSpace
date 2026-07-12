@@ -115,6 +115,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
         const content = state.files.get(path);
         return content === undefined ? null : Buffer.from(content);
       },
+      createCheckpoint: async () => {},
       stream: async () => {
         throw new Error('not used by machine-branches');
       },

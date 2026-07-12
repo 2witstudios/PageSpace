@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
@@ -6,12 +6,14 @@ import {
   classifyProvisionError,
   planProvisionFailure,
   readSessionInfoId,
+  checkpointStreamErrorMessage,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
   type SpriteInstanceLike,
   type SpriteCommandLike,
   type SpriteFsLike,
+  type SpriteCheckpointStreamLike,
 } from '../sprites';
 import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
@@ -99,6 +101,29 @@ function fakeFs(over: Partial<SpriteFsLike> = {}): SpriteFsLike {
   };
 }
 
+/**
+ * A fake checkpoint stream: replays `messages` through `processAll`, in
+ * order. `processAll` never resolves when `hang: true` (simulates a stalled
+ * SDK stream); `close` is a spy so a test can assert it was called on
+ * timeout.
+ */
+function fakeCheckpointStream(
+  messages: Array<{ type: string; data?: string; error?: string }> = [{ type: 'info', data: 'done' }],
+  options: { hang?: boolean } = {},
+): SpriteCheckpointStreamLike & { close: ReturnType<typeof vi.fn> } {
+  return {
+    processAll: async (handler) => {
+      if (options.hang) {
+        await new Promise(() => {}); // never resolves
+      }
+      for (const message of messages) {
+        await handler(message);
+      }
+    },
+    close: vi.fn(),
+  };
+}
+
 function fakeSprite(
   over: Partial<SpriteInstanceLike> & { fs?: SpriteFsLike } = {},
 ): SpriteInstanceLike {
@@ -115,6 +140,7 @@ function fakeSprite(
     listSessions: async () => [],
     filesystem: () => fs,
     updateNetworkPolicy: async () => {},
+    createCheckpoint: async () => fakeCheckpointStream(),
     destroy: async () => {},
     ...over,
   };
@@ -1036,6 +1062,127 @@ describe('ExecutableSandbox file ops', () => {
     const { sdk: sdkMissing } = makeSdk({ getSprite: async () => fakeSprite({ fs: missing }) });
     const miss = await createSpritesSandboxClient({ sdk: sdkMissing }).get({ sandboxId: 'k' });
     expect(await miss!.readFileToBuffer({ path: '/workspace/missing.txt' })).toBeNull();
+  });
+});
+
+describe('checkpointStreamErrorMessage (pure)', () => {
+  assert({
+    given: 'a non-error stream message',
+    should: 'return undefined',
+    actual: checkpointStreamErrorMessage({ type: 'info', data: 'snapshotting' }),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'an error-type message carrying `error`',
+    should: 'return that error text',
+    actual: checkpointStreamErrorMessage({ type: 'error', error: 'disk full' }),
+    expected: 'disk full',
+  });
+
+  assert({
+    given: 'an error-type message with no `error` field but a `data` field',
+    should: 'fall back to `data`',
+    actual: checkpointStreamErrorMessage({ type: 'error', data: 'boom' }),
+    expected: 'boom',
+  });
+
+  assert({
+    given: 'an error-type message with neither `error` nor `data`',
+    should: 'fall back to a generic message',
+    actual: checkpointStreamErrorMessage({ type: 'error' }),
+    expected: 'checkpoint stream reported an error',
+  });
+});
+
+describe('ExecutableSandbox.createCheckpoint', () => {
+  it('calls the SDK with the given comment and drains the stream to completion', async () => {
+    const seenComments: (string | undefined)[] = [];
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          createCheckpoint: async (comment) => {
+            seenComments.push(comment);
+            return fakeCheckpointStream([{ type: 'info', data: 'snapshotting' }, { type: 'info', data: 'done' }]);
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await handle!.createCheckpoint('pagespace-pre-agent-turn-1');
+    expect(seenComments).toEqual(['pagespace-pre-agent-turn-1']);
+  });
+
+  it('rejects when the stream reports an error message', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          createCheckpoint: async () => fakeCheckpointStream([{ type: 'error', error: 'quota exceeded' }]),
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await expect(handle!.createCheckpoint('c')).rejects.toThrow(/quota exceeded/);
+  });
+
+  it('propagates the SDK\'s rejection (caller decides fail-open policy)', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () =>
+        fakeSprite({
+          createCheckpoint: async () => {
+            throw new Error('sprite unreachable');
+          },
+        }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const handle = await client.get({ sandboxId: 'k' });
+    await expect(handle!.createCheckpoint('c')).rejects.toThrow('sprite unreachable');
+  });
+
+  // Regression test for a P2 finding on PR #2025 (chatgpt-codex-connector): the
+  // SDK exposes no timeout for createCheckpoint or the stream it returns, so a
+  // stalled connection would otherwise hang this call — and therefore the
+  // caller's whole fail-open checkpoint attempt (tool-runners.ts) — forever.
+  it('given a stream that never settles, rejects after CHECKPOINT_TIMEOUT_MS and closes the stream', async () => {
+    vi.useFakeTimers();
+    try {
+      const hungStream = fakeCheckpointStream(undefined, { hang: true });
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({ createCheckpoint: async () => hungStream }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const handle = await client.get({ sandboxId: 'k' });
+
+      const result = handle!.createCheckpoint('c');
+      const assertion = expect(result).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+
+      expect(hungStream.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given the SDK call itself never resolves (before any stream is returned), rejects after the timeout without attempting to close a stream', async () => {
+    vi.useFakeTimers();
+    try {
+      const { sdk } = makeSdk({
+        getSprite: async () =>
+          fakeSprite({
+            createCheckpoint: () => new Promise(() => {}), // never resolves
+          }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const handle = await client.get({ sandboxId: 'k' });
+
+      const result = handle!.createCheckpoint('c');
+      const assertion = expect(result).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

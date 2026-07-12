@@ -17,6 +17,7 @@ function makeHandle(overrides: {
     exec: overrides.exec ?? (async () => ({ exitCode: 0, stdout: '', stderr: '' })),
     readFile: overrides.readFile ?? (async () => null),
     writeFiles: async () => {},
+    createCheckpoint: async () => {},
     stream: async () => {
       throw new Error('stream() is not used by the fs primitives');
     },

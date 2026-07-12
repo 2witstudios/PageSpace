@@ -36,6 +36,7 @@ function fakeRunDeps(): SandboxRunDeps {
       runCommand: async () => ({ exitCode: 0, stdout: 'hi', stderr: '' }),
       writeFiles: async () => {},
       readFileToBuffer: async () => Buffer.from('data'),
+      createCheckpoint: async () => {},
     }),
     quota: {
       acquireSlot: () => true,
@@ -148,6 +149,7 @@ describe('createSandboxTools', () => {
         wrote = true;
       },
       readFileToBuffer: async () => Buffer.from(''),
+      createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
       runDeps,
@@ -229,6 +231,7 @@ describe('createSandboxTools', () => {
         wrote = true;
       },
       readFileToBuffer: async () => Buffer.from('data'),
+      createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
       runDeps,

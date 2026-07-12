@@ -146,6 +146,7 @@ function wrapSpriteHandle({
     exec: (args) => exec.runCommand(args),
     writeFiles: (files) => exec.writeFiles(files),
     readFile: (args) => exec.readFileToBuffer(args),
+    createCheckpoint: (comment) => exec.createCheckpoint(comment),
 
     /**
      * Open a PTY stream, surviving the cold-start wake drop.

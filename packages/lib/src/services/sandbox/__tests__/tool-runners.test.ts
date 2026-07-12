@@ -5,6 +5,7 @@ import {
   readSandboxFile,
   editSandboxFile,
   MAX_WRITE_BYTES,
+  CHECKPOINT_TIMEOUT_MS,
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
@@ -32,6 +33,7 @@ function makeSandbox(over: Partial<ExecutableSandbox> = {}): ExecutableSandbox {
     runCommand: async (): Promise<SandboxRunResult> => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from('file-contents'),
+    createCheckpoint: async () => {},
     ...over,
   };
 }
@@ -532,6 +534,225 @@ describe('runBashInSandbox', () => {
     });
     await runBashInSandbox({ command: 'echo hi', timeoutMs: 0, ctx: makeCtx(), deps });
     expect(seenTimeout).toBe(1);
+  });
+});
+
+describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 5-2)', () => {
+  function makeCheckpointDeps(over: Partial<NonNullable<SandboxRunDeps['checkpoint']>> = {}) {
+    const state = new Map<string, { lastCheckpointAt: Date | null; lastCheckpointTurnId: string | null }>();
+    const created: Array<{ sandboxId: string; comment: string }> = [];
+    const checkpoint: NonNullable<SandboxRunDeps['checkpoint']> = {
+      isEnabled: () => true,
+      getState: (sandboxId) => state.get(sandboxId) ?? { lastCheckpointAt: null, lastCheckpointTurnId: null },
+      recordCheckpoint: (sandboxId, s) => {
+        state.set(sandboxId, s);
+      },
+      createCheckpoint: async ({ sandbox, comment }) => {
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+      ...over,
+    };
+    return { checkpoint, created, state };
+  }
+
+  it('given the flag on and a turnId, should checkpoint before the command runs, tagged with the turn', async () => {
+    const order: string[] = [];
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async ({ sandbox, comment }) => {
+        order.push('checkpoint');
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+    });
+    const { deps } = makeDeps({
+      checkpoint,
+      reconnect: async () =>
+        makeSandbox({
+          runCommand: async () => {
+            order.push('run');
+            return { exitCode: 0, stdout: 'ok', stderr: '' };
+          },
+        }),
+    });
+    const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(created).toEqual([{ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' }]);
+    expect(order).toEqual(['checkpoint', 'run']);
+  });
+
+  it('given the flag off, should never call createCheckpoint', async () => {
+    const { checkpoint, created } = makeCheckpointDeps({ isEnabled: () => false });
+    const { deps } = makeDeps({ checkpoint });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(created).toEqual([]);
+  });
+
+  it('given no turnId on ctx, should skip checkpointing entirely (no turn boundary to key the throttle on)', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const { deps } = makeDeps({ checkpoint });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: undefined }), deps });
+    expect(result).toMatchObject({ success: true });
+    expect(created).toEqual([]);
+  });
+
+  it('given repeated batches within the SAME turn, should checkpoint at most once', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const { deps } = makeDeps({ checkpoint });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    await runBashInSandbox({ command: 'echo three', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(created).toHaveLength(1);
+  });
+
+  it('given a NEW turn well after the first, should checkpoint again', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const { deps: deps1 } = makeDeps({ checkpoint, now: () => new Date('2026-07-12T12:00:00.000Z') });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps: deps1 });
+
+    const { deps: deps2 } = makeDeps({ checkpoint, now: () => new Date('2026-07-12T12:05:00.000Z') });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-2' }), deps: deps2 });
+
+    expect(created).toHaveLength(2);
+    expect(created[1]).toEqual({ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-2' });
+  });
+
+  // Regression test for a P2 finding on PR #2025 (chatgpt-codex-connector): an
+  // earlier revision's pure policy suppressed a NEW turn's checkpoint if it
+  // fell within a time-based throttle window of a prior, DIFFERENT turn's
+  // checkpoint — so two legitimate turns close together (an ordinary rapid
+  // back-and-forth) would leave only the older turn's restore point on
+  // record, silently discarding the newer turn's real work on a later
+  // restore. Exercised here through the full runBashInSandbox path, not just
+  // the pure function, with `now` identical across both turns (the most
+  // adversarial case for a time-based throttle).
+  it('given a NEW turn moments after a different turn was checkpointed, should still checkpoint (no cross-turn interval suppression)', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const sameInstant = () => new Date('2026-07-12T12:00:00.000Z');
+    const { deps: deps1 } = makeDeps({ checkpoint, now: sameInstant });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps: deps1 });
+
+    const { deps: deps2 } = makeDeps({ checkpoint, now: sameInstant });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-2' }), deps: deps2 });
+
+    expect(created).toEqual([
+      { sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' },
+      { sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-2' },
+    ]);
+  });
+
+  it('given checkpoint creation throws, should proceed with the batch (fail-open) and log', async () => {
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async () => {
+        throw new Error('checkpoint API unavailable');
+      },
+    });
+    const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
+    const { deps } = makeDeps({
+      checkpoint,
+      logger: {
+        error: () => {},
+        warn: (message, metadata) => {
+          warnings.push([message, metadata]);
+        },
+      },
+    });
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true, stdout: 'ok' });
+    expect(created).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0][0]).toMatch(/checkpoint/i);
+  });
+
+  it('given no checkpoint dep configured, should run normally (seam fully optional)', async () => {
+    const { deps } = makeDeps();
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(result).toMatchObject({ success: true });
+  });
+
+  it('does not record a checkpoint when the SDK call itself fails (a later batch in the same turn may retry)', async () => {
+    let attempts = 0;
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async ({ sandbox, comment }) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('transient failure');
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+    });
+    const { deps } = makeDeps({ checkpoint, logger: { error: () => {}, warn: () => {} } });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    expect(attempts).toBe(2);
+    expect(created).toHaveLength(1);
+  });
+
+  // Regression test for a P2 finding on PR #2025 (chatgpt-codex-connector): a
+  // checkpoint call that never settles must never block the batch — the
+  // fail-open guarantee documented on maybeCheckpointBeforeBatch would
+  // otherwise be violated by an indefinitely hung checkpoint stream.
+  it('given a checkpoint call that never settles, still proceeds with the batch after CHECKPOINT_TIMEOUT_MS (fail-open)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { checkpoint, created } = makeCheckpointDeps({
+        createCheckpoint: () => new Promise(() => {}), // never resolves
+      });
+      const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
+      const { deps } = makeDeps({
+        checkpoint,
+        logger: {
+          error: () => {},
+          warn: (message, metadata) => {
+            warnings.push([message, metadata]);
+          },
+        },
+      });
+
+      const resultPromise = runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+      const assertion = expect(resultPromise).resolves.toMatchObject({ success: true, stdout: 'ok' });
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_TIMEOUT_MS);
+      await assertion;
+
+      expect(created).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0][0]).toMatch(/checkpoint/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression test for a P2 finding on PR #2025 (2 independent review
+  // agents): the AI SDK can execute multiple tool calls from one agent step
+  // concurrently, so two bash calls in the SAME turn must still checkpoint
+  // at most once even when dispatched together (Promise.all), not just when
+  // dispatched sequentially (already covered above).
+  it('given two bash calls in the SAME turn dispatched concurrently, still checkpoints at most once', async () => {
+    let createCalls = 0;
+    let releaseCheckpoint: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseCheckpoint = resolve;
+    });
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async ({ sandbox, comment }) => {
+        createCalls += 1;
+        await gate; // hold both concurrent callers here until released together
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+    });
+    const { deps } = makeDeps({ checkpoint });
+
+    const first = runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    const second = runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+    // Give both calls a chance to reach (and coalesce on) the checkpoint attempt.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(createCalls).toBe(1); // coalesced — not 2, even though both calls raced past the throttle check
+
+    releaseCheckpoint?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toMatchObject({ success: true });
+    expect(secondResult).toMatchObject({ success: true });
+    expect(created).toHaveLength(1);
   });
 });
 

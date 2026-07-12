@@ -134,6 +134,7 @@ function makeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
     exec: async () => ({ success: true, exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async () => null,
+    createCheckpoint: async () => {},
     stream: async () => ({
       write: () => {},
       resize: () => {},

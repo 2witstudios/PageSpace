@@ -106,6 +106,17 @@ export interface MachineHandle {
   readFile(args: { path: string }): Promise<Buffer | null>;
   stream(args: MachineStreamOptions): Promise<MachineStream>;
   listStreams(): Promise<MachineStreamSessionInfo[]>;
+  /**
+   * Create a filesystem checkpoint tagged with `comment` (Sprites Platform
+   * Alignment 5-2) — see `sprite-machine-host.ts` for the (today, only)
+   * implementation. Required: `MachineHost` has exactly one backend
+   * (Sprite) as of this writing, so an optional-with-runtime-fallback here
+   * would be a guard against a hypothetical future backend that does not
+   * exist yet — code review on PR #2025 flagged that as premature
+   * abstraction. Add it back as optional only when a second backend that
+   * genuinely cannot support checkpoints is introduced.
+   */
+  createCheckpoint(comment: string): Promise<void>;
 }
 
 /**
