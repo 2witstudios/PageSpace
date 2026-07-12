@@ -395,11 +395,43 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(handle.egressPolicyToken).toBeUndefined();
   });
 
-  it('given a FRESH create whose lockdown fails (transient flake), should retain the Sprite and reject WITHOUT destroying it', async () => {
+  it('given a FRESH create whose lockdown fails ONCE (transient flake), should retry inline against the SAME Sprite and succeed without destroying it', async () => {
     let destroyed: string | null = null;
+    let policyCalls = 0;
     const sprite = fakeSprite({
       name: 'k',
       updateNetworkPolicy: async () => {
+        policyCalls += 1;
+        if (policyCalls === 1) throw new Error('policy api down');
+      },
+    });
+    const sdk: SpritesSdk = {
+      getSprite: async () => {
+        throw new Error('not found');
+      },
+      createSprite: async () => sprite,
+      deleteSprite: async (name) => {
+        destroyed = name;
+      },
+    };
+    // Real backoff would be fine (a couple hundred ms), but injecting a no-op
+    // sleep keeps this test instant.
+    const client = createSpritesSandboxClient({ sdk, sleep: async () => {} });
+    const handle = await client.getOrCreate({ name: 'k', options });
+    // A cold-start flake must never throw away a reusable VM: it retries the
+    // SAME Sprite inline (within this one acquire) and hands it back.
+    expect(handle.sandboxId).toBe('k');
+    expect(policyCalls).toBe(2);
+    expect(destroyed).toBeNull();
+  });
+
+  it('given a FRESH create whose lockdown fails PERSISTENTLY, should exhaust its bounded retry budget and THEN destroy it (never poisoned forever)', async () => {
+    let destroyed: string | null = null;
+    let policyCalls = 0;
+    const sprite = fakeSprite({
+      name: 'k',
+      updateNetworkPolicy: async () => {
+        policyCalls += 1;
         throw new Error('policy api down');
       },
     });
@@ -412,57 +444,60 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
         destroyed = name;
       },
     };
-    const client = createSpritesSandboxClient({ sdk });
+    const client = createSpritesSandboxClient({ sdk, sleep: async () => {} });
     const error = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
     expect(error).toBeInstanceOf(SandboxProvisionError);
     expect(String((error as SandboxProvisionError).providerCause)).toContain('policy api down');
-    // A cold-start flake must never throw away a reusable VM — the next acquire
-    // under the same name retries against this SAME retained Sprite.
-    expect(destroyed).toBeNull();
+    // A genuinely broken fresh VM must not poison the session key forever with
+    // no persisted row to act on: it gets every bounded attempt, then is
+    // destroyed so the next acquire provisions a clean replacement.
+    expect(policyCalls).toBe(3);
+    expect(destroyed).toBe('k');
   });
 
-  it('given a FRESH create whose lockdown failed and was retained, the next acquire under the same name should retry against it and succeed', async () => {
+  it('given a fresh Sprite destroyed after exhausting its retry budget, the next acquire under the same name should provision a clean replacement and succeed', async () => {
+    let created = 0;
     let policyCalls = 0;
     let spriteExists = false;
-    const created: string[] = [];
     const deleted: string[] = [];
-    const sprite = fakeSprite({
-      name: 'k',
-      updateNetworkPolicy: async () => {
-        policyCalls += 1;
-        if (policyCalls === 1) throw new Error('policy api down');
-      },
-    });
+    const makeSprite = () =>
+      fakeSprite({
+        name: 'k',
+        updateNetworkPolicy: async () => {
+          policyCalls += 1;
+          // Only the FIRST Sprite instance is broken; its replacement works.
+          if (created === 1) throw new Error('policy api down');
+        },
+      });
     const sdk: SpritesSdk = {
       getSprite: async () => {
         if (!spriteExists) throw new Error('not found');
-        return sprite;
+        return makeSprite();
       },
       createSprite: async (name) => {
-        created.push(name);
+        created += 1;
         spriteExists = true;
-        return sprite;
+        return makeSprite();
       },
       deleteSprite: async (name) => {
         deleted.push(name);
         spriteExists = false;
       },
     };
-    const client = createSpritesSandboxClient({ sdk });
+    const client = createSpritesSandboxClient({ sdk, sleep: async () => {} });
 
-    // First acquire: fresh create, lockdown fails, retained (not destroyed).
+    // First acquire: fresh create, lockdown persistently fails, exhausted and destroyed.
     const firstError = await client.getOrCreate({ name: 'k', options }).then(() => null, (e) => e);
     expect(firstError).toBeInstanceOf(SandboxProvisionError);
-    expect(created).toEqual(['k']);
-    expect(deleted).toEqual([]);
+    expect(created).toBe(1);
+    expect(deleted).toEqual(['k']);
 
-    // Second acquire, same name: the Sprite still exists (retained), so this
-    // resolves via resume (not a second create) and the lockdown succeeds.
+    // Second acquire, same name: the broken Sprite is gone, so this is a genuine
+    // fresh create of a NEW (working) instance.
     const handle = await client.getOrCreate({ name: 'k', options });
     expect(handle.sandboxId).toBe('k');
-    expect(created).toEqual(['k']); // still only ONE create across both acquires
-    expect(deleted).toEqual([]); // never destroyed
-    expect(policyCalls).toBe(2); // retried, and this time it landed
+    expect(created).toBe(2);
+    expect(deleted).toEqual(['k']); // never re-destroyed
   });
 });
 
