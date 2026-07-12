@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull } from '@pagespace/db/operators';
+import { and, eq, inArray, isNotNull, type SQL } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -7,6 +7,10 @@ import {
   type AbortOutcome,
   type SettleRow,
 } from '@/lib/ai/core/stream-abort-decisions';
+import {
+  ABORT_SETTLE_POLL_MS,
+  ABORT_SETTLE_TIMEOUT_MS,
+} from '@/lib/ai/core/stream-horizons';
 
 /**
  * The cross-instance half of Stop.
@@ -36,16 +40,6 @@ import {
  * The one exception is `markAbortRequestedAsOwner`, below. Read its docblock before using it.
  */
 
-/** Bounded, because a Stop that hangs is a Stop the user presses again. */
-export const ABORT_SETTLE_TIMEOUT_MS = 2_000;
-/** Comfortably tighter than the watcher's ~1s tick, so a confirmation is rarely missed by a beat. */
-export const ABORT_SETTLE_POLL_MS = 250;
-/**
- * The takeover's budget. Shorter than a user-facing Stop: this one is spent on a SEND, and the
- * user is waiting for their message to go out.
- */
-export const TAKEOVER_SETTLE_TIMEOUT_MS = 1_500;
-
 const sleepReal = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -60,6 +54,23 @@ const sleepReal = (ms: number): Promise<void> => new Promise((resolve) => setTim
  * caller must not distinguish "not yours" from "not there", and neither does this function: doing
  * so would confirm the existence of another user's stream.
  */
+export interface MarkResult {
+  /** messageIds now carrying an abort request. */
+  marked: string[];
+  /**
+   * The write itself did not happen — the DB was unreachable, the pool was exhausted, the
+   * statement timed out.
+   *
+   * This is NOT the same as "no row matched", and conflating them is dangerous: an empty match is
+   * benign (nothing of the caller's was in flight) and the client is designed to stay SILENT about
+   * it, whereas a failed write means the Stop was never recorded ANYWHERE. The generation keeps
+   * running, keeps calling write tools, and keeps billing, and the user would be told nothing at
+   * all while the button flips back to Send. A failure to record the request is strictly worse
+   * than a failure to read it back — so it must surface, as `unconfirmed`.
+   */
+  failed: boolean;
+}
+
 export const markAbortRequested = async ({
   messageId,
   streamId,
@@ -72,18 +83,9 @@ export const markAbortRequested = async ({
   conversationId?: string;
   userId: string;
   now?: Date;
-}): Promise<string[]> => {
-  const name = messageId
-    ? eq(aiStreamSessions.messageId, messageId)
-    : streamId
-      ? eq(aiStreamSessions.streamId, streamId)
-      : conversationId
-        ? eq(aiStreamSessions.conversationId, conversationId)
-        : undefined;
-
-  if (!name) return [];
-
-  try {
+}): Promise<MarkResult> => {
+  const markBy = async (name: SQL | undefined): Promise<string[]> => {
+    if (!name) return [];
     const marked = await db
       .update(aiStreamSessions)
       .set({ abortRequestedAt: now })
@@ -98,12 +100,36 @@ export const markAbortRequested = async ({
       .returning({ messageId: aiStreamSessions.messageId });
 
     return marked.map((row) => row.messageId);
+  };
+
+  // Precedence: the most precise name first. But a precise name that matches NOTHING falls through
+  // to the conversation, which is the one name that always resolves.
+  //
+  // This is not belt-and-braces, it is the rolling-deploy path: a stream started by a worker
+  // running the previous image has `stream_id = NULL`, so a Stop naming the `X-Stream-Id` the
+  // client was handed matches zero rows. Without the fallback that is reported as `not_found` —
+  // which the client is designed to treat as SILENT — while the generation runs on and bills.
+  // Falling back to the conversation is also exactly what Stop means: "stop whatever of MINE is
+  // generating here". The `user_id` predicate rides every one of these.
+  try {
+    const names: Array<SQL | undefined> = [
+      messageId ? eq(aiStreamSessions.messageId, messageId) : undefined,
+      streamId ? eq(aiStreamSessions.streamId, streamId) : undefined,
+      conversationId ? eq(aiStreamSessions.conversationId, conversationId) : undefined,
+    ];
+
+    for (const name of names) {
+      const marked = await markBy(name);
+      if (marked.length > 0) return { marked, failed: false };
+    }
+
+    return { marked: [], failed: false };
   } catch (error) {
     loggers.ai.warn('cross-instance abort: could not mark stream(s) for abort', {
       conversationId,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return [];
+    return { marked: [], failed: true };
   }
 };
 
@@ -129,8 +155,8 @@ export const markAbortRequestedAsOwner = async ({
 }: {
   messageIds: readonly string[];
   now?: Date;
-}): Promise<string[]> => {
-  if (messageIds.length === 0) return [];
+}): Promise<MarkResult> => {
+  if (messageIds.length === 0) return { marked: [], failed: false };
 
   try {
     const marked = await db
@@ -142,18 +168,22 @@ export const markAbortRequestedAsOwner = async ({
       ))
       .returning({ messageId: aiStreamSessions.messageId });
 
-    return marked.map((row) => row.messageId);
+    return { marked: marked.map((row) => row.messageId), failed: false };
   } catch (error) {
+    // `failed`, not silence. A takeover that could not even RECORD its abort request is about to
+    // start a second generation beside a live one — two agents, two sets of write tools, two
+    // bills. That must reach the log, not be swallowed into an empty result that reads exactly
+    // like "there was nothing to stop".
     loggers.ai.warn('cross-instance abort: could not mark stream(s) for takeover abort', {
       messageIds,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return [];
+    return { marked: [], failed: true };
   }
 };
 
-const readSettleRows = async (messageIds: readonly string[]): Promise<SettleRow[]> => {
-  const rows = await db
+const readSettleRows = (messageIds: readonly string[]): Promise<SettleRow[]> =>
+  db
     .select({
       messageId: aiStreamSessions.messageId,
       status: aiStreamSessions.status,
@@ -162,9 +192,6 @@ const readSettleRows = async (messageIds: readonly string[]): Promise<SettleRow[
     })
     .from(aiStreamSessions)
     .where(inArray(aiStreamSessions.messageId, [...messageIds]));
-
-  return rows;
-};
 
 /**
  * Wait for marked streams to actually stop, and say honestly what happened.
@@ -197,7 +224,6 @@ export const awaitAbortSettled = async ({
   }
 
   const deadline = now() + timeoutMs;
-  let outcome = decideAbortOutcome({ requested: messageIds, rows: [], now: now() });
 
   // Loop, rather than a single sleep-then-check: the common case is the owner picking the mark up
   // on its next tick, and returning the moment it does keeps Stop feeling immediate.
@@ -215,7 +241,7 @@ export const awaitAbortSettled = async ({
       return { aborted: [], reconcile: [], stillLive: [...messageIds], code: 'unconfirmed' };
     }
 
-    outcome = decideAbortOutcome({ requested: messageIds, rows, now: now() });
+    const outcome = decideAbortOutcome({ requested: messageIds, rows, now: now() });
     if (outcome.stillLive.length === 0) return outcome;
     if (now() >= deadline) return outcome;
 

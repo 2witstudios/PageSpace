@@ -396,6 +396,43 @@ describe('stream-abort-registry', () => {
     });
   });
 
+  // A generation ends well before its ROW does: onFinish unregisters the controller immediately and
+  // only writes the terminal status at the very end, after persisting the message and billing each
+  // tool call. For that whole window the row still reads 'streaming' with a live heartbeat.
+  //
+  // Without a tombstone, a Stop pressed in that window — as the last tokens render, one of the most
+  // common Stop clicks there is — is indistinguishable from a stream owned by ANOTHER instance. It
+  // would be escalated, time out against that live heartbeat, and warn the user their agent is
+  // "still running and still billing". It finished. The honest answer is silence.
+  describe('wasRecentlyFinishedHere', () => {
+    it('remembers a stream this process ran to completion, under both of its names', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.removeStream({ streamId: 'stream-1' });
+
+      expect(registry.wasRecentlyFinishedHere({ messageId: 'msg-1' })).toBe(true);
+      expect(registry.wasRecentlyFinishedHere({ streamId: 'stream-1' })).toBe(true);
+    });
+
+    // The distinction the whole tombstone exists to draw. A stream this instance never ran must NOT
+    // look finished — it belongs to someone else, and its Stop has to be escalated to them.
+    it('does not claim a stream it never owned', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      expect(registry.wasRecentlyFinishedHere({ messageId: 'msg-elsewhere' })).toBe(false);
+      expect(registry.wasRecentlyFinishedHere({ streamId: 'stream-elsewhere' })).toBe(false);
+    });
+
+    it('does not claim a stream that is still running here', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+
+      expect(registry.wasRecentlyFinishedHere({ messageId: 'msg-1' })).toBe(false);
+    });
+  });
+
   describe('listLocalStreams', () => {
     // The abort watcher's notion of "mine". A stream missing from this list would never have its
     // cross-instance abort request consumed.

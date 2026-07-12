@@ -1,17 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { assert } from './riteway';
 
-const { mockUpdateSet, mockUpdateWhere, mockReturning, mockLoggerWarn } = vi.hoisted(() => ({
+const { mockUpdateSet, mockUpdateWhere, mockReturning, mockSelectWhere, mockLoggerWarn } = vi.hoisted(() => ({
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockReturning: vi.fn(),
+  mockSelectWhere: vi.fn(),
   mockLoggerWarn: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     update: vi.fn(() => ({ set: mockUpdateSet })),
-    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(async () => []) })) })),
+    select: vi.fn(() => ({ from: vi.fn(() => ({ where: mockSelectWhere })) })),
   },
 }));
 
@@ -46,7 +47,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
 }));
 
-import { markAbortRequested, awaitAbortSettled } from '../stream-abort-mark';
+import {
+  markAbortRequested,
+  markAbortRequestedAsOwner,
+  awaitAbortSettled,
+  readMarkedStreams,
+  reconcileDeadStreamRows,
+  clearAbortMarks,
+} from '../stream-abort-mark';
 import type { SettleRow } from '../stream-abort-decisions';
 
 interface Predicate {
@@ -56,12 +64,21 @@ interface Predicate {
 const conditions = (): Predicate['conds'] =>
   (mockUpdateWhere.mock.calls[0][0] as Predicate).conds;
 
+// `.where(...)` is used two ways in this module: awaited directly (reconcile, clear) and chained
+// into `.returning()` (the marks). So it must be BOTH a thenable and an object carrying
+// `.returning` — mocking only one shape silently breaks the other.
+const whereResult = () => Object.assign(Promise.resolve(undefined), { returning: mockReturning });
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-  mockUpdateWhere.mockReturnValue({ returning: mockReturning });
+  mockUpdateWhere.mockImplementation(whereResult);
   mockReturning.mockResolvedValue([]);
+  mockSelectWhere.mockResolvedValue([]);
 });
+
+const selectConditions = (): Predicate['conds'] =>
+  (mockSelectWhere.mock.calls[0][0] as Predicate).conds;
 
 describe('markAbortRequested — the authorization', () => {
   // THE test. The cross-instance abort works by writing an intent onto a row that ANOTHER web
@@ -108,7 +125,7 @@ describe('markAbortRequested — the authorization', () => {
     assert({
       given: "user B naming user A's in-flight stream",
       should: 'mark nothing — the abort cannot cross users',
-      actual: await markAbortRequested({ messageId: 'msg-of-user-a', userId: 'user-b' }),
+      actual: (await markAbortRequested({ messageId: 'msg-of-user-a', userId: 'user-b' })).marked,
       expected: [],
     });
   });
@@ -133,7 +150,7 @@ describe('markAbortRequested — the authorization', () => {
     assert({
       given: 'user A stopping their own in-flight stream',
       should: 'mark it for the owning instance to abort',
-      actual: await markAbortRequested({ messageId: 'msg-of-user-a', userId: 'user-a' }),
+      actual: (await markAbortRequested({ messageId: 'msg-of-user-a', userId: 'user-a' })).marked,
       expected: ['msg-of-user-a'],
     });
   });
@@ -170,7 +187,7 @@ describe('markAbortRequested — the authorization', () => {
     assert({
       given: 'an abort request with no messageId, streamId or conversationId',
       should: 'mark nothing rather than matching every row',
-      actual: await markAbortRequested({ userId: 'user-a' }),
+      actual: (await markAbortRequested({ userId: 'user-a' })).marked,
       expected: [],
     });
   });
@@ -273,5 +290,189 @@ describe('awaitAbortSettled', () => {
       actual: { aborted: outcome.aborted, code: outcome.code },
       expected: { aborted: [], code: 'unconfirmed' },
     });
+  });
+});
+
+// Every function below was previously mocked out at ALL of its call sites and had no test of its
+// own. That is the "green light wired to nothing" failure: each writes or reads a SQL predicate
+// whose deletion produces a severe, silent bug that the whole suite would sail through.
+describe('markAbortRequested — what it actually writes', () => {
+  // The six authorization tests above all inspect the WHERE clause. NONE of them looked at the
+  // SET. Point this at the wrong column (or at `null`) and every cross-instance Stop becomes a
+  // silent no-op — with the entire suite still green.
+  it('writes the abort request onto the row', async () => {
+    const now = new Date('2026-07-12T12:00:00Z');
+
+    await markAbortRequested({ messageId: 'msg-1', userId: 'user-a', now });
+
+    assert({
+      given: 'an abort request for a stream',
+      should: 'stamp abort_requested_at, which is the whole signal the owning instance reads',
+      actual: mockUpdateSet.mock.calls[0][0],
+      expected: { abortRequestedAt: now },
+    });
+  });
+
+  // A write that never happened is NOT "nothing was in flight". The client stays SILENT on
+  // not_found by design, so collapsing the two would mean: the DB is down, the Stop reaches
+  // nobody, the agent keeps generating and billing, and the user is told nothing at all.
+  it('reports a failed write as failed, never as an empty match', async () => {
+    mockUpdateWhere.mockImplementation(() =>
+      Object.assign(Promise.resolve(undefined), {
+        returning: vi.fn().mockRejectedValue(new Error('db down')),
+      }),
+    );
+
+    assert({
+      given: 'the database refusing the write that records the abort',
+      should: 'say the request FAILED, so the caller can warn instead of staying silent',
+      actual: await markAbortRequested({ messageId: 'msg-1', userId: 'user-a' }),
+      expected: { marked: [], failed: true },
+    });
+  });
+
+  // The rolling-deploy hole: a stream started by the previous image has stream_id = NULL, so the
+  // X-Stream-Id the client holds matches zero rows. Without the fallback that reads as not_found →
+  // the client stays silent → the generation runs on and bills.
+  it('falls back to the conversation when a precise name matches nothing', async () => {
+    mockReturning
+      .mockResolvedValueOnce([])                       // by streamId — a legacy row has none
+      .mockResolvedValueOnce([{ messageId: 'msg-1' }]); // by conversationId
+
+    const result = await markAbortRequested({
+      streamId: 'stream-1',
+      conversationId: 'conv-1',
+      userId: 'user-a',
+    });
+
+    const fallbackConds = (mockUpdateWhere.mock.calls[1][0] as Predicate).conds;
+    expect(fallbackConds.find((c) => c.field === 'ai_stream_sessions.conversation_id')?.value).toBe('conv-1');
+    // The authorization rides the fallback too. It must never be the loose one.
+    expect(fallbackConds.find((c) => c.field === 'ai_stream_sessions.user_id')?.value).toBe('user-a');
+    assert({
+      given: 'a streamId that resolves to no row (a stream from a pre-migration worker)',
+      should: 'fall back to the conversation rather than silently reporting nothing in flight',
+      actual: result.marked,
+      expected: ['msg-1'],
+    });
+  });
+});
+
+describe('markAbortRequestedAsOwner — the takeover-only mark', () => {
+  // This is the ONE function in the change that deliberately omits the user_id predicate, because
+  // a second send on a SHARED conversation must be able to take over a co-member's generation. Its
+  // only remaining guard is the status predicate. It must never be reachable from a client Stop.
+  it('marks only rows that are still streaming', async () => {
+    await markAbortRequestedAsOwner({ messageIds: ['msg-1'] });
+
+    assert({
+      given: 'a takeover marking in-flight rows',
+      should: 'never re-mark a row that already reached a terminal status',
+      actual: conditions().find((c) => c.field === 'ai_stream_sessions.status')?.value,
+      expected: 'streaming',
+    });
+  });
+
+  it('reports a failed write as failed', async () => {
+    mockUpdateWhere.mockImplementation(() =>
+      Object.assign(Promise.resolve(undefined), {
+        returning: vi.fn().mockRejectedValue(new Error('db down')),
+      }),
+    );
+
+    assert({
+      given: 'the database refusing the takeover mark',
+      should: 'say so — the send is about to generate alongside a live stream',
+      actual: await markAbortRequestedAsOwner({ messageIds: ['msg-1'] }),
+      expected: { marked: [], failed: true },
+    });
+  });
+});
+
+describe('readMarkedStreams — what the watcher is allowed to act on', () => {
+  // THE most dangerous untested predicate in the change. Delete `isNotNull(abort_requested_at)` and
+  // this returns EVERY in-flight row the instance owns — all of which decideWatcherActions then
+  // matches (same messageId, same streamId, same owner: they are our own streams) — so the watcher
+  // aborts every generation on the instance within a second of it starting. Silently.
+  it('returns only rows that someone actually asked to abort', async () => {
+    await readMarkedStreams({ messageIds: ['msg-1'] });
+
+    assert({
+      given: 'the watcher reading its own in-flight streams',
+      should: 'return only rows carrying an abort request — never every stream it owns',
+      actual: selectConditions().some((c) => 'isNotNull' in (c as object)),
+      expected: true,
+    });
+  });
+
+  it('returns only rows that are still streaming', async () => {
+    await readMarkedStreams({ messageIds: ['msg-1'] });
+
+    assert({
+      given: 'the watcher reading marked rows',
+      should: 'ignore rows that already reached a terminal status',
+      actual: selectConditions().find((c) => c.field === 'ai_stream_sessions.status')?.value,
+      expected: 'streaming',
+    });
+  });
+
+  it('does not query at all when the instance owns no streams', async () => {
+    await readMarkedStreams({ messageIds: [] });
+
+    expect(mockSelectWhere).not.toHaveBeenCalled();
+  });
+});
+
+describe('reconcileDeadStreamRows — the destructive write', () => {
+  // This wipes `parts` — the stream's only crash-recovery snapshot — and hides the row from every
+  // subscriber. It may ONLY ever touch a row whose owner is provably gone. Drop the status
+  // predicate and a stream that terminated on its own between the read and here is retroactively
+  // relabelled 'aborted'; worse, widen it and you erase a live stream.
+  it('only ever touches rows still marked streaming', async () => {
+    await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
+
+    assert({
+      given: 'a row whose owning process is gone',
+      should: 'refuse to overwrite a row that has already reached a terminal status',
+      actual: conditions().find((c) => c.field === 'ai_stream_sessions.status')?.value,
+      expected: 'streaming',
+    });
+  });
+
+  it('drives the row terminal and clears its now-meaningless abort mark', async () => {
+    await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
+
+    const written = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
+    assert({
+      given: 'a dead row being reconciled',
+      should: 'mark it aborted, clear its parts snapshot, and drop the abort request',
+      actual: { status: written.status, parts: written.parts, abortRequestedAt: written.abortRequestedAt },
+      expected: { status: 'aborted', parts: [], abortRequestedAt: null },
+    });
+  });
+
+  it('does nothing when there is nothing to reconcile', async () => {
+    await reconcileDeadStreamRows({ messageIds: [] });
+
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('clearAbortMarks', () => {
+  it('clears the abort request', async () => {
+    await clearAbortMarks({ messageIds: ['msg-1'] });
+
+    assert({
+      given: 'an unactionable mark',
+      should: 'null it out, so the watcher stops re-reading it on every tick forever',
+      actual: mockUpdateSet.mock.calls[0][0],
+      expected: { abortRequestedAt: null },
+    });
+  });
+
+  it('does nothing when there is nothing to clear', async () => {
+    await clearAbortMarks({ messageIds: [] });
+
+    expect(mockUpdateSet).not.toHaveBeenCalled();
   });
 });

@@ -26,6 +26,18 @@
  */
 
 import { isStreamRowLive, STREAM_HEARTBEAT_STALE_MS, type StreamLivenessRow } from '@/lib/ai/core/stream-liveness';
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
+
+/**
+ * Has this row aged past the point where its heartbeat means anything?
+ *
+ * The lifecycle stops beating at `startedAt + STREAM_MAX_LIFETIME_MS` — deliberately, as a backstop
+ * against a leaked interval. The GENERATION has no such cap. So beyond that horizon a silent
+ * heartbeat is the expected state of a perfectly healthy stream, and "stale" stops being evidence
+ * of death.
+ */
+const hasOutlivedHeartbeatCap = (row: StreamLivenessRow, now: number): boolean =>
+  now - row.startedAt.getTime() > STREAM_MAX_LIFETIME_MS;
 
 /**
  * The outcome a caller reports to the client.
@@ -193,6 +205,20 @@ export const decideAbortOutcome = ({
 
     if (!row || row.status !== 'streaming') {
       outcome.aborted.push(messageId);
+      continue;
+    }
+
+    // A row that has outlived the heartbeat cap stopped beating BY DESIGN, not by dying: the
+    // lifecycle caps the beat at STREAM_MAX_LIFETIME_MS (see stream-lifecycle.ts) while the
+    // generation itself has no such cap — a long tool loop can still be running at T+61min.
+    //
+    // So past the cap a stale heartbeat proves NOTHING, and reading it as death would be the
+    // worst outcome this module can produce: we would tell the user "aborted", and reconcile the
+    // row terminal — wiping `parts` and hiding a stream that is STILL generating, still calling
+    // write tools, and still billing, from every subscriber. Report it honestly as unconfirmed
+    // instead, and never touch its row.
+    if (hasOutlivedHeartbeatCap(row, now)) {
+      outcome.stillLive.push(messageId);
       continue;
     }
 

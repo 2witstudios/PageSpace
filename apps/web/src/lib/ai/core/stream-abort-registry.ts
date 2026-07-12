@@ -31,6 +31,29 @@ const registry = new Map<string, StreamEntry>();
 const messageIdToStreamId = new Map<string, string>();
 const streamIdToMessageId = new Map<string, string>();
 
+/**
+ * Streams this process ran to completion, keyed by BOTH names, with the time they ended.
+ *
+ * WHY A TOMBSTONE AND NOT JUST A DELETE
+ *
+ * A generation ends well before its row does. `onFinish` unregisters the controller immediately
+ * (there is nothing left to abort) and only writes the terminal status at the very END — after
+ * persisting the assistant message, settling the credit hold, and billing each tool call in turn.
+ * For that whole window the row still reads `status='streaming'` and its heartbeat is still fresh.
+ *
+ * Without a tombstone, a Stop pressed in that window — as the last tokens render, which is one of
+ * the most common Stop clicks there is — looks exactly like a stream owned by ANOTHER instance:
+ * the registry misses, so we would mark the row and wait for an owner that no longer exists, time
+ * out against a live heartbeat, and warn the user that their agent is "still running and still
+ * billing". It finished. The honest answer is that nothing is running, and the honest answer is
+ * SILENT.
+ *
+ * So we remember, briefly, that this stream ended HERE. Long enough to outlive any settle wait,
+ * far short of the heartbeat staleness window.
+ */
+const recentlyFinished = new Map<string, number>();
+const FINISHED_TOMBSTONE_TTL_MS = 60 * 1000;
+
 const linkStream = (streamId: string, messageId: string): void => {
   // Clear any stale reverse entries before re-linking — otherwise a later
   // unlink of an orphaned half can wipe the active mapping and break
@@ -73,6 +96,9 @@ const startCleanupInterval = () => {
         registry.delete(streamId);
         unlinkStream(streamId);
       }
+    }
+    for (const [name, finishedAt] of recentlyFinished.entries()) {
+      if (now - finishedAt > FINISHED_TOMBSTONE_TTL_MS) recentlyFinished.delete(name);
     }
   }, CLEANUP_INTERVAL_MS);
 };
@@ -221,11 +247,45 @@ export const abortStream = ({
 };
 
 /**
- * Remove a stream from the registry (call in onFinish)
+ * Remove a stream from the registry (call in onFinish).
+ *
+ * Records a tombstone: this process OWNED this stream and it is over. See `recentlyFinished` — a
+ * Stop arriving in the window between here and the terminal write must be told "nothing is
+ * running" (silent), not mistaken for a stream living on another instance (a loud, false "still
+ * billing" alarm).
  */
 export const removeStream = ({ streamId }: { streamId: string }): void => {
+  const now = Date.now();
+  const messageId = streamIdToMessageId.get(streamId);
+
+  recentlyFinished.set(streamId, now);
+  if (messageId !== undefined) recentlyFinished.set(messageId, now);
+
   registry.delete(streamId);
   unlinkStream(streamId);
+};
+
+/**
+ * Did a stream by this name run to completion on THIS instance, recently?
+ *
+ * The question a cross-instance abort must ask before escalating. A registry miss alone cannot
+ * distinguish "it finished here moments ago" from "it belongs to another instance" — and those two
+ * demand opposite answers: silence, versus marking the row and waiting for an owner.
+ */
+export const wasRecentlyFinishedHere = ({
+  messageId,
+  streamId,
+}: {
+  messageId?: string;
+  streamId?: string;
+}): boolean => {
+  const now = Date.now();
+  for (const name of [messageId, streamId]) {
+    if (name === undefined) continue;
+    const finishedAt = recentlyFinished.get(name);
+    if (finishedAt !== undefined && now - finishedAt <= FINISHED_TOMBSTONE_TTL_MS) return true;
+  }
+  return false;
 };
 
 export const abortStreamByMessageId = ({

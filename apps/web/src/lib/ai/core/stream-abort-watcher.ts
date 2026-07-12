@@ -2,6 +2,11 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { abortStream, listLocalStreams } from '@/lib/ai/core/stream-abort-registry';
 import { decideWatcherActions } from '@/lib/ai/core/stream-abort-decisions';
 import { clearAbortMarks, readMarkedStreams } from '@/lib/ai/core/stream-abort-mark';
+import { ABORT_WATCH_INTERVAL_MS } from '@/lib/ai/core/stream-horizons';
+
+// Re-exported so the poll's period and the budgets that must outlast it stay one number, defined
+// in stream-horizons.ts. See the note there on why these live together.
+export { ABORT_WATCH_INTERVAL_MS };
 
 /**
  * The owning end of a cross-instance abort.
@@ -35,8 +40,6 @@ import { clearAbortMarks, readMarkedStreams } from '@/lib/ai/core/stream-abort-m
  * and STOPS ITSELF the moment its stream set empties. A busy instance issues one batched,
  * PK-indexed query per second, for all of its live streams at once.
  */
-
-export const ABORT_WATCH_INTERVAL_MS = 1_000;
 
 /**
  * Keyed on globalThis, not a module-level `let`.

@@ -232,3 +232,65 @@ describe('decideAbortOutcome', () => {
     });
   });
 });
+
+describe('decideAbortOutcome — a heartbeat that stops BY DESIGN is not a death', () => {
+  // The lifecycle caps the heartbeat at STREAM_MAX_LIFETIME_MS (1h) as a backstop against a leaked
+  // interval. The GENERATION has no such cap — a deep-research or long tool-loop run can still be
+  // going at T+61min. Past the cap, silence is the EXPECTED state of a perfectly healthy stream.
+  //
+  // Read that silence as death and this module produces its worst possible output: it tells the
+  // user "aborted", and hands the row back to be driven terminal — wiping the parts snapshot and
+  // hiding a stream that is still generating, still calling write tools, and still billing, from
+  // every subscriber. Report it honestly as unconfirmed, and never touch its row.
+  const OVER_CAP_NOW = new Date('2026-07-12T14:00:00Z').getTime();
+  const startedTwoHoursAgo = new Date(OVER_CAP_NOW - 2 * 60 * 60 * 1000);
+
+  it('refuses to call a stream dead once it has outlived the heartbeat cap', () => {
+    assert({
+      given: 'a long generation past the 1h heartbeat cap, whose beat therefore stopped by design',
+      should: 'report it unconfirmed and NOT reconcile it — silence is not proof of death here',
+      actual: decideAbortOutcome({
+        requested: ['msg-long'],
+        rows: [{
+          messageId: 'msg-long',
+          status: 'streaming',
+          startedAt: startedTwoHoursAgo,
+          lastHeartbeatAt: new Date(OVER_CAP_NOW - 61 * 60 * 1000),
+        }],
+        now: OVER_CAP_NOW,
+      }),
+      expected: {
+        aborted: [],
+        reconcile: [],
+        stillLive: ['msg-long'],
+        code: 'unconfirmed',
+      },
+    });
+  });
+
+  // The guard must not swallow the ordinary crashed-process case it sits next to: a stream that
+  // died INSIDE the cap still has a stale heartbeat that genuinely means death.
+  it('still calls a stream dead when it goes stale within the cap', () => {
+    const now = new Date('2026-07-12T12:00:00Z').getTime();
+    assert({
+      given: 'a stream that stopped beating 5 minutes into its life',
+      should: 'call it dead and reconcile it — its process is gone',
+      actual: decideAbortOutcome({
+        requested: ['msg-crashed'],
+        rows: [{
+          messageId: 'msg-crashed',
+          status: 'streaming',
+          startedAt: new Date(now - 10 * 60 * 1000),
+          lastHeartbeatAt: new Date(now - 5 * 60 * 1000),
+        }],
+        now,
+      }),
+      expected: {
+        aborted: ['msg-crashed'],
+        reconcile: ['msg-crashed'],
+        stillLive: [],
+        code: 'aborted',
+      },
+    });
+  });
+});

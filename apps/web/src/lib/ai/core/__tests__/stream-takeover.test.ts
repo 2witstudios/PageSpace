@@ -8,6 +8,7 @@ const {
   mockLoggerInfo,
   mockLoggerWarn,
   mockMarkAsOwner,
+  mockWasRecentlyFinishedHere,
   mockAwaitAbortSettled,
   mockReconcileDead,
 } = vi.hoisted(() => ({
@@ -18,6 +19,7 @@ const {
   mockUpdateSet: vi.fn(),
   mockAbortStreamByMessageId: vi.fn(),
   mockMarkAsOwner: vi.fn(),
+  mockWasRecentlyFinishedHere: vi.fn(),
   mockAwaitAbortSettled: vi.fn(),
   mockReconcileDead: vi.fn(),
 }));
@@ -52,10 +54,6 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: mockLoggerInfo, warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
 }));
 
-vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
-  abortStreamByMessageId: mockAbortStreamByMessageId,
-}));
-
 // The cross-instance mark is its own unit, with its own tests (stream-abort-mark.test.ts — where
 // the `user_id` predicate that authorizes the whole mechanism is asserted). Stubbed here so these
 // tests exercise what the TAKEOVER decides, not how the mark is written.
@@ -63,7 +61,12 @@ vi.mock('@/lib/ai/core/stream-abort-mark', () => ({
   markAbortRequestedAsOwner: mockMarkAsOwner,
   awaitAbortSettled: mockAwaitAbortSettled,
   reconcileDeadStreamRows: mockReconcileDead,
-  TAKEOVER_SETTLE_TIMEOUT_MS: 1500,
+}));
+
+vi.mock('@/lib/ai/core/stream-abort-registry', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  abortStreamByMessageId: mockAbortStreamByMessageId,
+  wasRecentlyFinishedHere: mockWasRecentlyFinishedHere,
 }));
 
 import { takeOverConversationStreams } from '../stream-takeover';
@@ -92,7 +95,11 @@ describe('takeOverConversationStreams', () => {
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
     mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
-    mockMarkAsOwner.mockImplementation(async ({ messageIds }: { messageIds: string[] }) => messageIds);
+    mockWasRecentlyFinishedHere.mockReturnValue(false);
+    mockMarkAsOwner.mockImplementation(async ({ messageIds }: { messageIds: string[] }) => ({
+      marked: messageIds,
+      failed: false,
+    }));
     mockAwaitAbortSettled.mockResolvedValue(settled());
     mockReconcileDead.mockResolvedValue(undefined);
   });

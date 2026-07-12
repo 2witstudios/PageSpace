@@ -4,6 +4,7 @@ import { assert } from './riteway';
 const {
   mockAbortStream,
   mockAbortStreamByMessageId,
+  mockWasRecentlyFinishedHere,
   mockAbortConversationStreams,
   mockMarkAbortRequested,
   mockAwaitAbortSettled,
@@ -11,6 +12,7 @@ const {
 } = vi.hoisted(() => ({
   mockAbortStream: vi.fn(),
   mockAbortStreamByMessageId: vi.fn(),
+  mockWasRecentlyFinishedHere: vi.fn(),
   mockAbortConversationStreams: vi.fn(),
   mockMarkAbortRequested: vi.fn(),
   mockAwaitAbortSettled: vi.fn(),
@@ -20,6 +22,7 @@ const {
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
   abortStream: mockAbortStream,
   abortStreamByMessageId: mockAbortStreamByMessageId,
+  wasRecentlyFinishedHere: mockWasRecentlyFinishedHere,
 }));
 
 vi.mock('@/lib/ai/core/abort-conversation-streams', () => ({
@@ -46,7 +49,8 @@ beforeEach(() => {
   mockAbortStream.mockReturnValue(MISS);
   mockAbortStreamByMessageId.mockReturnValue(MISS);
   mockAbortConversationStreams.mockResolvedValue({ aborted: [] });
-  mockMarkAbortRequested.mockResolvedValue([]);
+  mockWasRecentlyFinishedHere.mockReturnValue(false);
+  mockMarkAbortRequested.mockResolvedValue({ marked: [], failed: false });
   mockAwaitAbortSettled.mockResolvedValue({ aborted: [], reconcile: [], stillLive: [], code: 'not_found' });
   mockReconcileDead.mockResolvedValue(undefined);
 });
@@ -130,7 +134,7 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
     mockAbortConversationStreams.mockResolvedValue({ aborted: ['msg-mine'] });
     // The mark still catches it: its terminal write is fire-and-forget, so the row can still read
     // 'streaming' at this instant.
-    mockMarkAbortRequested.mockResolvedValue(['msg-mine', 'msg-elsewhere']);
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-mine', 'msg-elsewhere'], failed: false });
     mockAwaitAbortSettled.mockResolvedValue({
       aborted: ['msg-elsewhere'], reconcile: [], stillLive: [], code: 'aborted',
     });
@@ -147,7 +151,7 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
 
   it('confirms the abort when every stream on the conversation was stopped locally', async () => {
     mockAbortConversationStreams.mockResolvedValue({ aborted: ['msg-mine'] });
-    mockMarkAbortRequested.mockResolvedValue(['msg-mine']);
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-mine'], failed: false });
 
     const result = await abortStreamAnywhere({ conversationId: 'conv-1', userId: 'user-a' });
 
@@ -160,12 +164,53 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
     });
   });
 
+  // The most common Stop of all: pressed as the last tokens render. `onFinish` has already
+  // unregistered the controller (there is nothing left to abort) but has NOT yet written the
+  // terminal status — that happens after message persistence and per-tool billing. So the registry
+  // misses and the row still reads 'streaming' with a live heartbeat: it looks EXACTLY like a
+  // stream owned by another instance.
+  //
+  // Escalate it and we mark a row nobody will ever consume, time out against that live heartbeat,
+  // and tell the user their agent is "still running and still billing" — about a generation that
+  // has already completed. It finished. Say nothing.
+  it('stays silent about a stream that finished on this instance moments ago', async () => {
+    mockAbortStreamByMessageId.mockReturnValue(MISS);
+    mockWasRecentlyFinishedHere.mockReturnValue(true);
+
+    const result = await abortStreamAnywhere({ messageId: 'msg-1', userId: 'user-a' });
+
+    expect(mockMarkAbortRequested).not.toHaveBeenCalled();
+    expect(mockAwaitAbortSettled).not.toHaveBeenCalled();
+    assert({
+      given: 'a Stop pressed while the generation was finishing on THIS instance',
+      should: 'report not_found — which the client treats as silent — never a false "still billing"',
+      actual: { aborted: result.aborted, code: result.code },
+      expected: { aborted: false, code: 'not_found' },
+    });
+  });
+
+  // A Stop that could not even be RECORDED is not the benign "nothing was in flight". The client
+  // stays silent on not_found by design, so collapsing the two means: the DB is down, the abort
+  // reaches nobody, and the agent keeps generating and billing while the user is told nothing.
+  it('warns when the abort request could not be recorded at all', async () => {
+    mockMarkAbortRequested.mockResolvedValue({ marked: [], failed: true });
+
+    const result = await abortStreamAnywhere({ messageId: 'msg-1', userId: 'user-a' });
+
+    assert({
+      given: 'the database refusing the write that records the abort',
+      should: 'report unconfirmed, never the silent not_found',
+      actual: { aborted: result.aborted, code: result.code },
+      expected: { aborted: false, code: 'unconfirmed' },
+    });
+  });
+
   // THE BUG. The registry is in-process: an abort that lands on an instance which does not own the
   // stream used to find nothing and give up, while the generation ran on to completion — still
   // calling write tools, still billing.
   it('escalates to the owning instance when the local registry misses', async () => {
     mockAbortStreamByMessageId.mockReturnValue(MISS);
-    mockMarkAbortRequested.mockResolvedValue(['msg-1']);
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-1'], failed: false });
     mockAwaitAbortSettled.mockResolvedValue({
       aborted: ['msg-1'], reconcile: [], stillLive: [], code: 'aborted',
     });
@@ -184,7 +229,7 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
   });
 
   it('reports a stream that could not be confirmed stopped as unconfirmed', async () => {
-    mockMarkAbortRequested.mockResolvedValue(['msg-1']);
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-1'], failed: false });
     mockAwaitAbortSettled.mockResolvedValue({
       aborted: [], reconcile: [], stillLive: ['msg-1'], code: 'unconfirmed',
     });
@@ -203,7 +248,8 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
   // to someone else. The two are deliberately indistinguishable — telling them apart would confirm
   // the existence of another user's stream.
   it('reports not_found when nothing of the caller\'s was in flight', async () => {
-    mockMarkAbortRequested.mockResolvedValue([]);
+    mockWasRecentlyFinishedHere.mockReturnValue(false);
+  mockMarkAbortRequested.mockResolvedValue({ marked: [], failed: false });
 
     const result = await abortStreamAnywhere({ messageId: 'msg-1', userId: 'user-a' });
 
@@ -219,7 +265,7 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
   // The owning process died without writing its terminal status. Nothing is running — but nothing
   // will ever settle the row either, so the caller has to do it, exactly as a takeover would.
   it('drives the row terminal when the owning instance is gone', async () => {
-    mockMarkAbortRequested.mockResolvedValue(['msg-1']);
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-1'], failed: false });
     mockAwaitAbortSettled.mockResolvedValue({
       aborted: ['msg-1'], reconcile: ['msg-1'], stillLive: [], code: 'aborted',
     });

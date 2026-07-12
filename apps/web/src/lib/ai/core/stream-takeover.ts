@@ -2,14 +2,14 @@ import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
+import { abortStreamByMessageId, wasRecentlyFinishedHere } from '@/lib/ai/core/stream-abort-registry';
 import { decideStreamTakeover } from '@/lib/ai/core/stream-liveness';
 import {
   awaitAbortSettled,
   markAbortRequestedAsOwner,
   reconcileDeadStreamRows,
-  TAKEOVER_SETTLE_TIMEOUT_MS,
 } from '@/lib/ai/core/stream-abort-mark';
+import { TAKEOVER_SETTLE_TIMEOUT_MS } from '@/lib/ai/core/stream-horizons';
 
 /**
  * Per-conversation in-flight guard. Used by both chat routes (POST /api/ai/chat and
@@ -166,9 +166,16 @@ export const takeOverConversationStreams = async ({
     // stop the stream.
     const unstoppable = rows
       .map((r) => r.messageId)
-      .filter((id) => !aborted.includes(id) && !reconcile.includes(id));
+      .filter((id) => !aborted.includes(id) && !reconcile.includes(id))
+      // A generation that FINISHED on this instance is not "unstoppable" — it is over. Its row
+      // lingers at 'streaming' with a live heartbeat until the terminal write lands at the end of
+      // onFinish (after message persistence and per-tool billing), so without this it looks exactly
+      // like a live stream on another instance: we would mark it, wait the full budget for an owner
+      // that no longer exists, and warn. On a rapid follow-up send — the common case — every time.
+      .filter((id) => !wasRecentlyFinishedHere({ messageId: id }));
 
-    const remotelyAborted: string[] = [];
+    let remotelyAborted: string[] = [];
+    let remotelyReconciled: string[] = [];
     let stillLive: string[] = [];
 
     if (unstoppable.length > 0) {
@@ -176,7 +183,19 @@ export const takeOverConversationStreams = async ({
       // for the same reason: on a SHARED conversation, user B's send must be able to take over
       // user A's generation. See markAbortRequestedAsOwner, which may never be reached from a
       // client-driven Stop.
-      const marked = await markAbortRequestedAsOwner({ messageIds: unstoppable });
+      const { marked, failed } = await markAbortRequestedAsOwner({ messageIds: unstoppable });
+
+      if (failed) {
+        // The abort request was never RECORDED, so nothing will ever consume it. This send is
+        // about to start a second generation beside a live one — two agents, two sets of write
+        // tools, two bills — and an empty result would read exactly like "there was nothing to
+        // stop". Say what actually happened.
+        loggers.ai.error('AI Chat API: could not record cross-instance abort for in-flight stream(s); generating alongside them', {
+          conversationId,
+          channelId,
+          messageIds: unstoppable,
+        });
+      }
 
       // Bounded: the user is waiting for their message to send. Shorter than a user-facing Stop's
       // budget, and on expiry we proceed exactly as before rather than blocking the send.
@@ -185,7 +204,8 @@ export const takeOverConversationStreams = async ({
         timeoutMs: TAKEOVER_SETTLE_TIMEOUT_MS,
       });
 
-      remotelyAborted.push(...outcome.aborted);
+      remotelyAborted = outcome.aborted;
+      remotelyReconciled = outcome.reconcile;
       stillLive = outcome.stillLive;
 
       // Rows whose owner is provably gone (stale heartbeat) — nothing is running, but nothing
@@ -207,24 +227,27 @@ export const takeOverConversationStreams = async ({
     }
 
     const allAborted = [...aborted, ...remotelyAborted];
+    // Rows driven terminal by the cross-instance path are reconciled just as surely as the ones
+    // this instance reconciled directly. Leaving them out under-reports what the takeover actually
+    // did — and this module's own docblock is emphatic that a log which misreports attests to
+    // nothing, which is the same defect as a test that cannot fail.
+    const allReconciled = [...reconcile, ...remotelyReconciled];
 
     // Only claim a takeover when one actually happened.
     //
     // This used to log "took over in-flight stream(s)" unconditionally — including when we had
     // taken over NOTHING and were about to generate alongside a live foreign stream. That was the
-    // exact moment an operator most needed the truth, and the log said the opposite. A log that
-    // misreports is a signal that attests to nothing, which is the same defect as a test that
-    // cannot fail.
-    if (allAborted.length > 0 || reconcile.length > 0) {
+    // exact moment an operator most needed the truth, and the log said the opposite.
+    if (allAborted.length > 0 || allReconciled.length > 0) {
       loggers.ai.info('AI Chat API: took over in-flight stream(s) on this conversation', {
         conversationId,
         channelId,
         aborted: allAborted,
-        reconciled: reconcile,
+        reconciled: allReconciled,
       });
     }
 
-    return { aborted: allAborted, reconciled: reconcile };
+    return { aborted: allAborted, reconciled: allReconciled };
   } catch (error) {
     // Never block the send on a failed takeover — the worst case is the
     // pre-existing behaviour (a concurrent generation), not a locked chat.
