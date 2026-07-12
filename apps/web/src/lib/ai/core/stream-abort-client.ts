@@ -203,7 +203,15 @@ export const abortActiveStream = async ({
     // Forget the stream only once it is settled — stopped, or already gone. On 'unconfirmed' the
     // generation may still be running, so the streamId is the name a retry needs; and on a
     // transport error (401/429/500) we never learned anything at all. Keep it in both cases.
-    if (result.code === 'aborted' || result.code === 'not_found') {
+    //
+    // AND ONLY IF THE SLOT IS STILL OURS. The map is keyed by chatId, which is constant across
+    // turns, while this request can take seconds (a cross-instance Stop waits for the owner to
+    // confirm). The user can send turn 2 inside that window: its headers land, it claims the slot,
+    // and then THIS abort resolves and would delete the name of a generation that is still running.
+    // `forgetStream` already guards the same slot on the body-completion path; this is the other
+    // door into it.
+    const settled = result.code === 'aborted' || result.code === 'not_found';
+    if (settled && activeStreams.get(chatId) === streamId) {
       activeStreams.delete(chatId);
     }
 

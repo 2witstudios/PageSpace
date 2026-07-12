@@ -26,8 +26,7 @@
  */
 
 import {
-  heartbeatStoppedAtCap,
-  isStreamRowLive,
+  isProvablyDead,
   STREAM_HEARTBEAT_STALE_MS,
   type StreamLivenessRow,
 } from '@/lib/ai/core/stream-liveness';
@@ -201,26 +200,24 @@ export const decideAbortOutcome = ({
       continue;
     }
 
-    // A row whose beat ran all the way to the cap went silent BY DESIGN, not by dying: the
-    // lifecycle caps the beat at STREAM_MAX_LIFETIME_MS while the generation itself has no such
-    // cap — a long tool loop can still be running at T+61min. Its silence proves nothing, so
-    // reading it as death would be the worst thing this module can do: tell the user "aborted",
-    // and reconcile the row terminal — wiping `parts` and hiding a stream that is STILL
-    // generating from every subscriber. Report it honestly as unconfirmed, and never touch it.
+    // Its heartbeat proves the process that owned it is gone: nothing is running, but nothing wrote
+    // its terminal status either. Report it stopped, and hand the row back to be driven terminal.
     //
-    // A beat that stopped SHORT of the cap is a different thing entirely — that is a dead process,
-    // and it falls through to the branch below at any age. See heartbeatStoppedAtCap.
-    if (heartbeatStoppedAtCap(row, staleAfterMs) && !isStreamRowLive(row, now, staleAfterMs)) {
-      outcome.stillLive.push(messageId);
-      continue;
-    }
-
-    if (!isStreamRowLive(row, now, staleAfterMs)) {
+    // `isProvablyDead` — shared with the takeover, so the two terminal writers cannot disagree — is
+    // deliberately careful in BOTH directions. A beat that ran all the way to the heartbeat cap
+    // went silent by design, not by dying (the lifecycle caps it; the generation has no cap), so it
+    // is NOT proof of death, and reading it as such would tell the user "aborted" while wiping the
+    // parts of a stream that is still generating. But a beat that stopped short of the cap is a
+    // dead process at any age — and past an outer horizon even the ambiguous ones are judged, or a
+    // single crashed row would haunt its conversation forever.
+    if (isProvablyDead(row, now, staleAfterMs)) {
       outcome.aborted.push(messageId);
       outcome.reconcile.push(messageId);
       continue;
     }
 
+    // Either still beating, or ambiguously silent past the cap. Either way we cannot claim it
+    // stopped, so we say exactly that.
     outcome.stillLive.push(messageId);
   }
 

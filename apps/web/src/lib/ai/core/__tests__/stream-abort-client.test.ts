@@ -168,6 +168,39 @@ describe('stream-abort-client', () => {
       });
     });
 
+    // The OTHER door into the same shared slot. A cross-instance Stop can take seconds (it waits
+    // for the owning instance to confirm), and the user can send turn 2 inside that window — its
+    // headers land and claim the slot. When the turn-1 abort finally resolves, it must not delete
+    // the name of a generation that is now RUNNING.
+    it('does not forget a newer stream when an older abort finally resolves', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-1' });
+
+      let resolveAbort: ((r: unknown) => void) | undefined;
+      vi.mocked(fetchWithAuth).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveAbort = (r) => resolve({ json: async () => r } as unknown as Response);
+        }),
+      );
+
+      const abortPromise = client.abortActiveStream({ chatId: 'conv-1', conversationId: 'conv-1' });
+
+      // Turn 2 is sent while the turn-1 abort is still in flight, and claims the slot.
+      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-2' });
+
+      // Now the turn-1 abort comes back settled.
+      resolveAbort!({ aborted: true, code: 'aborted', reason: '' });
+      await abortPromise;
+
+      assert({
+        given: "an older Stop resolving after a newer turn has claimed the slot",
+        should: "leave the newer stream's name alone — it names a generation that is still running",
+        actual: client.getActiveStreamId({ chatId: 'conv-1' }),
+        expected: 'stream-turn-2',
+      });
+    });
+
     it('returns failure when no active stream exists', async () => {
       const client = await import('../stream-abort-client');
 
@@ -222,11 +255,7 @@ describe('stream-abort-client', () => {
 
     const drain = async (response: Response) => {
       const reader = response.body!.getReader();
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done } = await reader.read();
-        if (done) break;
-      }
+      while (!(await reader.read()).done) { /* drain */ }
     };
 
     it('given a POST in flight, should mark the channel as consuming BEFORE the request leaves (it must not lose the race against broadcastAiStreamStart)', async () => {

@@ -120,14 +120,18 @@ export const markAbortRequested = async ({
   //
   // Naming the conversation is what Stop means anyway — "stop whatever of MINE is generating here"
   // — and the `user_id` predicate rides every branch, so this can never reach another user.
-  try {
-    const names: SQL[] = [
-      messageId ? eq(aiStreamSessions.messageId, messageId) : undefined,
-      streamId ? eq(aiStreamSessions.streamId, streamId) : undefined,
-      conversationId ? eq(aiStreamSessions.conversationId, conversationId) : undefined,
-    ].filter((name): name is SQL => name !== undefined);
+  const names: SQL[] = [
+    messageId ? eq(aiStreamSessions.messageId, messageId) : undefined,
+    streamId ? eq(aiStreamSessions.streamId, streamId) : undefined,
+    conversationId ? eq(aiStreamSessions.conversationId, conversationId) : undefined,
+  ].filter((name): name is SQL => name !== undefined);
 
-    const marked = new Set<string>();
+  // Accumulated OUTSIDE the try, because these are separate autocommitted statements: if the second
+  // throws, the rows the first marked are still marked, and their owners will still stop them.
+  // Reporting an empty set there would be a second lie on top of the failure.
+  const marked = new Set<string>();
+
+  try {
     for (const name of names) {
       for (const id of await markBy(name)) marked.add(id);
     }
@@ -138,7 +142,7 @@ export const markAbortRequested = async ({
       conversationId,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return { marked: [], failed: true };
+    return { marked: [...marked], failed: true };
   }
 };
 
