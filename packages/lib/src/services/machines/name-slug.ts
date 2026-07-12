@@ -58,10 +58,14 @@ const NOISE_ONLY_RE = /^[\s./-]*$/;
  * Only consulted when NOTHING survived slugification, to choose between dropping
  * the segment and keeping a `slugDigest` token — and it is deliberately more
  * eager than `destroysNameContent`. Losing `!` from `a!b` is harmless (it still
- * says `a-b`), but `!!!` slugifies to nothing, and dropping it lands the name in
- * the SHARED FALLBACK — the one bucket where distinct names collide and
- * cross-attach. Whenever the user typed something, we would rather mint an ugly
- * token than put them in that bucket.
+ * says `a-b`), but `!!!` slugifies to nothing, and dropping it would put the name
+ * in the shared fallback alongside every OTHER unsluggable input — including
+ * `日本語`, which is a real name that must not land there.
+ *
+ * The token is not a promise of uniqueness for punctuation: `!!!` and `###` have
+ * the same (empty) `nameIdentity` and so share one token, exactly as `a!b` and
+ * `a#b` share one slug. What it guarantees is that a name with real identity
+ * never collides with one that has none.
  */
 export function hasNameContent(input: string): boolean {
   return !NOISE_ONLY_RE.test(input);

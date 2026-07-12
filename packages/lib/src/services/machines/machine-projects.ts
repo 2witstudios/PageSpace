@@ -219,8 +219,21 @@ export async function addProject({
   });
 
   if (!result.success || result.exitCode !== 0) {
-    // We hold the reservation, so this path is OURS — cleaning it up cannot touch
-    // anyone else's checkout. Roll back both the directory and the row.
+    const detail = result.success ? result.stderr || result.stdout : result.error;
+
+    // Roll back only what is STILL OURS. Reserving the name made the row visible
+    // for the whole clone, which means the user can now delete the project
+    // mid-clone (clones take seconds to minutes — an impatient click is plausible)
+    // and immediately re-add it. The row and directory under this name would then
+    // belong to that NEW add, and cleaning up by name — as `removeProject` and
+    // `safeRemoveDirectory` both do — would `rm -rf` a checkout we do not own and
+    // delete a row we did not write. So compare row identity first, and if the
+    // reservation is no longer ours, touch nothing.
+    const current = await deps.store.findByName(machineId, plan.name);
+    if (!current || current.id !== project.id) {
+      return { ok: false, reason: 'clone_failed', detail };
+    }
+
     await safeRemoveDirectory(machineId, plan.path, deps);
     try {
       await deps.store.remove(machineId, plan.name);
@@ -228,7 +241,6 @@ export async function addProject({
       // Best-effort: a stranded row is recoverable (the user can delete it); a
       // failure to report the clone error is not.
     }
-    const detail = result.success ? result.stderr || result.stdout : result.error;
     return { ok: false, reason: 'clone_failed', detail };
   }
 

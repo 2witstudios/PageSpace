@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   planAddProject,
   addProject,
@@ -242,6 +242,80 @@ describe('addProject', () => {
     expect(rows[0]).toMatchObject({ name: 'my-repo', path: `${PROJECTS_ROOT}/my-repo` });
     expect(dirs.has(`${PROJECTS_ROOT}/my-repo`)).toBe(true);
     expect(rmCalls).toEqual([]);
+  });
+
+  it("given the project is deleted and re-added mid-clone, a failing clone must NOT destroy the new owner's checkout", async () => {
+    // Reserving the name before cloning makes the row visible for the whole clone,
+    // so an impatient user can delete the project mid-clone and re-add it. The
+    // row and directory then belong to that NEW add — and rolling back BY NAME
+    // would rm -rf a checkout we do not own. The rollback is identity-checked.
+    const { store } = makeStore();
+    const dirs = new Set<string>();
+    const rmCalls: string[] = [];
+    let releaseClone: (() => void) | undefined;
+
+    const { sandbox } = makeSandbox(async (opts) => {
+      if (opts.cmd === 'rm') {
+        const target = opts.args?.[1] ?? '';
+        rmCalls.push(target);
+        dirs.delete(target);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      const dest = opts.args?.[2] ?? '';
+      dirs.add(dest);
+      // Hang until the test has deleted + re-added the project underneath us,
+      // then fail (e.g. the network dropped).
+      await new Promise<void>((resolve) => {
+        releaseClone = resolve;
+      });
+      return { exitCode: 128, stdout: '', stderr: 'fatal: could not read from remote' };
+    });
+    const deps = makeDeps({ store, reconnect: async () => sandbox }).deps;
+
+    const doomed = addProject({
+      machineId: TERMINAL_ID,
+      actor,
+      name: 'my-repo',
+      repoUrl: 'https://github.com/o/r.git',
+      deps,
+    });
+    await vi.waitFor(() => expect(releaseClone).toBeDefined());
+
+    // The user deletes it mid-clone, then re-adds it — a NEW row owns the name now.
+    await store.remove(TERMINAL_ID, 'my-repo');
+    const newOwner = await store.create({
+      ownerId: 'someone-else',
+      machineId: TERMINAL_ID,
+      name: 'my-repo',
+      repoUrl: 'https://github.com/o/r.git',
+      path: `${PROJECTS_ROOT}/my-repo`,
+      now: NOW,
+    });
+
+    releaseClone?.();
+    const result = await doomed;
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    // The new owner survives, untouched.
+    expect(await store.findByName(TERMINAL_ID, 'my-repo')).toMatchObject({ id: newOwner.id });
+    expect(rmCalls).toEqual([]);
+  });
+
+  it('given the sandbox itself is unreachable, should roll the reserved row back', async () => {
+    // The `!result.success` half — provision failure / reconnect null / quota full.
+    // It reserves a row like any other add, so it must roll that row back too.
+    const { deps, store } = makeDeps({ reconnect: async () => null });
+
+    const result = await addProject({
+      machineId: TERMINAL_ID,
+      actor,
+      name: 'my-repo',
+      repoUrl: 'https://github.com/o/r.git',
+      deps,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(await store.list(TERMINAL_ID)).toEqual([]);
   });
 
   it('given no GitHub token available (public repo), should still clone without token env vars', async () => {
