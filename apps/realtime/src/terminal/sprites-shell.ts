@@ -486,11 +486,9 @@ export function openPtyShell({
         // recognise them. Delivered exactly once.
         const sameSession = myBinding.id !== undefined && myBinding.id === wiredBinding.id;
         if (sameSession && !wiredReplayStarted) { deliver(toBuf(chunk)); return; }
-        // Otherwise: show them, record nothing. Either they belong to a session nothing will
-        // replay, or the replay is already classifying against a history that lacks them and
-        // will emit AND record them itself — recording here as well would put the same bytes
-        // in the history twice, and a history that repeats itself is no longer a run of the
-        // stream. The anchor would match nothing, forever. A repeated line is survivable.
+        // Otherwise: show them, record nothing — the after-the-snapshot half of the rule at
+        // `wiredReplayStarted`. Either nothing will ever replay them, or the replay will emit
+        // and record them itself; recording here too would enter them twice and break the run.
         //
         // Known residual: `wiredReplayStarted` is per-COMMAND, so a drain that arrives two
         // generations late (its session reattached, replayed these bytes, and dropped again)

@@ -51,15 +51,15 @@
  * The window is bounded from two sides. The CALLER bounds it in time — a quiet gap and a
  * wall-clock deadline — and closes it with `flushReplay`. THIS MODULE bounds it in bytes,
  * at MAX_PENDING_BYTES, and that give-up resolves the state right here without the caller's
- * close ever running. Getting that split wrong is not academic: the caller used to log its
- * own give-up and not this one, so the byte-cap failure — the one that never heals — was the
- * only one that happened silently. Either way, once the window is closed every later byte
- * passes through unsearched.
+ * close ever running. That split is why BOTH give-ups must be reported by the caller: the
+ * byte-cap one never reaches `flushReplay`, so a report written only there would leave the
+ * one failure that never heals as the only silent one. Once the window is closed, every
+ * later byte passes through unsearched.
  *
  * What that leaves, honestly: the proof is a byte comparison, so it cannot tell a replay
- * from an EXACT reproduction of one. Two numbers describe the risk, and they are not the
- * same number — a fact three earlier drafts of this comment got wrong, so here it is derived
- * from the arithmetic rather than remembered.
+ * from an EXACT reproduction of one. Two numbers describe the risk, and they are NOT the
+ * same number. Both are derived below rather than asserted, because the difference between
+ * them is the whole safety argument.
  *
  * A match at offset `at` SUPPRESSES `at + anchorLen` bytes. `corroborated` PROVES only
  * `depth = min(at, history)` of them. So:
@@ -227,10 +227,8 @@ export type ReplayState = {
 export const freshReplayState = (): ReplayState => ({ pending: EMPTY, scanned: 0, resolved: false });
 
 /** Nothing left to classify: every later byte of this attach passes straight through. */
-// FROZEN: one object is handed out as the resolved state of every attach, on a process that
-// hosts every terminal — so a single stray write to it would corrupt all of them at once.
-// Nothing writes to it today (`appendPending` is unreachable once `resolved`), but that is an
-// argument about today's callers; this is a guarantee about any of them.
+// Frozen: one object is the resolved state of every attach on a process that hosts every
+// terminal, so a stray write would corrupt all of them at once.
 const RESOLVED: ReplayState = Object.freeze({ pending: EMPTY, scanned: 0, resolved: true });
 
 /** The smallest arena worth allocating — a few WS frames' worth of headroom. */

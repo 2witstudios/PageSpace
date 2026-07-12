@@ -966,8 +966,8 @@ describe('openPtyShell', () => {
     it('given a reconnect attach that dies BEFORE it opens, says nothing and keeps deduping', async () => {
       // A pre-open drop (cold Sprite wake, flapping WS) reaches closeReplayWindow on a command
       // that never received a byte, so the window closes over an empty hold. Two guards stand
-      // between that and disaster, and they are REDUNDANT — established by mutation, because the
-      // previous two attempts at this comment each credited the wrong one:
+      // between that and disaster, and they are REDUNDANT. Which one holds what is stated here
+      // from mutation results, not from reading the code — it is easy to get backwards:
       //
       //   - `flushReplay` refuses to call an empty flush a give-up (it returns 'append'), so the
       //     caller is never told to restart a history from nothing. Delete it alone and every
