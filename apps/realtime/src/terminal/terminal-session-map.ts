@@ -35,6 +35,17 @@ export type TerminalSession = {
    */
   hasOutput: boolean;
   /**
+   * Was this PTY already running when the bridge picked it up? (`openShell`
+   * resumed a Sprite exec session rather than starting one.)
+   *
+   * Kept ALONGSIDE `hasOutput` because the two answer the same question at
+   * different moments and neither covers the other: a resumed agent that has not
+   * yet said anything has `hasOutput: false`, and a reattach in that window would
+   * otherwise be told the PTY is a fresh boot — and a client holding a starting
+   * prompt would type it into an agent that has been running for hours.
+   */
+  resumedAtCreate: boolean;
+  /**
    * Terminal Epic 3 metering (optional — set only when a `billing` seam is
    * wired). `payerId` + `connectedAt` identify who pays for the window that
    * started at `connectedAt` (rebased by each heartbeat settle); `holdId` is the

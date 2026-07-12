@@ -481,7 +481,7 @@ export function buildAgentTerminalHandlers({
     // may still be prompted.
     socket.emit('agent-terminal:ready', {
       scrollback: session.scrollback.join(''),
-      resumed: session.hasOutput,
+      resumed: session.hasOutput || session.resumedAtCreate,
       connectionId,
     });
   }
@@ -497,9 +497,14 @@ export function buildAgentTerminalHandlers({
         // a failure that belongs to one of them. Read straight off the raw payload:
         // the id is the client's own, and it survives a payload this validator
         // rejects for any other reason.
+        // No `?? socket.id` fallback: a client's connectionId is a UUID it minted,
+        // never the socket's own id, so falling back to socket.id would match NO
+        // pane and the error would be swallowed in silence. Left undefined, it
+        // degrades to the old broadcast — every pane shows it — which is worse than
+        // one pane showing it but far better than nobody seeing it at all.
         socket.emit('agent-terminal:error', {
           message: validation.error,
-          connectionId: readConnectionId(payload) ?? socket.id,
+          connectionId: readConnectionId(payload),
         });
         return;
       }
@@ -641,6 +646,7 @@ export function buildAgentTerminalHandlers({
           closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
           scrollback: [],
           hasOutput: false,
+          resumedAtCreate: resumed,
           scrollbackBytes: 0,
           reAuthInterval: undefined,
           idleTimer: undefined,

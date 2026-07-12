@@ -471,7 +471,8 @@ describe('buildAgentTerminalHandlers', () => {
     });
 
     it('given a FRESH session, should NOT list the Sprite\'s sessions at all (identity comes from the create handle, not a diff)', async () => {
-      // The retired before/after listSessions diff added two control-plane round
+      // A FRESH session (no stored id) lists nothing: the retired before/after
+      // listSessions diff added two control-plane round
       // trips to every cold connect AND could not tell our new shell from a
       // sibling terminal's. Both are gone: the connect path never lists.
       const auth = makeAuthSuccess({ streamSessionId: null });
@@ -1566,6 +1567,63 @@ describe('buildAgentTerminalHandlers', () => {
       await connect2(validPayload);
 
       expect(billing.gate).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('reattach — telling a client whether it may prompt the agent', () => {
+    it('given a session that was RESUMED at create and has not spoken yet, should still report resumed on reattach', async () => {
+      // The cold connect learned the agent was already running. If that fact is not
+      // carried on the session, a reattach landing before the first replayed byte —
+      // a React StrictMode remount does exactly this — would be told `resumed: false`
+      // with an empty scrollback, i.e. "a fresh boot, safe to type", and a client
+      // holding a starting prompt would type it into an agent running for hours.
+      checkAuth = vi.fn().mockResolvedValue(
+        makeAuthSuccess({
+          streamSessionId: 'sess-existing',
+          sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
+        }),
+      ) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      // A second pane connects to the same live session, before any output.
+      const reconnectSocket = makeSocket();
+      const { onConnect: onReconnect } = buildAgentTerminalHandlers({
+        sessionMap,
+        openShell,
+        checkAuth,
+        socket: reconnectSocket,
+        persistStreamSessionId,
+      });
+      await onReconnect({ ...validPayload, connectionId: 'pane-b' });
+
+      expect(reconnectSocket.emit).toHaveBeenCalledWith(
+        'agent-terminal:ready',
+        expect.objectContaining({ connectionId: 'pane-b', resumed: true }),
+      );
+    });
+
+    it('given a FRESH session that has not spoken yet, should report a fresh boot on reattach', async () => {
+      // The mirror image: a cold boot the pane is still waiting on. Re-mounting onto
+      // it must NOT spend the prompt — an agent that has emitted nothing cannot be
+      // sitting at a confirmation.
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      const reconnectSocket = makeSocket();
+      const { onConnect: onReconnect } = buildAgentTerminalHandlers({
+        sessionMap,
+        openShell,
+        checkAuth,
+        socket: reconnectSocket,
+        persistStreamSessionId,
+      });
+      await onReconnect({ ...validPayload, connectionId: 'pane-b' });
+
+      expect(reconnectSocket.emit).toHaveBeenCalledWith(
+        'agent-terminal:ready',
+        expect.objectContaining({ connectionId: 'pane-b', resumed: false }),
+      );
     });
   });
 });
