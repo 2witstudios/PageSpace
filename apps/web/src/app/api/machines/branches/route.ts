@@ -33,16 +33,28 @@ import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/mac
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
-// A NAMELESS value is a missing field, not free text to normalize — and "nameless"
-// is broader than "blank". `"   "`, `"."`, `".."` and `"//"` all carry no name, and
-// every one of them normalizes to the FALLBACK (`branch`), which would then match a
-// real branch called `branch` — attaching to its Sprite, or killing it. So this
-// guard uses the normalizer's OWN definition of nameless rather than a `.trim()`
-// that only catches whitespace.
-function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
-  if (typeof value !== 'string' || !hasNameContent(value)) {
-    return { ok: false, error: NextResponse.json({ error: `${field} is required` }, { status: 400 }) };
-  }
+/** Not named `Required` — that shadows the TS built-in utility type. */
+type ParsedField<T> = { ok: true; value: T } | { ok: false; error: NextResponse };
+
+function fieldRequired(field: string): NextResponse {
+  return NextResponse.json({ error: `${field} is required` }, { status: 400 });
+}
+
+/** An opaque id — not free text, so it is never normalized and needs no name predicate. */
+function requireId(value: unknown, field: string): ParsedField<string> {
+  if (typeof value !== 'string' || value.length === 0) return { ok: false, error: fieldRequired(field) };
+  return { ok: true, value };
+}
+
+/**
+ * A NAME. These ARE normalized, so the guard has to be the normalizer's own idea of
+ * namelessness — not a `.trim()`, which only catches whitespace. `"   "`, `"."`,
+ * `".."` and `"//"` all carry no name, yet every one of them normalizes to the
+ * FALLBACK (`branch`) — which would then match a REAL branch called `branch` and
+ * attach the caller to its Sprite, or kill it. A nameless value is a missing field.
+ */
+function requireName(value: unknown, field: string): ParsedField<string> {
+  if (typeof value !== 'string' || !hasNameContent(value)) return { ok: false, error: fieldRequired(field) };
   return { ok: true, value };
 }
 
@@ -62,9 +74,9 @@ export async function GET(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  const machineId = requireId(url.searchParams.get('machineId'), 'machineId');
   if (!machineId.ok) return machineId.error;
-  const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
+  const projectName = requireName(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
 
   if (!(await canViewMachine(auth.userId, machineId.value))) {
@@ -89,11 +101,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const machineId = requireString(body.machineId, 'machineId');
+  const machineId = requireId(body.machineId, 'machineId');
   if (!machineId.ok) return machineId.error;
-  const projectName = requireString(body.projectName, 'projectName');
+  const projectName = requireName(body.projectName, 'projectName');
   if (!projectName.ok) return projectName.error;
-  const branchName = requireString(body.branchName, 'branchName');
+  const branchName = requireName(body.branchName, 'branchName');
   if (!branchName.ok) return branchName.error;
 
   if (!(await canAccessMachine(auth.userId, machineId.value))) {
@@ -131,11 +143,11 @@ export async function DELETE(request: Request) {
   if (isAuthError(auth)) return auth.error;
 
   const url = new URL(request.url);
-  const machineId = requireString(url.searchParams.get('machineId'), 'machineId');
+  const machineId = requireId(url.searchParams.get('machineId'), 'machineId');
   if (!machineId.ok) return machineId.error;
-  const projectName = requireString(url.searchParams.get('projectName'), 'projectName');
+  const projectName = requireName(url.searchParams.get('projectName'), 'projectName');
   if (!projectName.ok) return projectName.error;
-  const branchName = requireString(url.searchParams.get('branchName'), 'branchName');
+  const branchName = requireName(url.searchParams.get('branchName'), 'branchName');
   if (!branchName.ok) return branchName.error;
 
   if (!(await canAccessMachine(auth.userId, machineId.value))) {
