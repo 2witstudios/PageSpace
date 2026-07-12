@@ -181,7 +181,7 @@ const REPLAY_SETTLE_MS = 500;
  * gap alone is not one. A shell that is CHATTY across the reconnect (a running
  * build, a repainting TUI) never goes quiet, so a gap timer would be re-armed by
  * every chunk and the buffered bytes would be withheld until MAX_PENDING_BYTES:
- * a megabyte of dead terminal.
+ * several megabytes of dead terminal.
  *
  * This deadline is also what keeps the suppression SAFE. The dedupe may only
  * search bytes that are actually the replay; searching live output risks matching

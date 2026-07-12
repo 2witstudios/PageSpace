@@ -1155,7 +1155,12 @@ describe('openPtyShell', () => {
 
       const afterOverflow = outputs(onOutput).join('');
 
-      // The history restarted from those bytes, so replaying them again dedupes.
+      // The history restarted from those bytes, so replaying them again dedupes. Note this
+      // fake delivers the whole flood in ONE frame, and the anchor search runs before the
+      // overflow check — so it is found. A real over-cap ring arrives in many frames and
+      // overflows first, and THAT reprints on every cycle: which is why the cap has to exceed
+      // the server's ring (see MAX_PENDING_BYTES). What this pins is the recovery, not a
+      // claim that an over-cap ring heals.
       attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
       attach2._stdout.emit('data', flood);
@@ -1167,8 +1172,8 @@ describe('openPtyShell', () => {
     it('given a CHATTY shell across the reconnect, emits within the replay window instead of stalling to the byte cap', async () => {
       // The quiet-gap timer alone is not a bound: a build or a repainting TUI
       // never goes quiet, so every chunk would re-arm it and the terminal would
-      // sit dead all the way to MAX_PENDING_BYTES (1 MiB). The hard window is what
-      // makes the worst case a redraw rather than a megabyte-long stall.
+      // sit dead all the way to MAX_PENDING_BYTES. The hard window is what makes the worst
+      // case a redraw rather than a multi-megabyte stall.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
