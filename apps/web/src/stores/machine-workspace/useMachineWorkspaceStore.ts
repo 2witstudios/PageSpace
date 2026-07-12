@@ -27,6 +27,7 @@ import {
   removeWorkspace as removeWorkspaceTransition,
   showSessionIn,
   workspaceShowing,
+  paneShowing,
   sanitizeMachines,
   sessionWorkspaceId,
   nextWorkspaceName,
@@ -188,7 +189,10 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
         // workspaces at once. Show it where it actually is.
         const home = workspaceShowing(machine, scope);
         if (home) {
-          const homePaneId = panesOf(home).find((pane) => pane.scope?.name === scope.name)?.id;
+          // The SAME predicate that found the workspace — matching on the name
+          // alone would focus the wrong pane the moment a workspace can hold panes
+          // from two different nodes.
+          const homePaneId = paneShowing(home, scope)?.id;
           set((state) =>
             applyToMachine(state, machineId, (current) =>
               updateWorkspace(setActiveWorkspaceTransition(current, home.id), home.id, (workspace) =>
@@ -346,8 +350,23 @@ const EMPTY_CHILD_SESSIONS: ReadonlySet<string> = new Set<string>();
  */
 export const selectChildSessionIds = (machineId: string) => (state: MachineWorkspaceStoreState) => {
   const machine = state.machines[machineId];
-  return machine ? childSessionIds(machine) : EMPTY_CHILD_SESSIONS;
+  if (!machine) return EMPTY_CHILD_SESSIONS;
+
+  // Cached against the state it was derived FROM. zustand v5 runs the selector
+  // inside `getSnapshot`, so one that allocates has to return the same object for
+  // the same state — otherwise React sees a new snapshot on every read and the
+  // component loops ("The result of getSnapshot should be cached"). The store is
+  // immutable, so the state object's identity is an exact cache key: it changes
+  // precisely when the answer does. Weak, so a machine's entry dies with it.
+  const cached = childSessionCache.get(machine);
+  if (cached) return cached;
+
+  const derived = childSessionIds(machine);
+  childSessionCache.set(machine, derived);
+  return derived;
 };
+
+const childSessionCache = new WeakMap<MachineWorkspacesState, ReadonlySet<string>>();
 
 /** How many of a machine's panes are running an agent, optionally at one node's
  * scope — the "N running" count a node shows instead of a session list. */

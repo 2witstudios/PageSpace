@@ -370,7 +370,7 @@ export function runningPaneCount(state: MachineWorkspacesState, scope?: MachineN
 }
 
 /** Is this session in one of `workspace`'s panes? */
-function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): TerminalPaneState | undefined {
+export function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): TerminalPaneState | undefined {
   return panesOf(workspace).find(
     (pane) =>
       pane.scope?.name === scope.name &&

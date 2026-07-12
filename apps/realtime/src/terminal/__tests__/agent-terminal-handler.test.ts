@@ -354,19 +354,53 @@ describe('buildAgentTerminalHandlers', () => {
       expect(persistStreamSessionId).not.toHaveBeenCalled();
     });
 
-    it('given a known streamSessionId, should tell the client the agent was RESUMED, not freshly booted', async () => {
+    it('given a streamSessionId the Sprite STILL HAS, should tell the client the agent was RESUMED', async () => {
       // This process holds no session for it (a restart empties the map), so the
       // connect takes the cold CREATE path — but the Sprite still has the agent
-      // running, and `openShell` picks it back up. The client cannot tell those
-      // apart on its own, and a client that types a starting prompt into a
-      // terminal MUST: a line plus a carriage return delivered to an agent that
-      // has been running for hours, sitting at a confirmation prompt, is
-      // destructive.
-      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ streamSessionId: 'sess-existing' })) as unknown as ReturnType<typeof vi.fn> &
-        AgentTerminalCheckAuthFn;
+      // running and the shell picks it back up. The client cannot tell that apart
+      // from a cold boot, and one that types a starting prompt into the terminal
+      // MUST: a line plus a carriage return delivered to an agent that has been
+      // running for hours, sitting at a confirmation prompt, is destructive.
+      checkAuth = vi.fn().mockResolvedValue(
+        makeAuthSuccess({
+          streamSessionId: 'sess-existing',
+          sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
+        }),
+      ) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
+    });
+
+    it('given a DANGLING streamSessionId, should report a fresh boot — the row is a memory, not a fact', async () => {
+      // Exec sessions do not survive a Sprite pause, and nothing ever clears the
+      // column: the id names a session the Sprite no longer has, so the shell will
+      // discover the dangling attach and launch a FRESH agent (`planReconnect`).
+      // Reporting `resumed` from the row's word alone would tell that fresh
+      // agent's pane its starting prompt had already been taken, and the agent
+      // would sit there having never been given its task.
+      checkAuth = vi.fn().mockResolvedValue(
+        makeAuthSuccess({ streamSessionId: 'sess-long-dead', sessions: [] }),
+      ) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: false });
+    });
+
+    it('given the Sprite will not say which sessions it has, should assume the agent is STILL RUNNING', async () => {
+      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      auth.sprite.listSessions = vi.fn(async () => {
+        throw new Error('control plane unreachable');
+      });
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      // The two ways of being wrong are not symmetric: refusing to type at an agent
+      // that turns out to be fresh costs a prompt the user can retype; typing at one
+      // that turns out to be live can answer a confirmation it was waiting on.
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
     });
 

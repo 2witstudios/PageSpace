@@ -26,6 +26,15 @@ export type TerminalSession = {
   scrollback: string[];
   scrollbackBytes: number;
   /**
+   * Has this PTY ever produced a byte? NOT the same question as "is the
+   * scrollback non-empty": a single chunk larger than MAX_SCROLLBACK_BYTES is
+   * pushed and then trimmed straight back off, leaving an EMPTY scrollback for a
+   * session that has been screaming output. A client that types a starting prompt
+   * into a terminal reads "has produced nothing" as "still booting, safe to type"
+   * — so it has to be the truth, not an artefact of the trim.
+   */
+  hasOutput: boolean;
+  /**
    * Terminal Epic 3 metering (optional — set only when a `billing` seam is
    * wired). `payerId` + `connectedAt` identify who pays for the window that
    * started at `connectedAt` (rebased by each heartbeat settle); `holdId` is the
@@ -39,8 +48,12 @@ export type TerminalSession = {
   pageId?: string;
 };
 
-export function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
+export function appendScrollback(
+  session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes' | 'hasOutput'>,
+  data: string,
+): void {
   const bytes = Buffer.byteLength(data, 'utf8');
+  session.hasOutput = true;
   session.scrollback.push(data);
   session.scrollbackBytes += bytes;
   while (session.scrollbackBytes > MAX_SCROLLBACK_BYTES && session.scrollback.length > 0) {

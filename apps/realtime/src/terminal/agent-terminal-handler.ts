@@ -391,6 +391,31 @@ function startSettleHeartbeat(
   return interval;
 }
 
+/**
+ * Is this exec session one the Sprite ACTUALLY still has?
+ *
+ * `streamSessionId` on the row only records a session that existed at some point:
+ * exec sessions do not survive a Sprite pause, and nothing ever clears the column
+ * (see `updateStreamSessionId` — it only ever writes a new id over an old one).
+ *
+ * A listing failure answers "unknown", and unknown is treated as STILL RUNNING.
+ * The caller uses this to decide whether a client may type a starting prompt into
+ * the terminal, and the two ways of being wrong are not symmetric: refusing to
+ * type at an agent that turns out to be fresh costs the user a prompt they can
+ * retype, while typing at one that turns out to be live can answer a confirmation
+ * it was waiting on.
+ */
+async function isSessionLive(sprite: SpriteInstanceLike, streamSessionId: string | null): Promise<boolean> {
+  if (!streamSessionId) return false;
+
+  try {
+    const sessions = await sprite.listSessions();
+    return sessions.some((session) => session.id === streamSessionId);
+  } catch {
+    return true;
+  }
+}
+
 export function buildAgentTerminalHandlers({
   sessionMap,
   openShell,
@@ -447,7 +472,18 @@ export function buildAgentTerminalHandlers({
     session.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
     sessionMap.reattach(sessionKey, connectionId);
     activeConnectionIds.add(connectionId);
-    socket.emit('agent-terminal:ready', { scrollback: session.scrollback.join(''), connectionId });
+    // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
+    // client holding a starting prompt must not type it. Asking `hasOutput` rather
+    // than "is the scrollback non-empty": one chunk over the scrollback cap is
+    // trimmed straight back off, leaving an empty buffer for a session that has
+    // been producing output for hours. A session that has emitted NOTHING is the
+    // boot a pane is still waiting for (a re-mount onto a silent cold start), and
+    // may still be prompted.
+    socket.emit('agent-terminal:ready', {
+      scrollback: session.scrollback.join(''),
+      resumed: session.hasOutput,
+      connectionId,
+    });
   }
 
   return {
@@ -585,6 +621,7 @@ export function buildAgentTerminalHandlers({
           outputFn: (data) => socket.emit('agent-terminal:output', { data, connectionId }),
           closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
           scrollback: [],
+          hasOutput: false,
           scrollbackBytes: 0,
           reAuthInterval: undefined,
           idleTimer: undefined,
@@ -707,16 +744,24 @@ export function buildAgentTerminalHandlers({
 
         session.reAuthInterval = reAuthInterval;
 
-        // `resumed` says whether this PTY is a fresh boot or an agent that was
-        // ALREADY RUNNING — `openShell` picks up `sandbox.streamSessionId` when
-        // the Sprite still holds an exec session for it. The client cannot infer
-        // this: after a restart of THIS process the in-memory session map is
-        // empty, so a connect to an agent that has been running for hours takes
-        // this create path and is otherwise indistinguishable from a cold boot.
-        // A caller that types a starting prompt into a terminal has to know the
-        // difference — a line plus a carriage return delivered to a live agent
-        // sitting at a confirmation prompt is destructive.
-        socket.emit('agent-terminal:ready', { connectionId, resumed: sandbox.streamSessionId != null });
+        // `resumed` says whether this connect picked up an agent that was ALREADY
+        // RUNNING, or started a fresh one. The client cannot infer it: after a
+        // restart of THIS process the session map is empty, so a connect to an
+        // agent that has been running for hours takes this create path and looks
+        // exactly like a cold boot. A caller that types a starting prompt into the
+        // terminal has to know the difference — a line plus a carriage return
+        // delivered to a live agent sitting at a confirmation is destructive.
+        //
+        // It is a VERIFIED fact, not the row's word for it. `streamSessionId` is a
+        // memory of a session that was alive once: exec sessions do not survive a
+        // Sprite pause, nothing ever clears the column, and `openPtyShell` attaches
+        // to the id optimistically and only discovers it is dangling when the
+        // socket fails — at which point it quietly launches a FRESH agent
+        // (`planReconnect`). Trusting the row would tell that fresh agent's pane
+        // its prompt had already been taken, and the agent would sit there having
+        // never been given its task. So we ask the Sprite which sessions it
+        // actually has.
+        socket.emit('agent-terminal:ready', { connectionId, resumed: await isSessionLive(sprite, sandbox.streamSessionId) });
       } finally {
         // Release the key claim on EVERY exit from the cold path — success, denial
         // or throw — so a failed create never wedges the key against future connects.

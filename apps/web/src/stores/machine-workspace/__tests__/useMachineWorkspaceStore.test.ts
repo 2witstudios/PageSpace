@@ -449,4 +449,24 @@ describe('useMachineWorkspaceStore', () => {
     });
     void workspace;
   });
+
+  it('given the same state read twice, selectChildSessionIds should hand back the SAME set', () => {
+    store().ensureMachine('m1');
+    const workspace = activeOf('m1')!;
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, SESSION);
+
+    const first = selectChildSessionIds('m1')(store());
+    const second = selectChildSessionIds('m1')(store());
+    // A write the derivation depends on must produce a new answer.
+    store().splitRight('m1', workspace.id, workspace.activePaneId);
+    const afterChange = selectChildSessionIds('m1')(store());
+
+    assert({
+      given: 'a selector that derives a Set, read twice from unchanged state, then after a write',
+      should:
+        'return the identical Set until the state changes — zustand v5 runs the selector inside getSnapshot, so allocating a fresh Set per read hands React a new snapshot every time and the component loops',
+      actual: { stable: first === second, freshAfterChange: afterChange !== first },
+      expected: { stable: true, freshAfterChange: true },
+    });
+  });
 });
