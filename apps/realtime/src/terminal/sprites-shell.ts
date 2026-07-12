@@ -391,8 +391,18 @@ export function openPtyShell({
       releaseOutOfBand();
       onOutput(bytes.toString('utf8'));
     };
-    /** Close the replay window: hand over whatever we were still holding. */
-    const closeReplayWindow = () => {
+    /**
+     * Close the replay window: hand over whatever we were still holding.
+     *
+     * `socketDead` is the difference between a window that stops early and one that will
+     * never receive another byte, and it decides the fate of a HELD DRAIN. A drain sits at
+     * the END of the session's ring, so a partial replay — a prefix — cannot have carried
+     * it. While the socket lives, the rest of that burst still streams in (the window is
+     * resolved now, so it passes straight through) and delivers it. Once the socket is
+     * dead, nothing will. Asking "did any replay byte arrive?" instead of "can more
+     * arrive?" throws the drain away on exactly the path it exists to survive.
+     */
+    const closeReplayWindow = (socketDead = false) => {
       cancelTimers();
       if (closed) return;
       const held = replay.pending.length;
@@ -412,10 +422,9 @@ export function openPtyShell({
       }
       deliver(emit);
       releaseOutOfBand();
-      // Only bytes that ACTUALLY arrived can have carried the drain. A window that closes
-      // without ever receiving one (the socket died first) has delivered nothing, so the
-      // drain is still nobody's — keep holding it.
-      if (held > 0) replayAccountedForDrain();
+      // A live socket will finish its burst — the drain rides in on the rest of it. A dead
+      // one will not, and a prefix cannot have carried bytes that sit at the ring's end.
+      if (held > 0 && !socketDead) replayAccountedForDrain();
     };
 
     cmd.stdout.on('data', (chunk) => {
@@ -467,6 +476,10 @@ export function openPtyShell({
             unreplayedDrainBytes += held.length;
             return;
           }
+          // Past the cap. Release what is queued FIRST, then this chunk — emitting the
+          // newest ahead of the ones already waiting would scramble the very output we are
+          // preserving.
+          flushUnreplayedDrain();
         }
         // A fresh session replays nothing, so these last words of the dead shell — its
         // panic, its stack trace — exist nowhere else. Emit them, queued behind whatever
@@ -531,9 +544,11 @@ export function openPtyShell({
       // Ignore the stale exit that trails a keepalive 'error' on the same dead
       // command — only an exit WITHOUT a preceding error is a real shell exit.
       if (stale) return;
-      // The shell's last words may still be sitting in the replay buffer: there is
-      // no reconnect coming to re-deliver them, so hand them over before the exit.
-      closeReplayWindow();
+      // The shell's last words may still be sitting in the replay buffer, or held for a
+      // replay that is now never coming — there is no reconnect after an exit. Hand both
+      // over before the terminal closes, or they die with it.
+      closeReplayWindow(true);
+      flushUnreplayedDrain();
       fatal(code ?? -1);
     });
     // A single failed open emits 'error' more than once on the SAME command — the
@@ -556,7 +571,10 @@ export function openPtyShell({
       // scrollback for good. Emitting them cannot lose anything, and cannot
       // duplicate anything either: they join `seen`, so if a reattach DOES replay
       // them, that replay dedupes against them.
-      closeReplayWindow();
+      //
+      // The socket is dead, so a replay this window only PARTLY received cannot have
+      // carried a held drain: keep holding it for the reconnect to resolve.
+      closeReplayWindow(true);
       stale = true;
       // Remember WHY this command died, STRUCTURALLY: if it never reported an open
       // (no 'spawn', no byte of output), its socket never came up, so the session
@@ -590,6 +608,19 @@ export function openPtyShell({
     unreplayedDrainBytes = 0;
   }
 
+  /**
+   * Hand over a drain nothing is going to replay. Never recorded into `seen`: these bytes
+   * belong to a session that is gone, so no future replay can contain them, and splicing
+   * them into the history would leave the anchor unmatchable.
+   */
+  function flushUnreplayedDrain(): void {
+    if (unreplayedDrain.length === 0 || closed) return;
+    const out = Buffer.concat(unreplayedDrain);
+    unreplayedDrain = [];
+    unreplayedDrainBytes = 0;
+    onOutput(out.toString('utf8'));
+  }
+
   function launchFreshSession(): void {
     currentSessionId = undefined;
     const binding: SessionBinding = { id: undefined, replaysPriorOutput: false };
@@ -606,15 +637,8 @@ export function openPtyShell({
     seenTail = EMPTY_SEEN;
     // No replay is coming for the drain we were holding: the session that produced it is
     // gone, and a fresh shell's scrollback knows nothing about it. These are the dead
-    // shell's last words — hand them over now, or they are lost for good. NOT recorded
-    // into `seen`: they are no part of the new session's stream, and splicing them in
-    // would leave the anchor unmatchable for the life of the terminal.
-    if (unreplayedDrain.length > 0 && !closed) {
-      const out = Buffer.concat(unreplayedDrain);
-      unreplayedDrain = [];
-      unreplayedDrainBytes = 0;
-      onOutput(out.toString('utf8'));
-    }
+    // shell's last words — hand them over now, or they are lost for good.
+    flushUnreplayedDrain();
     const gen = (sessionGeneration += 1);
     // The cwd is NOT passed as a createSession option: the server chdirs into it
     // and fails the open outright if it is gone, and a sandbox command can delete

@@ -1488,6 +1488,88 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(`${BANNER}unalignable scrollback X$ `);
     });
 
+    it('given the reattach receives PART of a replay and then dies, still delivers the held drain', async () => {
+      // "Did any replay byte arrive?" is not the question. A drain sits at the END of the
+      // session's ring, so a PREFIX of the replay cannot have carried it. While the socket
+      // lives the rest of the burst still streams in and delivers it — but once the socket
+      // is dead nothing will, and one arrived frame was enough to make us throw the hold
+      // away. The shell's panic died with it.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // reattached to sess-1
+      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // drained late; held for the replay
+
+      // The replay starts arriving — and the socket dies MID-BURST.
+      attachCmd._emitter.emit('spawn');
+      attachCmd._stdout.emit('data', BANNER.slice(0, 10)); // a prefix: cannot contain the drain
+      sprite.listSessions.mockResolvedValue([]); // the session died with the Sprite
+      attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(outputs(onOutput).join('')).toContain('panic: goodbye\r\n');
+    });
+
+    it('given the terminal EXITS while a drain is held, delivers it before the exit', async () => {
+      // The most likely shape in the wild: the shell panics (that IS the drain), its socket
+      // dies, we reattach, and the reattached session reports the exit. There is no
+      // reconnect after an exit, so the one door the drain had never opens — the user sees
+      // the terminal close with no explanation.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+      const onExit = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // reattached
+      cmd._stdout.emit('data', 'panic: goodbye\r\n'); // held for the replay
+      attachCmd._emitter.emit('exit', 0); // ...which never comes: the shell is gone
+
+      expect(outputs(onOutput).join('')).toContain('panic: goodbye\r\n');
+      expect(onExit).toHaveBeenCalledWith(0);
+    });
+
+    it('given an UNNAMED dead session, a fresh UNNAMED session does not claim its drain', async () => {
+      // Both bindings have an undefined id until their sessions announce themselves. If the
+      // guard compared ids alone, `undefined === undefined` would read as "same session, a
+      // replay is coming" — and a fresh session, whose history is empty, resolves on its
+      // first chunk and discards the hold. The dead shell's last words vanish.
+      const cmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [] });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('spawn'); // never announces an id
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // a fresh session is wired; it has no id yet
+      cmd._stdout.emit('data', 'panic: last words\r\n'); // the dead socket drains
+      freshCmd._emitter.emit('spawn');
+      freshCmd._stdout.emit('data', '$ '); // the new shell speaks, resolving its window
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput).join('')).toContain('panic: last words\r\n');
+    });
+
     it('given the REATTACH dies before replaying, the fresh session delivers the drain WITHOUT poisoning the history', async () => {
       // Why the drain is HELD rather than dropped: the reattach's replay is expected to
       // carry it, but that attach can die before its replay ever lands, and if the session
