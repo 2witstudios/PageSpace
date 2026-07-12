@@ -44,6 +44,12 @@ export const PROJECT_NAME_FALLBACK = 'project';
  * counterpart to `isValidProjectName`, which stays as it is: the predicate
  * remains the CONTRACT this function must satisfy for any input at all.
  *
+ * A name already accepted by `isValidProjectName` passes through untouched —
+ * normalization exists to accept text that would otherwise be REJECTED, not to
+ * rewrite a directory name the user legitimately chose (`MyRepo` stays
+ * `MyRepo`). It mirrors `normalizeBranchName`, where the same pass-through is
+ * load-bearing because git refs are case-sensitive.
+ *
  * Unlike a branch ref, a project name is exactly ONE path segment — `/` has no
  * structural meaning here, so `slugifySegment` folds it to `-` along with
  * every other out-of-charset character. That, plus the leading-separator trim,
@@ -54,6 +60,8 @@ export const PROJECT_NAME_FALLBACK = 'project';
  * string x, and the function is idempotent.
  */
 export function normalizeProjectName(input: string): string {
+  if (isValidProjectName(input)) return input;
+
   let name = slugifySegment(input);
 
   if (name.length > MAX_PROJECT_NAME_LENGTH) {

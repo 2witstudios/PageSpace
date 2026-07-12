@@ -54,10 +54,16 @@ const BRANCH_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 // a trailing one is (git-check-ref-format(1)).
 const FORBIDDEN_SEGMENT_RE = /(^|\/)\.|\.\.|\/{2,}|\.lock(\/|$)/;
 
+// `git check-ref-format --branch HEAD` is fatal — HEAD is the reserved symbolic
+// ref, and it is the ONLY such name in the charset above (`head`, `Head`, and
+// `FETCH_HEAD` are all legal branches; verified against git).
+const RESERVED_BRANCH_NAMES = new Set(['HEAD']);
+
 export function isValidBranchName(name: string): boolean {
   if (typeof name !== 'string' || name.length === 0 || name.length > MAX_BRANCH_NAME_LENGTH) {
     return false;
   }
+  if (RESERVED_BRANCH_NAMES.has(name)) return false;
   if (name.endsWith('/') || name.endsWith('.')) return false;
   if (!BRANCH_NAME_RE.test(name)) return false;
   if (FORBIDDEN_SEGMENT_RE.test(name)) return false;
@@ -90,17 +96,30 @@ function rewriteLockSuffix(segment: string): string {
  * CONTRACT, and this function's job is to satisfy it for any input at all,
  * rather than to reject the user.
  *
+ * A name git ALREADY accepts is returned untouched. This is not a shortcut —
+ * it is load-bearing. Git refs are case-sensitive, so slugifying `Release-2.0`
+ * to `release-2.0` would make `git checkout -b release-2.0 origin/release-2.0`
+ * miss the real upstream branch, and `cloneAndCheckoutBranch`'s fallback would
+ * then silently hand the user a NEW EMPTY branch off HEAD while
+ * `origin/Release-2.0` sat there untouched. Same for `_`, which git allows.
+ * Normalization exists to accept text git would REJECT — never to rewrite text
+ * git would have honored.
+ *
  * `/` is structural — it is how git namespaces refs — so it survives as a
  * segment separator and each segment is slugified independently
  * (`feat/JIRA-123 Fix!!` → `feat/jira-123-fix`). Empty segments vanish, which
  * is what disarms `../escape` (→ `escape`) and `a//b` (→ `a/b`).
  *
  * INVARIANT: `isValidBranchName(normalizeBranchName(x)) === true` for EVERY
- * string x, and the function is idempotent. The closing guard makes the first
- * half of that total rather than merely intended — a slug that somehow still
- * fails the predicate degrades to the fallback instead of reaching git.
+ * string x, and the function is idempotent (which the pass-through above makes
+ * immediate: the output is always valid, so a second pass is the identity).
+ * The closing guard makes the invariant total rather than merely intended — a
+ * slug that somehow still fails the predicate degrades to the fallback instead
+ * of reaching git.
  */
 export function normalizeBranchName(input: string): string {
+  if (isValidBranchName(input)) return input;
+
   const segments = input
     .split('/')
     .map((segment) => rewriteLockSuffix(slugifySegment(segment)))

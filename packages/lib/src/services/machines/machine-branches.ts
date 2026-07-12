@@ -224,8 +224,8 @@ async function reconcileProvisionCollision({
  * `branchName` is free text: it is NORMALIZED here (not rejected — see
  * `normalizeBranchName`), and the normalized form is what gets checked out,
  * hashed into the session key, persisted, and returned. This is the
- * authoritative normalization point — a client's live preview is a
- * convenience, never the source of truth.
+ * authoritative normalization point; any future client-side live preview would
+ * be a convenience, never the source of truth.
  */
 export async function spawnBranch({
   machineId,
@@ -373,7 +373,12 @@ export async function listBranches({
 
 export type KillBranchResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
 
-/** Tear down a branch-terminal: DELETE its Sprite through the MachineHost seam and drop the tracking row. */
+/**
+ * Tear down a branch-terminal: DELETE its Sprite through the MachineHost seam
+ * and drop the tracking row. Normalizes its lookup key for the same reason
+ * `attachBranch` does — whatever text created a branch must also be able to
+ * kill it, and a canonical name from `listBranches` passes through unchanged.
+ */
 export async function killBranch({
   machineId,
   projectName,
@@ -387,7 +392,8 @@ export async function killBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<KillBranchResult> {
-  const existing = await store.findByName(machineId, projectName, branchName);
+  const normalized = normalizeBranchName(branchName);
+  const existing = await store.findByName(machineId, projectName, normalized);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
@@ -399,6 +405,6 @@ export async function killBranch({
     return { ok: false, reason: 'error' };
   }
 
-  await store.remove(machineId, projectName, branchName);
+  await store.remove(machineId, projectName, normalized);
   return { ok: true };
 }

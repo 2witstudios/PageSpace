@@ -74,6 +74,8 @@ describe('isValidBranchName', () => {
     'a[b',
     'a\\b',
     'a'.repeat(201),
+    // git's reserved symbolic ref — `git checkout -b HEAD` is fatal.
+    'HEAD',
   ])('given a malformed branch name %s, should reject', (name) => {
     expect(isValidBranchName(name)).toBe(false);
   });
@@ -114,6 +116,9 @@ const GNARLY_INPUTS = [
   `${'x'.repeat(195)}.lockdown`,
   'main',
   'release/1.2.3',
+  'Release-2.0',
+  'feature_x',
+  'HEAD',
 ];
 
 describe('normalizeBranchName', () => {
@@ -122,14 +127,22 @@ describe('normalizeBranchName', () => {
     ['My Cool Feature', 'my-cool-feature'],
     ['feat/JIRA-123 Fix!!', 'feat/jira-123-fix'],
     ['émoji 🚀 branch', 'emoji-branch'],
-    ['CAPS', 'caps'],
-    ['a_b', 'a-b'],
+    // Free text git would REJECT still slugifies (lowercased, `_`→`-`).
+    ['CAPS FEATURE', 'caps-feature'],
+    ['a_b c', 'a-b-c'],
     ['a b  c', 'a-b-c'],
     ['a~b^c:d?e*f[g\\h', 'a-b-c-d-e-f-g-h'],
     // Already-valid refs are left alone — `/` is structural, single dots survive.
     ['main', 'main'],
     ['feature/foo', 'feature/foo'],
     ['release/1.2.3', 'release/1.2.3'],
+    // ...INCLUDING case and `_`, both of which git accepts. Slugifying these
+    // would be actively harmful — see the regression test below.
+    ['Release-2.0', 'Release-2.0'],
+    ['feature_x', 'feature_x'],
+    ['JIRA-123', 'JIRA-123'],
+    // ...but NOT git's reserved symbolic ref, which slugifies to a legal branch.
+    ['HEAD', 'head'],
     // Traversal and empty segments collapse away rather than erroring.
     ['../escape', 'escape'],
     ['a//b', 'a/b'],
@@ -140,7 +153,7 @@ describe('normalizeBranchName', () => {
     ['/leading-slash', 'leading-slash'],
     ['trailing-slash/', 'trailing-slash'],
     ['trailing-dot.', 'trailing-dot'],
-    ['feature/-foo-', 'feature/foo'],
+    ['feature/ -foo- ', 'feature/foo'],
     // `.lock` is forbidden at the end of EVERY slash-separated component, not
     // just the ref as a whole — `git checkout -b feature/a.lock/foo` is fatal.
     ['hotfix.lock', 'hotfix-lock'],
@@ -180,9 +193,25 @@ describe('normalizeBranchName', () => {
     }
   });
 
-  it('given two inputs that differ only in noise, should collapse them to the SAME ref', () => {
+  it('given a name git already accepts, should NOT rewrite it — case and `_` are load-bearing', () => {
+    // REGRESSION GUARD. Git refs are case-sensitive. Slugifying `Release-2.0`
+    // to `release-2.0` made `git checkout -b release-2.0 origin/release-2.0`
+    // miss the real upstream branch, and cloneAndCheckoutBranch's fallback then
+    // silently created a NEW EMPTY branch off HEAD while origin/Release-2.0 sat
+    // untouched. Normalization exists to accept text git would REJECT — never to
+    // rewrite text git would have honored.
+    expect(normalizeBranchName('Release-2.0')).toBe('Release-2.0');
+    expect(normalizeBranchName('feature_x')).toBe('feature_x');
+    expect(normalizeBranchName('feature/JIRA-123')).toBe('feature/JIRA-123');
+  });
+
+  it('given two free-text spellings of the same name, should collapse them to the SAME ref', () => {
     // Consequential: the session key is derived from the normalized name, so
-    // these must land on one branch-terminal, not two.
-    expect(normalizeBranchName('My Cool Feature')).toBe(normalizeBranchName('my---cool___feature'));
+    // these must land on one branch-terminal, not two. Note this only applies to
+    // text git REJECTS — `my---cool___feature` is a legal ref, so it passes
+    // through as itself and is genuinely a different branch.
+    expect(normalizeBranchName('My Cool Feature')).toBe('my-cool-feature');
+    expect(normalizeBranchName('my  cool   feature!!')).toBe('my-cool-feature');
+    expect(normalizeBranchName('My Cool Feature')).toBe(normalizeBranchName('my  cool   feature!!'));
   });
 });

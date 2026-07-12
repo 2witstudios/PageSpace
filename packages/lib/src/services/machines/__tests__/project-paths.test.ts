@@ -82,16 +82,16 @@ const GNARLY_INPUTS = [
   '.git',
   'a'.repeat(150),
   'my-repo',
+  'PageSpace',
+  'my_repo.v2',
 ];
 
 describe('normalizeProjectName', () => {
   it.each([
     // [free text a user typed, the directory name it becomes]
     ['My Cool Feature', 'my-cool-feature'],
-    ['PageSpace', 'pagespace'],
     ['émoji 🚀 project', 'emoji-project'],
-    ['my_repo.v2', 'my-repo.v2'],
-    ['repo---name', 'repo-name'],
+    ['repo!!!  name', 'repo-name'],
     // A project name is ONE segment — `/` carries no structure here.
     ['feat/JIRA-123 Fix!!', 'feat-jira-123-fix'],
     ['a\\b', 'a-b'],
@@ -99,8 +99,12 @@ describe('normalizeProjectName', () => {
     ['../escape', 'escape'],
     ['../../etc/passwd', 'etc-passwd'],
     ['.git', 'git'],
-    // Already-valid slugs are left alone.
+    // Already-valid names are left alone — including case and `_`, which a
+    // directory name may legitimately carry (mirrors normalizeBranchName, where
+    // the same pass-through is load-bearing for case-sensitive git refs).
     ['my-repo', 'my-repo'],
+    ['PageSpace', 'PageSpace'],
+    ['my_repo.v2', 'my_repo.v2'],
     // Nothing sluggable left → the deterministic fallback.
     ['', 'project'],
     ['   ', 'project'],

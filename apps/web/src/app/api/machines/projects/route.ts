@@ -14,8 +14,9 @@
  *
  * `name` on POST is FREE TEXT. The server normalizes it into a valid directory
  * slug (`normalizeProjectName`, inside `addProject`) rather than rejecting it,
- * and the response echoes the canonical name. A client-side live preview of
- * that same normalization is a convenience — this is the authority.
+ * and the response echoes the canonical name — clients should render THAT, not
+ * what the user typed. (A client-side live preview of the same normalization is
+ * a separate follow-up; it would be a convenience, never the authority.)
  */
 
 import { NextResponse } from 'next/server';
