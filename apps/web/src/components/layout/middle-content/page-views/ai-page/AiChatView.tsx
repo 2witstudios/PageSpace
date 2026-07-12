@@ -982,7 +982,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [
     isReadOnly,
     input,
-    attachments.length,
+    // `attachments.length` was here and is redundant: getFilesForSend (below) is memoized on
+    // [attachments], so it already changes whenever they do. ESLint flagged it once the rule was
+    // promoted to an error for these files — which is the rule doing exactly its job.
     currentConversationId,
     canSendMessage,
     buildFreshPageContext,

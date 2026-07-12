@@ -169,7 +169,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       setInitialMessages([]);
       setIsMessagesLoading(false);
     }
-  }, []);
+  }, [dispatchIdentity]);
 
   const createNewConversation = useCallback(async () => {
     try {
@@ -187,7 +187,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
-  }, []);
+  }, [dispatchIdentity]);
 
   useEffect(() => {
     const initializeGlobalChat = async () => {
@@ -452,7 +452,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // same synchronous IDENTITY_SET path as loadConversation/createNewConversation.
   const setCurrentConversationId = useCallback((id: string | null) => {
     if (id) dispatchIdentity({ type: 'IDENTITY_SET', conversationId: id });
-  }, []);
+  }, [dispatchIdentity]);
 
   // ============================================
   // Context Values
@@ -470,6 +470,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     rejoinGlobalStream,
     latestGlobalConversationAdded,
   }), [
+    setCurrentConversationId,
     currentConversationId,
     initialMessages,
     isInitialized,

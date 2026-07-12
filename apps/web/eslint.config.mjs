@@ -172,6 +172,41 @@ const eslintConfig = [
       ],
     },
   },
+  {
+    // AI stream surfaces: a stale closure here is not a re-render bug, it is a RUNAWAY AGENT.
+    //
+    // Streams are server-owned and deliberately survive a client disconnect, so the only thing
+    // that stops a generation is an explicit abort naming it correctly. Every stale value in
+    // these files — a captured conversationId, a captured messageId, a captured isStreaming —
+    // means Stop names the wrong stream (or nothing), the fetch is cancelled, the button flips
+    // back to Send, and the server keeps generating, keeps running write tools, and KEEPS
+    // BILLING while the user believes it stopped. That has now happened repeatedly.
+    //
+    // `react-hooks/exhaustive-deps` catches exactly this, and it was already enabled — as a
+    // WARNING, via next/core-web-vitals. `bun run lint` exits 0 on warnings, so CI reported
+    // "14/14 successful" while the rule was pointing straight at a missing dep in handleStop.
+    // The signal existed and was wired to nothing.
+    //
+    // Scoped to the files that own stream identity, and verified to be at ZERO violations and
+    // ZERO suppressions when added — so this costs nothing today and fails CI on the next one.
+    // If it fires, do not silence it: a dep you are tempted to omit here is a stop button you
+    // are about to break.
+    files: [
+      "src/hooks/useChannelStreamSocket.ts",
+      "src/hooks/useAgentChannelMultiplayer.ts",
+      "src/hooks/useAppStateRecovery.ts",
+      "src/contexts/GlobalChatContext.tsx",
+      "src/components/layout/middle-content/page-views/dashboard/GlobalAssistantView.tsx",
+      "src/components/layout/middle-content/page-views/dashboard/useGlobalEffectiveStream.ts",
+      "src/components/layout/middle-content/page-views/ai-page/AiChatView.tsx",
+      "src/components/layout/right-sidebar/ai-assistant/SidebarChatTab.tsx",
+      "src/lib/ai/shared/hooks/useChatStop.ts",
+      "src/lib/ai/shared/hooks/useChatTransport.ts",
+    ],
+    rules: {
+      "react-hooks/exhaustive-deps": "error",
+    },
+  },
 ];
 
 export default eslintConfig;
