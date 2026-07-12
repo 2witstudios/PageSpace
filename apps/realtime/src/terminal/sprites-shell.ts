@@ -486,9 +486,13 @@ export function openPtyShell({
         // recognise them. Delivered exactly once.
         const sameSession = myBinding.id !== undefined && myBinding.id === wiredBinding.id;
         if (sameSession && !wiredReplayStarted) { deliver(toBuf(chunk)); return; }
-        // Otherwise: show them, record nothing — the after-the-snapshot half of the rule at
-        // `wiredReplayStarted`. Either nothing will ever replay them, or the replay will emit
-        // and record them itself; recording here too would enter them twice and break the run.
+        // Otherwise: show them, record nothing. TWO ways in, and the don't-record verdict is the
+        // same for both. A DIFFERENT session (see `SessionBinding`): its scrollback never held
+        // these bytes, so no replay will ever carry them — recording them would splice bytes
+        // into the history that no replay contains. Or the SAME session past its snapshot (see
+        // `wiredReplayStarted`): its replay will emit AND record them itself, so recording here
+        // too would enter them twice. Either way a repeated entry breaks the run, and a history
+        // that repeats itself matches no anchor, ever again.
         //
         // Known residual: `wiredReplayStarted` is per-COMMAND, so a drain that arrives two
         // generations late (its session reattached, replayed these bytes, and dropped again)
