@@ -257,11 +257,19 @@ export function openPtyShell({
   // Cancels the replay-window timers of whichever command is currently wired, so a
   // teardown doesn't leave one armed against a shell nobody is watching any more.
   let cancelReplayTimers: () => void = () => {};
-  // Emits bytes that must NOT be deduped and must NOT jump whatever the live command
-  // is holding — a superseded command's late drain, and stderr. Hoisted because a DEAD
-  // command has to queue behind the LIVE command's replay, and its own per-wire state
-  // is the wrong window entirely.
+  // Emits bytes that must NOT be deduped and must NOT jump whatever the live command is
+  // holding — stderr, and the last words of a dead socket that nothing will replay.
+  // Hoisted because a DEAD command has to queue behind the LIVE command's replay, and
+  // its own per-wire state is the wrong window entirely.
   let emitOutOfBand: (bytes: Buffer) => void = () => {};
+  // Whether the wired command is REATTACHED to the session that produced the output so
+  // far — in which case that session's scrollback still holds anything a dying socket
+  // drains late, and the attach's replay will deliver it. Emitting such a drain
+  // ourselves would deliver it TWICE (and, once the window has resolved, splice it into
+  // the middle of the tail the replay is still streaming). A fresh CREATE replays
+  // nothing, so there the same bytes exist nowhere else and MUST be emitted. Same drain,
+  // opposite handling: the difference is whether a replay is coming for it.
+  let wiredSessionReplaysPriorOutput = sessionId !== undefined;
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -333,7 +341,7 @@ export function openPtyShell({
     emitOutOfBand = (bytes: Buffer) => {
       // (Both call sites already refuse to run once `closed`.)
       if (bytes.length === 0) return;
-      if (!replay.resolved && replay.pending.length > 0) { heldOutOfBand.push(bytes); return; }
+      if (replay.pending.length > 0) { heldOutOfBand.push(bytes); return; } // holding a replay: wait for it
       onOutput(bytes.toString('utf8'));
     };
     /** Close the replay window: hand over whatever we were still holding. */
@@ -341,15 +349,6 @@ export function openPtyShell({
       cancelTimers();
       if (closed) return;
       const held = replay.pending.length;
-      // Nothing held means the window has nothing to hand over — and must NOT be
-      // resolved. A window is resolved by CLOSING it, and a resolved window searches
-      // nothing: every later byte of the attach passes straight through. So resolving
-      // one that has not yet received a byte would disable the dedupe for that whole
-      // attach. That is reachable, and common: a dead socket's drain closes the LIVE
-      // window (to keep ordering), and it almost always arrives before the successor's
-      // replay, which still has a WebSocket to open. The banner would reprint — this
-      // bug, resurrected by the fix for the ordering one.
-      if (held === 0 && heldOutOfBand.length === 0) return;
       const { emit, state } = flushReplay(replay);
       replay = state;
       if (held > 0) {
@@ -387,12 +386,18 @@ export function openPtyShell({
       // fresh output needed to scroll the poison out. The banner would reprint on
       // every watchdog cycle: precisely the bug this file exists to prevent.
       if (stale) {
+        // Still the wired command: the reconnect has not chosen yet. Deliver AND record
+        // — these bytes are part of the stream a reattach would replay, so `seen` must
+        // end with them or that replay would hand them over a second time.
         if (cmd === current) { deliver(toBuf(chunk)); return; }
-        // A successor is already wired and may be HOLDING a replay — bytes that are
-        // older in the session's stream than this drain. Emitting straight into the
-        // client would render them out of order (and interleave escape sequences), so
-        // they queue behind it. Closing that window to make room instead would tear a
-        // half-received replay in two — see `emitOutOfBand`.
+        // Superseded. If the successor REATTACHED, the session's scrollback still holds
+        // this drain and the replay is already carrying it: emitting it here would show
+        // it twice, and (once that window resolves) in the middle of the tail the replay
+        // is still streaming. Drop it — the replay is the delivery.
+        if (wiredSessionReplaysPriorOutput) return;
+        // A fresh session replays nothing, so these last words of the dead shell — its
+        // panic, its stack trace — exist nowhere else. Emit them, queued behind whatever
+        // the new session is holding so they cannot render ahead of it.
         emitOutOfBand(toBuf(chunk));
         return;
       }
@@ -496,6 +501,7 @@ export function openPtyShell({
   // replacing a dangling one).
   function launchFreshSession(): void {
     currentSessionId = undefined;
+    wiredSessionReplaysPriorOutput = false;
     // A brand-new shell shares no history with the one the client was watching, so
     // there is nothing of ITS output on the client's screen: clear the history, or
     // the replacement's opening banner would be mistaken for a replay of the dead
@@ -590,6 +596,7 @@ export function openPtyShell({
           // behavior) — a dead id just errors and re-enters reconnect once listing
           // recovers.
           sessionGeneration += 1;
+          wiredSessionReplaysPriorOutput = true;
           current = sprite.attachSession(currentSessionId, { cols: lastCols, rows: lastRows });
           wire(current);
           reconnecting = false;
@@ -613,6 +620,7 @@ export function openPtyShell({
         return;
       }
       sessionGeneration += 1;
+      wiredSessionReplaysPriorOutput = true;
       currentSessionId = plan.id;
       current = sprite.attachSession(plan.id, { cols: lastCols, rows: lastRows });
       wire(current);
@@ -640,6 +648,8 @@ export function openPtyShell({
   return {
     write: (data) => { if (!closed) current.stdin?.write(data); },
     resize: (c, r) => { lastCols = c; lastRows = r; if (!closed) current.resize?.(c, r); },
+    // Anything still held (an unresolved replay, queued stderr) is dropped with it: the
+    // viewer is gone, and `closed` stops every listener from speaking after this point.
     kill: () => { closed = true; cancelReplayTimers(); current.kill('SIGKILL'); },
   };
 }

@@ -1172,14 +1172,11 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toContain('segfault: dumping core\r\n');
     });
 
-    it('given a dead socket drains a byte AFTER its replacement is wired, the REATTACH still dedupes its replay', async () => {
-      // The drain has to flush the live command's held bytes before it speaks (else it
-      // renders ahead of them) — but flushing a window that is holding NOTHING resolves
-      // it, and a resolved window searches nothing. The successor's replay would then
-      // pass through whole. And the drain almost always DOES arrive first: it is bytes
-      // already buffered on the dying socket, while the replay still has a WebSocket to
-      // open. This is the attach path, where `seen` survives — the create path resets it
-      // and would hide the bug entirely.
+    it('given a dead socket drains a byte AFTER its replacement is wired, lets the REPLAY deliver it (exactly once)', async () => {
+      // The drained byte is in the SERVER's scrollback — it came from there — so the
+      // reattach's replay is already carrying it. Emitting it ourselves would show it
+      // twice, and (once the window resolves) splice it into the middle of the tail the
+      // replay is still streaming. The replay is the delivery; the drain is a duplicate.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1191,15 +1188,12 @@ describe('openPtyShell', () => {
       cmd._stdout.emit('data', BANNER);
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
-      await vi.advanceTimersByTimeAsync(500); // attachCmd is wired, but has sent nothing
+      await vi.advanceTimersByTimeAsync(500); // attachCmd is wired
       cmd._stdout.emit('data', 'X'); // the dead socket drains, late
-      attachCmd._stdout.emit('data', BANNER); // ...and only THEN does the replay land
+      attachCmd._stdout.emit('data', `${BANNER}X`); // the real scrollback contains it
       await vi.advanceTimersByTimeAsync(2000);
 
-      // The drained byte reached the user; the banner did not reprint.
-      const shown = outputs(onOutput).join('');
-      expect(shown).toContain('X');
-      expect(shown.split(BANNER).length - 1).toBe(1);
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}X`); // once — not twice, not torn
     });
 
     it('given a dead socket drains a byte AFTER its replacement is wired, keeps deduping on every later cycle', async () => {
@@ -1297,11 +1291,11 @@ describe('openPtyShell', () => {
     it('given a drain that lands BETWEEN replay frames, neither tears the replay nor poisons the history', async () => {
       // A scrollback burst is not one WebSocket frame, and the dead socket's events are
       // separate macrotasks from the new socket's — so a straggling drain lands in the
-      // middle of a replay that is only half received. Force-closing the window to make
-      // room for it would flush that half VERBATIM (reprinting the banner) and splice
-      // the drained byte into `seen`, leaving the anchor unmatchable for the life of the
-      // terminal — an idle shell never emits the 8 KiB of fresh output needed to scroll
-      // it out, so the banner would reprint on EVERY later cycle.
+      // middle of a half-received replay. Force-closing the window to make room for it
+      // would flush that half VERBATIM (reprinting the banner) and splice the drained
+      // byte into `seen`, leaving the anchor unmatchable for the life of the terminal:
+      // an idle shell never emits the 8 KiB of fresh output needed to scroll it out, so
+      // the banner would reprint on EVERY later cycle.
       const cmd = buildFakeCommand();
       const attach1 = buildFakeCommand();
       const attach2 = buildFakeCommand();
@@ -1320,26 +1314,29 @@ describe('openPtyShell', () => {
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
-      // The replay arrives in TWO frames, and the dead socket drains between them.
-      attach1._stdout.emit('data', BANNER.slice(0, 14));
+      // The replay arrives in TWO frames — and it carries the drained byte, because the
+      // server's scrollback does. The drain lands between the frames.
+      const scrollback = `${BANNER}X`;
+      attach1._stdout.emit('data', scrollback.slice(0, 14));
       cmd._stdout.emit('data', 'X');
-      attach1._stdout.emit('data', BANNER.slice(14));
+      attach1._stdout.emit('data', scrollback.slice(14));
       await vi.advanceTimersByTimeAsync(2000);
 
-      // The replay was suppressed whole, and the drained byte still reached the user.
-      expect(outputs(onOutput).join('')).toBe(`${BANNER}X`);
+      // The replay was suppressed up to the anchor and handed over only what is new —
+      // the drained byte, exactly once, in one piece.
+      expect(outputs(onOutput).join('')).toBe(scrollback);
 
       // ...and the history is intact, so ordinary idle cycles keep deduping.
       attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
-      attach2._stdout.emit('data', BANNER);
+      attach2._stdout.emit('data', scrollback);
       await vi.advanceTimersByTimeAsync(2000);
       attach2._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
-      attach3._stdout.emit('data', BANNER);
+      attach3._stdout.emit('data', scrollback);
       await vi.advanceTimersByTimeAsync(2000);
 
-      expect(outputs(onOutput).join('')).toBe(`${BANNER}X`); // still exactly one banner
+      expect(outputs(onOutput).join('')).toBe(scrollback); // still exactly one banner
     });
 
     it('given stderr while a replay is being held, releases it AFTER the held stdout (never dropped, never ahead)', async () => {
