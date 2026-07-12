@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   EMPTY_SEEN,
+  MAX_ANCHOR_BYTES,
   MAX_MATCH_CANDIDATES,
   MAX_PENDING_BYTES,
   MAX_SEEN_BYTES,
@@ -92,13 +93,19 @@ describe('planReplayEmission (pure)', () => {
     expected: { emit: '', pending: 'totally different scrollback\r\n', resolved: false },
   });
 
-  it('given more buffered bytes than the scan bound, should give up and emit them (duplication is survivable; losing output is not)', () => {
+  it('given more buffered bytes than the scan bound, should give up and emit them UNALIGNED', () => {
+    // `aligned: false` is the whole contract of a give-up: it tells the caller these bytes may
+    // duplicate history it already holds, so they must RESTART the history rather than extend
+    // it. Appending them is what latched the original bug permanently. (The flag happens to be
+    // unobservable on THIS producer — an emission this large evicts the history either way —
+    // which is exactly why it has to be asserted here rather than through the shell.)
     const anchor = buf(BANNER);
     const chunk = Buffer.alloc(MAX_PENDING_BYTES + 1, 0x61); // no anchor anywhere in it
-    const { emit, state } = planReplayEmission({ seen: anchor, chunk, state: freshReplayState() });
+    const { emit, state, aligned } = planReplayEmission({ seen: anchor, chunk, state: freshReplayState() });
 
     expect(emit.length).toBe(chunk.length);
     expect(state.resolved).toBe(true);
+    expect(aligned).toBe(false);
   });
 
   // The anchor is matched on BYTES, not JS string indices: a UTF-8 code point is
@@ -147,7 +154,7 @@ describe('planReplayEmission corroboration (pure)', () => {
     // front of it, including output the client has never seen, is dropped. What
     // sits in front of the recurrence is the gap output, not the history that
     // precedes the anchor in the real stream, so the match must be refused.
-    const anchor = seen.subarray(seen.length - 8 * 1024);
+    const anchor = seen.subarray(seen.length - MAX_ANCHOR_BYTES);
     const neverSeen = lines('output the client never saw', 40);
     const replay = Buffer.concat([neverSeen, anchor, buf('after repaint\r\n')]);
 
@@ -196,7 +203,7 @@ describe('planReplayEmission corroboration (pure)', () => {
     // shared realtime event loop. The bound is what stops that — and giving up is
     // safe (the bytes go out verbatim), so the observable proof of the bound is that
     // a TRUE match sitting beyond it is NOT found.
-    const anchor = seen.subarray(seen.length - 8 * 1024);
+    const anchor = seen.subarray(seen.length - MAX_ANCHOR_BYTES);
     const decoy = Buffer.concat([buf('decoy\r\n'), anchor]); // uncorroborated: junk in front
     const decoys = Buffer.concat(Array.from({ length: MAX_MATCH_CANDIDATES + 2 }, () => decoy));
     const genuine = Buffer.concat([seen, buf('the real tail\r\n')]); // would corroborate
@@ -215,6 +222,82 @@ describe('planReplayEmission corroboration (pure)', () => {
  * The search resumes from `scanned` instead of rescanning the whole buffer on every
  * chunk (which was quadratic). What it must never do is skip a GENUINE match.
  */
+describe('planReplayEmission corroboration bounds (pure)', () => {
+  const lines = (prefix: string, n: number) =>
+    Buffer.from(Array.from({ length: n }, (_, i) => `${prefix} ${i}\r\n`).join(''), 'utf8');
+  const deliver = (...parts: Buffer[]) =>
+    materializeSeen(parts.reduce((tail, part) => rememberDelivered(tail, part), EMPTY_SEEN));
+  const seen = deliver(lines('history', 3000), lines('recent', 800));
+  const anchor = seen.subarray(seen.length - MAX_ANCHOR_BYTES);
+
+  it('given a SHALLOW but COMPLETE proof, should accept it (a ring barely larger than the anchor)', () => {
+    // The `depth === at` acceptance. When the server's ring reaches back only a little past
+    // our anchor, a genuine match sits at a small `at` — and every one of those bytes can be
+    // proven. Demanding MIN_CORROBORATION_BYTES there would refuse a match we have COMPLETE
+    // evidence for, and reprint the scrollback on a terminal that was deduping fine.
+    const at = 64; // far below MIN_CORROBORATION_BYTES
+    const replay = Buffer.concat([
+      seen.subarray(seen.length - MAX_ANCHOR_BYTES - at), // the ring opens `at` bytes early
+      buf('brand new\r\n'),
+    ]);
+
+    const { emit, state } = planReplayEmission({ seen, chunk: replay, state: freshReplayState() });
+
+    expect(emit.toString('utf8')).toBe('brand new\r\n');
+    expect(state.resolved).toBe(true);
+  });
+
+  it('given a partial proof SHALLOWER than the floor, should refuse it', () => {
+    // The floor binds where `at` runs past the history we hold: the proof can only ever be
+    // partial there, so it must at least be deep. A shallow partial proof is no proof.
+    const shortSeen = deliver(lines('recent', 700)); // < MAX_ANCHOR_BYTES: the anchor IS the history
+    const neverSeen = lines('unseen', 40);
+    const replay = Buffer.concat([neverSeen, shortSeen, buf('after\r\n')]);
+
+    const { emit, state } = planReplayEmission({ seen: shortSeen, chunk: replay, state: freshReplayState() });
+
+    expect(emit.length).toBe(0); // refused: held, not suppressed
+    expect(state.resolved).toBe(false);
+  });
+
+  it('given FEWER recurrences than the bound, should still find the genuine boundary behind them', () => {
+    // The bound has to be generous enough to see past a handful of decoys — a repainting TUI
+    // can easily reproduce the anchor two or three times. Set it to 1 and a genuine, fully
+    // corroborated boundary sitting behind even one recurrence is missed, and the scrollback
+    // reprints on a terminal that was deduping fine.
+    const decoy = Buffer.concat([buf('decoy\r\n'), anchor]); // uncorroborated: junk in front
+    const decoys = Buffer.concat(Array.from({ length: 4 }, () => decoy)); // well under the bound
+    const genuine = Buffer.concat([seen, buf('the real tail\r\n')]);
+
+    const { emit, state } = planReplayEmission({
+      seen,
+      chunk: Buffer.concat([decoys, genuine]),
+      state: freshReplayState(),
+    });
+
+    expect(emit.toString('utf8')).toBe('the real tail\r\n');
+    expect(state.resolved).toBe(true);
+  });
+
+  it('given more anchor recurrences than the candidate bound, should stop searching (a suppression lost, never a byte)', () => {
+    // MAX_MATCH_CANDIDATES bounds work the SANDBOX chooses on the shared event loop. Past it
+    // the search gives up — even on a genuine boundary sitting behind the decoys — and the
+    // replay goes out verbatim. That costs a reprint; it can never cost a byte.
+    const decoy = Buffer.concat([buf('decoy\r\n'), anchor]); // uncorroborated: junk in front
+    const decoys = Buffer.concat(Array.from({ length: MAX_MATCH_CANDIDATES + 1 }, () => decoy));
+    const genuine = Buffer.concat([seen, buf('the real tail\r\n')]);
+
+    const { emit, state } = planReplayEmission({
+      seen,
+      chunk: Buffer.concat([decoys, genuine]),
+      state: freshReplayState(),
+    });
+
+    expect(emit.length).toBe(0);
+    expect(state.resolved).toBe(false); // gave up rather than grind through every decoy
+  });
+});
+
 describe('planReplayEmission incremental scan (pure)', () => {
   const lines = (prefix: string, n: number) =>
     Buffer.from(Array.from({ length: n }, (_, i) => `${prefix} ${i}\r\n`).join(''), 'utf8');
@@ -246,7 +329,7 @@ describe('planReplayEmission incremental scan (pure)', () => {
     const { state } = planReplayEmission({ seen, chunk: first, state: freshReplayState() });
 
     expect(state.resolved).toBe(false);
-    expect(state.scanned).toBe(first.length - 8 * 1024 + 1);
+    expect(state.scanned).toBe(first.length - MAX_ANCHOR_BYTES + 1);
   });
 });
 

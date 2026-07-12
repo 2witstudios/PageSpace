@@ -58,19 +58,23 @@
  * contiguous replica of `seen`'s tail. How big that replica must be is the real measure of
  * the risk, and it is smaller than it first looks:
  *
- * - A match at offset 0 has NOTHING in front of it, so it is corroborated by zero bytes —
- *   `corroborated` cannot compare what is not there. A replica of the anchor alone (8 KiB)
- *   at a replay's head is therefore accepted. This is the weakest point of the scheme: a
- *   full-screen TUI repaint landing exactly on the ring's boundary can produce one.
- * - Anywhere else, the replica must ALSO reproduce MIN_CORROBORATION_BYTES of the history in
- *   front of the anchor — 12 KiB in total.
- * - And when `seen` is shorter than the anchor bound, the anchor IS the whole history: there
- *   is nothing left to corroborate with, and the bound collapses to `seen.length`.
+ * A match at offset `at` suppresses `at + anchor` bytes, and `corroborated` proves them by
+ * comparing `depth = min(at, history)` bytes. It accepts either a COMPLETE proof
+ * (`depth === at` — every suppressed byte in front of the anchor matched) or a deep enough
+ * partial one (>= MIN_CORROBORATION_BYTES). So the replica the stream must contain is:
  *
- * So the precondition is `min(seen.length, MAX_ANCHOR_BYTES)`, plus MIN_CORROBORATION_BYTES
- * only when the match is not at the head. The exposure is bounded in SIZE too: a search over
- * ~366k configurations put the worst case at roughly one anchor's worth (~8 KiB) per
- * occurrence.
+ *     min(seen.length, MAX_ANCHOR_BYTES)  +  at
+ *
+ * — and the 4 KiB floor binds ONLY when `at` runs past the history we still hold. Which
+ * means the weakest point is `at = 0`: nothing is in front of the match, `corroborated`
+ * compares zero bytes (it cannot compare what is not there), and a replica of the anchor
+ * ALONE — 8 KiB — is accepted at a replay's head. A full-screen TUI repaint landing exactly
+ * on the ring's boundary can produce one. And when `seen` is shorter than the anchor bound,
+ * the anchor IS the whole history, so the bound collapses to `seen.length` (512 B has been
+ * demonstrated).
+ *
+ * The exposure is bounded in SIZE too: a search over ~366k configurations put the worst case
+ * at roughly one anchor's worth (~8 KiB) per occurrence.
  *
  * Realistically it takes violently periodic output — a `while true` loop printing the same
  * kilobytes, a repainting TUI — where the dropped bytes are indistinguishable from their
@@ -102,10 +106,12 @@ export const MAX_SEEN_BYTES = 64 * 1024;
 export const MAX_ANCHOR_BYTES = 8 * 1024;
 
 /**
- * How deep the corroboration must reach when it cannot cover the WHOLE suppressed
- * prefix (see `corroborated`). A false match would have to reproduce the 8 KiB
- * anchor AND the 4 KiB of unrelated history in front of it, contiguously and byte
- * for byte — which no screen repaint does.
+ * How deep the corroboration must reach when it cannot cover the WHOLE suppressed prefix
+ * (see `corroborated`). It is a FLOOR on a partial proof, not a tax on every match: a match
+ * whose entire prefix is proven (`depth === at`) is accepted however short that prefix is.
+ * So this binds only where `at` runs past the history we still hold — and there a false match
+ * would have to reproduce the anchor AND 4 KiB of unrelated history in front of it,
+ * contiguously and byte for byte, which no screen repaint does.
  */
 export const MIN_CORROBORATION_BYTES = 4 * 1024;
 
@@ -159,9 +165,10 @@ export type ReplayState = {
   /** Replayed bytes received in THIS attach that we can't yet classify. */
   pending: Buffer;
   /**
-   * How far into `pending` the anchor search has already looked. Every start
-   * position below this was tested and rejected, permanently — see the search in
-   * `planReplayEmission`.
+   * How far into `pending` the anchor search has already looked, and will not look again.
+   * Not quite "tested and rejected": once MAX_MATCH_CANDIDATES trips, the positions past the
+   * last candidate are skipped UNTESTED. That only ever loses a suppression (the replay goes
+   * out verbatim), never a byte — see the search in `planReplayEmission`.
    */
   scanned: number;
   /**
@@ -315,11 +322,13 @@ export function planReplayEmission({
   const pending = concat(state.pending, chunk);
   const anchor = anchorOf(seen);
 
-  // Search only where a match could newly START. Everything before `state.scanned`
-  // was tested against a strictly smaller buffer and rejected — and rejection is
-  // permanent, because corroboration only ever looks BACKWARD from the match while
-  // pending only ever grows forward, so no later byte can rehabilitate an earlier
-  // candidate. Rescanning from zero on every chunk is what made this quadratic: a
+  // Search only where a match could newly START. Everything before `state.scanned` has been
+  // looked at already: rejected against a strictly smaller buffer (and rejection is permanent,
+  // because corroboration only ever looks BACKWARD from the match while pending only grows
+  // forward, so no later byte can rehabilitate an earlier candidate) — or skipped, when the
+  // candidate bound below cut the scan short. Skipping costs a suppression, never a byte: the
+  // replay simply goes out verbatim. Rescanning from zero on every chunk is what made this
+  // quadratic: a
   // shell emitting 1 MiB in 256-byte chunks across an unalignable reconnect cost
   // ~570ms of solid event loop, on the process every terminal shares, driven by
   // bytes the sandbox chose. Bounding the candidate count without bounding the scan

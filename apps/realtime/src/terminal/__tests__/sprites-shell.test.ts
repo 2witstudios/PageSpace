@@ -1946,11 +1946,10 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toContain('unalignable\r\n');
     });
 
-    it('given a drain that floods past the hold cap, emits it rather than buffering without limit', async () => {
+    it('given stderr that floods past the hold cap while a replay is held, releases it rather than buffering without limit', async () => {
       // These are bytes the SANDBOX chose, queued on the process every terminal shares:
-      // `replay.pending` is capped for that reason and so is this. Past the cap the bytes
-      // are RELEASED, never dropped — the worst that happens is the duplicate the replay
-      // would have caused anyway.
+      // `replay.pending` is capped for that reason and so is this queue. Past the cap the
+      // bytes are RELEASED, never dropped — ordering is what we give up, not output.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1962,11 +1961,14 @@ describe('openPtyShell', () => {
       cmd._stdout.emit('data', BANNER);
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
-      await vi.advanceTimersByTimeAsync(500); // attachCmd wired; the drain will be held
-      const flood = 'x'.repeat(300 * 1024); // past MAX_HELD_SIDE_BYTES
-      cmd._stdout.emit('data', flood);
+      await vi.advanceTimersByTimeAsync(500);
+      // An unalignable replay is now HELD, so stderr queues behind it...
+      attachCmd._stdout.emit('data', 'unalignable scrollback\r\n');
+      const flood = 'e'.repeat(300 * 1024); // past MAX_HELD_SIDE_BYTES
+      attachCmd._stderr.emit('data', flood);
 
-      expect(outputs(onOutput).join('')).toContain(flood); // released, not swallowed
+      // ...but not without limit: past the cap it goes out at once, before the window closes.
+      expect(outputs(onOutput).join('')).toContain(flood);
     });
 
     it('given an EMPTY stderr chunk, emits nothing', () => {
@@ -2080,6 +2082,42 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
+    it('given a socket that dies holding a replay, flushes it THEN — not on a timer after its successor is live', async () => {
+      // The error handler closes the window (and cancels its timers) before marking the
+      // command stale. Without that, a DEAD command's settle timer fires ~500ms later — after
+      // its successor has already snapshotted — and its verbatim flush restarts the SHARED
+      // history behind the live command's back: a reprint, out of order, from a socket that
+      // no longer exists.
+      const cmd = buildFakeCommand();
+      const attach1 = buildFakeCommand();
+      const attach2 = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession.mockReturnValueOnce(attach1).mockReturnValueOnce(attach2);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach1._emitter.emit('spawn');
+      attach1._stdout.emit('data', 'held and unalignable\r\n'); // held by attach1's window
+      attach1._emitter.emit('error', new Error('WebSocket keepalive timeout')); // dies holding it
+
+      // Flushed by the error handler, at once — not by a timer belonging to a dead socket.
+      expect(outputs(onOutput).join('')).toContain('held and unalignable\r\n');
+
+      // And its successor's history is intact: an ordinary idle cycle still dedupes.
+      await vi.advanceTimersByTimeAsync(500);
+      const beforeReplay = outputs(onOutput).join('');
+      attach2._stdout.emit('data', 'held and unalignable\r\n'); // the ring, replayed
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput).join('')).toBe(beforeReplay); // suppressed, not reprinted
     });
 
     it('given a shell that exits while replay bytes are still buffered, flushes them before the exit', async () => {
