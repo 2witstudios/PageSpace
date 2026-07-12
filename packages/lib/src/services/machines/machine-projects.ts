@@ -175,39 +175,6 @@ export async function addProject({
   const plan = planAddProject({ name, repoUrl, existingNames: existing.map((p) => p.name) });
   if (!plan.ok) return plan;
 
-  // RESERVE THE NAME BEFORE CLONING. The unique constraint on (machineId, name)
-  // is what makes two concurrent adds safe: the loser fails right here, instantly,
-  // and never touches the filesystem — so it cannot delete the winner's checkout.
-  //
-  // Reserving AFTER the clone (as this used to) could not be made safe by any
-  // amount of checking: the winner's row only lands once its clone finishes,
-  // while the loser's clone fails the moment the directory appears, so the loser
-  // looked for a winner's row that did not exist yet, saw none, and `rm -rf`'d the
-  // winner's freshly cloned files out from under them — leaving a project row
-  // pointing at an empty directory. Normalization widens that race from "same
-  // text" to "same slug", so it is no longer only reachable by two callers typing
-  // byte-identical names.
-  //
-  // The cost is a row that exists for the duration of the clone. That is the
-  // right trade: a row with no directory is visible and deletable, whereas a
-  // directory with no row is an orphan nobody can reach.
-  let project: MachineProjectRecord;
-  try {
-    project = await deps.store.create({
-      ownerId: actor.userId,
-      machineId,
-      // The normalized name — never the raw text the caller typed. Persisting
-      // anything else would desync the row from the directory we are about to clone.
-      name: plan.name,
-      repoUrl,
-      path: plan.path,
-      now: deps.now(),
-    });
-  } catch (error) {
-    if (isUniqueViolation(error)) return { ok: false, reason: 'duplicate_name' };
-    return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
-  }
-
   const ctx = buildCtx(machineId, actor);
   const gitDeps = buildGitRunDeps(machineId, deps);
 
@@ -218,33 +185,48 @@ export async function addProject({
     deps: gitDeps,
   });
 
-  if (!result.success || result.exitCode !== 0) {
-    const detail = result.success ? result.stderr || result.stdout : result.error;
-
-    // Roll back only what is STILL OURS. Reserving the name made the row visible
-    // for the whole clone, which means the user can now delete the project
-    // mid-clone (clones take seconds to minutes — an impatient click is plausible)
-    // and immediately re-add it. The row and directory under this name would then
-    // belong to that NEW add, and cleaning up by name — as `removeProject` and
-    // `safeRemoveDirectory` both do — would `rm -rf` a checkout we do not own and
-    // delete a row we did not write. So compare row identity first, and if the
-    // reservation is no longer ours, touch nothing.
-    const current = await deps.store.findByName(machineId, plan.name);
-    if (!current || current.id !== project.id) {
-      return { ok: false, reason: 'clone_failed', detail };
-    }
-
+  if (!result.success) {
+    return { ok: false, reason: 'clone_failed', detail: result.error };
+  }
+  if (result.exitCode !== 0) {
+    // KNOWN, PRE-EXISTING RACE (not introduced here, and deliberately not fixed
+    // here): two concurrent adds of the same project both clone into this one
+    // path. The loser's clone fails *because* the winner's succeeded
+    // ("destination path already exists"), and this cleanup then `rm -rf`s the
+    // WINNER's fresh checkout while their row lives on — a project pointing at an
+    // empty directory.
+    //
+    // Normalization widens the trigger from "two callers typed the same text" to
+    // "two callers typed the same NAME" (`My Repo` / `my repo`), so it is worth
+    // stating plainly. It is not fixable by reordering or by re-checking here:
+    // reserving the name before the clone (tried, reverted) merely trades this for
+    // a worse bug — the row becomes visible mid-clone, so a delete-then-re-add
+    // during a slow clone leaves an orphan directory no row can reach.
+    //
+    // The real fix is structural and belongs in its own PR: make the clone path
+    // unique per ROW (`${name}-${id}`) rather than per name, so no two operations
+    // can ever own the same directory, and make every destructive store op
+    // id-scoped. Both `removeProject` below and this path need it.
     await safeRemoveDirectory(machineId, plan.path, deps);
-    try {
-      await deps.store.remove(machineId, plan.name);
-    } catch {
-      // Best-effort: a stranded row is recoverable (the user can delete it); a
-      // failure to report the clone error is not.
-    }
-    return { ok: false, reason: 'clone_failed', detail };
+    return { ok: false, reason: 'clone_failed', detail: result.stderr || result.stdout };
   }
 
-  return { ok: true, project };
+  try {
+    const project = await deps.store.create({
+      ownerId: actor.userId,
+      machineId,
+      // The normalized name — never the raw text the caller typed. Persisting
+      // anything else would desync the row from the directory just cloned.
+      name: plan.name,
+      repoUrl,
+      path: plan.path,
+      now: deps.now(),
+    });
+    return { ok: true, project };
+  } catch (error) {
+    if (isUniqueViolation(error)) return { ok: false, reason: 'duplicate_name' };
+    return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function listProjects({
