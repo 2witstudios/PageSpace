@@ -88,7 +88,14 @@ export async function POST(request: Request) {
   // normalize to that same fallback, so the guard uses the normalizer's own
   // `hasNameContent` rather than a `.trim()` that only catches whitespace. The
   // branches route draws the same line (`requireName`).
-  if (typeof body.name !== 'string' || !hasNameContent(body.name) || typeof body.repoUrl !== 'string') {
+  //
+  // `repoUrl` is NOT normalized (there is no way to turn a non-HTTPS remote into an
+  // HTTPS one), so it is only checked for presence here and validated for real by
+  // `isValidRepoUrl` inside `addProject`. It still has to be non-empty for this
+  // message to be true of it.
+  const nameOk = typeof body.name === 'string' && hasNameContent(body.name);
+  const repoUrlOk = typeof body.repoUrl === 'string' && body.repoUrl.trim().length > 0;
+  if (!nameOk || !repoUrlOk) {
     return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
   }
 

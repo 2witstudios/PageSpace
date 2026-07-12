@@ -162,6 +162,15 @@ describe('POST /api/machines/projects', () => {
     expect(res.status).toBe(502);
   });
 
+  it.each(['', '   '])(
+    'given the empty repoUrl %j, returns 400 — the guard must mean what its message says',
+    async (repoUrl) => {
+      const res = await POST(req({ machineId: 't1', name: 'repo', repoUrl }));
+      expect(res.status).toBe(400);
+      expect(mockAddProject).not.toHaveBeenCalled();
+    },
+  );
+
   it('given a missing name/repoUrl, returns 400 without checking access', async () => {
     const res = await POST(req({ machineId: 't1', name: 'repo' }));
     expect(res.status).toBe(400);
