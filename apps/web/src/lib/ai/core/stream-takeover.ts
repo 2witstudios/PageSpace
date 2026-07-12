@@ -9,6 +9,26 @@ import { decideStreamTakeover } from '@/lib/ai/core/stream-liveness';
  * Per-conversation in-flight guard. Used by both chat routes (POST /api/ai/chat and
  * POST /api/ai/global/[id]/messages) — every path that starts a generation.
  *
+ * ── WHAT THIS DOES NOT GUARANTEE ────────────────────────────────────────────────────────────
+ *
+ * It does NOT enforce "at most one generation per conversation", and you must not write code
+ * that assumes it does. This is a check-then-act with no serialization: the SELECT below and the
+ * INSERT in `createStreamLifecycle` — which is what would make a peer see this generation — are
+ * not atomic together. Two near-simultaneous sends can BOTH find zero in-flight rows and BOTH
+ * proceed: two generations, two sets of tool calls, two bills.
+ *
+ * Closing it needs DB-level serialization: an advisory lock spanning takeover+insert, or a
+ * partial unique index on (conversation_id) WHERE status='streaming' — whose migration would
+ * fail outright on any pre-existing duplicate rows, so it needs a reconciliation step first.
+ * That is its own change, with its own migration risk. `master` has no takeover at all
+ * (concurrent sends there ALWAYS double-generate), so what follows is a strict improvement — it
+ * narrows the window, it does not eliminate it.
+ *
+ * Stated here because the call site's comment used to claim the opposite, and a comment that
+ * promises a guarantee the code lacks is how the next person builds on a false premise.
+ *
+ * ── WHAT IT DOES ────────────────────────────────────────────────────────────────────────────
+ *
  * Before a new generation starts on a conversation, anything already in flight on that
  * conversation is taken over:
  *

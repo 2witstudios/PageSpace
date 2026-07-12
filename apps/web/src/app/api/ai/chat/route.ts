@@ -1193,12 +1193,25 @@ export async function POST(request: Request) {
       }
     }
 
-    // Per-conversation in-flight guard. A stream is a server-owned entity: at most
-    // one may be generating on a conversation at a time. A second send takes the
-    // conversation over — aborts whatever is live, reconciles its row — rather than
-    // being rejected, because a row whose terminal write never landed (crashed
-    // process; the write is fire-and-forget) would otherwise lock the user out of
-    // their own chat. See stream-liveness.ts.
+    // Per-conversation in-flight guard. A second send takes the conversation OVER — aborts
+    // whatever is live, reconciles its row — rather than being rejected, because a row whose
+    // terminal write never landed (crashed process; the write is fire-and-forget) would
+    // otherwise lock the user out of their own chat. See stream-liveness.ts.
+    //
+    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
+    // comment used to claim that it did. It is a check-then-act with no serialization: the SELECT
+    // inside takeOverConversationStreams and the INSERT inside createStreamLifecycle (a few
+    // statements below) are not atomic together. Two near-simultaneous sends can BOTH see zero
+    // in-flight rows and BOTH proceed — two generations, two sets of tool calls, two bills.
+    //
+    // Deliberately not closed here: it needs DB-level serialization (an advisory lock spanning
+    // takeover+insert, or a partial unique index on (conversation_id) WHERE status='streaming' —
+    // whose migration would fail outright on any pre-existing duplicate rows, so it needs a
+    // reconciliation step first). That is its own change with its own migration risk, and `master`
+    // has no takeover at all — concurrent sends there ALWAYS double-generate — so this is a strict
+    // improvement, not a regression.
+    //
+    // Do not read what follows as if the race were closed. It is narrow, not absent.
     await takeOverConversationStreams({
       conversationId: conversationId!,
       channelId: chatId,
