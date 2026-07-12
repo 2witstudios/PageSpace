@@ -227,7 +227,11 @@ export type ReplayState = {
 export const freshReplayState = (): ReplayState => ({ pending: EMPTY, scanned: 0, resolved: false });
 
 /** Nothing left to classify: every later byte of this attach passes straight through. */
-const RESOLVED: ReplayState = { pending: EMPTY, scanned: 0, resolved: true };
+// FROZEN: one object is handed out as the resolved state of every attach, on a process that
+// hosts every terminal — so a single stray write to it would corrupt all of them at once.
+// Nothing writes to it today (`appendPending` is unreachable once `resolved`), but that is an
+// argument about today's callers; this is a guarantee about any of them.
+const RESOLVED: ReplayState = Object.freeze({ pending: EMPTY, scanned: 0, resolved: true });
 
 /** The smallest arena worth allocating — a few WS frames' worth of headroom. */
 const MIN_ARENA_BYTES = 16 * 1024;
