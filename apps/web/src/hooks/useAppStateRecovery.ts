@@ -11,10 +11,17 @@ export interface UseAppStateRecoveryOptions {
   onResume: () => Promise<void> | void;
 
   /**
-   * Whether to enable recovery (e.g., disable during streaming)
+   * Whether to enable recovery.
+   *
+   * PREFER THE CALLBACK FORM. A boolean is captured at render, and iOS freezes JS
+   * the moment the app backgrounds — so the value that ends up gating the resume is
+   * whatever was true when the app went away, not what is true when it comes back.
+   * That is how the AI-page recovery path came to be dead in exactly the case it
+   * was written for. A callback is evaluated at fire time.
+   *
    * @default true
    */
-  enabled?: boolean;
+  enabled?: boolean | (() => boolean);
 
   /**
    * Minimum time in background before triggering recovery (ms)
@@ -49,7 +56,8 @@ export interface UseAppStateRecoveryOptions {
  *     // Fetch latest messages from database
  *     await mutate(); // SWR refresh
  *   },
- *   enabled: !isStreaming, // Don't interrupt active streams
+ *   // Callback form — evaluated on resume, not captured at render.
+ *   enabled: () => !useEditingStore.getState().isAnyEditing(),
  * });
  * ```
  */
@@ -62,6 +70,10 @@ export function useAppStateRecovery({
   const backgroundStartRef = useRef<number | null>(null);
   const onResumeRef = useRef(onResume);
   const pendingRefreshRef = useRef(false);
+  // Assigned during render so handleResume reads the latest gate without listing
+  // `enabled` as a dependency (which would re-register the listeners on every flip).
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   // Keep callback ref updated
   useEffect(() => {
@@ -78,7 +90,10 @@ export function useAppStateRecovery({
   );
 
   const handleResume = useCallback(async () => {
-    if (!enabled) {
+    // Evaluated HERE, on resume — not captured at render. See `enabled` above.
+    const gate = enabledRef.current;
+    const isEnabled = typeof gate === 'function' ? gate() : gate;
+    if (!isEnabled) {
       log('Resume ignored - hook disabled');
       return;
     }
@@ -113,7 +128,7 @@ export function useAppStateRecovery({
       pendingRefreshRef.current = false;
       backgroundStartRef.current = null;
     }
-  }, [enabled, minBackgroundTime, log]);
+  }, [minBackgroundTime, log]);
 
   // Capacitor app state listener
   useEffect(() => {

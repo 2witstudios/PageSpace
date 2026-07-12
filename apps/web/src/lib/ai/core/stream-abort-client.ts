@@ -13,6 +13,10 @@
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getBrowserSessionId } from './browser-session-id';
+import {
+  markChannelConsuming,
+  unmarkChannelConsuming,
+} from '@/lib/ai/streams/consumingChannels';
 
 // Track active streams by chat/conversation ID
 const activeStreams = new Map<string, string>();
@@ -55,14 +59,59 @@ export const clearActiveStreamId = ({ chatId }: { chatId: string }): void => {
  * Abort an active stream by calling the server-side abort endpoint
  * Returns true if abort was requested, false if no active stream
  */
+/**
+ * Abort by CONVERSATION — the only name the client holds from t=0.
+ *
+ * Both `streamId` and `messageId` are minted server-side, and the client does not learn either
+ * until the response headers land. A real agent send spends 0.5-3 seconds before that (auth,
+ * rate limit, DB reads, context assembly, connecting to the provider). Stop pressed in that
+ * window — precisely when a user who has spotted a typo presses it — had NOTHING to name: the
+ * `activeStreams` map was empty, the abort was a guaranteed no-op, the local fetch was cancelled,
+ * and the button flipped back to Send.
+ *
+ * And cancelling the fetch stops nothing. Streams are deliberately server-owned and survive a
+ * client disconnect — that is the whole architecture. So the generation kept running, kept
+ * calling write tools, and kept BILLING, while the UI told the user it had stopped.
+ *
+ * This is the fallback that makes Stop always able to say something true. Server-side it only
+ * ever stops the caller's OWN streams (see abort-conversation-streams.ts).
+ */
+export const abortActiveStreamByConversation = async ({
+  conversationId,
+}: {
+  conversationId: string;
+}): Promise<{ aborted: boolean; reason: string }> => {
+  try {
+    const response = await fetchWithAuth('/api/ai/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId }),
+    });
+    return await response.json();
+  } catch {
+    return { aborted: false, reason: 'Failed to call abort endpoint' };
+  }
+};
+
 export const abortActiveStream = async ({
   chatId,
+  /**
+   * The conversation this chat is streaming, when known. Used ONLY as a fallback: if the
+   * activeStreams map has no entry — which is the norm before the response headers land — we
+   * still have a name for the stream, and Stop must not silently no-op. See
+   * abortActiveStreamByConversation.
+   */
+  conversationId,
 }: {
   chatId: string;
+  conversationId?: string | null;
 }): Promise<{ aborted: boolean; reason: string }> => {
   const streamId = activeStreams.get(chatId);
 
   if (!streamId) {
+    if (conversationId) {
+      return abortActiveStreamByConversation({ conversationId });
+    }
     return { aborted: false, reason: 'No active stream for this chat' };
   }
 
@@ -113,28 +162,128 @@ export const abortActiveStreamByMessageId = async ({
 };
 
 /**
+ * Re-wraps a streaming response so `onDone` fires exactly once, when the body is
+ * genuinely finished — closed, errored, or cancelled. `fetch` resolving only tells
+ * us the headers landed; the tokens are still arriving after that.
+ */
+const withBodyCompletion = (response: Response, onDone: () => void): Response => {
+  const body = response.body;
+  if (!body) {
+    onDone();
+    return response;
+  }
+
+  let done = false;
+  const finishOnce = () => {
+    if (done) return;
+    done = true;
+    onDone();
+  };
+
+  const reader = body.getReader();
+  const tracked = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) {
+          finishOnce();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        finishOnce();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      finishOnce();
+      return reader.cancel(reason);
+    },
+  });
+
+  return new Response(tracked, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+};
+
+/**
  * Create a fetch wrapper that tracks streamId from response headers
  * Use this with DefaultChatTransport
+ *
+ * `channelId` (the socket room the server broadcasts this stream's lifecycle on —
+ * NOT the same value as `chatId`, which is a transport-local key) is marked as
+ * "being consumed by this browser context" for exactly as long as this client is
+ * reading tokens off the response body. That is the one signal that makes the
+ * client's own `chat:stream_start` uninteresting; without it we'd render every
+ * token twice. See `consumingChannels.ts` for why this replaces the old
+ * `browserSessionId` check.
  */
 export const createStreamTrackingFetch = ({
-  chatId,
+  getChatId,
+  getChannelId,
 }: {
-  chatId: string;
+  /**
+   * Resolved AT CALL TIME, not at construction. This is not a style choice.
+   *
+   * useChat only rebuilds its `Chat` when its `id` changes (@ai-sdk/react:
+   * `shouldRecreateChat`), and every surface here passes a CONSTANT id. The `Chat` binds
+   * `this.transport` once in its constructor and calls `this.transport.sendMessages()`
+   * forever after — so the first transport a surface ever builds is the only one it will
+   * ever use, and every later one is constructed and thrown away.
+   *
+   * Baking `chatId` into this closure therefore froze it at whatever conversation the surface
+   * happened to start with. After a single conversation switch the map was WRITTEN under the
+   * old id and READ under the new one: `abortActiveStream({chatId})` was a guaranteed miss,
+   * the local fetch stopped, and the server kept generating and kept billing. Same for
+   * `channelId` after an agent switch: the wrong channel got marked as consuming, so the tab
+   * failed to recognise its OWN stream on the socket, joined its own multicast, and rendered
+   * the reply twice.
+   *
+   * The server already compensates for this freeze on the URL side (see the note in
+   * /api/ai/global/[id]/messages — the id segment is likewise baked in and never updates).
+   * Nothing had propagated that lesson to the tracking keys.
+   */
+  getChatId: () => string | null;
+  getChannelId: () => string | undefined;
 }): typeof fetch => {
   return async (url, options) => {
+    const chatId = getChatId();
+    const channelId = getChannelId();
     const urlString = url instanceof Request ? url.url : url.toString();
     const merged = new Headers(options?.headers);
     merged.set('X-Browser-Session-Id', getBrowserSessionId());
     const headers = Object.fromEntries(merged.entries());
-    const response = await fetchWithAuth(urlString, { ...options, headers });
+
+    // Marked BEFORE the request leaves, so it can never lose the race against the
+    // server's broadcastAiStreamStart (which is why this is not derived from the
+    // X-Stream-Id response header).
+    if (channelId) markChannelConsuming(channelId);
+
+    let response: Response;
+    try {
+      response = await fetchWithAuth(urlString, { ...options, headers });
+    } catch (error) {
+      if (channelId) unmarkChannelConsuming(channelId);
+      throw error;
+    }
 
     // Extract streamId from response headers (for global assistant route)
     const streamId = response.headers.get(STREAM_ID_HEADER);
-    if (streamId) {
+    if (streamId && chatId) {
       setActiveStreamId({ chatId, streamId });
     }
 
-    return response;
+    if (!channelId) return response;
+    if (!response.ok) {
+      unmarkChannelConsuming(channelId);
+      return response;
+    }
+
+    const consumedChannelId = channelId;
+    return withBodyCompletion(response, () => unmarkChannelConsuming(consumedChannelId));
   };
 };
 

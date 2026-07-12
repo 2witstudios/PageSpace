@@ -130,7 +130,7 @@ describe('useAgentChannelMultiplayer', () => {
       }));
 
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
 
       const state = usePageAgentDashboardStore.getState();
@@ -147,7 +147,7 @@ describe('useAgentChannelMultiplayer', () => {
       }));
 
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
 
       expect(usePageAgentDashboardStore.getState().agentStopStreaming).toBe(existingStop);
@@ -161,7 +161,7 @@ describe('useAgentChannelMultiplayer', () => {
       }));
 
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
       act(() => {
         capturedChannel.options?.onOwnStreamFinalize?.({ messageId: 'msg-own' });
@@ -182,7 +182,7 @@ describe('useAgentChannelMultiplayer', () => {
 
       // Bootstrap fires but slot is occupied; this surface declines to claim.
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
       // Finalize arrives — must NOT clear the other surface's slot.
       act(() => {
@@ -200,7 +200,7 @@ describe('useAgentChannelMultiplayer', () => {
       }));
 
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
 
       const stop = usePageAgentDashboardStore.getState().agentStopStreaming;
@@ -501,7 +501,7 @@ describe('useAgentChannelMultiplayer', () => {
 
       // Bootstrap claims the slot.
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
       expect(typeof usePageAgentDashboardStore.getState().agentStopStreaming).toBe('function');
 
@@ -525,7 +525,7 @@ describe('useAgentChannelMultiplayer', () => {
 
       // Bootstrap fires but slot is occupied — this surface declines.
       act(() => {
-        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own' });
+        capturedChannel.options?.onOwnStreamBootstrap?.({ messageId: 'msg-own', conversationId: 'conv-1' });
       });
       // Surface unmounts. The other writer's slot must survive.
       unmount();

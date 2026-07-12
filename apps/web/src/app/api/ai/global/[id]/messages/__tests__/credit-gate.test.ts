@@ -39,6 +39,10 @@ const captured = vi.hoisted(() => ({
   steps: [] as unknown,
 }));
 
+const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
+  mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
+}));
+
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
   createStreamLifecycle: mockCreateStreamLifecycle,
 }));
@@ -57,8 +61,16 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
 }));
 
+vi.mock('@/lib/ai/core/stream-takeover', () => ({
+  takeOverConversationStreams: mockTakeOverConversationStreams,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
+    ai: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
     api: {
       info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
       child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
