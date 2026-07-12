@@ -102,6 +102,13 @@ export type PtyShell = {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;
+  /**
+   * Tell this shell whether a viewer is currently attached — see
+   * `planWatchdogResponse`. `false` on a detach stops the watchdog from
+   * reconnecting an idle shell nobody is watching; `true` on a return
+   * reattaches lazily if a reconnect was swallowed while detached.
+   */
+  setViewerAttached(attached: boolean): void;
 };
 
 export type OpenPtyShellArgs = {
@@ -151,6 +158,53 @@ export type OpenPtyShellArgs = {
 // bounded so a genuinely dead Sprite still surfaces an exit.
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 200;
+
+export type WatchdogAction = 'reattach' | 'detach-quiet' | 'fatal';
+
+/**
+ * What the watchdog should do about a dropped socket, given whether anyone is
+ * actually watching. Pure so every branch is unit-testable without a fake SDK.
+ *
+ * A detached shell is bytes for nobody: the client socket is gone (dropped by
+ * `agent-terminal-handler.ts`'s `disconnectConnection`), so reattaching now
+ * would only place a fresh exec connection on the Sprite to relay output no
+ * one will see — exactly the connection docs.sprites.dev/keeping-sprites-running
+ * says prevents the Sprite from pausing ("open TCP connections drop on the
+ * pause, even on warm"). `detach-quiet` lets the drop stand instead: no
+ * `listSessions`/`attachSession` call, so nothing keeps the Sprite awake.
+ *
+ * `detach-quiet` wins over the reconnect BUDGET too, deliberately — a
+ * detached shell must never go `fatal`. `fatal` calls `onExit`, which
+ * `disconnectConnection` has already pointed at a no-op, so the call itself
+ * is harmless — but it also latches `closed = true` on the `PtyShell`
+ * PERMANENTLY, and every one of its methods (`write`/`resize`, and the
+ * lazy reattach `setViewerAttached` triggers) is a no-op once `closed`. A
+ * later viewer returning would then find a shell that can never reattach —
+ * worse than the churn this leaf removes. Only an ATTACHED shell may ever
+ * exhaust the budget and go fatal; a detached one simply stays quiet
+ * indefinitely; until either a viewer returns (lazy reattach) or the 30-min
+ * idle reap kills it outright (see the CAUTION in the module doc: an agent
+ * running inside survives a quiet socket exactly as it already survives the
+ * reap today — leaf 5-1's Tasks API hold is the sanctioned protection, not this).
+ *
+ * `closed` is checked for the same reason: once the shell is already torn
+ * down there is nothing left to reconnect, and treating it as an ordinary
+ * `reattach`/`fatal` case would just repeat a decision that has already been
+ * made.
+ */
+export function planWatchdogResponse({
+  viewersAttached,
+  closed,
+  consecutiveFailures,
+}: {
+  viewersAttached: number;
+  closed: boolean;
+  consecutiveFailures: number;
+}): WatchdogAction {
+  if (closed) return 'detach-quiet';
+  if (viewersAttached <= 0) return 'detach-quiet';
+  return consecutiveFailures > MAX_RECONNECT_ATTEMPTS ? 'fatal' : 'reattach';
+}
 
 /**
  * How many CONSECUTIVE unnamed sessions this shell may abandon (see
@@ -260,6 +314,16 @@ export function openPtyShell({
   // counter, an id we never learn produces a fresh orphan on every keepalive
   // cycle, forever.
   let abandonedUnnamedSessions = 0;
+  // Whether a viewer is currently attached — see `planWatchdogResponse` and
+  // `setViewerAttached`. Starts true: a shell is only ever opened in direct
+  // response to a connecting viewer (agent-terminal-handler's cold-create path).
+  let viewerAttached = true;
+  // Set when a watchdog trip was swallowed while detached (`planWatchdogResponse`
+  // returned 'detach-quiet') instead of reattached. Nothing is wired up any more
+  // to trip a FUTURE keepalive on that dead command, so the next
+  // `setViewerAttached(true)` has to trigger the reattach itself rather than wait
+  // for one that will never come.
+  let needsLazyReattach = false;
   // The tail of the REPLAYABLE stream this client has been shown — the bound session's
   // stdout, and only that (stderr and a foreign session's drain are shown but never
   // recorded; see `deliver`). It is what each attach matches its replayed scrollback
@@ -645,6 +709,15 @@ export function openPtyShell({
       // FIRST — the SDK's own `closed before open` string is only emitted
       // afterwards, and a substring test would miss the real cold-start drop.
       lastErrorWasPreOpenDrop = !opened;
+      const action = planWatchdogResponse({
+        viewersAttached: viewerAttached ? 1 : 0,
+        closed,
+        consecutiveFailures,
+      });
+      if (action === 'detach-quiet') {
+        needsLazyReattach = true;
+        return;
+      }
       void reconnect();
     });
   }
@@ -829,5 +902,15 @@ export function openPtyShell({
     // Anything still held (an unresolved replay, queued stderr) is dropped with it: the
     // viewer is gone, and `closed` stops every listener from speaking after this point.
     kill: () => { closed = true; cancelReplayTimers(); current.kill('SIGKILL'); },
+    setViewerAttached: (attached) => {
+      viewerAttached = attached;
+      // A lazy reattach only fires if a watchdog trip actually got swallowed while
+      // detached — a viewer toggling attach/detach faster than the ~45s keepalive
+      // (nothing ever tripped) is a no-op here, correctly: output is already flowing.
+      if (attached && needsLazyReattach && !closed) {
+        needsLazyReattach = false;
+        void reconnect();
+      }
+    },
   };
 }
