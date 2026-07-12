@@ -350,6 +350,7 @@ describe('planReplayEmission incremental scan (pure)', () => {
   const deliver = (...parts: Buffer[]) =>
     materializeSeen(parts.reduce((tail, part) => rememberDelivered(tail, part), EMPTY_SEEN));
   const seen = deliver(lines('history', 3000), lines('recent', 800));
+  const anchor = seen.subarray(seen.length - MAX_ANCHOR_BYTES);
 
   it('given a genuine replay fed in MANY small chunks, should still find the boundary', () => {
     // The anchor is 8 KiB and the chunks are 512 B, so the match spans ~16 of them: if
@@ -368,6 +369,32 @@ describe('planReplayEmission incremental scan (pure)', () => {
     expect(state.resolved).toBe(true);
   });
 
+  it('given a HASH COLLISION with the anchor, should suppress nothing (a hash match is not a match)', () => {
+    // The search finds candidates by rolling hash; a hash is 32 bits over 8 KiB, so collisions
+    // exist by pigeonhole and an adversary who knows the base can build one. If a collision were
+    // trusted, bytes the client has NEVER seen would be suppressed — the cardinal sin. So a hash
+    // match only nominates a position; the anchor is then compared byte for byte.
+    //
+    // A real collision, built here rather than hoped for: the hash folds as h = h*131 + byte, so
+    // subtracting 1 from a byte and adding 131 to the NEXT one cancels exactly (-B^k + B*B^(k-1)).
+    const collided = Buffer.from(anchor);
+    const i = collided.findIndex((b, k) => k + 1 < collided.length && b >= 1 && collided[k + 1] <= 124);
+    expect(i).toBeGreaterThanOrEqual(0); // the construction needs one such pair
+    collided[i] -= 1;
+    collided[i + 1] += 131;
+    expect(collided.equals(anchor)).toBe(false); // different bytes...
+
+    const { emit, state } = planReplayEmission({
+      seen,
+      chunk: Buffer.concat([collided, buf('output nobody has seen\r\n')]),
+      state: freshReplayState(),
+    });
+
+    // ...so nothing may be suppressed: no match, hold the bytes for the window's close.
+    expect(emit.length).toBe(0);
+    expect(state.resolved).toBe(false);
+  });
+
   it('given a buffer longer than the anchor with no match, should not rescan what it already rejected', () => {
     // A match can still BEGIN in the last (anchor - 1) bytes — the next chunk could
     // complete it — so exactly those positions stay in the search region.
@@ -379,21 +406,30 @@ describe('planReplayEmission incremental scan (pure)', () => {
   });
 
   it('given a later chunk, should START the search at `scanned` rather than rescanning from zero', () => {
-    // The test above pins the value `scanned` is SET to. This one pins that the search
-    // actually USES it — which is the half that carries the cost. Rescanning from zero on
-    // every chunk is quadratic in bytes the sandbox picks: an unalignable 4 MiB replay in
-    // 256-byte frames goes from ~5ms to ~1650ms of solid event loop, on the process every
-    // terminal shares. Asserting the offset the search is handed pins that without timing.
-    const first = Buffer.alloc(20 * 1024, 0x2e);
-    const held = planReplayEmission({ seen, chunk: first, state: freshReplayState() }).state;
-
-    const indexOf = vi.spyOn(Buffer.prototype, 'indexOf');
-    planReplayEmission({ seen, chunk: Buffer.alloc(512, 0x2e), state: held });
-    const offsets = indexOf.mock.calls.map(([, from]) => from);
-    indexOf.mockRestore(); // before the assertion: a failing expect must not leak the spy
-
-    expect(offsets[0]).toBe(held.scanned); // not 0
+    // The test above pins the value `scanned` is SET to. This one pins that the search actually
+    // USES it — the half that carries the cost. Rescanning from zero on every chunk is quadratic
+    // in bytes the sandbox picks, on the process every terminal shares.
+    //
+    // Pinned by BEHAVIOUR, not by watching the search: a chunk of decoys exhausts the candidate
+    // budget. Resuming past them, the next chunk's genuine boundary is found. Rescanning from
+    // zero, those same decoys eat the budget a second time and the boundary is missed — so
+    // "did it resume?" is observable in what the client receives, and stays observable however
+    // the search is implemented.
+    const decoy = Buffer.concat([buf('decoy\r\n'), anchor]); // uncorroborated: junk in front
+    const decoys = Buffer.concat(Array.from({ length: MAX_MATCH_CANDIDATES }, () => decoy));
+    const held = planReplayEmission({ seen, chunk: decoys, state: freshReplayState() }).state;
+    expect(held.resolved).toBe(false); // all budget spent, nothing suppressed
     expect(held.scanned).toBeGreaterThan(0);
+
+    // The genuine boundary arrives next: the history, its anchor, then new output.
+    const { emit, state } = planReplayEmission({
+      seen,
+      chunk: Buffer.concat([seen, buf('the real tail\r\n')]),
+      state: held,
+    });
+
+    expect(emit.toString('utf8')).toBe('the real tail\r\n');
+    expect(state.resolved).toBe(true);
   });
 });
 

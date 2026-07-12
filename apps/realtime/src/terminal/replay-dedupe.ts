@@ -127,17 +127,60 @@ export const MIN_CORROBORATION_BYTES = 4 * 1024;
  * compare, on the realtime process's event loop, driven by bytes the sandbox
  * chose. Giving up early is safe — it emits verbatim.
  *
- * It bounds a CHUNK's search (8 candidates, each a compare of at most `seen`, so at most
- * ~512 KiB of comparing per chunk), not an ATTACH's: every chunk gets a fresh budget, so
- * output engineered to be self-similar can spend the full budget on all of them. What bounds
- * the TOTAL is the replay window the caller closes and MAX_PENDING_BYTES.
- *
- * The shape of that cost is what matters, and it is a bound rather than a measurement:
- * the work is paid per chunk, between chunks, so it costs throughput and never a stalled
- * event loop. (Timings here are worth little — every attempt to pin one produced a different
- * number depending on how the adversarial input was built.)
+ * It bounds the CORROBORATION work — 8 candidates, each a compare of at most `seen`. It does
+ * NOT bound the SEARCH, and that distinction was worth ~600ms of blocked event loop: see
+ * SEARCH_PROBE_BYTES.
  */
 export const MAX_MATCH_CANDIDATES = 8;
+
+/**
+ * The rolling-hash base. Any odd multiplier works; this one is conventional.
+ *
+ * `pending.indexOf(anchor)` — the obvious search — is O(region x anchor) on input engineered
+ * to NEAR-miss: at every offset it compares almost the whole 8 KiB anchor before failing. A
+ * TUI repainting runs of blank padding just under the anchor's length does exactly that, and
+ * it cost **588ms inside a single 'data' handler**, on the process every terminal shares. Not
+ * a throughput cost — a stall, and the sandbox picks the bytes. It is the third quadratic this
+ * module has had to close (the others: rescanning from zero, and re-copying `pending`).
+ *
+ * A short probe would be cheap but IMPRECISE: inside a run of identical bytes it hits at every
+ * offset, burning the candidate budget on positions the anchor cannot start at. Rabin-Karp is
+ * both. Hashing is O(1) per position, so the scan is O(region); a hash match is only a
+ * candidate, verified with one `equals` (a memcmp that quits on the first differing byte)
+ * before corroboration runs. Candidates stay charged to MAX_MATCH_CANDIDATES, so a collision
+ * attack can still cost us a suppression — never a byte, and never the event loop.
+ */
+const HASH_BASE = 131;
+
+/** One step of the fold, pinned to int32 so two paths to the same value always compare equal. */
+const fold = (hash: number, byte: number): number => (Math.imul(hash, HASH_BASE) + byte) | 0;
+
+type AnchorHash = { anchor: Buffer; target: number; pow: number };
+
+/**
+ * The anchor and its hash, computed ONCE per attach.
+ *
+ * `seen` is frozen for the life of an attach and arrives as the same Buffer on every chunk, so
+ * it keys the memo. Recomputing the hash per chunk would cost O(anchor) each time — 8 KiB of
+ * work per 256-byte frame, which is its own quadratic and exactly the trap this search exists
+ * to avoid.
+ */
+const anchorHashes = new WeakMap<Buffer, AnchorHash>();
+function anchorHashOf(seen: Buffer): AnchorHash {
+  const memo = anchorHashes.get(seen);
+  if (memo !== undefined) return memo;
+
+  const anchor = anchorOf(seen);
+  let target = 0;
+  for (let i = 0; i < anchor.length; i += 1) target = fold(target, anchor[i]);
+  // `pow` = HASH_BASE^(n-1): the weight of the byte rolling OUT of the window.
+  let pow = 1;
+  for (let i = 1; i < anchor.length; i += 1) pow = Math.imul(pow, HASH_BASE);
+
+  const fresh = { anchor, target, pow };
+  anchorHashes.set(seen, fresh);
+  return fresh;
+}
 
 /**
  * How many un-emitted replay bytes the caller may hold while looking for the boundary.
@@ -219,6 +262,12 @@ export type ReplayState = {
    * out verbatim), never a byte — see the search in `planReplayEmission`.
    */
   scanned: number;
+  /**
+   * The rolling hash of the anchor-sized window ending at `pending`'s end — the chain the next
+   * chunk's search resumes from, so it never has to rebuild the window from scratch. Absent
+   * when there is no whole window yet, or when a candidate budget cut the scan short.
+   */
+  hash?: number;
   /**
    * The boundary has been decided (found, or given up on) — from here to the end
    * of this attach every byte is live output and passes straight through.
@@ -413,7 +462,7 @@ export function planReplayEmission({
   }
 
   const { pending, arena } = appendPending(state, chunk);
-  const anchor = anchorOf(seen);
+  const { anchor, target, pow } = anchorHashOf(seen);
 
   // Search only where a match could newly START. Everything before `state.scanned` has been
   // looked at already: rejected against a strictly smaller buffer (and rejection is permanent,
@@ -429,13 +478,42 @@ export function planReplayEmission({
   // the other way (the per-chunk re-copy). Bounding the candidate count without bounding the
   // scan would have left this one open, one line down.
   const from = state.scanned;
-  let at = pending.indexOf(anchor, from);
-  for (let tried = 0; at !== -1 && tried < MAX_MATCH_CANDIDATES; tried += 1) {
-    if (corroborated({ seen, pending, at, anchorLength: anchor.length })) {
-      return { emit: pending.subarray(at + anchor.length), state: RESOLVED, history: 'append' };
+  const n = anchor.length;
+  const lastStart = pending.length - n; // the last position a whole anchor could start at
+  // The hash of the window at `from`, carried forward from the previous chunk when we can:
+  // that chunk rolled as far as its own last window, which sits exactly one byte behind this
+  // one. Rebuilding it from scratch is O(anchor), and paying that per 256-byte frame is the
+  // very cost this search exists to avoid — so it is only paid when the chain is broken.
+  let rolling: number | undefined;
+  if (from <= lastStart) {
+    const prev = from - 1;
+    if (state.hash !== undefined && prev >= 0 && prev + n < pending.length) {
+      rolling = (Math.imul(state.hash - Math.imul(pending[prev], pow), HASH_BASE) + pending[prev + n]) | 0;
+    } else {
+      rolling = 0;
+      for (let i = from; i < from + n; i += 1) rolling = fold(rolling, pending[i]);
     }
-    // Not the boundary — the anchor's bytes merely recur here. Keep looking past it.
-    at = pending.indexOf(anchor, at + 1);
+  }
+
+  let hash: number | undefined;
+  let tried = 0;
+  for (let at = from; rolling !== undefined && at <= lastStart; at += 1) {
+    // A hash match is not a match: verify the bytes. `equals` is a memcmp that quits on the
+    // first differing byte, so a collision costs almost nothing.
+    if (rolling === target && pending.subarray(at, at + n).equals(anchor)) {
+      if (corroborated({ seen, pending, at, anchorLength: n })) {
+        return { emit: pending.subarray(at + n), state: RESOLVED, history: 'append' };
+      }
+      // Not the boundary — the anchor's bytes merely recur here. Keep looking past it.
+      tried += 1;
+      if (tried >= MAX_MATCH_CANDIDATES) break;
+    }
+    if (at === lastStart) {
+      hash = rolling; // the chain the next chunk resumes from
+      break;
+    }
+    // Roll one byte forward: drop `pending[at]`, take `pending[at + n]`.
+    rolling = (Math.imul(rolling - Math.imul(pending[at], pow), HASH_BASE) + pending[at + n]) | 0;
   }
 
   // Unalignable. Hold the bytes until the caller closes the window — and if they
@@ -446,7 +524,7 @@ export function planReplayEmission({
   // A match can still begin in the last `anchor.length - 1` bytes: those are the only
   // start positions the next chunk could complete.
   const scanned = Math.max(0, pending.length - anchor.length + 1);
-  return { emit: EMPTY, state: { pending, arena, scanned, resolved: false }, history: 'append' };
+  return { emit: EMPTY, state: { pending, arena, scanned, hash, resolved: false }, history: 'append' };
 }
 
 /**
