@@ -13,6 +13,10 @@ const workspaceWith = (scope: WorkspaceState['columns'][number]['panes'][number]
 
 describe('resolvePendingSession', () => {
   test('opens the session once the user is on the machine and it has a workspace', () => {
+    // Also the rebuild case: MachineWorkspace disposes on unmount and re-creates on
+    // mount (StrictMode double-invokes exactly this on the first visit), so the
+    // intent must still resolve to `open` against a fresh, empty workspace rather
+    // than being a one-shot that the rebuild destroys.
     expect(resolvePendingSession(PENDING, 'machine-1', workspaceWith(null))).toEqual({
       type: 'open',
       machineId: 'machine-1',
@@ -34,24 +38,12 @@ describe('resolvePendingSession', () => {
     expect(resolvePendingSession(PENDING, 'machine-1', undefined)).toEqual({ type: 'wait' });
   });
 
-  test('re-opens against a workspace that was torn down and rebuilt', () => {
-    // MachineWorkspace disposes on unmount and re-creates on mount (StrictMode
-    // double-invokes exactly this on the first visit). A fire-once intent would
-    // be destroyed by the rebuild; a convergent one re-applies to the new one.
-    expect(resolvePendingSession(PENDING, 'machine-1', workspaceWith(null))).toEqual({
-      type: 'open',
-      machineId: 'machine-1',
-      scope: SCOPE,
-    });
-  });
-
   test('clears once the session is actually in the active pane', () => {
     expect(resolvePendingSession(PENDING, 'machine-1', workspaceWith(SCOPE))).toEqual({ type: 'clear' });
   });
 
   test('a satisfied intent is dropped, so it cannot clobber the user\'s next pane change', () => {
-    expect(resolvePendingSession(PENDING, 'machine-1', workspaceWith(SCOPE))).toEqual({ type: 'clear' });
-    // And with no intent left, nothing is ever re-applied.
+    // With no intent left, nothing is ever re-applied over the user's own choice.
     expect(
       resolvePendingSession(null, 'machine-1', workspaceWith({ ...SCOPE, name: 'agent-2' })),
     ).toEqual({ type: 'clear' });

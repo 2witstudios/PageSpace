@@ -50,6 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hostRenders.length = 0;
   usePendingSessionStore.setState({ pending: null });
+  useMachineWorkspaceStore.setState({ workspaces: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseDriveMachines.mockReturnValue(driveMachines());
 });
@@ -157,6 +158,28 @@ describe('DevelopmentLayout', () => {
     expect(hostRenders.at(-1)!.activePageId).toBeNull();
     // Held, not applied — it converges once the machine is displayed again.
     expect(useMachineWorkspaceStore.getState().workspaces['machine-1']).toBeUndefined();
+  });
+
+  test('holds a session intent while the list loads, then applies it once the machine is displayed', () => {
+    // The other half of gating the drain on what's DISPLAYED: holding must not
+    // become dropping. An intent for a machine that isn't in the list *yet* waits,
+    // and converges as soon as the machine appears — otherwise the fix for the
+    // hidden-machine case would have silently broken the ordinary one.
+    mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [], isLoading: true }));
+    usePendingSessionStore.setState({ pending: { machineId: 'machine-1', scope: { name: 'agent-1' } } });
+    const { rerender } = render(<DevelopmentLayout>{null}</DevelopmentLayout>);
+
+    // Held, not dropped.
+    expect(usePendingSessionStore.getState().pending).not.toBeNull();
+
+    // The list arrives, and the machine's pane region has ensured a workspace.
+    mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [machine('machine-1')] }));
+    useMachineWorkspaceStore.getState().ensureWorkspace('machine-1');
+    rerender(<DevelopmentLayout>{null}</DevelopmentLayout>);
+
+    const workspace = useMachineWorkspaceStore.getState().workspaces['machine-1'];
+    const activePane = workspace.columns.flatMap((c) => c.panes).find((p) => p.id === workspace.activePaneId);
+    expect(activePane?.scope).toMatchObject({ name: 'agent-1' });
   });
 
   test('drops an unconverged session intent when the surface is left', () => {

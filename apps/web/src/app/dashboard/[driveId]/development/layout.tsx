@@ -205,7 +205,7 @@ function DetailNotice({ title, description }: { title: string; description?: str
  * singleton, so an intent left behind here would otherwise still be sitting
  * there on the user's next visit, ready to fire into whatever pane was active.
  */
-function useDrainPendingSession(selectedMachineId: string | null) {
+function useDrainPendingSession(displayedMachineId: string | null) {
   const pending = usePendingSessionStore((state) => state.pending);
   const clearPending = usePendingSessionStore((state) => state.clearPending);
   const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
@@ -214,11 +214,11 @@ function useDrainPendingSession(selectedMachineId: string | null) {
   );
 
   useEffect(() => {
-    const action = resolvePendingSession(pending, selectedMachineId, workspace);
+    const action = resolvePendingSession(pending, displayedMachineId, workspace);
     if (action.type === 'open') openTerminal(action.machineId, action.scope);
     // A 'clear' with no pending intent is a no-op, so this cannot loop.
     else if (action.type === 'clear') clearPending();
-  }, [pending, selectedMachineId, workspace, openTerminal, clearPending]);
+  }, [pending, displayedMachineId, workspace, openTerminal, clearPending]);
 
   useEffect(() => () => clearPending(), [clearPending]);
 }
