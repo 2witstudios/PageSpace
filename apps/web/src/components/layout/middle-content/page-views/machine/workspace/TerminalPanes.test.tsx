@@ -449,4 +449,24 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
       expected: { bound: 1, prompt: undefined },
     });
   });
+
+  test('a spawn that lands nowhere does NOT kill a terminal it found rather than created', async () => {
+    // The two hazards meet: the API handed back a session that ALREADY EXISTED, and
+    // the pane went away before it could be bound. `removeAgentTerminal` KILLS the
+    // terminal — so cleaning up here destroys an agent that may be mid-task in
+    // someone else's pane. Only a session this spawn actually brought into the world
+    // is ours to take back out.
+    addAgentTerminal.mockResolvedValueOnce({ name: 'claude-a1', agentType: 'claude', resumed: true });
+    bindPaneTerminal.mockReturnValueOnce(false);
+
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    assert({
+      given: 'an unbindable spawn the API served from an EXISTING session',
+      should: 'leave that session alone — the cleanup path kills terminals, and this spawn did not create this one',
+      actual: removeAgentTerminal.mock.calls.length,
+      expected: 0,
+    });
+  });
 });

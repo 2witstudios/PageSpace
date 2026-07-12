@@ -1843,5 +1843,79 @@ describe('buildAgentTerminalHandlers', () => {
       expect(auth.releaseSlot).toHaveBeenCalled();
       expect(shell.kill).toHaveBeenCalled();
     });
+
+    it('given a SECOND pane that joined the create, should not let its attach cancel the reap', async () => {
+      // The sibling path, and the nastier one. A connect that joins a create already
+      // in flight (a double-mount: the same terminal open in two panes) attaches when
+      // the create lands — and attaching CLEARS the idle timer. So a tab that closes
+      // mid-create had the reap armed for pane A and then cancelled by pane B, on
+      // behalf of a socket that is already gone: the PTY, its slot and its billing run
+      // for the life of the process, which is the exact leak the create path fixes.
+      const auth = makeAuthSuccess();
+      const resolveSandbox = auth.resolveSandbox;
+      const gate = deferred<void>();
+      auth.resolveSandbox = vi.fn(async () => {
+        await gate.promise;
+        return resolveSandbox();
+      }) as unknown as typeof auth.resolveSandbox;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const creating = handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
+      await vi.advanceTimersByTimeAsync(0);
+      // Pane B lands on the same key while A is still booting: it joins rather than
+      // opening a second PTY, and parks until the create resolves.
+      const joining = handlers.onConnect({ ...validPayload, connectionId: 'pane-b' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The tab closes — BOTH panes are gone, and neither has a session yet.
+      handlers.onDisconnect();
+      gate.resolve();
+      await Promise.all([creating, joining]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const session = sessionMap.getByKey('branch1:agent:cli');
+      expect(session?.idleTimer).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
+      expect(auth.releaseSlot).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalled();
+    });
+
+    it('given a pane that leaves during the ACCESS CHECK of a reattach, should not cancel the reap', async () => {
+      // The same hole, one path further back. A reattach binds no PTY of its own, but
+      // it does cancel the pending idle reap of the session it joins — and a pane can
+      // leave while its access check (a DB round-trip) is still in flight, before the
+      // connect has registered anything to disconnect. Left unhandled, a tab-back that
+      // is immediately closed again resurrects a session nobody is watching and no
+      // further disconnect can ever collect.
+      const first = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(first) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+
+      await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
+      handlers.onDisconnect({ connectionId: 'pane-a' });
+      expect(sessionMap.getByKey('branch1:agent:cli')?.idleTimer).toBeDefined();
+
+      // The tab-back: a fresh pane reattaches, but its access check is slow…
+      const authGate = deferred<void>();
+      checkAuth = vi.fn(async () => {
+        await authGate.promise;
+        return makeAuthSuccess();
+      }) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const reattaching = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const connecting = reattaching.onConnect({ ...validPayload, connectionId: 'pane-b' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // …and the pane is gone before it comes back.
+      reattaching.onDisconnect({ connectionId: 'pane-b' });
+      authGate.resolve();
+      await connecting;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('branch1:agent:cli')?.idleTimer).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
+      expect(first.releaseSlot).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalled();
+    });
   });
 });

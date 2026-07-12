@@ -103,11 +103,16 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         // resting on luck instead of on the answer we were given.
         created.resumed ? undefined : prompt,
       );
-      if (!bound) {
+      if (!bound && !created.resumed) {
         // The pane went away while the Sprite booted (closed, or the page
         // navigated off). The session row exists but now belongs to nothing and
         // nothing will ever show it — so take it back out rather than leave the
         // user a terminal they never asked for and never saw appear.
+        //
+        // Only one WE created, though. `removeAgentTerminal` KILLS the terminal,
+        // and a `resumed` session is one that already existed — quite possibly
+        // open in someone else's pane, with an agent halfway through a task. This
+        // spawn did not bring it into the world and must not take it out of it.
         await removeAgentTerminal(created.name).catch(() => {});
       }
     },
