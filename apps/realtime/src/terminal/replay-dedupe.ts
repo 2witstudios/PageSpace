@@ -48,9 +48,13 @@
  *   happens to match `seen`'s tail is exactly as likely to be a NEW identical line
  *   as a replayed one — and guessing wrong there deletes it.
  *
- * The caller is responsible for bounding the replay window (quiet gap, wall-clock
- * deadline, MAX_PENDING_BYTES) and calling `flushReplay` to close it; after that
- * every byte passes through unsearched.
+ * The window is bounded from two sides. The CALLER bounds it in time — a quiet gap and a
+ * wall-clock deadline — and closes it with `flushReplay`. THIS MODULE bounds it in bytes,
+ * at MAX_PENDING_BYTES, and that give-up resolves the state right here without the caller's
+ * close ever running. Getting that split wrong is not academic: the caller used to log its
+ * own give-up and not this one, so the byte-cap failure — the one that never heals — was the
+ * only one that happened silently. Either way, once the window is closed every later byte
+ * passes through unsearched.
  *
  * What that leaves, honestly: the proof is a byte comparison, so it cannot tell a replay
  * from an EXACT reproduction of one. Two numbers describe the risk, and they are not the

@@ -1152,8 +1152,8 @@ describe('openPtyShell', () => {
       const reported = info.mock.calls.filter(
         ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'pending-cap',
       );
+      info.mockRestore(); // before the assertion: a failing expect must not leak the spy
       expect(reported.length).toBeGreaterThan(0); // it says so, instead of failing silently
-      info.mockRestore();
     });
 
     it('given a replay that overflows the byte cap, emits it and leaves a usable history', async () => {
