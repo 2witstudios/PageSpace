@@ -58,14 +58,16 @@ interface MachineWorkspaceStoreState {
   /** Shows `node`'s grid, creating an empty one the first time that node is opened. */
   selectNode: (machineId: string, node: MachineNodeScope) => void;
   openTerminal: (machineId: string, scope: OpenTerminalScope) => void;
-  /** Split-and-pick's landing step: bind a just-spawned session to the pane it was picked in. */
+  /** Split-and-pick's landing step: bind a just-spawned session to the pane it was
+   * picked in. The target grid comes from `scope`'s own node, NOT from whatever is
+   * active when the spawn resolves. */
   bindPaneTerminal: (machineId: string, paneId: string, scope: OpenTerminalScope, pendingPrompt?: string) => void;
-  clearPanePrompt: (machineId: string, paneId: string) => void;
-  dismissPicker: (machineId: string, paneId: string) => void;
-  splitRight: (machineId: string, fromPaneId: string) => void;
-  splitDown: (machineId: string, fromPaneId: string) => void;
-  closePane: (machineId: string, paneId: string) => void;
-  selectPane: (machineId: string, paneId: string) => void;
+  clearPanePrompt: (machineId: string, node: MachineNodeScope, paneId: string) => void;
+  dismissPicker: (machineId: string, node: MachineNodeScope, paneId: string) => void;
+  splitRight: (machineId: string, node: MachineNodeScope, fromPaneId: string) => void;
+  splitDown: (machineId: string, node: MachineNodeScope, fromPaneId: string) => void;
+  closePane: (machineId: string, node: MachineNodeScope, paneId: string) => void;
+  selectPane: (machineId: string, node: MachineNodeScope, paneId: string) => void;
 }
 
 /** The node a machine is currently showing — machine scope until something selects otherwise. */
@@ -73,15 +75,27 @@ function activeNodeOf(state: MachineWorkspaceStoreState, machineId: string): Mac
   return state.activeNodes[machineId] ?? MACHINE_NODE_SCOPE;
 }
 
-/** Applies a pure reducer transition to the machine's ACTIVE node's workspace,
- * if it exists — a missing workspace (not yet ensured, or already disposed) is
- * a no-op rather than an error. */
+/**
+ * Applies a pure reducer transition to ONE node's workspace. A missing workspace
+ * (not yet ensured, or already disposed) is a no-op rather than an error.
+ *
+ * Every pane-addressed action names its node EXPLICITLY — the node the pane was
+ * rendered for, or the node a spawned session belongs to — rather than reading
+ * `activeNodes` at write time. Pane ids are only unique within a node's grid,
+ * and the active node can change between a user's action and the write it causes:
+ * a spawn resolving after a cold Sprite boot, a `ready` event arriving after the
+ * user moved to another branch. Resolving the target late would apply the write
+ * to whichever grid happened to be on screen by then — usually a grid with no
+ * such pane, silently dropping the write (an orphaned session row, a pane left
+ * empty) and at worst hitting a same-id pane in the wrong grid.
+ */
 function applyTransition(
   state: MachineWorkspaceStoreState,
   machineId: string,
+  node: MachineNodeScope,
   transition: (workspace: WorkspaceState) => WorkspaceState
 ): Pick<MachineWorkspaceStoreState, 'workspaces'> {
-  const key = workspaceKey(machineId, activeNodeOf(state, machineId));
+  const key = workspaceKey(machineId, node);
   const workspace = state.workspaces[key];
   if (!workspace) return { workspaces: state.workspaces };
   return {
@@ -139,42 +153,52 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>((set,
     if (!isSameNodeScope(activeNodeOf(state, machineId), node) || !state.workspaces[workspaceKey(machineId, node)]) {
       state.selectNode(machineId, node);
     }
-    set((current) => applyTransition(current, machineId, (workspace) => openTerminalTransition(workspace, scope)));
+    set((current) => applyTransition(current, machineId, node, (workspace) => openTerminalTransition(workspace, scope)));
   },
 
   bindPaneTerminal: (machineId, paneId, scope, pendingPrompt) => {
+    // The node comes from the SESSION, not from `activeNodes`: a spawn resolves
+    // after a round trip (a cold Sprite boot is seconds), and the user is free to
+    // open another node meanwhile. The session runs in this scope's checkout and
+    // was picked in this pane, and that is true regardless of what is on screen
+    // when it lands.
+    const node = nodeOfTerminalScope(scope);
     set((state) =>
-      applyTransition(state, machineId, (workspace) => assignPaneTransition(workspace, paneId, scope, pendingPrompt))
+      applyTransition(state, machineId, node, (workspace) => assignPaneTransition(workspace, paneId, scope, pendingPrompt))
     );
   },
 
-  clearPanePrompt: (machineId, paneId) => {
-    set((state) => applyTransition(state, machineId, (workspace) => clearPanePromptTransition(workspace, paneId)));
+  clearPanePrompt: (machineId, node, paneId) => {
+    set((state) => applyTransition(state, machineId, node, (workspace) => clearPanePromptTransition(workspace, paneId)));
   },
 
-  dismissPicker: (machineId, paneId) => {
-    set((state) => applyTransition(state, machineId, (workspace) => dismissPickerTransition(workspace, paneId)));
+  dismissPicker: (machineId, node, paneId) => {
+    set((state) => applyTransition(state, machineId, node, (workspace) => dismissPickerTransition(workspace, paneId)));
   },
 
-  splitRight: (machineId, fromPaneId) => {
+  splitRight: (machineId, node, fromPaneId) => {
     const newColumnId = crypto.randomUUID();
     const newPaneId = crypto.randomUUID();
     set((state) =>
-      applyTransition(state, machineId, (workspace) => splitRightTransition(workspace, fromPaneId, newColumnId, newPaneId))
+      applyTransition(state, machineId, node, (workspace) =>
+        splitRightTransition(workspace, fromPaneId, newColumnId, newPaneId)
+      )
     );
   },
 
-  splitDown: (machineId, fromPaneId) => {
+  splitDown: (machineId, node, fromPaneId) => {
     const newPaneId = crypto.randomUUID();
-    set((state) => applyTransition(state, machineId, (workspace) => splitDownTransition(workspace, fromPaneId, newPaneId)));
+    set((state) =>
+      applyTransition(state, machineId, node, (workspace) => splitDownTransition(workspace, fromPaneId, newPaneId))
+    );
   },
 
-  closePane: (machineId, paneId) => {
-    set((state) => applyTransition(state, machineId, (workspace) => closePaneTransition(workspace, paneId)));
+  closePane: (machineId, node, paneId) => {
+    set((state) => applyTransition(state, machineId, node, (workspace) => closePaneTransition(workspace, paneId)));
   },
 
-  selectPane: (machineId, paneId) => {
-    set((state) => applyTransition(state, machineId, (workspace) => selectPaneTransition(workspace, paneId)));
+  selectPane: (machineId, node, paneId) => {
+    set((state) => applyTransition(state, machineId, node, (workspace) => selectPaneTransition(workspace, paneId)));
   },
 }));
 

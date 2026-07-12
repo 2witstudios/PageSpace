@@ -105,13 +105,17 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     // A split just made this pane, so its picker takes focus — the user asked
     // for a new agent, not for a blank rectangle to go find a control in.
     pickerFocused: pane.id === pendingPickerPaneId,
-    onSelect: () => selectPane(machineId, pane.id),
-    onSplitRight: () => splitRight(machineId, pane.id),
-    onSplitDown: () => splitDown(machineId, pane.id),
-    onClose: () => closePane(machineId, pane.id),
+    // Every pane action names the node this pane was RENDERED for. A pane id is
+    // only unique within its node's grid, and an action can land after the user
+    // has moved to another node (a `ready` event, a resolved spawn) — so the
+    // target is captured here, not looked up when the write happens.
+    onSelect: () => selectPane(machineId, node, pane.id),
+    onSplitRight: () => splitRight(machineId, node, pane.id),
+    onSplitDown: () => splitDown(machineId, node, pane.id),
+    onClose: () => closePane(machineId, node, pane.id),
     onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
-    onPickerFocused: () => dismissPicker(machineId, pane.id),
-    onPromptSent: () => clearPanePrompt(machineId, pane.id),
+    onPickerFocused: () => dismissPicker(machineId, node, pane.id),
+    onPromptSent: () => clearPanePrompt(machineId, node, pane.id),
   });
 
   // A phone cannot hold a split grid: two columns at 375px give each terminal
@@ -145,7 +149,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     return (
       <div className="flex h-full flex-col bg-background">
         {panes.length > 1 && (
-          <PaneStrip panes={panes} activePaneId={activeId} onSelect={(id) => selectPane(machineId, id)} />
+          <PaneStrip panes={panes} activePaneId={activeId} onSelect={(id) => selectPane(machineId, node, id)} />
         )}
         <div className="relative min-h-0 flex-1">
           {panes.map((pane) => (

@@ -12,6 +12,7 @@ const reset = () => useMachineWorkspaceStore.setState({ workspaces: {}, activeNo
 
 const store = () => useMachineWorkspaceStore.getState();
 
+const MACHINE_NODE = {};
 const BRANCH_NODE = { projectName: 'app', branchName: 'main' };
 const OTHER_BRANCH = { projectName: 'app', branchName: 'fix' };
 
@@ -141,7 +142,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given splitRight, should add a second column and activate its pane', () => {
     useMachineWorkspaceStore.getState().ensureWorkspace('terminal-1');
     const before = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
-    useMachineWorkspaceStore.getState().splitRight('terminal-1', before!.activePaneId);
+    useMachineWorkspaceStore.getState().splitRight('terminal-1', MACHINE_NODE, before!.activePaneId);
 
     const workspace = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
 
@@ -161,7 +162,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given splitDown, should stack a new pane in the same column', () => {
     useMachineWorkspaceStore.getState().ensureWorkspace('terminal-1');
     const before = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
-    useMachineWorkspaceStore.getState().splitDown('terminal-1', before!.activePaneId);
+    useMachineWorkspaceStore.getState().splitDown('terminal-1', MACHINE_NODE, before!.activePaneId);
 
     const workspace = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
 
@@ -182,7 +183,7 @@ describe('useMachineWorkspaceStore', () => {
     useMachineWorkspaceStore.getState().ensureWorkspace('terminal-1');
     const before = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
 
-    useMachineWorkspaceStore.getState().closePane('terminal-1', allPanes(before)[0].id);
+    useMachineWorkspaceStore.getState().closePane('terminal-1', MACHINE_NODE, allPanes(before)[0].id);
     const after = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
 
     expect({
@@ -201,11 +202,11 @@ describe('useMachineWorkspaceStore', () => {
   it('given selectPane, should activate the chosen pane', () => {
     useMachineWorkspaceStore.getState().ensureWorkspace('terminal-1');
     const before = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
-    useMachineWorkspaceStore.getState().splitRight('terminal-1', before!.activePaneId);
+    useMachineWorkspaceStore.getState().splitRight('terminal-1', MACHINE_NODE, before!.activePaneId);
 
     const workspace = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
     const firstPaneId = allPanes(workspace)[0].id;
-    useMachineWorkspaceStore.getState().selectPane('terminal-1', firstPaneId);
+    useMachineWorkspaceStore.getState().selectPane('terminal-1', MACHINE_NODE, firstPaneId);
 
     const after = selectWorkspace('terminal-1')(useMachineWorkspaceStore.getState());
 
@@ -223,10 +224,10 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given pane actions on a machineId that was never ensured, should be a no-op', () => {
-    store().splitRight('never-ensured', 'anything');
-    store().splitDown('never-ensured', 'anything');
-    store().closePane('never-ensured', 'anything');
-    store().selectPane('never-ensured', 'anything');
+    store().splitRight('never-ensured', MACHINE_NODE, 'anything');
+    store().splitDown('never-ensured', MACHINE_NODE, 'anything');
+    store().closePane('never-ensured', MACHINE_NODE, 'anything');
+    store().selectPane('never-ensured', MACHINE_NODE, 'anything');
 
     assert({
       given: 'pane actions naming a machineId with no workspace (never ensured, or already disposed)',
@@ -251,7 +252,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given a node is selected, should give it its own grid and leave the machine grid alone', () => {
     store().ensureWorkspace('m1');
     const machineFirstPane = allPanes(selectWorkspace('m1')(store()))[0].id;
-    store().splitRight('m1', machineFirstPane);
+    store().splitRight('m1', MACHINE_NODE, machineFirstPane);
 
     store().selectNode('m1', BRANCH_NODE);
 
@@ -270,7 +271,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given a node is re-selected, should restore the grid it had, not a fresh one', () => {
     store().ensureWorkspace('m1');
     store().selectNode('m1', BRANCH_NODE);
-    store().splitDown('m1', selectWorkspace('m1')(store())!.activePaneId);
+    store().splitDown('m1', BRANCH_NODE, selectWorkspace('m1')(store())!.activePaneId);
     store().selectNode('m1', OTHER_BRANCH);
 
     store().selectNode('m1', BRANCH_NODE);
@@ -286,7 +287,7 @@ describe('useMachineWorkspaceStore', () => {
   it('given a split on one node, should not touch a sibling node grid', () => {
     store().ensureWorkspace('m1');
     store().selectNode('m1', BRANCH_NODE);
-    store().splitRight('m1', selectWorkspace('m1')(store())!.activePaneId);
+    store().splitRight('m1', BRANCH_NODE, selectWorkspace('m1')(store())!.activePaneId);
 
     assert({
       given: 'a split performed while a branch node is active',
@@ -325,7 +326,7 @@ describe('useMachineWorkspaceStore', () => {
     store().ensureWorkspace('m1');
     store().selectNode('m1', BRANCH_NODE);
     const paneId = selectWorkspace('m1')(store())!.activePaneId;
-    store().splitRight('m1', paneId);
+    store().splitRight('m1', BRANCH_NODE, paneId);
 
     store().bindPaneTerminal('m1', paneId, { ...BRANCH_NODE, name: 'claude-a1b2c3' }, 'fix the build');
 
@@ -354,6 +355,52 @@ describe('useMachineWorkspaceStore', () => {
         m2: allPanes(selectWorkspace('m2')(store())).length,
       },
       expected: { m1Keys: 0, m1ActiveNode: undefined, m2: 1 },
+    });
+  });
+
+  it('given the user opens another node while a spawn is in flight, should still bind to the pane it was picked in', () => {
+    store().ensureWorkspace('m1');
+    store().selectNode('m1', BRANCH_NODE);
+    const paneId = selectWorkspace('m1')(store())!.activePaneId;
+
+    // The spawn is in flight (a cold Sprite boot is seconds) and the user goes
+    // and looks at another branch. THEN the spawn resolves.
+    store().selectNode('m1', OTHER_BRANCH);
+    store().bindPaneTerminal('m1', paneId, { ...BRANCH_NODE, name: 'claude-a1b2c3' }, 'fix the build');
+
+    const pane = allPanes(selectNodeWorkspace('m1', BRANCH_NODE)(store())).find((p) => p.id === paneId);
+    assert({
+      given: 'a spawn that resolves after the user has switched to a different node',
+      should:
+        "bind it to the pane it was picked in, in ITS OWN node's grid — resolving the target against whatever is active at write time would drop the write, orphaning the session row and leaving the picked pane empty",
+      actual: {
+        boundScope: pane?.scope,
+        boundPrompt: pane?.pendingPrompt,
+        otherBranchUntouched: allPanes(selectNodeWorkspace('m1', OTHER_BRANCH)(store()))[0].scope,
+      },
+      expected: {
+        boundScope: { ...BRANCH_NODE, name: 'claude-a1b2c3' },
+        boundPrompt: 'fix the build',
+        otherBranchUntouched: null,
+      },
+    });
+  });
+
+  it('given a pane action naming a node that is not the active one, should still apply to that node', () => {
+    store().ensureWorkspace('m1');
+    store().selectNode('m1', BRANCH_NODE);
+    const paneId = selectWorkspace('m1')(store())!.activePaneId;
+    store().selectNode('m1', OTHER_BRANCH);
+
+    // e.g. an `agent-terminal:ready` arriving for a pane whose node the user has left.
+    store().bindPaneTerminal('m1', paneId, { ...BRANCH_NODE, name: 'claude-a1b2c3' }, 'go');
+    store().clearPanePrompt('m1', BRANCH_NODE, paneId);
+
+    assert({
+      given: 'a prompt delivered to a pane in a node the user has since navigated away from',
+      should: 'clear it in THAT node grid — a pane id only means anything within its own node',
+      actual: allPanes(selectNodeWorkspace('m1', BRANCH_NODE)(store())).find((p) => p.id === paneId)?.pendingPrompt,
+      expected: undefined,
     });
   });
 });

@@ -195,7 +195,7 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
       given: 'the hidden pane tapped in the pane strip',
       should: 'select it — without the strip, panes opened on a desktop would be silently unreachable on a phone',
       actual: selectPane.mock.calls[0],
-      expected: ['m1', 'pane-1'],
+      expected: ['m1', activeNode, 'pane-1'],
     });
   });
 
@@ -301,7 +301,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
         focused: document.activeElement === screen.getByLabelText('Starting prompt'),
         consumed: dismissPicker.mock.calls[0],
       },
-      expected: { focused: true, consumed: ['m1', 'pane-1'] },
+      expected: { focused: true, consumed: ['m1', activeNode, 'pane-1'] },
     });
   });
 
