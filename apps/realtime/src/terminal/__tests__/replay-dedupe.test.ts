@@ -5,6 +5,7 @@ import {
   MAX_MATCH_CANDIDATES,
   MAX_PENDING_BYTES,
   MAX_SEEN_BYTES,
+  MIN_CORROBORATION_BYTES,
   flushReplay,
   freshReplayState,
   materializeSeen,
@@ -236,6 +237,38 @@ describe('planReplayEmission corroboration bounds (pure)', () => {
     materializeSeen(parts.reduce((tail, part) => rememberDelivered(tail, part), EMPTY_SEEN));
   const seen = deliver(lines('history', 3000), lines('recent', 800));
   const anchor = seen.subarray(seen.length - MAX_ANCHOR_BYTES);
+
+  // The floor's exact boundary. It binds only where the proof is PARTIAL — `at` runs past the
+  // history we still hold, so some of the bytes about to be dropped can never be checked. One
+  // byte either side of MIN_CORROBORATION_BYTES decides whether a partial proof is evidence or
+  // a guess, and nothing pinned it. Erring strict costs a suppression; erring loose drops bytes
+  // nobody has seen — which is why the boundary is asserted rather than assumed.
+  const partialProof = (historyBytes: number) => {
+    // `seen` = history ++ anchor, so the retained history is exactly `historyBytes` long.
+    const tail = Buffer.alloc(MAX_ANCHOR_BYTES, 0x41); // the anchor
+    const past = Buffer.alloc(historyBytes, 0x42); // the history in front of it
+    const shortSeen = Buffer.concat([past, tail]);
+    // The replay opens with bytes we cannot check (they precede everything we retained), then
+    // reproduces the whole retained history, then the anchor. So `depth === historyBytes < at`.
+    const unprovable = Buffer.alloc(900, 0x43);
+    const replay = Buffer.concat([unprovable, past, tail, buf('new tail\r\n')]);
+
+    return planReplayEmission({ seen: shortSeen, chunk: replay, state: freshReplayState() });
+  };
+
+  it('given a partial proof ONE BYTE under the floor, should refuse it (a guess is not evidence)', () => {
+    const { emit, state } = partialProof(MIN_CORROBORATION_BYTES - 1);
+
+    expect(emit.length).toBe(0); // suppressed nothing: buffered, pending the window's close
+    expect(state.resolved).toBe(false);
+  });
+
+  it('given a partial proof EXACTLY at the floor, should accept it', () => {
+    const { emit, state } = partialProof(MIN_CORROBORATION_BYTES);
+
+    expect(emit.toString('utf8')).toBe('new tail\r\n');
+    expect(state.resolved).toBe(true);
+  });
 
   it('given a SHALLOW but COMPLETE proof, should accept it (a ring barely larger than the anchor)', () => {
     // The `depth === at` acceptance. When the server's ring reaches back only a little past
@@ -592,9 +625,11 @@ describe('buffering an unalignable replay (pure)', () => {
   it('given a replay buffered frame by frame, should grow the buffer in O(log n) allocations, not one per frame', () => {
     // Re-copying `pending` on every frame is quadratic in the bytes the SANDBOX chose:
     // 4 MiB of output in 256-byte frames became tens of GB of memcpy on the process every
-    // terminal shares. Counting backing allocations pins the amortized growth without a
-    // wall-clock assertion: a copy per frame would mint ~2000 buffers here, doubling mints
-    // a handful. (Timing, for the record: ~3.9s before, ~6ms after.)
+    // terminal shares — ~6.4s of it, against ~5ms once the buffer grows into an arena.
+    // Counting backing allocations pins that amortized growth without a wall-clock
+    // assertion: over the 2000 frames below, a copy per frame mints 2000 buffers and
+    // doubling mints 6. (At this size the copy costs only ~70ms — the blow-up is at the
+    // cap, which is why the assertion counts allocations rather than measuring time.)
     let state = freshReplayState();
     const backings = new Set<ArrayBufferLike>();
     for (let i = 0; i < 2_000; i += 1) {

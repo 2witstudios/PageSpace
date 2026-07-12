@@ -274,7 +274,7 @@ describe('openPtyShell', () => {
 
     // The cwd is NOT a createSession option: the server chdirs into it and fails
     // the open if it is gone, and a sandbox command can delete /workspace. It is
-    // recreated + entered by the wrapper, which then execs bash — see ensureCwdSession.
+    // recreated + entered by the wrapper, which then execs bash — see `spawnWithSelfHealingCwd`.
     expect(sprite.createSession).toHaveBeenCalledWith(...spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: '/workspace' }), {
       tty: true,
       cols: 80,
@@ -965,11 +965,13 @@ describe('openPtyShell', () => {
 
     it('given a reconnect attach that dies BEFORE it opens, keeps the history (an empty flush must not wipe it)', async () => {
       // A pre-open drop (cold Sprite wake, flapping WS) reaches closeReplayWindow on a command
-      // that never received a byte. `replay` is still fresh, so flushReplay hands back
-      // { emit: EMPTY, aligned: false } and deliver() runs in RESTART mode with zero bytes.
-      // Restart wipes the history — so if the empty flush were allowed through, one pre-open
-      // drop would erase the anchor and the NEXT attach would reprint the whole scrollback:
-      // the very bug this module exists to remove, fired by a socket that said nothing at all.
+      // that never received a byte. Nothing was held, so nothing was given up on — and
+      // `flushReplay` says so: it returns `history: 'append'` rather than calling an empty
+      // flush a give-up. If it called that a give-up, the caller would RESTART its history
+      // from an emission of zero bytes, erasing the anchor, and the next attach would reprint
+      // the whole scrollback: the bug this module exists to remove, fired by a socket that
+      // said nothing at all. `deliver`'s zero-length early return is a second line of defence
+      // behind that; the pure `flushReplay` case is what makes it unreachable.
       const cmd = buildFakeCommand();
       const dies = buildFakeCommand();
       const replays = buildFakeCommand();
