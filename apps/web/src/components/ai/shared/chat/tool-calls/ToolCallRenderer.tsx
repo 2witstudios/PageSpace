@@ -8,6 +8,7 @@ import {
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
 import { TaskRenderer } from './TaskRenderer';
+import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { renderToolContent } from './registry';
 import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
@@ -268,6 +269,8 @@ export const ToolCallRenderer: React.FC<ToolCallRendererProps> = memo(function T
       return <PageAgentConversationRenderer part={dispatch.part} />;
     case 'question':
       return <AskUserQuestionCard part={dispatch.part} />;
+    case 'image':
+      return <GeneratedImageRenderer part={dispatch.part} />;
     case 'generic':
       return <ToolCallRendererInternal part={dispatch.part} toolName={dispatch.toolName} open={open} onOpenChange={onOpenChange} />;
   }

@@ -65,6 +65,18 @@ vi.mock('@/hooks/useSocket', () => ({
   useSocket: () => mockSocket,
 }));
 
+const LOCAL_USER_ID = 'user-1';
+let mockAuthUserId: string | null = LOCAL_USER_ID;
+vi.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: mockAuthUserId === null ? null : { id: mockAuthUserId } }),
+}));
+
+let mockConnectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
+vi.mock('@/stores/useSocketStore', () => ({
+  useSocketStore: (selector: (s: { connectionStatus: string }) => unknown) =>
+    selector({ connectionStatus: mockConnectionStatus }),
+}));
+
 vi.mock('@/stores/usePendingStreamsStore', () => ({
   usePendingStreamsStore: {
     getState: () => ({
@@ -95,6 +107,7 @@ vi.mock('@/lib/ai/streams/bootstrapConsumerGuard', () => ({
 
 import { useChannelStreamSocket } from '../useChannelStreamSocket';
 import { releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
+import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
 import type {
   AiStreamStartPayload,
   AiStreamCompletePayload,
@@ -175,6 +188,10 @@ describe('useChannelStreamSocket', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSocket._reset();
+    // Module state — a real reload clears it; a test file must too.
+    resetConsumingChannels();
+    mockConnectionStatus = 'disconnected';
+    mockAuthUserId = LOCAL_USER_ID;
     mockConsumeStreamJoin.mockResolvedValue({ aborted: false });
     mockGetBrowserSessionId.mockReturnValue(SESSION_ID_LOCAL);
     mockFetchWithAuth.mockResolvedValue({
@@ -227,8 +244,18 @@ describe('useChannelStreamSocket', () => {
 
     it('should call removeStream and onStreamComplete after consumeStreamJoin resolves', async () => {
       let resolveJoin!: () => void;
-      mockConsumeStreamJoin.mockReturnValue(
-        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      // A successful join to a live stream always delivers at least the buffered prefix (the SSE
+      // route replays it synchronously on subscribe). A join that delivers NOTHING means our copy
+      // is not authoritative — the hook now reports joinFailed so consumers reload from the DB
+      // rather than rendering the stale, debounced seed. Model the delivery.
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) =>
+          new Promise<{ aborted: boolean }>((res) => {
+            resolveJoin = () => {
+              onChunk({ type: 'text', text: 'hello' });
+              res({ aborted: false });
+            };
+          }),
       );
       const onStreamComplete = vi.fn();
 
@@ -238,13 +265,23 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1');
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (SSE path)', async () => {
       let resolveJoin!: () => void;
-      mockConsumeStreamJoin.mockReturnValue(
-        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      // A real join DELIVERS at least one part — that is how the store gets the data this test is
+      // about. A join that delivers nothing leaves only the seeded (debounced, possibly shorter)
+      // DB snapshot, which is not authoritative, so the hook now drops it and lets consumers
+      // reload from the DB instead of rendering a truncated bubble.
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) =>
+          new Promise<{ aborted: boolean }>((res) => {
+            resolveJoin = () => {
+              onChunk({ type: 'text', text: 'hello' });
+              res({ aborted: false });
+            };
+          }),
       );
       const callOrder: string[] = [];
       mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
@@ -273,17 +310,66 @@ describe('useChannelStreamSocket', () => {
   });
 
   describe('chat:stream_start from local browser session', () => {
-    it('given triggeredBy.browserSessionId matches getBrowserSessionId(), should skip addStream and consumeStreamJoin', () => {
+    it('given an own-session stream this context is CONSUMING over the POST body, should skip addStream and consumeStreamJoin (no double-render)', () => {
       const localPayload: AiStreamStartPayload = {
         ...START_PAYLOAD,
         triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
       };
 
+      markChannelConsuming('page-a');
       renderHook(() => useChannelStreamSocket('page-a'));
       act(() => { mockSocket._trigger('chat:stream_start', localPayload); });
 
       expect(mockAddStream).not.toHaveBeenCalled();
       expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+    });
+
+    // THE HEADLINE REGRESSION TEST. A reload wipes the consuming set (module state)
+    // but NOT the browserSessionId (sessionStorage). Under the old blanket own-session
+    // skip, the reloaded tab still looked like the originator and dropped its own
+    // stream forever: no bubble, no Stop button, live input, while the server kept
+    // generating and editing pages.
+    it('given an own-session stream this context is NOT consuming (i.e. after a reload), should attach to it like any other subscriber', () => {
+      const localPayload: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+      };
+
+      // The consuming set is empty — exactly the state a freshly-loaded document is in.
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', localPayload); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-1',
+        isOwn: true,
+      }));
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    it('given a REMOTE stream while this context is consuming its own on the same channel, should still attach (multiplayer is not collateral damage)', () => {
+      markChannelConsuming('page-a');
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-1',
+        isOwn: false,
+      }));
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    it('given an own-session stream after a reload, should fire onOwnStreamBootstrap so the Stop button comes back', () => {
+      const onOwnStreamBootstrap = vi.fn();
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamBootstrap }));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_start', {
+          ...START_PAYLOAD,
+          triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+        });
+      });
+
+      expect(onOwnStreamBootstrap).toHaveBeenCalledWith({ messageId: 'msg-1', conversationId: 'conv-1' });
     });
 
     it('given triggeredBy.userId matches local user but browserSessionId differs, should still addStream (cross-session same-user)', () => {
@@ -300,6 +386,91 @@ describe('useChannelStreamSocket', () => {
         isOwn: false,
         startedAt: '2024-01-01T00:00:00.000Z',
       }));
+    });
+  });
+
+  // A page room holds every member of the page, but conversations are private by default
+  // (`listConversations` shows you only `userId = you OR isShared`). The server refuses
+  // these joins anyway; skipping them client-side is what stops every member firing a
+  // doomed /stream-join per assistant message — each one an authz denial in the audit log.
+  describe('chat:stream_start — conversation privacy pre-filter', () => {
+    it("given another user's stream in a PRIVATE conversation, should not attach or even attempt the join", () => {
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_start', {
+          ...START_PAYLOAD,
+          isShared: false,
+          triggeredBy: { userId: 'user-other', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+        });
+      });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+    });
+
+    it("given another user's stream in an explicitly SHARED conversation, should attach (multiplayer)", () => {
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_start', {
+          ...START_PAYLOAD,
+          isShared: true,
+          triggeredBy: { userId: 'user-other', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+        });
+      });
+
+      expect(mockAddStream).toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    // The same user in a second tab: a different browserSessionId, so `isOwn` is false —
+    // but it is still THEIR stream and their private conversation. They must see it.
+    it('given MY OWN stream from another tab in a private conversation, should still attach', () => {
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_start', {
+          ...START_PAYLOAD,
+          isShared: false,
+          triggeredBy: { userId: LOCAL_USER_ID, displayName: 'Me', browserSessionId: 'a-different-tab' },
+        });
+      });
+
+      expect(mockAddStream).toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    // `useAuth()` returns `user: null` until auth resolves. Treating "I don't know who I
+    // am" as "not me" would drop the user's OWN private stream in that window — the exact
+    // failure this whole PR exists to fix. Skip only on certainty; when in doubt, attach
+    // and let the server decide (an unauthorized join is a quiet 404).
+    it('given the signed-in user is not known yet, should NOT drop a private stream (it may be the user\'s own)', () => {
+      mockAuthUserId = null;
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => {
+        mockSocket._trigger('chat:stream_start', {
+          ...START_PAYLOAD,
+          isShared: false,
+          triggeredBy: { userId: LOCAL_USER_ID, displayName: 'Me', browserSessionId: 'another-tab' },
+        });
+      });
+
+      expect(mockAddStream).toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    // Rolling deploy: an originator on the previous build emits no `isShared` field.
+    // Dropping on `undefined` would black out multiplayer for shared conversations
+    // mid-deploy, so only an explicit `false` skips. The server is the authority anyway.
+    it('given no isShared field at all (old server, rolling deploy), should attempt the join rather than drop it', () => {
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      expect(mockAddStream).toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -579,23 +750,39 @@ describe('useChannelStreamSocket', () => {
   });
 
   describe('chat:stream_complete', () => {
-    it('should call removeStream and onStreamComplete', () => {
+    it('should call removeStream and onStreamComplete, reporting joinFailed for a stream we never joined', () => {
       const onStreamComplete = vi.fn();
       renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
 
+      // No stream_start, no join: we hold no authoritative copy of this stream, so `joinFailed`
+      // is TRUE — that flag means "our parts are not the source of truth, reload from the DB",
+      // not "the network failed". Consumers behave identically either way here (there is no store
+      // entry, so they take the reload branch regardless); the flag now simply tells the truth.
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1');
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
     });
 
-    it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', () => {
+    it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', async () => {
       const callOrder: string[] = [];
-      mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
+      // The stream must actually have been joined AND delivered content — otherwise there is no
+      // "stream data" for the callback to see, and the hook deliberately drops the entry so
+      // consumers reload the authoritative message from the DB.
+      let deliver!: () => void;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) =>
+          new Promise<{ aborted: boolean }>(() => {
+            deliver = () => onChunk({ type: 'text', text: 'hello' });
+          }),
+      );
       const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
 
       renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); deliver(); });
 
+      mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(callOrder).toEqual(['onStreamComplete', 'removeStream']);
@@ -655,7 +842,12 @@ describe('useChannelStreamSocket', () => {
       expect(onStreamComplete).toHaveBeenCalledTimes(1);
     });
 
-    it('given SSE rejects then chat:stream_complete fires, should NOT call onStreamComplete', async () => {
+    // A failed SSE join does NOT mean the stream failed — the usual cause is that it
+    // is owned by another web instance, whose in-process multicast registry we can't
+    // reach. It keeps generating and it still broadcasts chat:stream_complete. Under
+    // the old behaviour that event was suppressed, so the ghost vanished and the
+    // finished (durably persisted) assistant message was never loaded.
+    it('given SSE rejects then chat:stream_complete fires, should call onStreamComplete with the store entry ALREADY removed, so the surface reloads from the DB', async () => {
       let rejectJoin!: (err: Error) => void;
       mockConsumeStreamJoin.mockReturnValueOnce(
         new Promise((_res, rej) => { rejectJoin = rej; }),
@@ -668,9 +860,14 @@ describe('useChannelStreamSocket', () => {
 
       await act(async () => { rejectJoin(new Error('network down')); await Promise.resolve(); });
 
+      mockRemoveStream.mockClear();
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
-      expect(onStreamComplete).not.toHaveBeenCalled();
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      // Removed BEFORE the callback fired: shouldReloadOnComountComplete keys on the
+      // absence of a store entry to choose the reload-from-DB branch over synthesizing
+      // a bubble from what is, at best, a stale snapshot.
+      expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
       errorSpy.mockRestore();
     });
 
@@ -728,7 +925,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(firstCallback).not.toHaveBeenCalled();
-      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1');
+      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
     });
   });
 
@@ -1160,6 +1357,138 @@ describe('useChannelStreamSocket', () => {
   });
 
   // AC6 — bootstrap unmount safety
+  // AC2. socket.io reconnects the SAME instance in place, so the main effect
+  // (deps [socket, channelId]) does not re-run — without this, every chat:stream_start
+  // emitted during an offline blip is lost and the tab stays blind to a live stream
+  // until it is reloaded.
+  // The reconciliation snapshot is what releases a consumer's Stop-slot claim when the
+  // stream it names has ended. It is authoritative, so it must be RIGHT: it may only speak
+  // on a successful, non-superseded response, and access_revoked — which latches
+  // `cancelled` and therefore silences every future bootstrap on this channel — must
+  // release the claims itself or they strand forever.
+  describe('onActiveStreamsSnapshot', () => {
+    it('given a successful bootstrap, should report the live messageIds', async () => {
+      const onActiveStreamsSnapshot = vi.fn();
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-live',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-2', displayName: 'A', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a', { onActiveStreamsSnapshot }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(onActiveStreamsSnapshot).toHaveBeenCalledWith(new Set(['msg-live']));
+    });
+
+    it('given the bootstrap fetch fails, should NOT report a snapshot (never release a claim on no information)', async () => {
+      const onActiveStreamsSnapshot = vi.fn();
+      mockFetchWithAuth.mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+
+      renderHook(() => useChannelStreamSocket('page-a', { onActiveStreamsSnapshot }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(onActiveStreamsSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('given the bootstrap throws, should NOT report a snapshot', async () => {
+      const onActiveStreamsSnapshot = vi.fn();
+      mockFetchWithAuth.mockRejectedValueOnce(new Error('network down'));
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      renderHook(() => useChannelStreamSocket('page-a', { onActiveStreamsSnapshot }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(onActiveStreamsSnapshot).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    // access_revoked latches `cancelled` on this effect's closure, so every future
+    // runBootstrap — including the reconnect re-bootstrap and rejoinActiveStreams, which
+    // both call through bootstrapRef into THIS closure — returns early. The snapshot can
+    // never fire again on this channel, so a claim released only by it would strand
+    // forever: a Stop button over a stream the user can no longer even reach.
+    it('given access is revoked, should finalize every own stream so no claim strands', async () => {
+      const onOwnStreamFinalize = vi.fn();
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a', { onOwnStreamFinalize }));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      act(() => { mockSocket._trigger('access_revoked', { room: 'page-a' }); });
+
+      expect(onOwnStreamFinalize).toHaveBeenCalledWith({ messageId: 'msg-own' });
+    });
+  });
+
+  describe('re-bootstrap on socket reconnect', () => {
+    it('given the socket reconnects after an initial connect, should re-run the DB bootstrap', async () => {
+      const { rerender } = renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); });
+
+      const bootstrapCallsAfterMount = mockFetchWithAuth.mock.calls.length;
+
+      // First connect — already covered by the mount bootstrap, must NOT refetch.
+      mockConnectionStatus = 'connected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+      expect(mockFetchWithAuth.mock.calls.length).toBe(bootstrapCallsAfterMount);
+
+      // Drop, then reconnect.
+      mockConnectionStatus = 'disconnected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+      mockConnectionStatus = 'connected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+
+      expect(mockFetchWithAuth.mock.calls.length).toBe(bootstrapCallsAfterMount + 1);
+      expect(mockFetchWithAuth).toHaveBeenLastCalledWith(
+        '/api/ai/chat/active-streams?channelId=page-a',
+        expect.anything(),
+      );
+    });
+
+    it('given the very first connect, should NOT re-bootstrap (the mount already did)', async () => {
+      const { rerender } = renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); });
+
+      const callsAfterMount = mockFetchWithAuth.mock.calls.length;
+
+      mockConnectionStatus = 'connecting';
+      await act(async () => { rerender(); await Promise.resolve(); });
+      mockConnectionStatus = 'connected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+
+      expect(mockFetchWithAuth.mock.calls.length).toBe(callsAfterMount);
+    });
+
+    it('given no channelId, should never bootstrap on reconnect', async () => {
+      const { rerender } = renderHook(() => useChannelStreamSocket(undefined));
+      await act(async () => { await Promise.resolve(); });
+
+      mockConnectionStatus = 'connected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+      mockConnectionStatus = 'disconnected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+      mockConnectionStatus = 'connected';
+      await act(async () => { rerender(); await Promise.resolve(); });
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+  });
+
   describe('bootstrap unmount safety', () => {
     it('given fetch resolves after unmount, should not call addStream', async () => {
       let resolveFetch!: (value: unknown) => void;
@@ -1233,7 +1562,13 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
       expect(onOwnStreamBootstrap).toHaveBeenCalledTimes(1);
-      expect(onOwnStreamBootstrap).toHaveBeenCalledWith({ messageId: 'msg-own-bootstrap' });
+      // The STREAM's conversation, asserted exactly — not expect.any(String), which would have
+      // accepted the channelId ('page-a'), the messageId, or ''. This value decides which
+      // conversation's Stop button lights up; a wrong one lights the wrong surface.
+      expect(onOwnStreamBootstrap).toHaveBeenCalledWith({
+        messageId: 'msg-own-bootstrap',
+        conversationId: 'conv-1',
+      });
     });
 
     it('given a bootstrapped stream from a remote tab, should not fire onOwnStreamBootstrap', async () => {

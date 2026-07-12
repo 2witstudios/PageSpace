@@ -13,6 +13,7 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
 
 interface StreamEntry {
   controller: AbortController;
@@ -47,8 +48,11 @@ const unlinkStream = (streamId: string): void => {
   messageIdToStreamId.delete(messageId);
 };
 
-// Cleanup streams older than 10 minutes (safety net for orphaned entries)
-const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
+// Safety net for orphaned entries only — a stream that ends normally unregisters itself.
+// Shares STREAM_MAX_LIFETIME_MS with the multicast registry and the heartbeat cap: if this
+// were shorter, a still-running long generation would be reported as live by
+// /active-streams while its Stop button had already become a no-op here.
+const MAX_STREAM_AGE_MS = STREAM_MAX_LIFETIME_MS;
 const CLEANUP_INTERVAL_MS = 60 * 1000;
 
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;

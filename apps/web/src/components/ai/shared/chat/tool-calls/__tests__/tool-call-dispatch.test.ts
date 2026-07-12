@@ -23,6 +23,11 @@ describe('dispatchToolCall', () => {
     expect(result.kind).toBe('agent');
   });
 
+  it('routes generate_image to the image branch', () => {
+    const result = dispatchToolCall(part({ toolName: 'generate_image' }), TASK_TOOL_NAMES);
+    expect(result.kind).toBe('image');
+  });
+
   it('routes an ordinary tool to the generic branch with its own toolName', () => {
     const result = dispatchToolCall(part({ toolName: 'read_page' }), TASK_TOOL_NAMES);
     expect(result).toEqual({

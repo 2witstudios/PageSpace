@@ -6,6 +6,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const mockAbortConversationStreams = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ aborted: [], reason: 'No in-flight stream on this conversation' }),
+);
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
@@ -17,6 +21,10 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // Mock stream abort registry (boundary)
+vi.mock('@/lib/ai/core/abort-conversation-streams', () => ({
+  abortConversationStreams: mockAbortConversationStreams,
+}));
+
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
   abortStream: vi.fn(),
   abortStreamByMessageId: vi.fn(),
@@ -96,6 +104,59 @@ describe('POST /api/ai/abort', () => {
     });
   });
 
+  // THE WINDOW STOP COULD NOT NAME.
+  //
+  // streamId and messageId are BOTH minted server-side, and the client learns neither until the
+  // response headers land. A real agent send spends 0.5-3s before that (auth, rate limit, DB
+  // reads, context assembly, provider connect). Press Stop in that window — exactly when a user
+  // who spotted a typo presses it — and the client had nothing to name: the abort was a
+  // guaranteed no-op, the fetch was cancelled, and the button flipped back to Send.
+  //
+  // Cancelling the fetch stops NOTHING: streams are deliberately server-owned and survive a
+  // client disconnect. The generation kept running, kept calling write tools, and kept BILLING,
+  // while the UI said it had stopped. conversationId is the one name the client holds from t=0.
+  describe('abort by conversationId (the pre-headers window)', () => {
+    it('accepts conversationId alone and aborts the conversation\'s in-flight stream', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+      mockAbortConversationStreams.mockResolvedValueOnce({ aborted: ['msg-1'], reason: '' });
+
+      const response = await POST(createRequest({ conversationId: 'conv-1' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(mockAbortConversationStreams).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        userId: expect.any(String),
+      });
+      expect(body.aborted).toBe(true);
+    });
+
+    it('given nothing was in flight, reports honestly rather than claiming success', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+      mockAbortConversationStreams.mockResolvedValueOnce({
+        aborted: [],
+        reason: 'No in-flight stream on this conversation',
+      });
+
+      const body = await (await POST(createRequest({ conversationId: 'conv-1' }))).json();
+
+      expect(body.aborted).toBe(false);
+    });
+
+    // messageId names the stream exactly; conversationId is only the fallback for when nothing
+    // else exists yet. Preferring the fallback would abort every stream on the conversation.
+    it('prefers messageId when both are supplied', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
+      vi.mocked(isAuthError).mockReturnValueOnce(false);
+
+      await POST(createRequest({ messageId: 'msg-precise', conversationId: 'conv-1' }));
+
+      expect(mockAbortConversationStreams).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Input Validation', () => {
     it('returns 400 when neither streamId nor messageId provided', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValueOnce(mockWebAuth(mockUserId));
@@ -106,7 +167,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId or messageId is required');
+      expect(data.error).toBe('streamId, messageId or conversationId is required');
       expect(abortStream).not.toHaveBeenCalled();
       expect(abortStreamByMessageId).not.toHaveBeenCalled();
     });
@@ -120,7 +181,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId or messageId is required');
+      expect(data.error).toBe('streamId, messageId or conversationId is required');
     });
 
     it('returns 400 when streamId is empty string and no messageId', async () => {
@@ -132,7 +193,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId or messageId is required');
+      expect(data.error).toBe('streamId, messageId or conversationId is required');
     });
 
     it('returns 400 when streamId is whitespace only and no messageId', async () => {
@@ -144,7 +205,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId or messageId is required');
+      expect(data.error).toBe('streamId, messageId or conversationId is required');
       expect(abortStream).not.toHaveBeenCalled();
     });
   });
@@ -249,7 +310,7 @@ describe('POST /api/ai/abort', () => {
       const data = await response.json();
 
       expect(response.status).toBe(400);
-      expect(data.error).toBe('streamId or messageId is required');
+      expect(data.error).toBe('streamId, messageId or conversationId is required');
     });
   });
 

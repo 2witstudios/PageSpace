@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { STREAM_MAX_LIFETIME_MS } from '../stream-horizons';
 import {
   StreamMulticastRegistry,
   type StreamMeta,
@@ -224,7 +225,11 @@ describe('StreamMulticastRegistry', () => {
   });
 
   describe('auto-cleanup', () => {
-    it('given a stream still open after 10 minutes, should auto-cleanup to prevent memory leaks', () => {
+    // The eviction horizon is shared with the abort registry and the heartbeat cap
+    // (STREAM_MAX_LIFETIME_MS). It must NOT be shorter than the heartbeat: a still-running
+    // long generation would then be reported live by /active-streams while no client could
+    // join it and its Stop button had already become a no-op.
+    it('given a stream still open past the shared lifetime horizon, should auto-cleanup to prevent memory leaks', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
@@ -234,13 +239,13 @@ describe('StreamMulticastRegistry', () => {
 
       expect(registry.getMeta('msg-1')).toBeDefined();
 
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      vi.advanceTimersByTime(STREAM_MAX_LIFETIME_MS);
 
       expect(registry.getMeta('msg-1')).toBeUndefined();
       expect(completedValues).toEqual([true]);
     });
 
-    it('given a stream that finishes before 10 minutes, should not fire the auto-cleanup timer', () => {
+    it('given a stream that finishes inside the horizon, should not fire the auto-cleanup timer', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
@@ -250,7 +255,7 @@ describe('StreamMulticastRegistry', () => {
 
       registry.finish('msg-1', false);
 
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      vi.advanceTimersByTime(STREAM_MAX_LIFETIME_MS);
 
       expect(completedValues).toEqual([false]);
     });
@@ -267,7 +272,7 @@ describe('StreamMulticastRegistry', () => {
       expect(completed).toEqual([true]);
     });
 
-    it('given register is called twice for the same messageId, should call onComplete only once after 10 minutes', () => {
+    it('given register is called twice for the same messageId, should call onComplete only once after the horizon', () => {
       vi.useFakeTimers();
       const registry = new StreamMulticastRegistry();
       registry.register('msg-1', meta());
@@ -276,7 +281,7 @@ describe('StreamMulticastRegistry', () => {
       const completed: boolean[] = [];
       registry.subscribe('msg-1', () => {}, (aborted) => completed.push(aborted));
 
-      vi.advanceTimersByTime(10 * 60 * 1000);
+      vi.advanceTimersByTime(STREAM_MAX_LIFETIME_MS);
 
       expect(completed).toHaveLength(1);
     });

@@ -685,6 +685,40 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
+    it('given a 60s re-auth tick on a live ATTACHED session, should perform zero sprite SDK calls (DB-only check)', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(checkAuth).toHaveBeenCalledTimes(2); // connect + one tick
+      expect(auth.resolveSandbox).toHaveBeenCalledTimes(1); // only the connect's cold-path create
+      expect(auth.sprite.listSessions).not.toHaveBeenCalled();
+      expect(auth.sprite.spawn).not.toHaveBeenCalled();
+      expect(auth.sprite.createSession).not.toHaveBeenCalled();
+      expect(auth.sprite.attachSession).not.toHaveBeenCalled();
+      expect(auth.sprite.updateNetworkPolicy).not.toHaveBeenCalled();
+    });
+
+    it('given revoked access on a DETACHED session, should still tear it down within one interval — a detached viewer buys no extended grace', async () => {
+      // The PTY (and any agent/command it is running) keeps executing after the
+      // viewer disconnects — it is not idle just because nobody is watching. A
+      // detached session must lose access on the SAME 60s cadence an attached
+      // one does; letting it run unsupervised until the 30-min idle reap would
+      // leave a revoked user's process executing long after access was pulled.
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+
     it('given re-auth resolves AFTER the session was already torn down, should not double-teardown (no second kill/releaseSlot)', async () => {
       const auth = makeAuthSuccess();
       let resolveReauth: (v: unknown) => void = () => {};
