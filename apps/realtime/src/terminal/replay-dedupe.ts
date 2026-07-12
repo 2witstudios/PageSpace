@@ -606,17 +606,27 @@ export const MAX_DISCARDABLE_GIVEUP_BYTES = MAX_ANCHOR_BYTES;
  * AGENT terminal (a repainting TUI status line, a `SIGWINCH`-triggered redraw off
  * `attachSession`'s own `{cols,rows}`) violates byte-equality on almost every ~45s keepalive
  * cycle, so "reprint rather than risk losing a byte" becomes "repaint on top of itself every
- * 45s" for exactly the terminals that need the dedupe most. On THAT reconnect the viewer has
- * been continuously attached, so a SMALL give-up is very likely pure redraw noise and can be
+ * 45s" for exactly the terminals that need the dedupe most. On THAT reconnect the caller has
+ * already delivered every byte this module knows about — via whatever single sink is downstream
+ * of this module's output (see the caller's own doc: in `sprites-shell.ts` that sink is one
+ * `onOutput` call feeding BOTH the live viewer and the app-level scrollback buffer any FUTURE
+ * viewer catches up from) — so a SMALL give-up is very likely pure redraw noise and can be
  * dropped outright.
  *
  * "Very likely," not "provably" — and that gap is real, not glossed over. The server session
  * keeps running while the client is disconnected (sessions survive client drops; only the
- * SOCKET died), so the replay a reattach carries is "history the client already saw" PLUS
+ * SOCKET died), so the replay a reattach carries is "history already delivered downstream" PLUS
  * "whatever the shell produced during the gap," concatenated, with no marker between them —
  * see the module header's "cannot tell a replay from an EXACT reproduction." An unaligned
  * give-up therefore CAN legitimately contain new output (a build line, a crash message) that
- * arrived during the reconnect gap, and discarding loses it for good.
+ * arrived during the reconnect gap.
+ *
+ * And discarding loses it TOTALLY, not just from the one connection that happened to trigger
+ * the reconnect: a discard skips the caller's sink outright (see `sprites-shell.ts`'s
+ * `recordHistory` vs `deliver`), so the bytes reach neither whoever is watching live right now
+ * NOR any later viewer who joins fresh and catches up from whatever that sink also feeds (e.g.
+ * an app-level scrollback buffer). There is no narrower "just this viewer already saw it"
+ * reading available here — a discard is gone from the system, for every consumer, for good.
  *
  * `burstBytes` is the mitigation, not a fix for that: a mere redraw is bounded by roughly what
  * is already on screen (`MAX_DISCARDABLE_GIVEUP_BYTES`), while active new output — a build, a
@@ -624,16 +634,17 @@ export const MAX_DISCARDABLE_GIVEUP_BYTES = MAX_ANCHOR_BYTES;
  * produce — accumulates without that bound and is shown, not dropped, once the burst outgrows
  * it. This closes the large-loss end of the risk (megabytes of real output are never silently
  * eaten) without pretending to close the small end (a short message racing the reconnect,
- * indistinguishable byte-for-byte from a short redraw, can still be discarded). That residual
- * is the same shape this module already accepts elsewhere: "violently periodic output... where
- * the dropped bytes are indistinguishable from their neighbours anyway" — bounded and
- * understood, not eliminated.
+ * indistinguishable byte-for-byte from a short redraw, can still be discarded — and that loss is
+ * total, per the paragraph above, not partial). That residual is the same shape this module
+ * already accepts elsewhere: "violently periodic output... where the dropped bytes are
+ * indistinguishable from their neighbours anyway" — bounded and understood, not eliminated.
  *
  * Detection is unchanged — `planReplayEmission`/`flushReplay` still decide alignment purely
- * from bytes, with no notion of where the attach came from or how large the burst is. This is
- * the decision layered on top of a give-up they already produced, so the caller can still
- * record the bytes as history (a give-up is itself a contiguous run of the stream — see
- * `deliver`'s `restart` doc) without being forced to also show them.
+ * from bytes, with no notion of where the attach came from, how large the burst is, or how many
+ * downstream consumers exist. This is the decision layered on top of a give-up they already
+ * produced, so the caller can still record the bytes as history (a give-up is itself a
+ * contiguous run of the stream — see `deliver`'s `restart` doc) without being forced to also
+ * show them.
  */
 export function resolveGiveUpAction({
   attachKind,

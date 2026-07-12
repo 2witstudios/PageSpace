@@ -16,6 +16,7 @@ import {
   resolveGiveUpAction,
   type AttachKind,
   type GiveUpCause,
+  type ReplayEmission,
   type ReplayState,
   type SeenTail,
 } from './replay-dedupe';
@@ -452,8 +453,14 @@ export function openPtyShell({
      * A give-up's terminal action, resolved by `attachKind` AND burst size (see
      * `resolveGiveUpAction`): shown (today's baseline — a fresh session, this shell's first
      * attach, or a burst too large to plausibly be a mere redraw), or discarded (a small give-up
-     * on a transparent in-place reconnect, where the viewer has already been shown every byte a
-     * redraw-sized replay could carry).
+     * on a transparent in-place reconnect).
+     *
+     * Discarding means these bytes never reach `onOutput` at all — not "shown to someone else
+     * instead." `onOutput` is the ONE sink this shell has (the caller wires it to both the live
+     * viewer and whatever app-level scrollback buffer a later viewer catches up from — see
+     * `agent-terminal-handler.ts`'s `attachToLiveSession`), so a discard is total loss from every
+     * consumer of it, not just the connection whose reconnect triggered the give-up. That is the
+     * bet `resolveGiveUpAction`'s size bound is deliberately scoped around — see its own doc.
      *
      * Either way the history RESTARTS to these bytes: a give-up's bytes ARE a contiguous run
      * of the stream regardless of whether they are shown, and recording them (via
@@ -467,14 +474,25 @@ export function openPtyShell({
       else deliver(emit, 'restart');
     };
 
+    /**
+     * The dispatch every `ReplayEmission` (from either `planReplayEmission` or `flushReplay`)
+     * goes through: a give-up is SETTLED (shown or discarded, by `settleGiveUp`); anything else
+     * — the aligned/suppress-nothing case, and the "nothing to dedupe" pass-through — is just
+     * delivered. Shared by both call sites (the live `stdout` handler and `closeReplayWindow`)
+     * so the two can't drift out of sync on what counts as a give-up.
+     */
+    const resolveEmission = ({ emit, history, giveUp }: Pick<ReplayEmission, 'emit' | 'history' | 'giveUp'>) => {
+      if (giveUp !== undefined) settleGiveUp(emit, giveUp);
+      else deliver(emit, history);
+    };
+
     /** Close the replay window: hand over whatever we were still holding. */
     const closeReplayWindow = () => {
       cancelTimers();
       if (closed) return;
       const { emit, state, history, giveUp } = flushReplay(replay);
       replay = state;
-      if (giveUp !== undefined) settleGiveUp(emit, giveUp);
-      else deliver(emit, history);
+      resolveEmission({ emit, history, giveUp });
       releaseOutOfBand();
     };
 
@@ -543,9 +561,9 @@ export function openPtyShell({
       // A give-up has to be SETTLED here rather than just delivered: the byte-cap give-up
       // resolves the window inside the pure core, so `closeReplayWindow` — and its report —
       // never runs. Without this the one failure the cap exists to catch would be the only one
-      // that happens silently. `settleGiveUp` also decides show-vs-discard by `attachKind`.
-      if (giveUp !== undefined) settleGiveUp(emit, giveUp);
-      else deliver(emit, history);
+      // that happens silently. `settleGiveUp` (via `resolveEmission`) also decides
+      // show-vs-discard by `attachKind` and burst size.
+      resolveEmission({ emit, history, giveUp });
       if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over: on the
       // next quiet gap, and on a deadline a chatty shell cannot push out by talking.
