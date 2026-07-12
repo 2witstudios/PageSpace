@@ -963,16 +963,23 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([BANNER]);
     });
 
-    it('given a reconnect attach that dies BEFORE it opens, keeps the history (an empty flush must not wipe it)', async () => {
+    it('given a reconnect attach that dies BEFORE it opens, says nothing and keeps deduping', async () => {
       // A pre-open drop (cold Sprite wake, flapping WS) reaches closeReplayWindow on a command
-      // that never received a byte, and the window closes over an empty hold. What this test
-      // pins is `deliver`'s zero-length early return, which runs BEFORE the restart wipe: an
-      // emission of no bytes must never replace the history, or one silent socket would erase
-      // the anchor and the next attach would reprint the whole scrollback — the bug this module
-      // exists to remove, fired by a socket that said nothing at all. (Delete that early return
-      // and this test fails; it fires three times here.) `flushReplay` refusing to CALL an empty
-      // flush a give-up is the other half — it stops a reprint being reported that never
-      // happened — and that half is pinned in the pure test, not this one.
+      // that never received a byte, so the window closes over an empty hold. Two guards stand
+      // between that and disaster, and they are REDUNDANT — established by mutation, because the
+      // previous two attempts at this comment each credited the wrong one:
+      //
+      //   - `flushReplay` refuses to call an empty flush a give-up (it returns 'append'), so the
+      //     caller is never told to restart a history from nothing. Delete it alone and every
+      //     shell test still passes — only the pure test fails.
+      //   - `deliver` returns on zero bytes BEFORE it would wipe. Delete it alone and the banner
+      //     is still deduped; this test fails only because empty strings now reach `onOutput`
+      //     (eleven shell tests do).
+      //
+      // Delete BOTH and the anchor is erased and the scrollback reprints: the bug this module
+      // exists to remove, fired by a socket that said nothing at all. So what this test actually
+      // discriminates is the emission — a silent socket must produce no output and leave the next
+      // attach still deduping. The history property it is named for is held twice over.
       const cmd = buildFakeCommand();
       const dies = buildFakeCommand();
       const replays = buildFakeCommand();
@@ -1445,7 +1452,7 @@ describe('openPtyShell', () => {
     });
 
     it('given a session with FAR more history than the anchor, still dedupes a full-ring replay', async () => {
-      // Every other shell test here uses a 33-byte banner, i.e. `seen` smaller than
+      // Most shell tests here use a 33-byte banner, i.e. `seen` smaller than
       // MAX_ANCHOR_BYTES — the regime where the anchor is the whole of `seen` and
       // trivially matches. Production leaves that regime within seconds. This is the
       // real shape: a long-running session, an 8 KiB anchor taken from the tail of a
