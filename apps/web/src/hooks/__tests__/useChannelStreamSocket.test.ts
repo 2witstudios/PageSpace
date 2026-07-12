@@ -244,8 +244,18 @@ describe('useChannelStreamSocket', () => {
 
     it('should call removeStream and onStreamComplete after consumeStreamJoin resolves', async () => {
       let resolveJoin!: () => void;
-      mockConsumeStreamJoin.mockReturnValue(
-        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      // A successful join to a live stream always delivers at least the buffered prefix (the SSE
+      // route replays it synchronously on subscribe). A join that delivers NOTHING means our copy
+      // is not authoritative — the hook now reports joinFailed so consumers reload from the DB
+      // rather than rendering the stale, debounced seed. Model the delivery.
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) =>
+          new Promise<{ aborted: boolean }>((res) => {
+            resolveJoin = () => {
+              onChunk({ type: 'text', text: 'hello' });
+              res({ aborted: false });
+            };
+          }),
       );
       const onStreamComplete = vi.fn();
 
@@ -260,8 +270,18 @@ describe('useChannelStreamSocket', () => {
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (SSE path)', async () => {
       let resolveJoin!: () => void;
-      mockConsumeStreamJoin.mockReturnValue(
-        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      // A real join DELIVERS at least one part — that is how the store gets the data this test is
+      // about. A join that delivers nothing leaves only the seeded (debounced, possibly shorter)
+      // DB snapshot, which is not authoritative, so the hook now drops it and lets consumers
+      // reload from the DB instead of rendering a truncated bubble.
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) =>
+          new Promise<{ aborted: boolean }>((res) => {
+            resolveJoin = () => {
+              onChunk({ type: 'text', text: 'hello' });
+              res({ aborted: false });
+            };
+          }),
       );
       const callOrder: string[] = [];
       mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
@@ -730,23 +750,39 @@ describe('useChannelStreamSocket', () => {
   });
 
   describe('chat:stream_complete', () => {
-    it('should call removeStream and onStreamComplete', () => {
+    it('should call removeStream and onStreamComplete, reporting joinFailed for a stream we never joined', () => {
       const onStreamComplete = vi.fn();
       renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
 
+      // No stream_start, no join: we hold no authoritative copy of this stream, so `joinFailed`
+      // is TRUE — that flag means "our parts are not the source of truth, reload from the DB",
+      // not "the network failed". Consumers behave identically either way here (there is no store
+      // entry, so they take the reload branch regardless); the flag now simply tells the truth.
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
     });
 
-    it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', () => {
+    it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', async () => {
       const callOrder: string[] = [];
-      mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
+      // The stream must actually have been joined AND delivered content — otherwise there is no
+      // "stream data" for the callback to see, and the hook deliberately drops the entry so
+      // consumers reload the authoritative message from the DB.
+      let deliver!: () => void;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) =>
+          new Promise<{ aborted: boolean }>(() => {
+            deliver = () => onChunk({ type: 'text', text: 'hello' });
+          }),
+      );
       const onStreamComplete = vi.fn(() => { callOrder.push('onStreamComplete'); });
 
       renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); deliver(); });
 
+      mockRemoveStream.mockImplementation(() => { callOrder.push('removeStream'); });
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(callOrder).toEqual(['onStreamComplete', 'removeStream']);

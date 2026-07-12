@@ -7,6 +7,10 @@
 
 export {
   usePageAgentDashboardStore,
+  selectIsAgentStreaming,
+  agentStreamKey,
+  type AgentStreamKey,
+  selectAgentStop,
   type AgentInfo,
   type SidebarTab,
 } from './usePageAgentDashboardStore';
