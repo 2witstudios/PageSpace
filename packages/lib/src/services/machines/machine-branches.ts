@@ -33,6 +33,7 @@ import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement, FullEgressDenialReason } from '../sandbox/containment';
 import type { CodeExecutionAuditInput } from '../sandbox/audit';
 import { deriveBranchSessionKey, normalizeBranchName } from './branch-session';
+import { normalizeProjectName } from './project-paths';
 import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } from './machine-branches-store';
 
 /** The directory on a branch-terminal's OWN Sprite the project is cloned into. */
@@ -229,7 +230,7 @@ async function reconcileProvisionCollision({
  */
 export async function spawnBranch({
   machineId,
-  projectName,
+  projectName: requestedProjectName,
   branchName: requestedBranchName,
   actor,
   deps,
@@ -242,6 +243,12 @@ export async function spawnBranch({
 }): Promise<SpawnBranchResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'kill_switch_off' };
 
+  // Both names are free text. `addProject` persists the CANONICAL project name,
+  // so the lookup key must be normalized the same way or free text that created
+  // a project could never spawn a branch in it. Canonical names (what the UI
+  // sends, straight from `listProjects`) pass through unchanged — normalization
+  // is idempotent.
+  const projectName = normalizeProjectName(requestedProjectName);
   const branchName = normalizeBranchName(requestedBranchName);
 
   const project = await deps.projectStore.findByName(machineId, projectName);
@@ -350,8 +357,9 @@ export async function attachBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<AttachBranchResult> {
+  const project = normalizeProjectName(projectName);
   const normalized = normalizeBranchName(branchName);
-  const existing = await store.findByName(machineId, projectName, normalized);
+  const existing = await store.findByName(machineId, project, normalized);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   const handle = await host.attach({ machineId: existing.sandboxId });
@@ -359,6 +367,7 @@ export async function attachBranch({
   return { ok: true, sandboxId: handle.machineId, branchName: normalized };
 }
 
+/** List a project's branch-terminals. Normalizes the project key like every other name-keyed lookup. */
 export async function listBranches({
   machineId,
   projectName,
@@ -368,7 +377,7 @@ export async function listBranches({
   projectName: string;
   store: MachineBranchStore;
 }): Promise<MachineBranchRecord[]> {
-  return store.list(machineId, projectName);
+  return store.list(machineId, normalizeProjectName(projectName));
 }
 
 export type KillBranchResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
@@ -392,8 +401,9 @@ export async function killBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<KillBranchResult> {
+  const project = normalizeProjectName(projectName);
   const normalized = normalizeBranchName(branchName);
-  const existing = await store.findByName(machineId, projectName, normalized);
+  const existing = await store.findByName(machineId, project, normalized);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
@@ -405,6 +415,6 @@ export async function killBranch({
     return { ok: false, reason: 'error' };
   }
 
-  await store.remove(machineId, projectName, normalized);
+  await store.remove(machineId, project, normalized);
   return { ok: true };
 }

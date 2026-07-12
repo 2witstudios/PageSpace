@@ -234,6 +234,31 @@ describe('spawnBranch', () => {
     expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'My Cool Feature')).toBeNull();
   });
 
+  it('given free text as the PROJECT name, should normalize the lookup and find the project', async () => {
+    // `addProject` persists the canonical project name, so free text that
+    // created a project must also be able to spawn a branch in it.
+    const lookedUp: string[] = [];
+    const { deps } = makeDeps({
+      projectStore: {
+        findByName: async (_machineId: string, name: string) => {
+          lookedUp.push(name);
+          return name === 'my-cool-feature' ? { repoUrl: REPO_URL } : null;
+        },
+      },
+    });
+
+    const result = await spawnBranch({
+      machineId: TERMINAL_ID,
+      projectName: 'My Cool Feature',
+      branchName: 'main',
+      actor,
+      deps,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(lookedUp).toEqual(['my-cool-feature']);
+  });
+
   it('given a hostile branch name, should normalize it into a safe ref instead of erroring', async () => {
     const { deps, store } = makeDeps({});
     const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: '../etc', actor, deps });
