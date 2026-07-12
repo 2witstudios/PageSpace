@@ -77,6 +77,7 @@ function makeHandle(files: Record<string, string>): { handle: MachineHandle; rea
       const content = files[path];
       return content === undefined ? null : Buffer.from(content, 'utf8');
     },
+    createCheckpoint: async () => {},
     stream: async () => {
       throw new Error('not used');
     },

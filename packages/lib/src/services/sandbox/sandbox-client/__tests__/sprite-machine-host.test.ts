@@ -77,7 +77,7 @@ function fakeSprite(over: Partial<SpriteInstanceLike> = {}): SpriteInstanceLike 
     listSessions: async () => [],
     filesystem: () => ({ readFile: async () => Buffer.from(''), writeFile: async () => {}, mkdir: async () => {} }),
     updateNetworkPolicy: async () => {},
-    createCheckpoint: async () => ({ processAll: async () => {} }),
+    createCheckpoint: async () => ({ processAll: async () => {}, close: () => {} }),
     destroy: async () => {},
     ...over,
   };

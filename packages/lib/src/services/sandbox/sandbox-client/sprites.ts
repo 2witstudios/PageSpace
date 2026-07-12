@@ -255,6 +255,9 @@ export interface SpriteCheckpointStreamMessage {
 
 export interface SpriteCheckpointStreamLike {
   processAll(handler: (message: SpriteCheckpointStreamMessage) => void | Promise<void>): Promise<void>;
+  /** Close the stream — called on a timeout so a stalled read doesn't hold the
+   *  underlying connection open past the point we've given up waiting on it. */
+  close(): void;
 }
 
 /** The Sprite instance subset the driver consumes. */
@@ -707,6 +710,15 @@ export function checkpointStreamErrorMessage(message: SpriteCheckpointStreamMess
   return message.error ?? message.data ?? 'checkpoint stream reported an error';
 }
 
+/**
+ * Wall-clock cap on `ExecutableSandbox.createCheckpoint` (the `createCheckpoint`
+ * call plus draining its stream). The SDK exposes no timeout or abort handle
+ * for either step, so this driver enforces one itself — see the call site's
+ * doc for why a bound is needed here in addition to the shell's own (P2
+ * review finding, PR #2025).
+ */
+const CHECKPOINT_TIMEOUT_MS = 10_000;
+
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
@@ -764,16 +776,58 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
       // policy (never block the caller's batch on this) is the SHELL's
       // decision (tool-runners.ts), not this driver's — this method faithfully
       // reports success or failure.
-      const stream = await sprite.createCheckpoint(comment);
-      let streamError: string | undefined;
-      await stream.processAll((message) => {
-        if (streamError === undefined) {
-          streamError = checkpointStreamErrorMessage(message);
+      //
+      // Bounded by CHECKPOINT_TIMEOUT_MS: the SDK exposes no timeout or abort
+      // handle for either `createCheckpoint` or the stream it returns, so a
+      // stalled connection would otherwise hang this call forever — the
+      // shell's own timeout (tool-runners.ts) already stops the CALLER from
+      // blocking on that, but without a bound HERE too the abandoned stream
+      // read lingers in the background indefinitely, holding whatever
+      // connection/socket resource it holds. On timeout we best-effort close
+      // the stream (if we got one) to release that resource instead of
+      // leaving it to read forever nobody is listening to.
+      let stream: SpriteCheckpointStreamLike | undefined;
+      const drain = async (): Promise<void> => {
+        stream = await sprite.createCheckpoint(comment);
+        let streamError: string | undefined;
+        await stream.processAll((message) => {
+          if (streamError === undefined) {
+            streamError = checkpointStreamErrorMessage(message);
+          }
+        });
+        if (streamError !== undefined) {
+          throw new Error(`Sandbox checkpoint failed: ${streamError}`);
         }
+      };
+
+      let settled = false;
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try {
+            stream?.close();
+          } catch {
+            // Best-effort cleanup only; the timeout error below is what
+            // actually propagates.
+          }
+          reject(new Error(`Sandbox checkpoint timed out after ${CHECKPOINT_TIMEOUT_MS}ms`));
+        }, CHECKPOINT_TIMEOUT_MS);
+        drain().then(
+          () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve();
+          },
+          (error) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reject(error);
+          },
+        );
       });
-      if (streamError !== undefined) {
-        throw new Error(`Sandbox checkpoint failed: ${streamError}`);
-      }
     },
   };
 }

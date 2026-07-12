@@ -5,6 +5,7 @@ import {
   readSandboxFile,
   editSandboxFile,
   MAX_WRITE_BYTES,
+  CHECKPOINT_TIMEOUT_MS,
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
@@ -681,6 +682,76 @@ describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 
     await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
     await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
     expect(attempts).toBe(2);
+    expect(created).toHaveLength(1);
+  });
+
+  // Regression test for a P2 finding on PR #2025 (chatgpt-codex-connector): a
+  // checkpoint call that never settles must never block the batch — the
+  // fail-open guarantee documented on maybeCheckpointBeforeBatch would
+  // otherwise be violated by an indefinitely hung checkpoint stream.
+  it('given a checkpoint call that never settles, still proceeds with the batch after CHECKPOINT_TIMEOUT_MS (fail-open)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { checkpoint, created } = makeCheckpointDeps({
+        createCheckpoint: () => new Promise(() => {}), // never resolves
+      });
+      const warnings: Array<[string, Record<string, unknown> | undefined]> = [];
+      const { deps } = makeDeps({
+        checkpoint,
+        logger: {
+          error: () => {},
+          warn: (message, metadata) => {
+            warnings.push([message, metadata]);
+          },
+        },
+      });
+
+      const resultPromise = runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+      const assertion = expect(resultPromise).resolves.toMatchObject({ success: true, stdout: 'ok' });
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_TIMEOUT_MS);
+      await assertion;
+
+      expect(created).toEqual([]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0][0]).toMatch(/checkpoint/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Regression test for a P2 finding on PR #2025 (2 independent review
+  // agents): the AI SDK can execute multiple tool calls from one agent step
+  // concurrently, so two bash calls in the SAME turn must still checkpoint
+  // at most once even when dispatched together (Promise.all), not just when
+  // dispatched sequentially (already covered above).
+  it('given two bash calls in the SAME turn dispatched concurrently, still checkpoints at most once', async () => {
+    let createCalls = 0;
+    let releaseCheckpoint: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseCheckpoint = resolve;
+    });
+    const { checkpoint, created } = makeCheckpointDeps({
+      createCheckpoint: async ({ sandbox, comment }) => {
+        createCalls += 1;
+        await gate; // hold both concurrent callers here until released together
+        created.push({ sandboxId: sandbox.sandboxId, comment });
+      },
+    });
+    const { deps } = makeDeps({ checkpoint });
+
+    const first = runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+    const second = runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+    // Give both calls a chance to reach (and coalesce on) the checkpoint attempt.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(createCalls).toBe(1); // coalesced — not 2, even though both calls raced past the throttle check
+
+    releaseCheckpoint?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult).toMatchObject({ success: true });
+    expect(secondResult).toMatchObject({ success: true });
     expect(created).toHaveLength(1);
   });
 });

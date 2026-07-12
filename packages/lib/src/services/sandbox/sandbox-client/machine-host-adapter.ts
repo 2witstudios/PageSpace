@@ -35,14 +35,7 @@ export function adaptMachineHandleToExecutableSandbox(handle: MachineHandle): Ex
     runCommand: (args) => handle.exec(args),
     writeFiles: (files) => handle.writeFiles(files),
     readFileToBuffer: (args) => handle.readFile(args),
-    // `MachineHandle.createCheckpoint` is optional (a future non-Sprite backend
-    // need not support it); `ExecutableSandbox.createCheckpoint` is not, so a
-    // backend that omits it rejects rather than silently no-opping — a caller
-    // relying on the checkpoint (even fail-open) should see why it never ran.
-    createCheckpoint: (comment) =>
-      handle.createCheckpoint
-        ? handle.createCheckpoint(comment)
-        : Promise.reject(new Error('This machine backend does not support checkpoints.')),
+    createCheckpoint: (comment) => handle.createCheckpoint(comment),
   };
 }
 

@@ -288,46 +288,20 @@ export function createResolveSandboxActorContext(
       return { error: 'Code execution requires an active drive.' };
     }
 
-    // driveId present for both page AI and global AI: resolve tenantId from the
-    // drive's owning account. Both surfaces share identical resolution logic here.
-    if (driveId) {
-      const [drive, actorRow, actorInfo] = await Promise.all([
-        deps.findDrive(driveId),
-        deps.findUser(userId),
-        deps.getActorInfo(userId),
-      ]);
-      if (!drive) return { error: 'Code execution requires an active drive.' };
-
-      return {
-        userId,
-        tenantId: drive.ownerId,
-        driveId,
-        conversationId,
-        requestOrigin: context?.requestOrigin,
-        agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
-        actorEmail: actorInfo.actorEmail,
-        actorDisplayName: actorInfo.actorDisplayName,
-        aiProvider: context?.aiProvider,
-        aiModel: context?.aiModel,
-        tier: toTier(actorRow?.subscriptionTier),
-        turnId,
-      };
-    }
-
-    // Global AI without a drive: user is their own isolation boundary.
-    // tenantId = userId keeps the session key and quota scopes user-owned.
-    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
-    // a second user-keyed window alongside code-exec:user:<userId>. This
-    // over-counts conservatively (only tightens budget) and is acceptable while
-    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
-    const [actorRow, actorInfo] = await Promise.all([
+    // One parallel fetch covers both branches below: `findDrive` only runs a
+    // real query when driveId is present (an immediately-resolved undefined
+    // otherwise), so this preserves the original concurrency — findDrive,
+    // findUser, and getActorInfo all in flight together — without duplicating
+    // the actor lookup + result-object construction per branch.
+    const [drive, actorRow, actorInfo] = await Promise.all([
+      driveId ? deps.findDrive(driveId) : Promise.resolve(undefined),
       deps.findUser(userId),
       deps.getActorInfo(userId),
     ]);
+    if (driveId && !drive) return { error: 'Code execution requires an active drive.' };
 
-    return {
+    const base = {
       userId,
-      tenantId: userId,
       conversationId,
       requestOrigin: context?.requestOrigin,
       agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
@@ -338,6 +312,20 @@ export function createResolveSandboxActorContext(
       tier: toTier(actorRow?.subscriptionTier),
       turnId,
     };
+
+    // driveId present for both page AI and global AI: tenantId is the drive's
+    // owning account. Both surfaces share identical resolution logic here.
+    if (driveId) {
+      return { ...base, tenantId: drive!.ownerId, driveId };
+    }
+
+    // Global AI without a drive: user is their own isolation boundary.
+    // tenantId = userId keeps the session key and quota scopes user-owned.
+    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
+    // a second user-keyed window alongside code-exec:user:<userId>. This
+    // over-counts conservatively (only tightens budget) and is acceptable while
+    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
+    return { ...base, tenantId: userId };
   };
 }
 

@@ -9,10 +9,13 @@
  * that from a bricked machine into a restore (restore itself is a separate,
  * manual/admin action; this leaf only creates the safety net, never uses it).
  *
- * Pure core (this file): the throttle decision and the checkpoint's tagged
- * comment. IO — the actual SDK call, and where the per-sandbox bookkeeping is
- * read/written — lives in the shell (`tool-runners.ts`'s `SandboxCheckpointDeps`
- * seam, wired to the in-process state below by default).
+ * Pure core (this file): the throttle decision (`shouldCheckpoint`) and the
+ * checkpoint's tagged comment (`checkpointComment`). The rest of this file is
+ * in-process, stateful bookkeeping (the per-sandbox state map + the
+ * concurrent-attempt coalescing below it) — still no IO of its own, but not
+ * pure either. The actual SDK call lives in the shell
+ * (`tool-runners.ts`'s `SandboxCheckpointDeps` seam, wired to the state below
+ * by default).
  */
 
 /** Recognizable prefix for a pre-batch checkpoint's comment, so a human browsing
@@ -97,16 +100,44 @@ export interface CheckpointState {
 const EMPTY_STATE: CheckpointState = { lastCheckpointAt: null, lastCheckpointTurnId: null };
 
 /**
- * In-process, per-sandbox checkpoint bookkeeping — mirrors `quota.ts`'s
- * `machineActivityByKey`: a plain Map, no persistence, no reaper. This is
- * intentionally NOT the platform's own checkpoint list (which the leaf
- * explicitly declines to reap — see the leaf spec's "rely on platform
- * auto-pruning" requirement); it only tracks enough to enforce the
+ * In-process, per-sandbox checkpoint bookkeeping — a plain Map, no
+ * persistence. This is intentionally NOT the platform's own checkpoint list
+ * (which the leaf explicitly declines to reap — see the leaf spec's "rely on
+ * platform auto-pruning" requirement); it only tracks enough to enforce the
  * at-most-once-per-turn throttle above. Scoped to the process lifetime: a
  * restart simply re-checkpoints on the next batch, which is harmless (COW,
  * ~300ms) and strictly safer than under-checkpointing.
  */
 const stateBySandboxId = new Map<string, CheckpointState>();
+
+/**
+ * How long a sandbox's checkpoint bookkeeping may sit unused before an
+ * opportunistic sweep reclaims it — mirrors `quota.ts`'s
+ * `evictStaleMachineActivity`/`MACHINE_ACTIVITY_GRACE_MS` pattern (this map
+ * has no symmetric acquire/release either, so eviction has to be
+ * opportunistic). Sandboxes are long-lived and reused across many turns, so
+ * this is deliberately generous — the only failure mode of evicting too
+ * early is one harmless redundant checkpoint on the next batch (same
+ * "re-checkpointing after a restart is safe" property documented above),
+ * never a missed one.
+ */
+const CHECKPOINT_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Opportunistic sweep: drop any entry whose last checkpoint is older than
+ * `CHECKPOINT_STATE_TTL_MS`, so the map is bounded by recently-active
+ * sandboxes rather than every sandbox ever checkpointed in this process's
+ * lifetime. Run from `recordCheckpoint`, using ITS `now` as the reference
+ * instant — every real checkpoint is a natural opportunity to reclaim other
+ * long-idle entries.
+ */
+function evictStaleCheckpointState(now: Date): void {
+  for (const [sandboxId, state] of stateBySandboxId) {
+    if (state.lastCheckpointAt !== null && now.getTime() - state.lastCheckpointAt.getTime() > CHECKPOINT_STATE_TTL_MS) {
+      stateBySandboxId.delete(sandboxId);
+    }
+  }
+}
 
 /** Read the last-checkpoint bookkeeping for `sandboxId`, or the empty state if never recorded. */
 export function getCheckpointState(sandboxId: string): CheckpointState {
@@ -115,10 +146,43 @@ export function getCheckpointState(sandboxId: string): CheckpointState {
 
 /** Record that `sandboxId` was just checkpointed for `lastCheckpointTurnId` at `lastCheckpointAt`. */
 export function recordCheckpoint(sandboxId: string, state: CheckpointState): void {
+  if (state.lastCheckpointAt !== null) evictStaleCheckpointState(state.lastCheckpointAt);
   stateBySandboxId.set(sandboxId, state);
 }
 
-/** Clear all recorded checkpoint state. Test-only seam. */
+const inFlightBySandboxId = new Map<string, Promise<void>>();
+
+/**
+ * Coalesce concurrent checkpoint attempts for the SAME sandbox onto a single
+ * in-flight promise.
+ *
+ * The AI SDK can execute multiple tool calls from one agent step
+ * concurrently, so two bash calls in the same turn can both pass
+ * `shouldCheckpoint`'s synchronous check before either finishes its
+ * checkpoint — without this, both would independently call the checkpoint
+ * SDK, producing two checkpoints for one turn (a real regression found in
+ * review on PR #2025). `attempt`'s registration in `inFlightBySandboxId`
+ * happens SYNCHRONOUSLY relative to the caller (no `await` before the
+ * `.set()` below), so whichever concurrent caller's synchronous call stack
+ * reaches this function first always wins the registration, and every other
+ * concurrent caller for the same sandbox reuses that SAME promise instead of
+ * starting a redundant attempt — closing the check-then-act race regardless
+ * of exact timing between callers. The entry is removed once `attempt`
+ * settles (success OR failure), so the next, non-overlapping attempt starts
+ * fresh rather than being permanently coalesced onto a long-dead promise.
+ */
+export function coalesceCheckpointAttempt(sandboxId: string, attempt: () => Promise<void>): Promise<void> {
+  const existing = inFlightBySandboxId.get(sandboxId);
+  if (existing) return existing;
+  const promise = attempt().finally(() => {
+    if (inFlightBySandboxId.get(sandboxId) === promise) inFlightBySandboxId.delete(sandboxId);
+  });
+  inFlightBySandboxId.set(sandboxId, promise);
+  return promise;
+}
+
+/** Clear all recorded checkpoint state (including in-flight coalescing). Test-only seam. */
 export function resetCheckpointState(): void {
   stateBySandboxId.clear();
+  inFlightBySandboxId.clear();
 }

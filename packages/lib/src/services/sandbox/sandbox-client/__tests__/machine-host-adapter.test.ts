@@ -12,6 +12,7 @@ function fakeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async () => null,
+    createCheckpoint: async () => {},
     stream: async () => {
       throw new Error('not used by this adapter');
     },
@@ -108,5 +109,22 @@ describe('createExecClientFromMachineHost', () => {
     expect(seen.writeFiles).toEqual([[{ path: '/a', content: 'x' }]]);
     expect(seen.readFile).toEqual([{ path: '/a' }]);
     expect(buf?.toString('utf8')).toBe('contents');
+  });
+
+  it('given the adapted handle, should delegate createCheckpoint to the underlying handle', async () => {
+    const seen: Array<string> = [];
+    const { host } = makeHost({
+      provision: async () =>
+        fakeHandle({
+          createCheckpoint: async (comment) => {
+            seen.push(comment);
+          },
+        }),
+    });
+    const client = createExecClientFromMachineHost(host, substrate);
+    const handle = await client.getOrCreate({ name: 'k', options });
+
+    await handle.createCheckpoint('pagespace-pre-agent-turn-1');
+    expect(seen).toEqual(['pagespace-pre-agent-turn-1']);
   });
 });

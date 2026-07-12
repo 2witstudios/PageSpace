@@ -31,7 +31,12 @@ import { truncateToBytes } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
-import { shouldCheckpoint, checkpointComment, type CheckpointState } from './checkpoint-policy';
+import {
+  shouldCheckpoint,
+  checkpointComment,
+  coalesceCheckpointAttempt,
+  type CheckpointState,
+} from './checkpoint-policy';
 import { getValidatedEnv } from '../../config/env-validation';
 import {
   resolveMachinePageId,
@@ -511,17 +516,51 @@ async function openSession(
 }
 
 /**
+ * Wall-clock cap on the checkpoint SDK call, so a stalled checkpoint can never
+ * violate `maybeCheckpointBeforeBatch`'s fail-open guarantee below (P2 review
+ * finding, PR #2025: without this, an `await` on a hung checkpoint stream
+ * never reaches the `catch`, so the bash command never starts and the
+ * quota/billing slot stays held until the outer request times out — the
+ * opposite of "never block agent work on checkpoint availability"). Generous
+ * relative to the platform's documented ~300ms COW checkpoint time, but far
+ * short of a bash command's own timeout (`SANDBOX_TIMEOUT_MS`, 120s) so a
+ * hang can't eat meaningfully into the user's command budget. This bounds the
+ * PROMISE from the caller's perspective regardless of what `deps.checkpoint`
+ * happens to be wired to; the production Sprites driver (`sprites.ts`)
+ * additionally bounds and cleans up the underlying stream itself.
+ */
+export const CHECKPOINT_TIMEOUT_MS = 10_000;
+
+function withCheckpointTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Checkpoint timed out after ${ms}ms`)), ms);
+    p.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/**
  * Best-effort, fail-open pre-batch checkpoint: if `deps.checkpoint` is wired,
  * the flag is on, and the pure `shouldCheckpoint` policy says this turn hasn't
  * been checkpointed yet, snapshot the sandbox's filesystem BEFORE the bash
  * batch executes (never after — the whole point is a state to restore TO).
  *
  * A missing `ctx.turnId` skips checkpointing outright rather than guessing at
- * a turn boundary. Any failure (state read, the checkpoint SDK call itself) is
- * logged and swallowed — this must never block or fail the caller's batch on
- * checkpoint availability. On success the bookkeeping is recorded so a later
- * batch in the SAME turn does not re-checkpoint; on failure nothing is
+ * a turn boundary. Any failure (state read, a timeout, the checkpoint SDK
+ * call itself) is logged and swallowed — this must never block or fail the
+ * caller's batch on checkpoint availability (bounded by
+ * `CHECKPOINT_TIMEOUT_MS` above). On success the bookkeeping is recorded so a
+ * later batch in the SAME turn does not re-checkpoint; on failure nothing is
  * recorded, so a later batch in the same turn gets another attempt.
+ *
+ * The actual attempt is wrapped in `coalesceCheckpointAttempt` so concurrent
+ * tool calls in one turn (the AI SDK can execute several bash calls from one
+ * agent step in parallel) share a single checkpoint instead of each
+ * independently passing the synchronous `shouldCheckpoint` check and racing
+ * to create their own — see that function's doc for why this closes the race
+ * regardless of exact timing between callers.
  */
 async function maybeCheckpointBeforeBatch({
   ctx,
@@ -547,8 +586,13 @@ async function maybeCheckpointBeforeBatch({
     ) {
       return;
     }
-    await checkpoint.createCheckpoint({ sandbox, comment: checkpointComment(turnId) });
-    checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: deps.now(), lastCheckpointTurnId: turnId });
+    await coalesceCheckpointAttempt(sandbox.sandboxId, async () => {
+      await withCheckpointTimeout(
+        checkpoint.createCheckpoint({ sandbox, comment: checkpointComment(turnId) }),
+        CHECKPOINT_TIMEOUT_MS,
+      );
+      checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: deps.now(), lastCheckpointTurnId: turnId });
+    });
   } catch (error) {
     safeLogWarn(deps.logger, 'Pre-agent checkpoint failed (proceeding without one)', {
       sandboxId: sandbox.sandboxId,
