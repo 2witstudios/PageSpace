@@ -33,13 +33,13 @@ vi.mock('@/components/editors/MonacoEditor', () => ({
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import CodeFilePane from './CodeFilePane';
+import FilesFilePane from './FilesFilePane';
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 const renderPane = (path = 'src/index.ts') =>
-  render(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path={path} />);
+  render(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path={path} />);
 
 const requested = (call: unknown[], param: string): string | null =>
   new URL(String(call[0]), 'http://test').searchParams.get(param);
@@ -53,7 +53,7 @@ const deferredResponse = () => {
   return { promise, resolve };
 };
 
-describe('CodeFilePane', () => {
+describe('FilesFilePane', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     monacoRenders.length = 0;
@@ -182,7 +182,7 @@ describe('CodeFilePane', () => {
     const { rerender } = renderPane('a.ts');
     await waitFor(() => screen.getByTestId('monaco'));
 
-    rerender(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.ts" />);
+    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.ts" />);
     await waitFor(() => {
       const lastPath = requested(vi.mocked(fetchWithAuth).mock.calls.at(-1) ?? [], 'path');
       if (lastPath !== 'b.ts') throw new Error('new path not fetched yet');
@@ -209,7 +209,7 @@ describe('CodeFilePane', () => {
       .mockResolvedValueOnce(jsonResponse({ content: 'the file I clicked second', encoding: 'utf8', truncated: false }));
 
     const { rerender } = renderPane('slow.ts');
-    rerender(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path="quick.ts" />);
+    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="quick.ts" />);
     await waitFor(() => screen.getByTestId('monaco'));
 
     // Only NOW does the abandoned first read resolve. Flush inside act() so any
@@ -252,7 +252,7 @@ describe('CodeFilePane', () => {
     const { rerender } = renderPane('assets/logo.png');
     await waitFor(() => screen.getByTestId('binary-file'));
 
-    rerender(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path="src/a.ts" />);
+    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="src/a.ts" />);
     const monaco = await waitFor(() => screen.getByTestId('monaco'));
 
     assert({
@@ -340,7 +340,7 @@ describe('CodeFilePane', () => {
     const { rerender } = renderPane('a.ts');
     await waitFor(() => screen.getByText('contents of a.ts'));
 
-    rerender(<CodeFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.py" />);
+    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.py" />);
     await waitFor(() => screen.getByText('Loading file…'));
 
     assert({

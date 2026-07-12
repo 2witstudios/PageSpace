@@ -23,7 +23,7 @@ function tabDouble(name: string) {
 }
 
 vi.mock('./tabs/TerminalTab', () => ({ default: tabDouble('terminal') }));
-vi.mock('./tabs/CodeTab', () => ({ default: tabDouble('code') }));
+vi.mock('./tabs/FilesTab', () => ({ default: tabDouble('files') }));
 vi.mock('./tabs/DiffTab', () => ({ default: tabDouble('diff') }));
 vi.mock('./tabs/SettingsTab', () => ({ default: tabDouble('settings') }));
 
@@ -48,6 +48,7 @@ vi.mock('motion/react', () => ({
 }));
 
 import MachineView from './MachineView';
+import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
 
 const asAdmin = () => mockUseAuth.mockReturnValue({ user: { role: 'admin' } });
 
@@ -55,6 +56,9 @@ describe('MachineView (Machine 4-tab shell)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lifecycle.length = 0;
+    // The active tab now lives in a module-singleton store, so a test that
+    // switches tabs would otherwise leave the next one parked on that tab.
+    useMachineTabStore.setState({ tabs: {} });
   });
 
   test('mounts only the Terminal tab body on load — not all four', () => {
@@ -63,7 +67,7 @@ describe('MachineView (Machine 4-tab shell)', () => {
 
     assert({
       given: 'a freshly-rendered Machine page',
-      should: 'mount only the default Terminal tab, leaving Code/Diff/Settings unmounted',
+      should: 'mount only the default Terminal tab, leaving Files/Diff/Settings unmounted',
       actual: lifecycle,
       expected: ['mount:terminal'],
     });
@@ -85,13 +89,13 @@ describe('MachineView (Machine 4-tab shell)', () => {
     asAdmin();
     render(<MachineView pageId="machine-1" />);
 
-    await userEvent.click(screen.getByRole('tab', { name: /code/i }));
+    await userEvent.click(screen.getByRole('tab', { name: /files/i }));
 
     assert({
-      given: 'the user switches from Terminal to Code',
-      should: 'mount the Code body and unmount the Terminal body (lazy, one at a time)',
+      given: 'the user switches from Terminal to Files',
+      should: 'mount the Files body and unmount the Terminal body (lazy, one at a time)',
       actual: lifecycle,
-      expected: ['mount:terminal', 'unmount:terminal', 'mount:code'],
+      expected: ['mount:terminal', 'unmount:terminal', 'mount:files'],
     });
   });
 

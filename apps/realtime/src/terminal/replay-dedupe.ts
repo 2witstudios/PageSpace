@@ -569,6 +569,94 @@ export function planReplayEmission({
  * replayed one, and trimming it would delete output the client never saw. An
  * unalignable replay costs a redraw. That is the whole trade.
  */
+/**
+ * Where a `wire()`'d command's replay comes from — the axis `resolveGiveUpAction` decides on.
+ *
+ * - `'transparent-attach'`: an in-place RECONNECT's attach to the session the client was
+ *   already watching (an idle-shell keepalive drop, an optimistic reattach when `listSessions`
+ *   is unavailable). The viewer never left — every byte a replay on this attach could carry has
+ *   already been shown, live, so a give-up here is pure duplication.
+ * - `'fresh'`: everything else. A shell's very FIRST `wire()` (a fresh viewer opening the
+ *   terminal, or a caller reattaching after ITS OWN restart) and a reconnect that CREATES a
+ *   new session (the old one is gone; nothing of its output is on the client's screen) both
+ *   want a give-up's bytes shown — there is no continuously-watching viewer to have already
+ *   seen them.
+ */
+export type AttachKind = 'transparent-attach' | 'fresh';
+
+/**
+ * The largest give-up burst leaf 2-5 will discard rather than show, on a transparent attach.
+ * Set to `MAX_ANCHOR_BYTES` deliberately, not a fresh magic number: this module's own docs
+ * already treat that bound as "about the size of an idle terminal's whole history" — "the
+ * shape the 45s watchdog cycles on" (see `anchorOf`, and the corroboration doc's "NO history
+ * at all behind the match" case). A give-up burst that fits under it is consistent with "a TUI
+ * redrew what's already roughly on screen"; a burst LARGER than it has grown past anything a
+ * mere redraw explains.
+ *
+ * This is a size heuristic, not a proof — see `resolveGiveUpAction`'s doc for what it does and
+ * does not guarantee.
+ */
+export const MAX_DISCARDABLE_GIVEUP_BYTES = MAX_ANCHOR_BYTES;
+
+/**
+ * A give-up's TERMINAL ACTION: show the unaligned bytes (today's baseline — see the give-up
+ * doc above, "duplication is survivable"), or drop them.
+ *
+ * That baseline is right for a fresh session and wrong for a transparent reconnect: an idle
+ * AGENT terminal (a repainting TUI status line, a `SIGWINCH`-triggered redraw off
+ * `attachSession`'s own `{cols,rows}`) violates byte-equality on almost every ~45s keepalive
+ * cycle, so "reprint rather than risk losing a byte" becomes "repaint on top of itself every
+ * 45s" for exactly the terminals that need the dedupe most. On THAT reconnect the caller has
+ * already delivered every byte this module knows about — via whatever single sink is downstream
+ * of this module's output (see the caller's own doc: in `sprites-shell.ts` that sink is one
+ * `onOutput` call feeding BOTH the live viewer and the app-level scrollback buffer any FUTURE
+ * viewer catches up from) — so a SMALL give-up is very likely pure redraw noise and can be
+ * dropped outright.
+ *
+ * "Very likely," not "provably" — and that gap is real, not glossed over. The server session
+ * keeps running while the client is disconnected (sessions survive client drops; only the
+ * SOCKET died), so the replay a reattach carries is "history already delivered downstream" PLUS
+ * "whatever the shell produced during the gap," concatenated, with no marker between them —
+ * see the module header's "cannot tell a replay from an EXACT reproduction." An unaligned
+ * give-up therefore CAN legitimately contain new output (a build line, a crash message) that
+ * arrived during the reconnect gap.
+ *
+ * And discarding loses it TOTALLY, not just from the one connection that happened to trigger
+ * the reconnect: a discard skips the caller's sink outright (see `sprites-shell.ts`'s
+ * `recordHistory` vs `deliver`), so the bytes reach neither whoever is watching live right now
+ * NOR any later viewer who joins fresh and catches up from whatever that sink also feeds (e.g.
+ * an app-level scrollback buffer). There is no narrower "just this viewer already saw it"
+ * reading available here — a discard is gone from the system, for every consumer, for good.
+ *
+ * `burstBytes` is the mitigation, not a fix for that: a mere redraw is bounded by roughly what
+ * is already on screen (`MAX_DISCARDABLE_GIVEUP_BYTES`), while active new output — a build, a
+ * verbose command, exactly the "silently lose build/log output" case a reattach-timing gap can
+ * produce — accumulates without that bound and is shown, not dropped, once the burst outgrows
+ * it. This closes the large-loss end of the risk (megabytes of real output are never silently
+ * eaten) without pretending to close the small end (a short message racing the reconnect,
+ * indistinguishable byte-for-byte from a short redraw, can still be discarded — and that loss is
+ * total, per the paragraph above, not partial). That residual is the same shape this module
+ * already accepts elsewhere: "violently periodic output... where the dropped bytes are
+ * indistinguishable from their neighbours anyway" — bounded and understood, not eliminated.
+ *
+ * Detection is unchanged — `planReplayEmission`/`flushReplay` still decide alignment purely
+ * from bytes, with no notion of where the attach came from, how large the burst is, or how many
+ * downstream consumers exist. This is the decision layered on top of a give-up they already
+ * produced, so the caller can still record the bytes as history (a give-up is itself a
+ * contiguous run of the stream — see `deliver`'s `restart` doc) without being forced to also
+ * show them.
+ */
+export function resolveGiveUpAction({
+  attachKind,
+  burstBytes,
+}: {
+  attachKind: AttachKind;
+  burstBytes: number;
+}): 'emit' | 'discard' {
+  if (attachKind !== 'transparent-attach') return 'emit';
+  return burstBytes <= MAX_DISCARDABLE_GIVEUP_BYTES ? 'discard' : 'emit';
+}
+
 export function flushReplay(state: ReplayState): ReplayEmission {
   // Nothing held is not a give-up. A window can close over an attach that never received a
   // byte — a socket that died before it opened — and calling THAT a give-up would report a

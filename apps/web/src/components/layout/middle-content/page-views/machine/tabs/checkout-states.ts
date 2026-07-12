@@ -1,5 +1,5 @@
 /**
- * Shared vocabulary for the Code tab's "the checkout isn't there" states
+ * Shared vocabulary for the Files tab's "the checkout isn't there" states
  * (Machine page rebuild, Phase 3).
  *
  * The files route reports why a branch checkout couldn't be reached with a typed
@@ -7,7 +7,7 @@
  * the tab have to speak about it: the sidebar (which can't list files) and the
  * main pane (which can't read the open file). They live in separate modules and
  * the tab imports the pane, so this copy lives here rather than in either one —
- * importing it back out of CodeTab would be a cycle.
+ * importing it back out of FilesTab would be a cycle.
  *
  * The user-facing rule this encodes: NEVER render the route's internal phrasing
  * ("Branch machine vanished") at a person. A checkout that isn't there is a

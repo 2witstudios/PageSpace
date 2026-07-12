@@ -1,19 +1,39 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { toast } from 'sonner';
 import type { Socket } from 'socket.io-client';
 import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
-import { useMachineWorkspaceStore, selectWorkspace, type OpenTerminalScope, type TerminalPaneState } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import {
+  useMachineWorkspaceStore,
+  selectActiveWorkspace,
+  autoSessionName,
+  panesOf,
+  MACHINE_NODE_SCOPE,
+  type MachineNodeScope,
+  type OpenTerminalScope,
+  type TerminalPaneState,
+} from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { PaneLoading, PaneNotice } from '../tabs/tab-states';
 
 const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
 
-export type { TerminalPaneState };
+const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
 
 interface TerminalPanesProps {
   machineId: string;
@@ -24,21 +44,88 @@ function paneSessionId(machineId: string, scope: OpenTerminalScope): string {
   return `agent-terminal:${machineId}:${scope.projectName ?? ''}:${scope.branchName ?? ''}:${scope.name}`;
 }
 
+/** Spawn is one act, so the session name is minted rather than asked for. */
+function freshNameSuffix(): string {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
+/** The checkout a workspace's agents run in, named for the picker — the promise
+ * the picker makes has to be the scope the spawn actually uses. */
+function scopeLabelOf(scope: MachineNodeScope): string {
+  if (!scope.projectName) return 'the machine';
+  if (!scope.branchName) return scope.projectName;
+  return `${scope.projectName} / ${scope.branchName}`;
+}
+
 export default function TerminalPanes({ machineId, socket }: TerminalPanesProps) {
-  const workspace = useMachineWorkspaceStore(selectWorkspace(machineId));
+  // The middle view IS the active workspace's grid — selecting another workspace
+  // swaps this whole component's contents for that item's combination of panes.
+  const workspace = useMachineWorkspaceStore(selectActiveWorkspace(machineId));
   const splitRight = useMachineWorkspaceStore((state) => state.splitRight);
   const splitDown = useMachineWorkspaceStore((state) => state.splitDown);
   const closePane = useMachineWorkspaceStore((state) => state.closePane);
   const selectPane = useMachineWorkspaceStore((state) => state.selectPane);
+  const bindPaneTerminal = useMachineWorkspaceStore((state) => state.bindPaneTerminal);
+  const clearPanePrompt = useMachineWorkspaceStore((state) => state.clearPanePrompt);
+  const dismissPicker = useMachineWorkspaceStore((state) => state.dismissPicker);
   const isMobile = useMobile();
 
-  // Briefly undefined between this component's first render and the
-  // mounting MachineWorkspace's ensureWorkspace effect committing.
+  // Hooks run before the early return below, so these read through a workspace
+  // that may not exist for one render.
+  const workspaceId = workspace?.id ?? '';
+  // Every agent spawned here runs in the workspace's node scope — a branch
+  // workspace's panes all share that branch's checkout.
+  const scope = workspace?.scope ?? MACHINE_NODE_SCOPE;
+  const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(
+    machineId,
+    scope.projectName ?? null,
+    scope.branchName ?? null,
+  );
+
+  /**
+   * Split-and-pick: create the session AND place it, in one act. The session
+   * record is a side-effect of picking an agent — auto-named, never prompted
+   * for — and the pane it was picked in is bound to it the moment the spawn
+   * resolves, so the agent belongs to a pane from the first frame it exists.
+   */
+  const spawnIntoPane = useCallback(
+    async (paneId: string, agentType: AgentRuntimeType, prompt?: string) => {
+      const created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
+      const bound = bindPaneTerminal(
+        machineId,
+        workspaceId,
+        paneId,
+        { projectName: scope.projectName, branchName: scope.branchName, name: created.name },
+        // `spawnAgentTerminal` is an upsert: `resumed` means it handed back a session
+        // that ALREADY EXISTED rather than creating one. An agent that was already
+        // running must never be typed at, and the API says so right here — relying on
+        // the auto-name's entropy to make this unreachable would leave the invariant
+        // resting on luck instead of on the answer we were given.
+        created.resumed ? undefined : prompt,
+      );
+      if (!bound && !created.resumed) {
+        // The pane went away while the Sprite booted (closed, or the page
+        // navigated off). The session row exists but now belongs to nothing and
+        // nothing will ever show it — so take it back out rather than leave the
+        // user a terminal they never asked for and never saw appear.
+        //
+        // Only one WE created, though. `removeAgentTerminal` KILLS the terminal,
+        // and a `resumed` session is one that already existed — quite possibly
+        // open in someone else's pane, with an agent halfway through a task. This
+        // spawn did not bring it into the world and must not take it out of it.
+        await removeAgentTerminal(created.name).catch(() => {});
+      }
+    },
+    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, machineId, workspaceId, scope.projectName, scope.branchName],
+  );
+
+  // Briefly undefined between this component's first render and the mounting
+  // MachineWorkspace's ensureMachine effect committing.
   if (!workspace) return null;
 
-  const { columns, activePaneId } = workspace;
-  const panes = columns.flatMap((column) => column.panes);
-  const canClose = panes.length > 1;
+  const { activePaneId, pendingPickerPaneId, columns } = workspace;
+  const scopeLabel = scopeLabelOf(scope);
+  const panes = panesOf(workspace);
 
   /** `activeId` is a parameter rather than read from the closure so the narrow
    * branch's fallback (below) drives the focus accent and the pane strip from the
@@ -49,11 +136,26 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     machineId,
     pane,
     isActive: pane.id === activeId,
-    canClose,
-    onSelect: () => selectPane(machineId, pane.id),
-    onSplitRight: () => splitRight(machineId, pane.id),
-    onSplitDown: () => splitDown(machineId, pane.id),
-    onClose: () => closePane(machineId, pane.id),
+    // A lone pane can still be closed when it holds a terminal — closing it
+    // detaches the terminal and hands the pane back to the picker. Without that,
+    // a workspace whose only pane shows a session that no longer exists could
+    // never be recovered.
+    canClose: panes.length > 1 || pane.scope !== null,
+    // A split just made this pane, so its picker takes focus — the user asked
+    // for a new agent, not for a blank rectangle to go find a control in.
+    pickerFocused: pane.id === pendingPickerPaneId,
+    scopeLabel,
+    // Every pane action names the WORKSPACE this pane was rendered in. A pane id
+    // is only unique within its own grid, and an action can land after the user
+    // has switched workspaces (a `ready` event, a spawn resolving from a cold
+    // boot) — so the target is captured here, not looked up when the write lands.
+    onSelect: () => selectPane(machineId, workspaceId, pane.id),
+    onSplitRight: () => splitRight(machineId, workspaceId, pane.id),
+    onSplitDown: () => splitDown(machineId, workspaceId, pane.id),
+    onClose: () => closePane(machineId, workspaceId, pane.id),
+    onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
+    onPickerFocused: () => dismissPicker(machineId, workspaceId, pane.id),
+    onPromptSent: () => clearPanePrompt(machineId, workspaceId, pane.id),
   });
 
   // A phone cannot hold a split grid: two columns at 375px give each terminal
@@ -87,7 +189,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     return (
       <div className="flex h-full flex-col bg-background">
         {panes.length > 1 && (
-          <PaneStrip panes={panes} activePaneId={activeId} onSelect={(id) => selectPane(machineId, id)} />
+          <PaneStrip panes={panes} activePaneId={activeId} onSelect={(id) => selectPane(machineId, workspaceId, id)} />
         )}
         <div className="relative min-h-0 flex-1">
           {panes.map((pane) => (
@@ -183,10 +285,15 @@ function TerminalPane({
   isActive,
   canClose,
   canSplit,
+  pickerFocused,
+  scopeLabel,
   onSelect,
   onSplitRight,
   onSplitDown,
   onClose,
+  onSpawn,
+  onPickerFocused,
+  onPromptSent,
 }: {
   socket: Socket | null | undefined;
   machineId: string;
@@ -195,10 +302,17 @@ function TerminalPane({
   canClose: boolean;
   /** False on narrow viewports, where a split would produce two unusable slivers. */
   canSplit: boolean;
+  /** This pane's picker should take focus — it was just made by a split. */
+  pickerFocused: boolean;
+  /** Where an agent spawned here would run — the workspace's checkout. */
+  scopeLabel: string;
   onSelect(): void;
   onSplitRight(): void;
   onSplitDown(): void;
   onClose(): void;
+  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onPickerFocused(): void;
+  onPromptSent(): void;
 }) {
   const sessionId = pane.scope ? paneSessionId(machineId, pane.scope) : null;
   // With neither a split nor a close to offer (a lone pane on a phone), the
@@ -209,8 +323,10 @@ function TerminalPane({
   return (
     <div className="group/pane relative flex h-full flex-col" onClick={onSelect}>
       <div className={`absolute inset-x-0 top-0 z-10 h-0.5 ${isActive ? 'bg-primary' : 'bg-transparent'}`} />
-      {/* Hover-revealed on a mouse; a touch device has no hover, so the controls
-          stay visible there rather than being unreachable. */}
+      {/* Hover-revealed from `md:` up. On a coarse pointer there is nothing to
+          hover with, so the global `[data-pointer='coarse']` rule in globals.css
+          keeps this exact opacity-0/group-hover shape visible — the controls must
+          not be unreachable on a device that cannot hover. */}
       {hasControls && (
       <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-border bg-card/90 p-0.5 opacity-100 shadow-sm backdrop-blur-sm transition-opacity focus-within:opacity-100 md:opacity-0 md:group-hover/pane:opacity-100">
         {canSplit && (
@@ -259,13 +375,115 @@ function TerminalPane({
       )}
       <div className="relative min-h-0 flex-1">
         {!pane.scope || !sessionId ? (
-          <PaneNotice
-            title="No terminal open"
-            description="Pick a session from the Sessions sidebar, or add one from any node in the tree."
+          <PaneAgentPicker
+            focused={pickerFocused}
+            scopeLabel={scopeLabel}
+            onSpawn={onSpawn}
+            onFocused={onPickerFocused}
           />
         ) : (
-          <TerminalPaneStream key={sessionId} socket={socket} machineId={machineId} scope={pane.scope} sessionId={sessionId} />
+          <TerminalPaneStream
+            key={sessionId}
+            socket={socket}
+            machineId={machineId}
+            scope={pane.scope}
+            sessionId={sessionId}
+            pendingPrompt={pane.pendingPrompt}
+            onPromptSent={onPromptSent}
+          />
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An empty pane's inline agent picker — the whole spawn flow, in the pane the
+ * agent will run in. Pick a type, optionally say what it should start on, and
+ * the agent is created AND placed here in one action: no modal, no name step,
+ * no separate "now assign it to a pane" click.
+ *
+ * The starting prompt is optional on purpose — Enter on the type is the fast
+ * path (the agent boots to its own prompt), and the textarea is there for when
+ * the user already knows the first thing to say.
+ */
+function PaneAgentPicker({
+  focused,
+  scopeLabel,
+  onSpawn,
+  onFocused,
+}: {
+  focused: boolean;
+  scopeLabel: string;
+  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onFocused(): void;
+}) {
+  const [agentType, setAgentType] = useState<AgentRuntimeType>(AGENT_TYPES[0]);
+  const [prompt, setPrompt] = useState('');
+  const [spawning, setSpawning] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  // Consume the focus intent once. Clearing it in the store (onFocused) is what
+  // stops a later unrelated re-render from yanking the caret back here while
+  // the user is typing in a sibling pane.
+  useEffect(() => {
+    if (!focused) return;
+    promptRef.current?.focus();
+    onFocused();
+  }, [focused, onFocused]);
+
+  const submit = async () => {
+    setSpawning(true);
+    try {
+      // A spawned pane re-renders with a terminal in it, unmounting this picker
+      // — so `spawning` is only ever cleared on the failure path.
+      await onSpawn(agentType, prompt.trim() || undefined);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
+      setSpawning(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+      <div className="text-center">
+        <p className="text-sm font-medium">Spawn an agent</p>
+        <p className="text-xs text-muted-foreground">Runs in {scopeLabel}.</p>
+      </div>
+      <div className="flex w-full max-w-xs flex-col gap-2">
+        <Select value={agentType} onValueChange={(value) => setAgentType(value as AgentRuntimeType)}>
+          <SelectTrigger aria-label="Agent type" className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {AGENT_TYPES.map((type) => (
+              <SelectItem key={type} value={type}>
+                {type}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Textarea
+          ref={promptRef}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Starting prompt (optional)"
+          aria-label="Starting prompt"
+          rows={2}
+          className="resize-none text-sm"
+          // Enter submits; Shift+Enter is a newline — the prompt is usually one
+          // line, and reaching for the button to spawn would put the click back
+          // into a flow whose whole point is not having one.
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              if (!spawning) void submit();
+            }
+          }}
+        />
+        <Button size="sm" disabled={spawning} onClick={() => void submit()}>
+          {spawning ? 'Spawning…' : 'Spawn agent'}
+        </Button>
       </div>
     </div>
   );
@@ -283,11 +501,16 @@ function TerminalPaneStream({
   machineId,
   scope,
   sessionId,
+  pendingPrompt,
+  onPromptSent,
 }: {
   socket: Socket | null | undefined;
   machineId: string;
   scope: OpenTerminalScope;
   sessionId: string;
+  /** The picker's starting prompt, typed into the PTY once it's ready. */
+  pendingPrompt?: string;
+  onPromptSent(): void;
 }) {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -303,6 +526,8 @@ function TerminalPaneStream({
           socket={socket}
           sessionId={sessionId}
           connectPayload={{ machineId, projectName: scope.projectName, branchName: scope.branchName, name: scope.name }}
+          initialInput={pendingPrompt}
+          onInitialInputSent={onPromptSent}
           onReady={handleReady}
           onError={handleError}
         />

@@ -3,12 +3,17 @@
 import '@xterm/xterm/css/xterm.css';
 import React from 'react';
 import { motion } from 'motion/react';
-import { Code2, GitCompare, Settings, TerminalSquare } from 'lucide-react';
+import { FolderTree, GitCompare, Settings, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
+import {
+  useMachineTabStore,
+  DEFAULT_MACHINE_TAB,
+  type MachineTabValue,
+} from '@/stores/machine-workspace/useMachineTabStore';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import TerminalTab from './tabs/TerminalTab';
-import CodeTab from './tabs/CodeTab';
+import FilesTab from './tabs/FilesTab';
 import DiffTab from './tabs/DiffTab';
 import SettingsTab from './tabs/SettingsTab';
 
@@ -16,17 +21,20 @@ interface MachineViewProps {
   pageId: string;
 }
 
-type MachineTabValue = 'terminal' | 'code' | 'diff' | 'settings';
-
+// The tab's stored value/id stays `'code'` — it's the key `useMachineTabStore`
+// persists under and the Development sidebar reads to land a session on this
+// tab, so renaming it would ripple into that surface. Only the label, icon,
+// and component are reframed here: this tab VIEWS a checkout's files, it
+// doesn't edit code.
 const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.ElementType }[] = [
   { value: 'terminal', label: 'Terminal', icon: TerminalSquare },
-  { value: 'code', label: 'Code', icon: Code2 },
+  { value: 'code', label: 'Files', icon: FolderTree },
   { value: 'diff', label: 'Diff', icon: GitCompare },
   { value: 'settings', label: 'Settings', icon: Settings },
 ];
 
 /**
- * The Machine page's 4-tab command center (Terminal / Code / Diff / Settings).
+ * The Machine page's 4-tab command center (Terminal / Files / Diff / Settings).
  *
  * `pageId` IS the Machine id, so it's threaded down to every tab as `machineId`.
  * Radix `TabsContent` (no `forceMount`) renders only the active tab's body and
@@ -35,10 +43,19 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
  * initializes. Terminal is the default. The export name (`MachineView`) and
  * `{ pageId }` prop shape are preserved so `CenterPanel.tsx` /
  * `MachineKeepAliveHost.tsx` need no change.
+ *
+ * The active tab is held in `useMachineTabStore` rather than by Radix, so that
+ * "show me this machine's terminal" is something another surface can ask for.
+ * The Development sidebar needs it: only the Terminal tab mounts a machine's
+ * workspace, so a session clicked on a machine parked on Files/Diff/Settings had
+ * nowhere to land. Behaviour is otherwise unchanged — a machine with no stored
+ * tab shows Terminal, as before.
  */
 const MachineView = ({ pageId }: MachineViewProps) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const activeTab = useMachineTabStore((state) => state.tabs[pageId] ?? DEFAULT_MACHINE_TAB);
+  const setTab = useMachineTabStore((state) => state.setTab);
 
   return (
     <motion.div
@@ -57,7 +74,11 @@ const MachineView = ({ pageId }: MachineViewProps) => {
       )}
 
       {isAdmin && (
-        <Tabs defaultValue="terminal" className="flex min-h-0 flex-1 flex-col gap-0">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setTab(pageId, value as MachineTabValue)}
+          className="flex min-h-0 flex-1 flex-col gap-0"
+        >
           <div className="border-b border-border px-2 py-1.5">
             <TabsList className="h-auto bg-transparent p-0">
               {TAB_TRIGGERS.map(({ value, label, icon: Icon }) => (
@@ -86,7 +107,7 @@ const MachineView = ({ pageId }: MachineViewProps) => {
             <TerminalTab machineId={pageId} />
           </TabsContent>
           <TabsContent value="code" className="min-h-0 flex-1 outline-none">
-            <CodeTab machineId={pageId} />
+            <FilesTab machineId={pageId} />
           </TabsContent>
           <TabsContent value="diff" className="min-h-0 flex-1 outline-none">
             <DiffTab machineId={pageId} />

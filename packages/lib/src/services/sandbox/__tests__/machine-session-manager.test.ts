@@ -152,13 +152,13 @@ describe('planMachineLifecycle', () => {
     expect(result).toEqual({ action: 'resume', sandboxId: 'sbx-warm' });
   });
 
-  it('given canRun=true and an idle session (lastActiveAt older than idleTimeoutMs), returns { action: teardown, reason: idle }', () => {
+  it('given canRun=true and an idle session (lastActiveAt older than idleTimeoutMs), returns { action: noop } (never teardown — Sprites hibernates)', () => {
     const result = planMachineLifecycle({
       canRun: true,
       existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
       now: NOW,
     });
-    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-idle', reason: 'idle' });
+    expect(result).toEqual({ action: 'noop' });
   });
 
   it('given intent=end and an existing session, returns { action: teardown, reason: session_end }', () => {
@@ -176,54 +176,23 @@ describe('planMachineLifecycle', () => {
     expect(result).toEqual({ action: 'noop' });
   });
 
-  it('given persistent=true and an idle session, returns { action: noop } (let Sprites hibernate)', () => {
+  it('given an idle session at exactly the idleTimeoutMs boundary, returns { action: noop } (>= is idle)', () => {
     const result = planMachineLifecycle({
       canRun: true,
-      persistent: true,
-      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
+      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 15 * 60 * 1000) },
       now: NOW,
     });
     expect(result).toEqual({ action: 'noop' });
   });
 
-  it('given persistent=false and an idle session, returns teardown (unchanged ephemeral behaviour)', () => {
+  it('given a custom idleTimeoutMs and a session idle past it, returns { action: noop }', () => {
     const result = planMachineLifecycle({
       canRun: true,
-      persistent: false,
-      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
+      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 5 * 60 * 1000) },
       now: NOW,
+      idleTimeoutMs: 60 * 1000,
     });
-    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-idle', reason: 'idle' });
-  });
-
-  it('given persistent=undefined and an idle session, returns teardown (default is ephemeral)', () => {
-    const result = planMachineLifecycle({
-      canRun: true,
-      existingSession: { sandboxId: 'sbx-idle', lastActiveAt: new Date(NOW.getTime() - 20 * 60 * 1000) },
-      now: NOW,
-    });
-    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-idle', reason: 'idle' });
-  });
-
-  it('given persistent=true and intent=end, still tears down (explicit destroy always works)', () => {
-    const result = planMachineLifecycle({
-      canRun: true,
-      persistent: true,
-      existingSession: { sandboxId: 'sbx-end', lastActiveAt: NOW },
-      now: NOW,
-      intent: 'end',
-    });
-    expect(result).toEqual({ action: 'teardown', sandboxId: 'sbx-end', reason: 'session_end' });
-  });
-
-  it('given persistent=true and a fresh session, still resumes normally', () => {
-    const result = planMachineLifecycle({
-      canRun: true,
-      persistent: true,
-      existingSession: { sandboxId: 'sbx-warm', lastActiveAt: new Date(NOW.getTime() - 1000) },
-      now: NOW,
-    });
-    expect(result).toEqual({ action: 'resume', sandboxId: 'sbx-warm' });
+    expect(result).toEqual({ action: 'noop' });
   });
 });
 

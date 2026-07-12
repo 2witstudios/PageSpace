@@ -10,18 +10,21 @@ interface MachineWorkspaceProps {
   machineId: string;
 }
 
+/**
+ * The Machine page's middle view. It always renders the ACTIVE workspace's pane
+ * grid, so selecting a different workspace switches the entire view to that
+ * item's combination of terminals.
+ */
 export default function MachineWorkspace({ machineId }: MachineWorkspaceProps) {
   const socket = useSocket();
-  const ensureWorkspace = useMachineWorkspaceStore((state) => state.ensureWorkspace);
-  const disposeWorkspace = useMachineWorkspaceStore((state) => state.disposeWorkspace);
+  const ensureMachine = useMachineWorkspaceStore((state) => state.ensureMachine);
 
-  // The Machine tree sidebar (Terminal tab) and TerminalPanes (here) share this
-  // workspace by composition through the store — no common parent to hold
-  // local state now that they live in different parts of the layout.
+  // Give the machine its first workspace, once. Nothing is disposed on unmount:
+  // the store is persisted precisely so a workspace's grid survives navigation
+  // and a reload, and comes back reattached to the PTYs still running in it.
   useEffect(() => {
-    ensureWorkspace(machineId);
-    return () => disposeWorkspace(machineId);
-  }, [machineId, ensureWorkspace, disposeWorkspace]);
+    ensureMachine(machineId);
+  }, [machineId, ensureMachine]);
 
   return <TerminalPanes machineId={machineId} socket={socket} />;
 }
