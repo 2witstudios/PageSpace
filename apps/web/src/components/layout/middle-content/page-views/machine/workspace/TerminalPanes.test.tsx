@@ -11,7 +11,11 @@ vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mockUseMobile() }));
 // The pane's terminal is an xterm/socket subtree — stub it so what's under test
 // is the LAYOUT the workspace picks, not the stream inside it.
 vi.mock('../XtermTerminal', () => ({
-  default: ({ sessionId }: { sessionId: string }) => <div data-testid="xterm">{sessionId}</div>,
+  default: ({ sessionId, initialInput }: { sessionId: string; initialInput?: string }) => (
+    <div data-testid="xterm" data-initial-input={initialInput}>
+      {sessionId}
+    </div>
+  ),
 }));
 
 const selectPane = vi.fn();
@@ -402,6 +406,28 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
         'remove the session it created — the row exists server-side but belongs to no pane, so leaving it would strand a terminal the user never asked for and never saw appear',
       actual: removeAgentTerminal.mock.calls[0]?.[0] === addAgentTerminal.mock.calls[0]?.[0],
       expected: true,
+    });
+  });
+
+  test('a pane carrying a starting prompt hands it to its terminal', async () => {
+    // The pane the picker just spawned into: bound, with its prompt not yet typed.
+    workspace = aWorkspace({
+      columns: [
+        { id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1' }, pendingPrompt: 'fix the build' }] },
+      ],
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    });
+
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    const terminal = await screen.findByTestId('xterm');
+
+    assert({
+      given: "a pane holding the starting prompt from the picker",
+      should:
+        'pass it to the terminal, which is what types it into the PTY — without this wiring the prompt is stored, never delivered, and no test would notice',
+      actual: terminal.getAttribute('data-initial-input'),
+      expected: 'fix the build',
     });
   });
 });

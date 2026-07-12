@@ -26,6 +26,7 @@ import {
   updateWorkspace,
   removeWorkspace as removeWorkspaceTransition,
   showSessionIn,
+  workspaceShowing,
   sanitizeMachines,
   sessionWorkspaceId,
   nextWorkspaceName,
@@ -39,6 +40,9 @@ import {
   selectPane as selectPaneTransition,
   nodeOfTerminalScope,
   panesOf,
+  childSessionIds,
+  runningPaneCount,
+  sessionWorkspaceId as sessionWorkspaceIdOf,
   autoSessionName,
   MACHINE_NODE_SCOPE,
   type MachineNodeScope,
@@ -57,7 +61,7 @@ export type {
   TerminalPaneState,
   WorkspaceState,
 };
-export { autoSessionName, panesOf, MACHINE_NODE_SCOPE };
+export { autoSessionName, panesOf, MACHINE_NODE_SCOPE, sessionWorkspaceIdOf as sessionWorkspaceId };
 
 /** Bump when the persisted shape changes; see the `migrate`/`merge` note below. */
 const PERSISTED_VERSION = 1;
@@ -175,14 +179,34 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       openTerminal: (machineId, scope) => {
         get().ensureMachine(machineId);
         const machine = get().machines[machineId];
+
+        // Is this session already a pane of some workspace? Then that workspace
+        // is where it lives, whatever its own id would name. A session spawned by
+        // split-and-pick was bound into a pane of the workspace the user was
+        // working in, so opening it "in its own workspace" would drag them out of
+        // the grid they built it in and leave the same PTY claimed by panes in two
+        // workspaces at once. Show it where it actually is.
+        const home = workspaceShowing(machine, scope);
+        if (home) {
+          const homePaneId = panesOf(home).find((pane) => pane.scope?.name === scope.name)?.id;
+          set((state) =>
+            applyToMachine(state, machineId, (current) =>
+              updateWorkspace(setActiveWorkspaceTransition(current, home.id), home.id, (workspace) =>
+                homePaneId ? selectPaneTransition(workspace, homePaneId) : workspace
+              )
+            )
+          );
+          return;
+        }
+
         const workspaceId = sessionWorkspaceId(scope);
 
-        // Already has a workspace: show it as the user last left it — the panes
-        // they split into it and the agents in them, not just this one session —
-        // and make sure the session they actually clicked is among them. It need
-        // not be: they may have closed the pane it was opened in, and without
-        // this the row would select a grid that no longer shows the session, with
-        // no way back to a PTY that is still running (and billing).
+        // Its own workspace exists but the session is not in it: show it as the
+        // user last left it — the panes they split into it and the agents in them
+        // — and put the session they actually clicked back on screen. They may
+        // have closed the pane it was opened in, and without this the row would
+        // select a grid that no longer shows the session, with no way back to a
+        // PTY that is still running (and billing).
         if (machine.workspaces[workspaceId]) {
           const newPaneId = crypto.randomUUID();
           set((state) =>
@@ -310,3 +334,25 @@ export const selectMachine = (machineId: string) => (state: MachineWorkspaceStor
 
 export const selectWorkspace = (machineId: string, workspaceId: string) => (state: MachineWorkspaceStoreState) =>
   state.machines[machineId]?.workspaces[workspaceId];
+
+/** Stable empty set — a fresh one per call would hand React a new snapshot on every read. */
+const EMPTY_CHILD_SESSIONS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * The sessions that are panes INSIDE a workspace rather than workspaces of their
+ * own — what the sidebar must not list as separate rows (a split pane belongs to
+ * the workspace that owns it). Keyed like `sessionWorkspaceId`, so a caller
+ * holding a session's scope can test membership directly.
+ */
+export const selectChildSessionIds = (machineId: string) => (state: MachineWorkspaceStoreState) => {
+  const machine = state.machines[machineId];
+  return machine ? childSessionIds(machine) : EMPTY_CHILD_SESSIONS;
+};
+
+/** How many of a machine's panes are running an agent, optionally at one node's
+ * scope — the "N running" count a node shows instead of a session list. */
+export const selectRunningPaneCount =
+  (machineId: string, scope?: MachineNodeScope) => (state: MachineWorkspaceStoreState) => {
+    const machine = state.machines[machineId];
+    return machine ? runningPaneCount(machine, scope) : 0;
+  };

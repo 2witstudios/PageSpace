@@ -218,10 +218,17 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     });
   });
 
-  test('a pane unmounted before the backstop fires never types at the agent afterwards', async () => {
+  test('a pane unmounted mid-boot types nothing later, and SPENDS its undelivered prompt', async () => {
     const fake = fakeSocket();
+    const onSent = vi.fn();
     const { unmount } = render(
-      <XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} initialInput="fix the build" />
+      <XtermTerminal
+        socket={fake.socket}
+        sessionId="s1"
+        connectPayload={CONNECT}
+        initialInput="fix the build"
+        onInitialInputSent={onSent}
+      />
     );
     await waitFor(() => expect(fake.hasHandlers()).toBe(true));
 
@@ -231,9 +238,10 @@ describe('XtermTerminal — starting-prompt delivery', () => {
 
     assert({
       given: 'a pane closed (or a workspace switched away from) while its agent was still booting',
-      should: 'cancel the pending write — a timer left armed would type into a terminal whose pane is gone',
-      actual: inputs(fake.emitted),
-      expected: [],
+      should:
+        'write nothing afterwards AND drop the prompt — carrying it to a later connect is unsafe, because no connect can tell a cold boot from a resume (after a realtime restart, a connect to an agent running for hours looks exactly like a cold one)',
+      actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length },
+      expected: { typed: [], promptSpent: 1 },
     });
   });
 });

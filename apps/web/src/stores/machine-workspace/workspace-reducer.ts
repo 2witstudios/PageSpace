@@ -331,7 +331,45 @@ export function workspacesOf(state: MachineWorkspacesState): WorkspaceState[] {
   return state.order.map((id) => state.workspaces[id]).filter(Boolean);
 }
 
-/** Is this session already on screen in `workspace`? */
+/**
+ * The sessions that live INSIDE a workspace rather than being one.
+ *
+ * A workspace opened from a session row is that session's own item (its id is
+ * `sessionWorkspaceId(scope)`), and belongs in the sidebar. Every other bound
+ * pane is a CHILD: an agent the user spawned into a workspace by splitting and
+ * picking. Those must not surface as their own sidebar rows — a split pane
+ * belongs to the workspace that owns it, and listing it separately would put the
+ * same agent in two places and undo the one-row-per-workspace model.
+ *
+ * Returned as `sessionWorkspaceId`-shaped keys, so a caller holding a session's
+ * scope can test membership without re-deriving the naming rule. (The sidebar
+ * that consumes this lands with the shared-tree work; the derivation belongs
+ * here, with the state it reads.)
+ */
+export function childSessionIds(state: MachineWorkspacesState): Set<string> {
+  const children = new Set<string>();
+
+  for (const workspace of workspacesOf(state)) {
+    for (const pane of panesOf(workspace)) {
+      if (!pane.scope) continue;
+      const id = sessionWorkspaceId(pane.scope);
+      if (id !== workspace.id) children.add(id);
+    }
+  }
+
+  return children;
+}
+
+/** How many panes of this machine are running an agent — the "N running" count
+ * a node shows instead of listing its sessions. Counts PANES, since that is what
+ * a running agent occupies. */
+export function runningPaneCount(state: MachineWorkspacesState, scope?: MachineNodeScope): number {
+  return workspacesOf(state)
+    .filter((workspace) => scope === undefined || isSameNodeScope(workspace.scope, scope))
+    .reduce((total, workspace) => total + panesOf(workspace).filter((pane) => pane.scope !== null).length, 0);
+}
+
+/** Is this session in one of `workspace`'s panes? */
 function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): TerminalPaneState | undefined {
   return panesOf(workspace).find(
     (pane) =>
@@ -339,6 +377,22 @@ function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): Termi
       (pane.scope?.projectName ?? '') === (scope.projectName ?? '') &&
       (pane.scope?.branchName ?? '') === (scope.branchName ?? '')
   );
+}
+
+/**
+ * The workspace this session is ALREADY a pane of, if any.
+ *
+ * A session need not live in the workspace its own id would name: split-and-pick
+ * binds a brand-new session into whichever pane it was picked in, which belongs
+ * to some other workspace. Opening such a session by minting the workspace its
+ * id names would take the user away from the grid they actually built it in, and
+ * leave the same PTY claimed by panes in two workspaces at once.
+ */
+export function workspaceShowing(
+  state: MachineWorkspacesState,
+  scope: OpenTerminalScope
+): WorkspaceState | undefined {
+  return workspacesOf(state).find((workspace) => paneShowing(workspace, scope) !== undefined);
 }
 
 /**

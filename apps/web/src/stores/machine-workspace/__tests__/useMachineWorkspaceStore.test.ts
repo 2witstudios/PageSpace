@@ -5,6 +5,8 @@ import {
   selectActiveWorkspace,
   selectMachine,
   selectWorkspace,
+  selectChildSessionIds,
+  selectRunningPaneCount,
   panesOf,
   type WorkspaceState,
 } from '../useMachineWorkspaceStore';
@@ -393,5 +395,58 @@ describe('useMachineWorkspaceStore', () => {
       },
       expected: { panes: 2, session: SESSION, prompt: undefined, picker: null },
     });
+  });
+
+  it('given a session SPAWNED into a workspace, should open it where it actually lives', () => {
+    store().ensureMachine('m1');
+    const workspace = activeOf('m1')!;
+    // Split-and-pick: the agent was bound into a pane of THIS workspace, so it
+    // has no workspace of its own.
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, SESSION);
+    store().setActiveWorkspace('m1', store().createWorkspace('m1'));
+
+    store().openTerminal('m1', SESSION);
+
+    assert({
+      given: "a split-and-pick agent's row clicked in the sidebar",
+      should:
+        'switch to the workspace it was spawned into, NOT mint a second workspace for it — that would drag the user out of the grid they built it in and leave one PTY claimed by panes in two workspaces',
+      actual: {
+        active: activeOf('m1')?.id,
+        workspaces: workspacesOf(selectMachine('m1')(store())).length,
+      },
+      expected: { active: workspace.id, workspaces: 2 },
+    });
+  });
+
+  it('given agents spawned into a workspace, should expose them as CHILD sessions, not sidebar rows', () => {
+    store().ensureMachine('m1');
+    const workspace = activeOf('m1')!;
+    // One session opened from the sidebar (its own workspace), one spawned into it.
+    store().openTerminal('m1', SESSION);
+    const sessionWorkspace = activeOf('m1')!;
+    const spawned = { ...BRANCH_SCOPE, name: 'codex-b2c3d4' };
+    store().splitRight('m1', sessionWorkspace.id, sessionWorkspace.activePaneId);
+    store().bindPaneTerminal(
+      'm1',
+      sessionWorkspace.id,
+      selectWorkspace('m1', sessionWorkspace.id)(store())!.activePaneId,
+      spawned,
+    );
+
+    const children = selectChildSessionIds('m1')(store());
+
+    assert({
+      given: 'a workspace opened from a session row, with a second agent split-and-picked into it',
+      should:
+        'report only the SPAWNED one as a child — it belongs to the workspace that owns it, and listing it as its own sidebar row would put one agent in two places',
+      actual: {
+        spawnedIsChild: children.has(sessionWorkspaceId(spawned)),
+        ownSessionIsNot: children.has(sessionWorkspaceId(SESSION)),
+        running: selectRunningPaneCount('m1')(store()),
+      },
+      expected: { spawnedIsChild: true, ownSessionIsNot: false, running: 2 },
+    });
+    void workspace;
   });
 });

@@ -116,8 +116,21 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
          * write waits for the agent's FIRST OUTPUT (it is up and drawing), with a
          * timer as the backstop for an agent that prints nothing on boot.
          *
-         * Latched, because `ready` can fire more than once for one terminal (a
-         * reattach after a socket reconnect replays it) and output certainly can.
+         * THE PROMPT ONLY EVER LANDS IN THE BOOT THIS PANE CONNECTED. It is spent
+         * on unmount whether or not it was written (see teardown), so it cannot
+         * survive to a later connect. That is deliberate, and it is the only way
+         * to be *sure*: a connect cannot tell a cold boot from a resume. `ready`
+         * carrying scrollback means the PTY was already running (a reattach) —
+         * but after a realtime restart the in-memory session map is empty, so a
+         * connect to an agent that has been running for hours takes the CREATE
+         * path and looks exactly like a cold boot. Deliver on that and the line
+         * plus a carriage return lands in a live agent at whatever state it has
+         * reached — a `y/n` confirmation, say. A prompt the user has to retype is
+         * a far smaller cost than one typed into a running agent, so an
+         * undelivered prompt is dropped rather than carried forward.
+         *
+         * Latched, because `ready` can fire more than once for one terminal and
+         * output certainly can.
          */
         let initialInputSent = false;
         let promptTimer: ReturnType<typeof setTimeout> | undefined;
@@ -201,7 +214,12 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const resize: { observer?: ResizeObserver } = {};
         teardown = () => {
           resize.observer?.disconnect();
-          clearTimeout(promptTimer);
+          // Spend the prompt even though it was never written. This pane is going
+          // away mid-boot (the user switched workspace, closed the pane, left the
+          // page); when they come back, the agent will have been running for who
+          // knows how long, and no connect can tell that apart from a cold boot
+          // (see above). So the prompt dies with the connect that owned it.
+          discardInitialInput();
           onData.dispose();
           socket.off('agent-terminal:output', handleOutput);
           socket.off('agent-terminal:ready', handleReady);
