@@ -9,6 +9,12 @@ export interface DriveMachine {
   updatedAt: string;
 }
 
+export interface DriveMachineGroup {
+  driveId: string;
+  driveName: string;
+  machines: DriveMachine[];
+}
+
 const fetcher = (url: string) =>
   fetchWithAuth(url).then(async (res) => {
     if (!res.ok) {
@@ -16,6 +22,15 @@ const fetcher = (url: string) =>
       throw new Error(body?.error ?? 'Failed to fetch machines');
     }
     return res.json() as Promise<{ machines: DriveMachine[] }>;
+  });
+
+const globalFetcher = (url: string) =>
+  fetchWithAuth(url).then(async (res) => {
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? 'Failed to fetch machines');
+    }
+    return res.json() as Promise<{ drives: DriveMachineGroup[] }>;
   });
 
 /**
@@ -51,6 +66,32 @@ export function useDriveMachines(driveId: string | null) {
 
   return {
     machines: data?.machines ?? [],
+    isLoading,
+    error: error as Error | undefined,
+    mutate,
+  };
+}
+
+/**
+ * Every Machine page across every drive the actor can access, grouped by
+ * drive — the GLOBAL (driveless) Development surface's root tier. `enabled`
+ * mirrors the caller's own gate (admin-only, and only in global mode) so a
+ * non-admin or a drive-scoped view never fires this request, the same way a
+ * `null` `driveId` disables `useDriveMachines`.
+ *
+ * Same polling rationale as `useDriveMachines`: a machine can drop out of the
+ * list without being deleted (a swallowed per-page permission check), so the
+ * list must be able to recover on its own.
+ */
+export function useAllMachines(enabled: boolean) {
+  const key = enabled ? '/api/machines' : null;
+
+  const { data, error, isLoading, mutate } = useSWR(key, globalFetcher, {
+    refreshInterval: 30_000,
+  });
+
+  return {
+    drives: data?.drives ?? [],
     isLoading,
     error: error as Error | undefined,
     mutate,

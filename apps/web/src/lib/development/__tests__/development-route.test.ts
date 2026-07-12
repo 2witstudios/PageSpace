@@ -19,7 +19,15 @@ describe('parseSelectedMachineId', () => {
     expect(parseSelectedMachineId('/dashboard/drive-1/development/machine-1/extra', 'drive-1')).toBe('machine-1');
   });
 
-  test('without a drive there is no machine', () => {
+  test('without a drive there is no machine at the surface root', () => {
     expect(parseSelectedMachineId('/dashboard/development', undefined)).toBeNull();
+  });
+
+  test('reads the machine id out of the GLOBAL (driveless) detail URL', () => {
+    expect(parseSelectedMachineId('/dashboard/development/machine-1', undefined)).toBe('machine-1');
+  });
+
+  test('a drive-scoped path is not mistaken for the global one', () => {
+    expect(parseSelectedMachineId('/dashboard/drive-1/development/machine-1', undefined)).toBeNull();
   });
 });

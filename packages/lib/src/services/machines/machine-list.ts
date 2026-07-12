@@ -23,6 +23,22 @@ export interface MachineListDeps {
   canUserViewPage: (userId: string, pageId: string) => Promise<boolean>;
 }
 
+export interface DriveSummary {
+  id: string;
+  name: string;
+}
+
+export interface DriveMachineGroup {
+  driveId: string;
+  driveName: string;
+  machines: MachinePageSummary[];
+}
+
+export interface GlobalMachineListDeps extends MachineListDeps {
+  /** Every drive `actorUserId` can access (owned, member, or page-permission), non-trashed. */
+  findAccessibleDrives: (actorUserId: string) => Promise<DriveSummary[]>;
+}
+
 /**
  * The Machine pages in `driveId` that `actorUserId` may view, in scan order.
  *
@@ -48,4 +64,31 @@ export async function listMachinesInDrive(
     candidates.map((machine) => deps.canUserViewPage(actorUserId, machine.id)),
   );
   return candidates.filter((_, index) => visibility[index]);
+}
+
+/**
+ * The Machine pages `actorUserId` may view, across every drive they can access,
+ * grouped by drive — the Development surface's GLOBAL (driveless) command
+ * center. Each drive's group runs through the exact same `listMachinesInDrive`
+ * a per-drive request would, so the guarantee is identical: an admin who lacks
+ * access to a drive never sees it here, and a Machine withheld from them by a
+ * page-level grant never appears even within a drive they can otherwise see.
+ *
+ * A drive with no VISIBLE machines (none exist, or every one is withheld) is
+ * dropped from the result rather than returned as an empty group — an empty
+ * drive header would just be noise in the aggregated list.
+ */
+export async function listMachinesAcrossDrives(
+  deps: GlobalMachineListDeps,
+  actorUserId: string,
+): Promise<DriveMachineGroup[]> {
+  const drives = await deps.findAccessibleDrives(actorUserId);
+  const groups = await Promise.all(
+    drives.map(async (drive): Promise<DriveMachineGroup> => ({
+      driveId: drive.id,
+      driveName: drive.name,
+      machines: await listMachinesInDrive(deps, actorUserId, drive.id),
+    })),
+  );
+  return groups.filter((group) => group.machines.length > 0);
 }
