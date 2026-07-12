@@ -362,10 +362,17 @@ export function showSessionIn(
   const showing = paneShowing(workspace, scope);
   if (showing) return selectPane(workspace, showing.id);
 
-  const empty = panesOf(workspace).find((pane) => pane.scope === null);
+  const panes = panesOf(workspace);
+  const empty = panes.find((pane) => pane.scope === null);
   if (empty) return assignPane(workspace, empty.id, scope);
 
-  return assignPane(splitDown(workspace, workspace.activePaneId, newPaneId), newPaneId, scope);
+  // Anchor the split on a pane that certainly exists. `activePaneId` is the
+  // right one to grow from, but every transition here no-ops on a pane id it
+  // cannot resolve — so anchoring on a stale one would quietly do nothing and
+  // the session would never appear, which is the exact failure this function
+  // exists to prevent.
+  const anchor = panes.some((pane) => pane.id === workspace.activePaneId) ? workspace.activePaneId : panes[0].id;
+  return assignPane(splitDown(workspace, anchor, newPaneId), newPaneId, scope);
 }
 
 /**
@@ -450,12 +457,20 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
     const workspaces: Record<string, WorkspaceState> = {};
     for (const [workspaceId, workspace] of Object.entries(candidate.workspaces)) {
       if (!isWorkspace(workspace)) continue;
+
+      const columns = workspace.columns.map((column) => ({
+        ...column,
+        panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
+      }));
+      const paneIds = columns.flatMap((column) => column.panes.map((pane) => pane.id));
+
       workspaces[workspaceId] = {
         ...workspace,
-        columns: workspace.columns.map((column) => ({
-          ...column,
-          panes: column.panes.map((pane) => ({ id: pane.id, scope: pane.scope })),
-        })),
+        columns,
+        // An activePaneId naming no pane is not merely cosmetic: every grid
+        // transition no-ops on a pane it cannot resolve, so a split anchored on
+        // it would silently do nothing.
+        activePaneId: paneIds.includes(workspace.activePaneId) ? workspace.activePaneId : paneIds[0],
         pendingPickerPaneId: null,
       };
     }

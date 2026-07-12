@@ -468,6 +468,19 @@ describe('showSessionIn — a clicked session must actually be on screen', () =>
     });
   });
 
+  it('given a workspace whose active pane is stale, should still put the session on screen', () => {
+    const full = assignPane({ ...aWorkspace(), activePaneId: 'closed-long-ago' }, 'pane-1', { name: 'other' });
+
+    const actual = showSessionIn(full, SESSION, 'new-pane');
+
+    assert({
+      given: 'a full workspace whose activePaneId names a pane that is gone',
+      should: 'anchor the split on a pane that exists, so the session actually appears',
+      actual: panesOf(actual).find((pane) => pane.scope?.name === SESSION.name)?.id,
+      expected: 'new-pane',
+    });
+  });
+
   it('given every pane is full of other agents, should split a new pane for it', () => {
     const full = assignPane(
       assignPane(splitRight(aWorkspace(), 'pane-1', 'col-2', 'pane-2'), 'pane-1', { name: 'other-1' }),
@@ -607,6 +620,24 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
       should: 'come back empty, so the store rebuilds from scratch instead of exploding at import time',
       actual: [sanitizeMachines(undefined), sanitizeMachines('nonsense'), sanitizeMachines({ m1: 7 })],
       expected: [{}, {}, {}],
+    });
+  });
+
+  it('given a stored activePaneId that names no pane, should re-point it at one that exists', () => {
+    const persisted = {
+      m1: {
+        workspaces: { 'ws-1': { ...aWorkspace(), activePaneId: 'pane-that-was-closed' } },
+        order: ['ws-1'],
+        activeWorkspaceId: 'ws-1',
+      },
+    };
+
+    assert({
+      given: 'a workspace whose active pane no longer exists',
+      should:
+        'point active at a real pane — every grid transition no-ops on a pane it cannot resolve, so a split anchored on a phantom would silently do nothing',
+      actual: sanitizeMachines(persisted).m1.workspaces['ws-1'].activePaneId,
+      expected: 'pane-1',
     });
   });
 });
