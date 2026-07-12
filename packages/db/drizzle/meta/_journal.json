@@ -1422,6 +1422,13 @@
       "when": 1783811607171,
       "tag": "0202_aspiring_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 203,
+      "version": "7",
+      "when": 1783813639079,
+      "tag": "0203_adorable_amphibian",
+      "breakpoints": true
     }
   ]
 }

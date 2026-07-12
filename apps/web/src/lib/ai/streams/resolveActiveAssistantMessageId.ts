@@ -13,8 +13,19 @@
  *   2. The last assistant message id, but only while `useChat` is actively
  *      streaming it (the rendered streaming bubble === serverAssistantMessageId).
  *
- * Returns `undefined` only in the brief `submitted`-before-first-chunk window
- * where no assistant id exists yet; callers fall back to the chatId abort.
+ * CALLERS MUST PASS `isStreaming` FROM `status === 'streaming'`, never from the looser
+ * `submitted || streaming`. useChat sets status='submitted' BEFORE issuing the request and
+ * pushes the new assistant message only inside write(), which flips the status to 'streaming'
+ * in the same job. So during the whole submitted window the array's last assistant message is
+ * THE PREVIOUS TURN'S reply — and resolving to it means aborting a message that finished
+ * minutes ago while the real generation keeps running and keeps billing.
+ *
+ * (An earlier version of this docstring claimed the submitted window is one "where no assistant
+ * id exists yet". That is true only of the very first turn of a conversation. On every turn
+ * after that, an id exists — it is just the wrong one.)
+ *
+ * Returns `undefined` in the `submitted`-before-first-chunk window; callers fall back to the
+ * chatId abort, which is correct there.
  */
 export const resolveActiveAssistantMessageId = ({
   ownStreamMessageId,

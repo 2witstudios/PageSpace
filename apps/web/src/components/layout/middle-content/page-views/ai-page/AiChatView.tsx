@@ -8,6 +8,7 @@
 
 import { TreePage } from '@/hooks/usePageTree';
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { createId } from '@paralleldrive/cuid2';
 import { useChat } from '@ai-sdk/react';
 import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -31,7 +32,7 @@ import { abortActiveStream, abortActiveStreamByMessageId } from '@/lib/ai/core/s
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isCapacitorApp } from '@/hooks/useCapacitor';
-import { isEditingActive } from '@/stores/useEditingStore';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
@@ -45,7 +46,6 @@ import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnCo
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
-import { isPlaceholderConversationId } from '@/lib/ai/streams/isPlaceholderConversationId';
 import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
@@ -55,6 +55,7 @@ import {
   useProviderSettings,
   useConversations,
   useConversationIdentity,
+  type ConversationIdentityResolveResult,
   conversationIdFrom,
   isResolving,
   useChatTransport,
@@ -148,6 +149,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // When set to a conversationId, the load-on-select effect skips the fetch for that
   // id on its next fire (messages are already provided inline, avoiding a double-fetch).
   const skipLoadEffectRef = useRef<string | null>(null);
+  // Mirrors the identity hook's isPersisted for the callbacks that must read it
+  // outside of render (the message loader, the stream-completion handler).
+  const isPersistedRef = useRef<boolean>(true);
+  // The identity hook is declared BELOW (it needs loadMessagesForConversation), so the
+  // loader reaches its setter through a ref rather than a closure.
+  const setPersistedRef = useRef<((isPersisted: boolean) => void) | null>(null);
   // Messages prefetched by resolveConversation (init path) for the id it resolves to,
   // consumed once by the load-on-select effect below to avoid a double-fetch.
   const preloadedMessagesRef = useRef<{ id: string; messages: UIMessage[] } | null>(null);
@@ -161,7 +168,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // the transport on every switch caused useChat to reset its internal store,
   // which clobbered the messages written by loadMessagesForConversation — the
   // root cause of conversations not loading when clicked from History.
-  const transport = useChatTransport(page.id, '/api/ai/chat');
+  // Third arg is the socket channel this page's streams are broadcast on — see
+  // useChatTransport / consumingChannels.
+  const transport = useChatTransport(page.id, '/api/ai/chat', page.id);
   const streamTrackingId = page.id;
 
   const handleChatError = useCallback((error: Error) => {
@@ -196,8 +205,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     conversationId: string,
     preloadedMessages?: UIMessage[],
   ): Promise<void> => {
-    // Skip the placeholder id — it has no server-side messages yet.
-    if (isPlaceholderConversationId(conversationId, page.id)) return;
+    // Skip an id that has no server-side conversation yet (freshly minted, no
+    // message sent). Gated on the FACT, not on the shape of the id string — the
+    // old sentinel-string check kept refusing to load conversations the server
+    // had in fact persisted under that very id, which is why chats came back
+    // empty after a reload.
+    if (conversationId === currentConversationIdRef.current && !isPersistedRef.current) return;
 
     loadRequestedIdRef.current = conversationId;
     setIsLoadingMessages(true);
@@ -215,6 +228,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         );
         // Stale check after await — user may have switched conversation.
         if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+        // The conversation isn't there. Either the send that was supposed to create it
+        // never reached the server (the credit gate runs BEFORE the row is persisted,
+        // so a 402 leaves nothing behind), or it was deleted elsewhere. Fall back to
+        // "fresh chat" rather than showing a load-failure banner for a conversation
+        // that does not exist — this is the only thing that walks `isPersisted` back,
+        // and without it the flag is a one-way door on an unverified assumption.
+        if (res.status === 404) {
+          if (conversationId === currentConversationIdRef.current) {
+            setPersistedRef.current?.(false);
+          }
+          return;
+        }
         if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
         const data = await res.json();
         if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
@@ -228,7 +253,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       // NOTE: prod runs multiple web instances — live tokens from a stream on another
       // instance won't be in the pending store; the persisted message still shows up
       // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
-      const ownStream = usePendingStreamsStore.getState().getOwnStreams(page.id)[0];
+      // Scoped by conversation, not `[0]`. getOwnStreams filters by pageId only, and a
+      // user can genuinely have two own streams on one page (send, then hit New Chat
+      // while it is still running) — in which case `[0]` may be the OTHER conversation's
+      // and the in-flight bubble for this one gets dropped on a DB reload.
+      const ownStream = usePendingStreamsStore
+        .getState()
+        .getOwnStreams(page.id)
+        .find((s) => s.conversationId === conversationId);
       const merged =
         ownStream?.conversationId === conversationId && ownStream.messageId
           ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
@@ -257,7 +289,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // fresh, disconnected conversation replacing a real one after a transient
   // network blip). Creating/selecting a conversation elsewhere is always a
   // synchronous setIdentity call — never routed through this resolver.
-  const resolveConversation = useCallback(async (): Promise<{ conversationId: string }> => {
+  const resolveConversation = useCallback(async (): Promise<ConversationIdentityResolveResult> => {
     const listResponse = await fetchWithAuth(
       `/api/ai/page-agents/${page.id}/conversations?pageSize=1`
     );
@@ -288,23 +320,35 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       if (loaded !== undefined) {
         preloadedMessagesRef.current = { id: conv.id, messages: loaded };
       }
-      return { conversationId: conv.id };
+      // Includes legacy `${pageId}-default` rows: the server used to accept that
+      // sentinel and mint a real conversation under it. They come back from the
+      // list like any other conversation and now load normally — which is how
+      // existing users get their stranded history back, with no data migration.
+      return { conversationId: conv.id, isPersisted: true };
     }
 
-    // No persisted conversations exist yet. Derive a stable ID from the page so
-    // concurrent openers share the same conversation before either sends a message.
-    // The conversation is anchored in the DB once the first message is saved.
-    return { conversationId: `${page.id}-default` };
+    // No conversation exists yet. Mint a real cuid — the server creates the row
+    // under exactly this id on the first send. (This used to be a `${pageId}-default`
+    // sentinel, which the server accepted unvalidated and the client then refused
+    // to load back: messages persisted, chat rendered empty.)
+    return { conversationId: createId(), isPersisted: false };
   }, [page.id]);
 
   const {
     state: identityState,
     canSend: canSendMessage,
+    isPersisted,
     setIdentity,
+    setPersisted,
     retry: retryResolveConversation,
   } = useConversationIdentity({ resolve: resolveConversation });
 
   const currentConversationId = conversationIdFrom(identityState);
+  // Same render-body-assignment rationale as currentConversationIdRef below: the
+  // loaders and the stream-completion callback must read the value from the most
+  // recently rendered pass, with no effect-flush lag.
+  isPersistedRef.current = isPersisted;
+  setPersistedRef.current = setPersisted;
   // Updated directly during render (not via an effect like pageIdRef) so the
   // late-joiner sync callback always reads the value from the most recently
   // rendered pass with no effect-flush lag. This component uses no
@@ -387,7 +431,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       setActiveTab('chat');
     },
     onConversationDelete: () => {
-      setIdentity(`${page.id}-default`);
+      // Mint a fresh cuid, not a sentinel. skipLoadEffectRef FIRST — otherwise the
+      // load-on-select effect fires for an id with nothing behind it and
+      // setMessages([]) lands on top of whatever the user does next.
+      const nextId = createId();
+      skipLoadEffectRef.current = nextId;
+      setIdentity(nextId, { isPersisted: false });
       setMessages([]);
     },
   });
@@ -431,12 +480,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const syncedConversationRef = useRef<string | null>(null);
   useEffect(() => {
     if (!currentConversationId) return;
-    if (isPlaceholderConversationId(currentConversationId, page.id)) return;
+    if (!isPersisted) return;
     if (conversations.some((c) => c.id === currentConversationId)) return;
     if (syncedConversationRef.current === currentConversationId) return;
     syncedConversationRef.current = currentConversationId;
     refreshConversations();
-  }, [currentConversationId, conversations, page.id, refreshConversations]);
+  }, [currentConversationId, conversations, isPersisted, refreshConversations]);
 
   // Find in page
   const findQuery = useFindStore((s) => s.query);
@@ -547,7 +596,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // here now — one authoritative fetch path for every conversation switch.
   useEffect(() => {
     if (!currentConversationId) return;
-    if (isPlaceholderConversationId(currentConversationId, page.id)) return;
+    if (!isPersisted) return;
     if (skipLoadEffectRef.current === currentConversationId) {
       skipLoadEffectRef.current = null; // consume the skip token
       return;
@@ -559,7 +608,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     void loadMessagesForConversation(currentConversationId);
-  }, [currentConversationId, page.id, loadMessagesForConversation]);
+  }, [currentConversationId, isPersisted, loadMessagesForConversation]);
 
   // Register streaming state with editing store
   useStreamingRegistration(
@@ -568,14 +617,45 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     { pageId: page.id, componentName: 'AiChatView' }
   );
 
+  // Conversation-scoped, mirroring selectChannelRemoteStreams. A page channel carries
+  // every conversation's streams; without the filter, a stream running in a DIFFERENT
+  // conversation on this page renders into the one on screen — which on its own looks
+  // exactly like duplication.
+  //
+  // The scoping is UNCONDITIONAL, including while the conversation is still unpersisted.
+  //
+  // It is tempting to drop the filter for a not-yet-sent conversation ("it owns no
+  // streams, so there is nothing to confuse it with") in order to restore the one
+  // deliberate property of the old `${pageId}-default` sentinel: two people opening a
+  // fresh AI page shared an id, so each could watch the other's stream. Do not. That
+  // property WAS a privacy leak. Conversations are private by default, and the page
+  // channel carries every conversation on the page — so on a shared AI page, an
+  // unfiltered surface renders another user's PRIVATE conversation token by token to
+  // anyone who opens the page. (The client-side filter is not the only defence any
+  // more — see the conversation-scoped authorization on /active-streams and
+  // /stream-join — but it must not be the hole either.)
+  //
+  // It also mistargets Stop: hitting "New Chat" mid-stream would leave the blank chat
+  // showing `effectiveIsStreaming` with a Stop button wired to the OLD conversation.
+  //
+  // A surface that never sent anything simply doesn't render someone else's stream. If
+  // that stream turns out to be this user's own conversation, onStreamComplete's
+  // late-joiner sync adopts it and the message appears.
   const remoteStreams = usePendingStreamsStore(
-    useShallow((state) => state.getRemotePageStreams(page.id))
+    useShallow((state) =>
+      currentConversationId === null
+        ? []
+        : state.getRemotePageStreams(page.id).filter((s) => s.conversationId === currentConversationId)
+    )
   );
 
   // Subscribe to a primitive (messageId | undefined) so token appends to the
   // own stream don't churn this hook's identity and re-render ChatLayout per chunk.
   const ownStreamMessageId = usePendingStreamsStore(
-    (state) => state.getOwnStreams(page.id)[0]?.messageId
+    (state) =>
+      currentConversationId === null
+        ? undefined
+        : state.getOwnStreams(page.id).find((s) => s.conversationId === currentConversationId)?.messageId
   );
 
   const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
@@ -592,7 +672,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // SSE join via the resulting chat:stream_complete broadcast.
     const messageId = resolveActiveAssistantMessageId({
       ownStreamMessageId,
-      isStreaming,
+      // 'streaming', NOT the looser isStreaming (which includes 'submitted'). useChat sets
+      // status='submitted' BEFORE issuing the request and pushes the new assistant message only
+      // inside write(), which flips to 'streaming' in the same job. So during submitted the
+      // array's last assistant message is THE PREVIOUS TURN'S reply — and passing the loose flag
+      // made this resolve to it and `return` early, aborting a message that finished minutes ago
+      // and never reaching the chatId fallback below, which would actually have worked. The local
+      // fetch stopped, the button looked like it worked, and the server kept generating and
+      // billing. Reachable on any 2nd+ turn, in the 0.5-3s window where a user hits Stop after a
+      // typo — the single most likely moment for them to hit it.
+      isStreaming: status === 'streaming',
       lastAssistantMessageId,
     });
     if (messageId) {
@@ -604,7 +693,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // so try streamTrackingId first (desired key) then page.id (actual registration key).
     if (streamTrackingId) void abortActiveStream({ chatId: streamTrackingId });
     if (streamTrackingId !== page.id) void abortActiveStream({ chatId: page.id });
-  }, [chatStop, ownStreamMessageId, isStreaming, lastAssistantMessageId, streamTrackingId, page.id]);
+  }, [chatStop, ownStreamMessageId, status, lastAssistantMessageId, streamTrackingId, page.id]);
 
   usePageSocketRoom(page.id);
   const { rejoinActiveStreams } = useChannelStreamSocket(page.id, {
@@ -643,14 +732,45 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onStreamComplete: (messageId, completedConvId) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
 
+      // The conversation row is definitely on the server by now (the stream that just
+      // finished wrote to it). If the cached list still doesn't have it, the optimistic
+      // sync below raced the POST: adoptConversationAsPersisted() flips isPersisted the
+      // moment a send leaves, so the list-sync effect fired, fetched a list that did not
+      // yet contain the row, and latched syncedConversationRef to this id — which then
+      // blocks it from ever trying again. Without this, the header's share toggle and the
+      // History tab never learn about the conversation the user is sitting in.
+      // Scoped to the conversation on screen. chat:stream_complete is broadcast to the
+      // whole page room with no conversation filter, so without this we'd refetch the
+      // conversation list on every OTHER member's assistant message — and their private
+      // conversations can never appear in our list, so it would refetch forever.
+      if (completedConvId === currentConversationId
+        && !conversations.some((c) => c.id === completedConvId)) {
+        if (syncedConversationRef.current === completedConvId) {
+          syncedConversationRef.current = null;
+        }
+        refreshConversations();
+      }
+
       if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationId) {
-        // Guard against a duplicate: useChat may already hold this message when the
-        // stream was consumed by both the POST stream and the multicast SSE join.
-        setMessages((prev) =>
-          prev.some((m) => m.id === messageId)
-            ? prev
-            : [...prev, synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt)],
-        );
+        // REPLACE by id — do not skip. An existing message with this id is NOT proof we already
+        // have the content.
+        //
+        // The server names the assistant message (`generateId: () => serverAssistantMessageId`),
+        // so useChat's copy shares the stream's `messageId`. useChat does not roll back on error,
+        // so a mid-stream network drop leaves its HALF-STREAMED message in the array — and that
+        // is precisely when recovery rejoins the multicast and `stream.parts` accumulates the
+        // FULL reply. Skipping threw the complete version away and left the user with the
+        // truncated one, the real text stranded in the DB until they navigated away and back.
+        //
+        // Replacing is correct for the duplicate case too (same id = same message; stream.parts
+        // is the authoritative copy), so it subsumes the original de-dup intent.
+        const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
+        setMessages((prev) => {
+          const i = prev.findIndex((m) => m.id === messageId);
+          return i === -1
+            ? [...prev, synthesized]
+            : prev.map((m, j) => (j === i ? synthesized : m));
+        });
         return;
       }
 
@@ -661,7 +781,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
       if (!stream || stream.parts.length === 0) return;
 
-      if (isPlaceholderConversationId(currentConversationId, page.id)) {
+      // The stream belongs to a conversation this surface hasn't confirmed exists
+      // server-side yet (first message on a brand-new chat). Confirm it landed, then
+      // adopt it as persisted so the loaders stop skipping it.
+      if (!isPersistedRef.current) {
         const { parts, conversationId: streamConvId, startedAt } = stream;
         fetchWithAuth(`/api/ai/page-agents/${page.id}/conversations?pageSize=1`)
           .then(async (res) => {
@@ -674,8 +797,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             // create/select, it must not clobber an identity the user has
             // since moved on to (e.g. via New Chat or history-select) while
             // this fetch was in flight. Only apply if still on the same
-            // placeholder that triggered it.
-            if (!isPlaceholderConversationId(currentConversationIdRef.current, page.id)) return;
+            // unpersisted conversation that triggered it.
+            if (isPersistedRef.current) return;
             setIdentity(persisted.id);
             setMessages((prev) =>
               prev.some((m) => m.id === messageId)
@@ -801,6 +924,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     buildBody: buildAskUserAnswerBody,
   });
 
+  // A send creates the conversations row server-side under exactly this id, so the id
+  // becomes real the moment the POST leaves. Flipping isPersisted re-runs the
+  // load-on-select effect for the SAME id, though — and that effect would fetch a
+  // conversation whose first message has not been written yet and setMessages([]) over
+  // the optimistic user bubble and the in-flight stream. Claim the skip token first.
+  const adoptConversationAsPersisted = useCallback(() => {
+    if (isPersistedRef.current) return;
+    const id = currentConversationIdRef.current;
+    if (id) skipLoadEffectRef.current = id;
+    setPersisted(true);
+  }, [setPersisted]);
+
   const handleSendMessage = useCallback(() => {
     if (isReadOnly) {
       toast.error('You do not have permission to send messages in this AI chat');
@@ -818,6 +953,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     clearInputDraft();
     clearFiles();
     inputRef.current?.clear();
+
+    adoptConversationAsPersisted();
 
     wrapSend(async () => {
       const pageContext = await contextPromise;
@@ -856,6 +993,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     imageGenEnabled,
     mcpToolSchemas,
     wrapSend,
+    adoptConversationAsPersisted,
   ]);
 
   // Voice mode: Send message from voice transcript
@@ -868,6 +1006,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!canSendMessage) return;
 
     const contextPromise = buildFreshPageContext();
+    adoptConversationAsPersisted();
     wrapSend(async () => {
       const pageContext = await contextPromise;
       sendMessage(
@@ -900,6 +1039,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     imageGenEnabled,
     mcpToolSchemas,
     wrapSend,
+    adoptConversationAsPersisted,
   ]);
 
   // Voice mode toggle handler
@@ -922,6 +1062,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     await loadMessagesForConversation(currentConversationId);
   }, [currentConversationId, loadMessagesForConversation]);
 
+  const resumeEnabled = useCallback(
+    () => currentConversationIdRef.current !== null && !useEditingStore.getState().isAnyEditing(),
+    [],
+  );
+
   // App state recovery - re-attach/refetch AI stream when returning from background.
   // On native (Capacitor): if streaming, stop the local fetch, rejoin any still-live
   // server stream, then refetch to recover a stream that finished while backgrounded.
@@ -942,7 +1087,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       }
       await handlePullUpRefresh();
     }, [effectiveIsStreaming, chatStop, rejoinActiveStreams, handlePullUpRefresh]),
-    enabled: currentConversationId !== null && !isEditingActive(),
+    // Gate on USER editing only, and evaluate it at fire time (callback form).
+    // The old gate was `!isEditingActive()`, i.e. isAnyActive(), which is true
+    // whenever an 'ai-streaming' session exists — and this component registers one
+    // while streaming. So the hook early-returned in exactly the case it was
+    // written for. Worse, a boolean is captured at render, and iOS freezes JS
+    // while backgrounded, so the captured value was always the streaming one.
+    enabled: resumeEnabled,
   });
 
   // Clean up stream tracking when conversation changes or on unmount
@@ -959,6 +1110,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       clearActiveStreamId({ chatId: streamTrackingId });
     };
   }, [streamTrackingId]);
+
+  // NOTE: deliberately NO unmarkChannelConsuming() on unmount. The consuming refcount
+  // is owned by the transport's response-body wrapper — one release per POST, and
+  // this component holds no reference of its own to release. Unmarking here would
+  // decrement someone else's count (a co-mounted surface on the same channel), and
+  // unmounting does not stop the body anyway: `useChat` keys its Chat instance by
+  // `page.id`, so a remount reuses the same instance and keeps consuming. The count
+  // clears itself when that body finishes — and a reload, which is the case this whole
+  // mechanism exists for, resets the module outright.
 
   // ============================================
   // RENDER

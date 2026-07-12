@@ -16,6 +16,7 @@ const {
   mockBroadcastChatUserMessage,
   mockSaveMessageToDatabase,
   mockGetConversation,
+  mockHasConflictingMessageOwner,
   mockCreateConversation,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockBroadcastChatUserMessage: vi.fn().mockResolvedValue(undefined),
   mockSaveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   mockGetConversation: vi.fn().mockResolvedValue(null), // default: legacy (no row) → broadcast
+  mockHasConflictingMessageOwner: vi.fn().mockResolvedValue(false),
   mockCreateConversation: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -195,7 +197,8 @@ vi.mock('ai', () => ({
   createUIMessageStreamResponse: vi.fn().mockReturnValue(new Response('', { status: 200 })),
 }));
 
-vi.mock('@paralleldrive/cuid2', () => ({
+vi.mock('@paralleldrive/cuid2', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@paralleldrive/cuid2')>()),
   createId: vi.fn().mockReturnValue('test-message-id'),
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
@@ -207,6 +210,7 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getConversation: mockGetConversation,
+    hasConflictingMessageOwner: mockHasConflictingMessageOwner,
     createConversation: mockCreateConversation,
   },
 }));
@@ -308,6 +312,9 @@ const mockAuth = (): SessionAuthResult => ({
   adminRoleVersion: 0,
 });
 
+// A real cuid: POST /api/ai/chat only ever CREATES a conversation from a cuid.
+const CONV_ID = 'clhjx7xu5e4yhlvpfs3h7xea';
+
 const makeRequest = (overrides: { browserSessionId?: string | null; conversationId?: string } = {}) => {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -322,7 +329,7 @@ const makeRequest = (overrides: { browserSessionId?: string | null; conversation
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page-1',
-      conversationId: overrides.conversationId ?? 'conv-1',
+      conversationId: overrides.conversationId ?? CONV_ID,
       selectedProvider: 'openai',
       selectedModel: 'openai/gpt-5.3-chat',
     }),
@@ -374,6 +381,112 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
   });
 
+  // AC3 step 3. The client used to send a `${pageId}-default` sentinel for a brand-new
+  // chat and this route accepted it unvalidated, minting a real conversations row under
+  // that id — which the client then refused to load back, stranding the history.
+  describe('conversationId validation', () => {
+    it('given a non-cuid conversationId with no existing row, should 400 rather than create a conversation from it', async () => {
+      mockGetConversation.mockResolvedValueOnce(null);
+
+      const response = await POST(makeRequest({ conversationId: 'page-1-default' }));
+
+      expect(response.status).toBe(400);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    // The migration-free recovery path: those sentinel rows EXIST in production, the
+    // client now loads them, and it will keep POSTing that id. A bare isCuid reject
+    // would lock those users out of the conversation we just gave them back.
+    it('given a legacy non-cuid conversationId that DOES exist, should accept it and stream normally', async () => {
+      mockGetConversation.mockResolvedValue({ id: 'page-1-default', userId: 'user-1', isShared: false, contextId: 'page-1' });
+
+      const response = await POST(makeRequest({ conversationId: 'page-1-default' }));
+
+      expect(response.status).not.toBe(400);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: 'page-1-default' }),
+      );
+    });
+
+    it('given a cuid conversationId with no existing row, should allow it (a cuid may always create)', async () => {
+      mockGetConversation.mockResolvedValue(null);
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: CONV_ID }),
+      );
+    });
+  });
+
+  // The history load is keyed on (pageId, conversationId) with NO user filter, so an id
+  // that resolves to someone else's conversation reads their private history into the
+  // model context and appends this user's message to it. `${pageId}-default` is derived
+  // from the page id, so it is *guessable* by any member with edit access — this guard
+  // is what stops that.
+  describe('conversationId authorization', () => {
+    it('given an existing conversation owned by ANOTHER user and not shared, should 403', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: 'page-1-default', userId: 'someone-else', isShared: false, contextId: 'page-1',
+      });
+
+      const response = await POST(makeRequest({ conversationId: 'page-1-default' }));
+
+      expect(response.status).toBe(403);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    it('given an existing conversation owned by another user but explicitly SHARED, should allow it', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: CONV_ID, userId: 'someone-else', isShared: true, contextId: 'page-1',
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(403);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+
+    it('given an existing conversation belonging to a DIFFERENT page, should 403', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: 'some-other-page',
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(403);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    // Fail closed on the LEGACY shape too: a conversation whose messages predate the
+    // conversations table has messages under its id and NO row, so an existence-only
+    // check would skip the ownership guard entirely — letting a caller read another
+    // user's history into their model context, append to it, and (since takeover aborts
+    // as the stream's owner) abort its stream.
+    it('given a cuid with no conversations row but messages owned by ANOTHER user (legacy), should 403', async () => {
+      mockGetConversation.mockResolvedValue(null);
+      mockHasConflictingMessageOwner.mockResolvedValueOnce(true);
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).toBe(403);
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+    });
+
+    // contextId is nullable in the schema (null for global conversations). An owner must
+    // never be locked out of their own row by a historically-unset column.
+    it('given the caller OWNS a conversation whose contextId is null, should allow it', async () => {
+      mockGetConversation.mockResolvedValue({
+        id: CONV_ID, userId: 'user-1', isShared: false, contextId: null,
+      });
+
+      const response = await POST(makeRequest({ conversationId: CONV_ID }));
+
+      expect(response.status).not.toBe(403);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+  });
+
   describe('createStreamLifecycle invocation', () => {
     it('given a new AI stream, should construct the lifecycle with channel, conversation, user, displayName, and browserSessionId', async () => {
       await POST(makeRequest({ browserSessionId: 'session-7' }));
@@ -382,24 +495,25 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).toHaveBeenCalledWith({
         messageId: 'test-message-id',
         channelId: 'page-1',
-        conversationId: 'conv-1',
+        conversationId: CONV_ID,
         userId: 'user-1',
         displayName: 'Profile User',
         browserSessionId: 'session-7',
+        isShared: false,
       });
     });
   });
 
   describe('user-message broadcast', () => {
     it('given a POST with a user message, should broadcast chat:user_message after the DB save resolves with the saved message and full envelope', async () => {
-      mockGetConversation.mockResolvedValueOnce({ id: 'conv-1', userId: 'user-1', isShared: true });
+      mockGetConversation.mockResolvedValueOnce({ id: CONV_ID, userId: 'user-1', isShared: true });
       await POST(makeRequest({ browserSessionId: 'session-7' }));
 
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledWith({
         message: { id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] },
         pageId: 'page-1',
-        conversationId: 'conv-1',
+        conversationId: CONV_ID,
         triggeredBy: { userId: 'user-1', displayName: 'Profile User', browserSessionId: 'session-7' },
       });
     });
@@ -424,47 +538,47 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       mockCreateConversation.mockRejectedValueOnce(new Error('db down'));
       mockGetConversation.mockResolvedValueOnce(null);
 
-      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await POST(makeRequest({ conversationId: CONV_ID }));
 
       expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
 
     it('should broadcast when conversation isShared is true', async () => {
       mockGetConversation.mockResolvedValueOnce({
-        id: 'conv-1', userId: 'other-user', isShared: true,
+        id: CONV_ID, userId: 'other-user', isShared: true,
       });
 
-      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await POST(makeRequest({ conversationId: CONV_ID }));
 
       expect(mockBroadcastChatUserMessage).toHaveBeenCalledTimes(1);
     });
 
     it('should suppress broadcast when user owns a private conversation', async () => {
       mockGetConversation.mockResolvedValueOnce({
-        id: 'conv-1', userId: 'user-1', isShared: false,
+        id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
-      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await POST(makeRequest({ conversationId: CONV_ID }));
 
       expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
 
     it('should suppress broadcast when private conversation is owned by someone else', async () => {
       mockGetConversation.mockResolvedValueOnce({
-        id: 'conv-1', userId: 'other-user', isShared: false,
+        id: CONV_ID, userId: 'other-user', isShared: false,
       });
 
-      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await POST(makeRequest({ conversationId: CONV_ID }));
 
       expect(mockBroadcastChatUserMessage).not.toHaveBeenCalled();
     });
 
     it('should omit mentionNotify from saveMessageToDatabase when isShared=false', async () => {
       mockGetConversation.mockResolvedValueOnce({
-        id: 'conv-1', userId: 'user-1', isShared: false,
+        id: CONV_ID, userId: 'user-1', isShared: false,
       });
 
-      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await POST(makeRequest({ conversationId: CONV_ID }));
       await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
 
       const saveCalls = mockSaveMessageToDatabase.mock.calls;
@@ -474,10 +588,10 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
     it('should include mentionNotify in saveMessageToDatabase when isShared=true', async () => {
       mockGetConversation.mockResolvedValueOnce({
-        id: 'conv-1', userId: 'user-1', isShared: true,
+        id: CONV_ID, userId: 'user-1', isShared: true,
       });
 
-      await POST(makeRequest({ conversationId: 'conv-1' }));
+      await POST(makeRequest({ conversationId: CONV_ID }));
       await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
 
       const saveCalls = mockSaveMessageToDatabase.mock.calls;
@@ -588,7 +702,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(assistantSave?.[0]).toMatchObject({
         messageId: 'test-message-id',
         pageId: 'page-1',
-        conversationId: 'conv-1',
+        conversationId: CONV_ID,
         userId: null,
         role: 'assistant',
       });

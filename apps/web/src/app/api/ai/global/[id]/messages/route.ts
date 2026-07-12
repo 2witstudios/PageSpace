@@ -23,6 +23,7 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
@@ -1086,6 +1087,16 @@ MENTION PROCESSING:
       }).catch(() => {});
     }
 
+    // Same per-conversation in-flight guard as POST /api/ai/chat. A stream is a
+    // server-owned entity: at most one may be generating on a conversation at a time.
+    // Without this the global assistant happily starts a second generation on the same
+    // conversation — two agents, two assistant rows, two bills. Takeover, not 409; see
+    // stream-liveness.ts for why rejecting would self-lock the conversation.
+    await takeOverConversationStreams({
+      conversationId,
+      channelId,
+    });
+
     lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,
       channelId,
@@ -1093,6 +1104,7 @@ MENTION PROCESSING:
       userId,
       displayName,
       browserSessionId,
+      isShared: conversation.isShared === true,
     });
 
     // Outcome of the retry shell, shared from execute() to onFinish(). Carries the

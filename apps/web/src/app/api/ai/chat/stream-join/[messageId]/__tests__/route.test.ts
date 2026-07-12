@@ -37,6 +37,11 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const mockPageId = 'page-test-123';
+const mockCanSubscribeToStream = vi.fn();
+vi.mock('@/lib/ai/core/stream-subscription-authz', () => ({
+  canSubscribeToStream: (args: unknown) => mockCanSubscribeToStream(args),
+}));
+
 const mockUserId = 'user-test-456';
 const mockMessageId = 'msg-test-789';
 const mockConversationId = 'conv-test-321';
@@ -88,6 +93,8 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
     vi.mocked(isAuthError).mockReturnValue(false);
+    // Default: the caller owns the stream (canSubscribeToStream short-circuits on that).
+    mockCanSubscribeToStream.mockResolvedValue(true);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
   });
 
@@ -192,6 +199,66 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
 
       expect(response.status).toBe(403);
       expect(canUserViewPage).not.toHaveBeenCalled();
+    });
+  });
+
+  // Page access is NOT conversation access. A page room holds every member of the page,
+  // but conversations are private by default — `listConversations` shows you only
+  // `userId = you OR isShared`. Stream subscription now follows the same rule, so these
+  // are the two paths that matter and neither had route-level coverage before.
+  describe('conversation-scoped subscription', () => {
+    beforeEach(() => {
+      testRegistry.register(mockMessageId, mockMeta);
+    });
+
+    it("given another member's stream in an explicitly SHARED conversation, should still join (multiplayer must not regress)", async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-other'));
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      mockCanSubscribeToStream.mockResolvedValue(true);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(200);
+      expect(mockCanSubscribeToStream).toHaveBeenCalledWith({
+        userId: 'user-other',
+        streamOwnerId: mockUserId,
+        conversationId: mockConversationId,
+      });
+    });
+
+    it("given another member's stream in a PRIVATE conversation, should NOT serve it", async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-other'));
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      mockCanSubscribeToStream.mockResolvedValue(false);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(404);
+    });
+
+    // Deliberately a 404, not an audited 403. A member asking for a co-member's private
+    // stream is the ordinary consequence of a page-wide broadcast, not an attack —
+    // auditing it would write an authz-denial row per member per assistant message and
+    // bury real signal. A genuine page-access violation still 403s and still audits.
+    it('given a non-subscribable stream, should NOT write an authz-denial audit row', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-other'));
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      mockCanSubscribeToStream.mockResolvedValue(false);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(vi.mocked(auditRequest)).not.toHaveBeenCalled();
+    });
+
+    it('given the caller has no page access at all, should still 403 AND audit', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth('user-other'));
+      vi.mocked(canUserViewPage).mockResolvedValue(false);
+      mockCanSubscribeToStream.mockResolvedValue(true);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(403);
+      expect(vi.mocked(auditRequest)).toHaveBeenCalled();
     });
   });
 
