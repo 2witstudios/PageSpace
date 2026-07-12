@@ -102,28 +102,37 @@ export const markAbortRequested = async ({
     return marked.map((row) => row.messageId);
   };
 
-  // Precedence: the most precise name first. But a precise name that matches NOTHING falls through
-  // to the conversation, which is the one name that always resolves.
+  // EVERY name the caller gave us is marked — a UNION, not a first-match.
   //
-  // This is not belt-and-braces, it is the rolling-deploy path: a stream started by a worker
-  // running the previous image has `stream_id = NULL`, so a Stop naming the `X-Stream-Id` the
-  // client was handed matches zero rows. Without the fallback that is reported as `not_found` —
-  // which the client is designed to treat as SILENT — while the generation runs on and bills.
-  // Falling back to the conversation is also exactly what Stop means: "stop whatever of MINE is
-  // generating here". The `user_id` predicate rides every one of these.
+  // First-match precedence was a bug, and a subtle one. A client's `streamId` can be STALE (the
+  // activeStreams map holds the previous turn's id until the new response headers land), and a
+  // stale name is not the same as a name that resolves to nothing: during the tail of `onFinish` —
+  // after the controller is unregistered but before the terminal write lands — the finished
+  // stream's row STILL READS 'streaming'. So the stale name matched, precedence stopped there, and
+  // the conversation was never marked. The generation that was actually running (a later turn,
+  // possibly on another instance) was never asked to stop, and the caller was told `not_found` —
+  // which the UI stays silent about. A silent Stop over a live generation: the cardinal sin, and
+  // the exact bug this whole PR exists to eliminate.
+  //
+  // A union also makes this step AGREE with the local step, which already aborts every one of the
+  // caller's streams on the conversation. Two steps that disagree about what a name means is how
+  // that bug kept coming back in new shapes.
+  //
+  // Naming the conversation is what Stop means anyway — "stop whatever of MINE is generating here"
+  // — and the `user_id` predicate rides every branch, so this can never reach another user.
   try {
-    const names: Array<SQL | undefined> = [
+    const names: SQL[] = [
       messageId ? eq(aiStreamSessions.messageId, messageId) : undefined,
       streamId ? eq(aiStreamSessions.streamId, streamId) : undefined,
       conversationId ? eq(aiStreamSessions.conversationId, conversationId) : undefined,
-    ];
+    ].filter((name): name is SQL => name !== undefined);
 
+    const marked = new Set<string>();
     for (const name of names) {
-      const marked = await markBy(name);
-      if (marked.length > 0) return { marked, failed: false };
+      for (const id of await markBy(name)) marked.add(id);
     }
 
-    return { marked: [], failed: false };
+    return { marked: [...marked], failed: false };
   } catch (error) {
     loggers.ai.warn('cross-instance abort: could not mark stream(s) for abort', {
       conversationId,

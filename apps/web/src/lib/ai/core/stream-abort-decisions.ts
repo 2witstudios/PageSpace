@@ -26,7 +26,7 @@
  */
 
 import {
-  hasOutlivedHeartbeatCap,
+  heartbeatStoppedAtCap,
   isStreamRowLive,
   STREAM_HEARTBEAT_STALE_MS,
   type StreamLivenessRow,
@@ -201,16 +201,16 @@ export const decideAbortOutcome = ({
       continue;
     }
 
-    // A row that has outlived the heartbeat cap stopped beating BY DESIGN, not by dying: the
-    // lifecycle caps the beat at STREAM_MAX_LIFETIME_MS (see stream-lifecycle.ts) while the
-    // generation itself has no such cap — a long tool loop can still be running at T+61min.
+    // A row whose beat ran all the way to the cap went silent BY DESIGN, not by dying: the
+    // lifecycle caps the beat at STREAM_MAX_LIFETIME_MS while the generation itself has no such
+    // cap — a long tool loop can still be running at T+61min. Its silence proves nothing, so
+    // reading it as death would be the worst thing this module can do: tell the user "aborted",
+    // and reconcile the row terminal — wiping `parts` and hiding a stream that is STILL
+    // generating from every subscriber. Report it honestly as unconfirmed, and never touch it.
     //
-    // So past the cap a stale heartbeat proves NOTHING, and reading it as death would be the
-    // worst outcome this module can produce: we would tell the user "aborted", and reconcile the
-    // row terminal — wiping `parts` and hiding a stream that is STILL generating, still calling
-    // write tools, and still billing, from every subscriber. Report it honestly as unconfirmed
-    // instead, and never touch its row.
-    if (hasOutlivedHeartbeatCap(row, now)) {
+    // A beat that stopped SHORT of the cap is a different thing entirely — that is a dead process,
+    // and it falls through to the branch below at any age. See heartbeatStoppedAtCap.
+    if (heartbeatStoppedAtCap(row, staleAfterMs) && !isStreamRowLive(row, now, staleAfterMs)) {
       outcome.stillLive.push(messageId);
       continue;
     }

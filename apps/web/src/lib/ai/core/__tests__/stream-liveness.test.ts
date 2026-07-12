@@ -141,11 +141,35 @@ describe('decideStreamTakeover — a beat that stops BY DESIGN is not a death', 
   // GENERATING — hiding it from every subscriber, destroying its only crash-recovery snapshot, and
   // leaving it calling write tools and billing. That is the one write this module must never make.
   const now = new Date('2026-07-12T14:00:00Z').getTime();
+  const HOUR = 60 * 60 * 1000;
+  // Started 2h ago; beat right up to the 1h cap and then went silent BY DESIGN. This is what a
+  // healthy long generation looks like — still running, no longer beating.
   const longRow = (over: Partial<StreamLivenessRow> = {}): StreamLivenessRow => ({
     messageId: 'msg-long',
-    startedAt: new Date(now - 2 * 60 * 60 * 1000),
-    lastHeartbeatAt: new Date(now - 61 * 60 * 1000),
+    startedAt: new Date(now - 2 * HOUR),
+    lastHeartbeatAt: new Date(now - 1 * HOUR),
     ...over,
+  });
+
+  // THE REGRESSION THIS GUARD ALMOST CAUSED. Asking "is the row old?" makes every row older than
+  // the cap unreconcilable — including one whose process crashed at minute five and which nobody
+  // looked at for an hour. That row is definitively dead, but it would sit at 'streaming' FOREVER:
+  // a permanent ghost, poisoning every later Stop on its conversation with a false "may still be
+  // running" and every later send with a warn.
+  //
+  // The row itself tells us which it is. A stream alive at the cap beat right UP TO it; a stream
+  // that died at minute five stopped beating there. So we ask WHERE the beat stopped, not how old
+  // the row is.
+  it('still reconciles a process that died early, however long ago that was', () => {
+    assert({
+      given: 'a row whose process crashed 5 minutes in, untouched for 2 hours',
+      should: 'reconcile it — a beat that stopped short of the cap is proof of death at any age',
+      actual: decideStreamTakeover({
+        rows: [longRow({ lastHeartbeatAt: new Date(now - 2 * 60 * 60 * 1000 + 5 * 60 * 1000) })],
+        now,
+      }).reconcile,
+      expected: ['msg-long'],
+    });
   });
 
   it('refuses to reconcile a row that has outlived the heartbeat cap', () => {

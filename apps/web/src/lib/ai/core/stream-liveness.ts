@@ -44,20 +44,40 @@ export interface StreamLivenessRow {
 }
 
 /**
- * Has this row aged past the point where a silent heartbeat means anything?
+ * Did this row stop beating because the CAP stopped it, rather than because its process died?
  *
- * The lifecycle stops beating at `startedAt + STREAM_MAX_LIFETIME_MS` — deliberately, as a backstop
- * against a leaked interval (see MAX_HEARTBEAT_MS there). The GENERATION has no such cap: a long
- * tool loop or a deep-research run can still be going at T+61min.
+ * The lifecycle caps the heartbeat at `startedAt + STREAM_MAX_LIFETIME_MS` — deliberately, as a
+ * backstop against a leaked interval (see MAX_HEARTBEAT_MS there). The GENERATION has no such cap:
+ * a long tool loop or a deep-research run can still be going at T+61min. So a silent heartbeat past
+ * the cap is the EXPECTED state of a perfectly healthy stream, and driving such a row terminal
+ * would write `status='aborted', parts=[]` over a stream that is still generating — hiding it from
+ * every subscriber, destroying its only crash-recovery snapshot, and leaving it calling write tools
+ * and billing.
  *
- * So past that horizon, silence is the EXPECTED state of a perfectly healthy stream, and "stale"
- * stops being evidence of death. Anything that drives a row TERMINAL on the strength of a stale
- * heartbeat must therefore exclude these rows, or it will write `status='aborted', parts=[]` over a
- * stream that is still generating — hiding it from every subscriber and destroying its only
- * crash-recovery snapshot, while it keeps calling write tools and keeps billing.
+ * BUT "IS IT OLD?" IS THE WRONG QUESTION, and asking it that way is a trap I fell into: it makes
+ * every row older than the cap unreconcilable, INCLUDING one whose process crashed at minute five
+ * and which nobody looked at for an hour. That row is definitively dead, yet it would sit at
+ * 'streaming' forever — poisoning every future Stop on its conversation with a false "may still be
+ * running", and every future send with a warn. A permanent ghost. Trading a rare harm (a live >1h
+ * stream terminal-written) for a common one (any crash, plus an hour) is a bad trade.
+ *
+ * The right question is WHERE the beat stopped, and the row already tells us:
+ *
+ *   - A stream still alive at the cap beat right UP TO it   → lastHeartbeatAt ≈ startedAt + cap.
+ *   - A stream that crashed at minute five stopped there    → lastHeartbeatAt ≈ startedAt + 5min.
+ *
+ * So a beat that reached the cap is ambiguous (the silence is by design; we cannot prove death, so
+ * we do not touch it), while a beat that stopped short of it is proof the process died — at any
+ * age. One margin of slack, so the final beat before the cap is not mistaken for an early death.
  */
-export const hasOutlivedHeartbeatCap = (row: StreamLivenessRow, now: number): boolean =>
-  now - row.startedAt.getTime() > STREAM_MAX_LIFETIME_MS;
+export const heartbeatStoppedAtCap = (
+  row: StreamLivenessRow,
+  staleAfterMs: number = STREAM_HEARTBEAT_STALE_MS,
+): boolean => {
+  const beat = row.lastHeartbeatAt ?? row.startedAt;
+  const beatAge = beat.getTime() - row.startedAt.getTime();
+  return beatAge >= STREAM_MAX_LIFETIME_MS - staleAfterMs;
+};
 
 export const isStreamRowLive = (
   row: StreamLivenessRow,
@@ -127,12 +147,10 @@ export const decideStreamTakeover = ({
       .filter((r) => (
         // We stopped it. Proven finished, whatever its heartbeat says.
         aborted.has(r.messageId)
-        // Or its heartbeat says its process is gone — but ONLY while the heartbeat still means
-        // something. Past the cap the beat stops by design (see hasOutlivedHeartbeatCap), so a
-        // silent row there may be a perfectly healthy long generation, and driving it terminal
-        // would erase a stream that is still running. We cannot prove it is dead, so we do not
-        // touch it.
-        || (!isStreamRowLive(r, now, staleAfterMs) && !hasOutlivedHeartbeatCap(r, now))
+        // Or its beat stopped SHORT of the cap and has since gone stale — which is what a dead
+        // process looks like, at any age. A beat that ran all the way to the cap is silent by
+        // design, so it proves nothing, and we leave that row alone. See heartbeatStoppedAtCap.
+        || (!isStreamRowLive(r, now, staleAfterMs) && !heartbeatStoppedAtCap(r, staleAfterMs))
       ))
       .map((r) => r.messageId),
   };

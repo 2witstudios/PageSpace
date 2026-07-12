@@ -332,9 +332,9 @@ describe('markAbortRequested — what it actually writes', () => {
   });
 
   // The rolling-deploy hole: a stream started by the previous image has stream_id = NULL, so the
-  // X-Stream-Id the client holds matches zero rows. Without the fallback that reads as not_found →
+  // X-Stream-Id the client holds matches zero rows. Without the conversation it reads as not_found →
   // the client stays silent → the generation runs on and bills.
-  it('falls back to the conversation when a precise name matches nothing', async () => {
+  it('marks by the conversation when a precise name matches nothing', async () => {
     mockReturning
       .mockResolvedValueOnce([])                       // by streamId — a legacy row has none
       .mockResolvedValueOnce([{ messageId: 'msg-1' }]); // by conversationId
@@ -345,14 +345,55 @@ describe('markAbortRequested — what it actually writes', () => {
       userId: 'user-a',
     });
 
-    const fallbackConds = (mockUpdateWhere.mock.calls[1][0] as Predicate).conds;
-    expect(fallbackConds.find((c) => c.field === 'ai_stream_sessions.conversation_id')?.value).toBe('conv-1');
-    // The authorization rides the fallback too. It must never be the loose one.
-    expect(fallbackConds.find((c) => c.field === 'ai_stream_sessions.user_id')?.value).toBe('user-a');
+    const convConds = (mockUpdateWhere.mock.calls[1][0] as Predicate).conds;
+    expect(convConds.find((c) => c.field === 'ai_stream_sessions.conversation_id')?.value).toBe('conv-1');
+    // The authorization rides every branch. It must never be the loose one.
+    expect(convConds.find((c) => c.field === 'ai_stream_sessions.user_id')?.value).toBe('user-a');
     assert({
       given: 'a streamId that resolves to no row (a stream from a pre-migration worker)',
-      should: 'fall back to the conversation rather than silently reporting nothing in flight',
+      should: 'mark by the conversation rather than silently reporting nothing in flight',
       actual: result.marked,
+      expected: ['msg-1'],
+    });
+  });
+
+  // THE CARDINAL SIN, and the reason this is a UNION rather than a first-match.
+  //
+  // A client's streamId can be STALE — it holds the previous turn's until the new response headers
+  // land — and a stale name is NOT the same as a name that resolves to nothing. During the tail of
+  // onFinish (after the controller is unregistered, before the terminal write lands) the finished
+  // stream's row STILL READS 'streaming'. So the stale name MATCHES. With first-match precedence
+  // the search stopped right there, the conversation was never marked, and the generation that was
+  // actually running — a later turn, possibly on another instance — was never asked to stop, while
+  // the caller was told `not_found` (which the UI stays silent about).
+  it('still marks the conversation when a STALE precise name matches a finishing row', async () => {
+    mockReturning
+      .mockResolvedValueOnce([{ messageId: 'msg-turn-1' }])  // the stale streamId DOES match: turn 1 is mid-onFinish
+      .mockResolvedValueOnce([{ messageId: 'msg-turn-2' }]); // and turn 2 is the one actually generating
+
+    const result = await markAbortRequested({
+      streamId: 'stale-stream-turn-1',
+      conversationId: 'conv-1',
+      userId: 'user-a',
+    });
+
+    assert({
+      given: "a Stop whose streamId names the previous turn, which is still finishing",
+      should: 'mark the conversation too — never stop at the stale name and leave turn 2 running',
+      actual: result.marked,
+      expected: ['msg-turn-1', 'msg-turn-2'],
+    });
+  });
+
+  it('does not mark a stream twice when two names resolve to the same row', async () => {
+    mockReturning
+      .mockResolvedValueOnce([{ messageId: 'msg-1' }])
+      .mockResolvedValueOnce([{ messageId: 'msg-1' }]);
+
+    assert({
+      given: 'a streamId and a conversationId that name the same in-flight stream',
+      should: 'report it once',
+      actual: (await markAbortRequested({ streamId: 's1', conversationId: 'conv-1', userId: 'user-a' })).marked,
       expected: ['msg-1'],
     });
   });

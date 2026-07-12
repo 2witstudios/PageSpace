@@ -400,6 +400,50 @@ describe('stream-abort-client', () => {
       });
     });
 
+    // The map slot is keyed by chatId, which is CONSTANT across turns. So an unconditional delete
+    // on body-end lets a stream that is ENDING wipe the name of one that is still RUNNING: send
+    // turn 2 while turn 1 is still streaming (exactly what the takeover exists for), turn 2's
+    // headers claim the slot, then turn 1's body finally closes — and deletes turn 2's streamId.
+    // Stop would then have no precise name for a live generation.
+    it('does not let a finishing stream forget the name of a newer one', async () => {
+      const client = await import('../stream-abort-client');
+
+      // Turn 1 is streaming; we hold its body open.
+      let releaseTurn1: (() => void) | undefined;
+      const turn1 = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            return new Promise<void>((resolve) => {
+              releaseTurn1 = () => { controller.close(); resolve(); };
+            });
+          },
+        }),
+        { status: 200, headers: { 'X-Stream-Id': 'stream-turn-1' } },
+      );
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(turn1);
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'conv-1', getChannelId: () => undefined });
+      const tracked1 = await trackingFetch('/api/ai/chat', { method: 'POST' });
+      const drain1 = (async () => {
+        const reader = tracked1.body!.getReader();
+        while (!(await reader.read()).done) { /* drain */ }
+      })();
+
+      // Turn 2 is sent while turn 1 is still open, and claims the slot.
+      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-2' });
+
+      // NOW turn 1's body finally ends.
+      releaseTurn1!();
+      await drain1;
+
+      assert({
+        given: "turn 1's body closing after turn 2 has already claimed the slot",
+        should: "leave turn 2's streamId alone — it names a generation that is still running",
+        actual: client.getActiveStreamId({ chatId: 'conv-1' }),
+        expected: 'stream-turn-2',
+      });
+    });
+
     it('does not set streamId when header is missing', async () => {
       const client = await import('../stream-abort-client');
 
