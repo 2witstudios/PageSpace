@@ -126,19 +126,23 @@ export const MIN_CORROBORATION_BYTES = 4 * 1024;
 export const MAX_MATCH_CANDIDATES = 8;
 
 /**
- * How many un-emitted replay bytes the caller may hold while looking for the
- * boundary. Bounds the memory one attach can pin (transient, and only while a
- * replay is unresolved).
+ * How many un-emitted replay bytes the caller may hold while looking for the boundary.
+ * Bounds the memory one attach can pin (transient — only while a replay is unresolved).
  *
- * The anchor sits at the END of a replay, so the boundary can only be found if the
- * whole replayed scrollback fits in here. Sized to be comfortably larger than any
- * plausible server-side scrollback ring, precisely because that ring's size is not
- * documented (see the module header): if the replay overflows this, we give up and
- * emit it verbatim — which is safe, but reprints the scrollback, i.e. the bug this
- * module exists to fix. Erring large costs transient memory; erring small costs the
- * feature.
+ * THIS CAP MUST EXCEED THE SERVER'S SCROLLBACK RING. The anchor sits at the END of a replay,
+ * so if the ring is bigger than this, the anchor arrives after we have already given up: the
+ * search never reaches it, the replay is emitted verbatim, and it happens again on the NEXT
+ * reconnect, and the next. That is not a degradation that heals — it is the original bug,
+ * reprinting the whole scrollback every 45 seconds, for any terminal whose ring exceeds this
+ * number. (Fuzzing a 1.5 MiB ring against a 1 MiB cap reproduces exactly that: ~2 MB
+ * reprinted on every idle cycle, indefinitely.)
+ *
+ * So this errs large, deliberately. Erring large costs transient memory during a reconnect;
+ * erring small costs the entire feature for the terminals that need it most — the ones with
+ * a lot of scrollback. The `closeReplayWindow` log fires on every give-up, so if the ring
+ * ever does outgrow this, it says so rather than silently reverting to the bug.
  */
-export const MAX_PENDING_BYTES = 1024 * 1024;
+export const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
 /**
  * `aligned` is the difference between "these bytes continue the stream" and "we gave up

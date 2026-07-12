@@ -1148,7 +1148,7 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
       // Unique lines, not padding: self-similar bytes let the anchor match early (the
       // documented content-matching limitation) and would test nothing here.
-      const flood = `unalignable ${Array.from({ length: 70_000 }, (_, i) => `line ${i} of the flood\r\n`).join('')}`;
+      const flood = `unalignable ${Array.from({ length: 220_000 }, (_, i) => `line ${i} of the flood\r\n`).join('')}`;
       attach1._stdout.emit('data', flood);
       await vi.advanceTimersByTimeAsync(2000);
       expect(outputs(onOutput).join('')).toContain('unalignable'); // emitted, not swallowed

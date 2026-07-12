@@ -333,6 +333,37 @@ describe('planReplayEmission incremental scan (pure)', () => {
   });
 });
 
+describe('the pending cap vs the server ring (pure)', () => {
+  it('given a ring just under the cap, should still find the anchor at its end', () => {
+    // The cap is not a memory knob — it decides whether the feature works at all. The anchor
+    // sits at the END of a replay, so a ring that does not fit under this cap is a ring whose
+    // anchor we never reach: every reconnect gives up, reprints the whole scrollback, and does
+    // it again 45 seconds later. Forever. This pins the working side of that line.
+    const lines = (n: number) =>
+      Buffer.from(Array.from({ length: n }, (_, i) => `line ${i} of a long session\r\n`).join(''), 'utf8');
+    const stream = lines(120_000); // ~3.4 MB: a big ring, but under the cap
+    expect(stream.length).toBeLessThan(MAX_PENDING_BYTES);
+
+    let tail = EMPTY_SEEN;
+    for (let off = 0; off < stream.length; off += 8192) {
+      tail = rememberDelivered(tail, stream.subarray(off, off + 8192));
+    }
+    const seen = materializeSeen(tail);
+    const replay = Buffer.concat([stream, buf('$ ')]); // the ring, replayed, plus a new prompt
+
+    let state = freshReplayState();
+    const emitted: Buffer[] = [];
+    for (let off = 0; off < replay.length; off += 64 * 1024) {
+      const result = planReplayEmission({ seen, chunk: replay.subarray(off, off + 64 * 1024), state });
+      state = result.state;
+      emitted.push(result.emit);
+    }
+
+    expect(Buffer.concat(emitted).toString('utf8')).toBe('$ '); // deduped: only the new byte
+    expect(state.resolved).toBe(true);
+  });
+});
+
 describe('empty inputs (pure)', () => {
   assert({
     given: 'an empty delivery (a chunk that carried no bytes)',
