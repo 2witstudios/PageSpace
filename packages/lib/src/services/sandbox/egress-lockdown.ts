@@ -35,9 +35,11 @@
  *    it is always locked down before it is usable. The caller links the session
  *    only AFTER `getOrCreate` resolves, so a crash between `createSprite` and
  *    lockdown leaves no session row pointing at an unlocked Sprite: the next
- *    attempt sees no link and re-provisions (and the Sprite is destroyed on
- *    lockdown failure anyway). That ordering — not re-application — is what
- *    closes the old crash window.
+ *    attempt sees no link and re-provisions against the SAME retained Sprite — a
+ *    lockdown failure no longer destroys it (see `sprites.ts`'s
+ *    `planProvisionFailure`). That ordering — not re-application, and not
+ *    destruction — is what closes the old crash window: an unlocked Sprite is
+ *    never reachable from a session row, whether or not it is ever destroyed.
  *  - **token mismatch** — a different policy, or a different Sprite instance.
  *  - **unknown** — no recorded token (a session that predates the record, or one
  *    whose write was lost), or a platform that did not report the Sprite's id at

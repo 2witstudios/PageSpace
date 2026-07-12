@@ -14,9 +14,10 @@
  * `pageRepository.trash`.
  *
  * `createMachineSpriteTeardown` tears down ALL the compute a Machine spawned:
- * each branch's OWN Sprite (tracked in `machine_branches`, which — unlike the
- * Machine's own session — has no idle reaper, so a delete that skipped them would
- * leak microVMs), then the Machine's own persistent Sprite (resolved the same way
+ * each branch's OWN Sprite (tracked only in `machine_branches` — a Sprite that
+ * goes idle simply hibernates on its own, it is never destroyed automatically,
+ * so a Machine delete that skipped these would leak live microVMs), then the
+ * Machine's own persistent Sprite (resolved the same way
  * the shell/session layer does: derive the `machine_sessions` key from (tenant,
  * drive, page), look up its `sandboxId`, kill through the `MachineHost` seam).
  * Everything runs inside `teardown()` so any host error surfaces AFTER the page is
@@ -168,10 +169,11 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
 }
 
 /**
- * Tears down all the Sprites a Machine spawned. See the module doc: branch Sprites
- * (no idle reaper) are killed best-effort first, then the Machine's own Sprite
- * whose kill governs `spriteTornDown`; the tracking-row removal is best-effort so a
- * post-kill DB error can't falsely report the Sprite as still alive.
+ * Tears down all the Sprites a Machine spawned. See the module doc: branch
+ * Sprites (never destroyed automatically — only hibernated on idle) are killed
+ * best-effort first, then the Machine's own Sprite whose kill governs
+ * `spriteTornDown`; the tracking-row removal is best-effort so a post-kill DB
+ * error can't falsely report the Sprite as still alive.
  */
 export function createMachineSpriteTeardown(): MachineSpriteTeardown {
   return {
