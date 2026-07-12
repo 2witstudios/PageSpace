@@ -22,6 +22,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { addProject, listProjects, removeProject } from '@pagespace/lib/services/machines/machine-projects';
+import { hasNameContent } from '@pagespace/lib/services/machines/name-slug';
 import {
   buildMachineProjectsDeps,
   canAccessMachine,
@@ -81,11 +82,13 @@ export async function POST(request: Request) {
   const parsed = requireMachineId(body.machineId);
   if (!parsed.ok) return parsed.error;
 
-  // A BLANK name is a MISSING field, not free text to be normalized — accepting it
-  // would silently clone the repo into a directory called `project`. `.trim()`
-  // matters: without it `" "` sails through and does exactly that. The branches
-  // route draws the same line (`requireString`).
-  if (typeof body.name !== 'string' || body.name.trim().length === 0 || typeof body.repoUrl !== 'string') {
+  // A NAMELESS name is a MISSING field, not free text to be normalized — accepting
+  // it would silently clone the repo into a directory called `project`. And
+  // "nameless" is broader than "blank": `"   "`, `"."`, `".."` and `"//"` all
+  // normalize to that same fallback, so the guard uses the normalizer's own
+  // `hasNameContent` rather than a `.trim()` that only catches whitespace. The
+  // branches route draws the same line (`requireString`).
+  if (typeof body.name !== 'string' || !hasNameContent(body.name) || typeof body.repoUrl !== 'string') {
     return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
   }
 
@@ -119,12 +122,12 @@ export async function DELETE(request: Request) {
   const parsed = requireMachineId(url.searchParams.get('machineId'));
   if (!parsed.ok) return parsed.error;
 
-  // `.trim()` matters here as much as it does on POST: `removeProject` normalizes
-  // its lookup key, and a whitespace-only name normalizes to the FALLBACK — so a
-  // blank `?name=` would resolve to a project literally called `project` and
-  // `rm -rf` someone's checkout. A blank name is a missing field, not free text.
+  // This guard matters MORE than the one on POST: `removeProject` normalizes its
+  // lookup key, so a nameless `?name=` resolves to the FALLBACK and would `rm -rf`
+  // a real project called `project`. `..` and `//` are nameless too, not just
+  // whitespace — hence `hasNameContent` and not `.trim()`.
   const name = url.searchParams.get('name');
-  if (!name || name.trim().length === 0) {
+  if (!name || !hasNameContent(name)) {
     return NextResponse.json({ error: 'name is required' }, { status: 400 });
   }
 

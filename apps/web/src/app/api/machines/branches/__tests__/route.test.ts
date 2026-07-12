@@ -173,6 +173,18 @@ describe('POST /api/machines/branches', () => {
     );
   });
 
+  it.each(['   ', '..', '.', '//'])(
+    'given the nameless branchName %j, returns 400 rather than attaching to the branch called "branch"',
+    async (branchName) => {
+      // Every nameless string normalizes to the FALLBACK `branch`. Without this
+      // guard, spawn would find and ATTACH to a real branch-terminal named
+      // `branch` — handing the caller its Sprite and filesystem.
+      const res = await POST(req({ machineId: 't1', projectName: 'repo', branchName }));
+      expect(res.status).toBe(400);
+      expect(mockSpawnBranch).not.toHaveBeenCalled();
+    },
+  );
+
   it('given a missing branchName, returns 400 without checking access', async () => {
     const res = await POST(req({ machineId: 't1', projectName: 'repo' }));
     expect(res.status).toBe(400);

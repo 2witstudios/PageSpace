@@ -75,7 +75,9 @@ export function normalizeProjectName(rawInput: string): string {
   if (name.length === 0) {
     // A content-free name (`..`, `//`, `   `) has no identity to preserve — every
     // one of them means "no name", so sharing the fallback is correct rather than
-    // a collision. The routes reject blank names outright.
+    // a collision. The routes reject NAMELESS input (they guard on this very
+    // predicate, not on `.trim()`), so the fallback is unreachable from the API and
+    // remains only to keep this function total for non-route callers.
     if (!hasNameContent(input)) return PROJECT_NAME_FALLBACK;
     name = `x${slugDigest(input)}`;
   } else if (destroysNameContent(input)) {

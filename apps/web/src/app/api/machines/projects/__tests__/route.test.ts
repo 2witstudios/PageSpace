@@ -139,11 +139,14 @@ describe('POST /api/machines/projects', () => {
     expect(mockAddProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'My Cool Feature' }));
   });
 
-  it('given an EMPTY name, returns 400 rather than normalizing it into a directory called "project"', async () => {
-    const res = await POST(req({ machineId: 't1', name: '', repoUrl: 'https://github.com/o/r.git' }));
-    expect(res.status).toBe(400);
-    expect(mockAddProject).not.toHaveBeenCalled();
-  });
+  it.each(['', '   ', '..', '.', '//'])(
+    'given the nameless name %j, returns 400 rather than cloning into a directory called "project"',
+    async (name) => {
+      const res = await POST(req({ machineId: 't1', name, repoUrl: 'https://github.com/o/r.git' }));
+      expect(res.status).toBe(400);
+      expect(mockAddProject).not.toHaveBeenCalled();
+    },
+  );
 
   it('given a duplicate name, returns 409', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
@@ -199,16 +202,20 @@ describe('DELETE /api/machines/projects', () => {
     expect(res.status).toBe(400);
   });
 
-  it('given a whitespace-only name, returns 400 rather than rm -rf-ing the project called "project"', async () => {
-    // `removeProject` normalizes its lookup key, and "   " normalizes to the
-    // FALLBACK — so a blank ?name= would resolve to a real project literally
-    // named `project` and delete someone's checkout.
-    const res = await DELETE(
-      new Request('https://x.test/api/machines/projects?machineId=t1&name=%20%20%20', { method: 'DELETE' }),
-    );
-    expect(res.status).toBe(400);
-    expect(mockRemoveProject).not.toHaveBeenCalled();
-  });
+  it.each(['%20%20%20', '..', '.', '%2F%2F', '%09'])(
+    'given the nameless name %s, returns 400 rather than rm -rf-ing the project called "project"',
+    async (encoded) => {
+      // `removeProject` normalizes its lookup key, and EVERY nameless string —
+      // whitespace, `.`, `..`, `//` — normalizes to the FALLBACK. Without this
+      // guard the request would resolve to a real project literally named
+      // `project` and delete its checkout. "Nameless" is broader than "blank".
+      const res = await DELETE(
+        new Request(`https://x.test/api/machines/projects?machineId=t1&name=${encoded}`, { method: 'DELETE' }),
+      );
+      expect(res.status).toBe(400);
+      expect(mockRemoveProject).not.toHaveBeenCalled();
+    },
+  );
 
   it('given no machineId, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/projects?name=repo', { method: 'DELETE' }));

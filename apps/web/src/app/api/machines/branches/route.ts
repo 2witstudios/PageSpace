@@ -20,6 +20,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { spawnBranch, killBranch, listBranches } from '@pagespace/lib/services/machines/machine-branches';
+import { hasNameContent } from '@pagespace/lib/services/machines/name-slug';
 import {
   buildMachineBranchesDeps,
   canAccessMachine,
@@ -32,10 +33,14 @@ import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/mac
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
-// A blank name is a MISSING field, not free text to normalize. `.trim()` matters:
-// without it, `" "` would sail past this guard and normalize to the bare fallback.
+// A NAMELESS value is a missing field, not free text to normalize — and "nameless"
+// is broader than "blank". `"   "`, `"."`, `".."` and `"//"` all carry no name, and
+// every one of them normalizes to the FALLBACK (`branch`), which would then match a
+// real branch called `branch` — attaching to its Sprite, or killing it. So this
+// guard uses the normalizer's OWN definition of nameless rather than a `.trim()`
+// that only catches whitespace.
 function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
-  if (typeof value !== 'string' || value.trim().length === 0) {
+  if (typeof value !== 'string' || !hasNameContent(value)) {
     return { ok: false, error: NextResponse.json({ error: `${field} is required` }, { status: 400 }) };
   }
   return { ok: true, value };
