@@ -257,10 +257,11 @@ export function openPtyShell({
   // Cancels the replay-window timers of whichever command is currently wired, so a
   // teardown doesn't leave one armed against a shell nobody is watching any more.
   let cancelReplayTimers: () => void = () => {};
-  // Closes the replay window of whichever command is CURRENTLY wired. Hoisted because
-  // a DEAD command's late drain has to be able to flush the LIVE command's held bytes
-  // before it emits its own — its own `closeReplayWindow` closes the wrong window.
-  let closeCurrentReplayWindow: () => void = () => {};
+  // Emits bytes that must NOT be deduped and must NOT jump whatever the live command
+  // is holding — a superseded command's late drain, and stderr. Hoisted because a DEAD
+  // command has to queue behind the LIVE command's replay, and its own per-wire state
+  // is the wrong window entirely.
+  let emitOutOfBand: (bytes: Buffer) => void = () => {};
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -312,16 +313,28 @@ export function openPtyShell({
       seenTail = rememberDelivered(seenTail, bytes);
       onOutput(bytes.toString('utf8'));
     };
-    // stderr that arrived while stdout was being held (see the stderr listener).
-    let heldStderr: Buffer[] = [];
-    const releaseStderr = () => {
-      if (heldStderr.length === 0) return;
-      const out = Buffer.concat(heldStderr);
-      heldStderr = [];
-      // Never recorded into `seenTail`: the server replays stdout, so stderr bytes in
+    // Bytes that arrived while a replay was being held, and that must not be deduped:
+    // stderr, and a superseded command's drain. They are released once the window
+    // closes, so they cannot render ahead of the older stdout it is holding.
+    let heldOutOfBand: Buffer[] = [];
+    const releaseOutOfBand = () => {
+      if (heldOutOfBand.length === 0) return;
+      const out = Buffer.concat(heldOutOfBand);
+      heldOutOfBand = [];
+      // Never recorded into `seenTail`: the server replays stdout, so these bytes in
       // the history would be bytes no replay can contain, and the anchor would stop
       // matching.
       onOutput(out.toString('utf8'));
+    };
+    // Queue behind a replay we are still assembling; otherwise speak now. Never
+    // force-close the window to make room: that would flush a HALF-received replay
+    // verbatim, tearing the very banner we are suppressing AND splicing these bytes
+    // into `seen`, which leaves the anchor unmatchable for the life of the terminal.
+    emitOutOfBand = (bytes: Buffer) => {
+      // (Both call sites already refuse to run once `closed`.)
+      if (bytes.length === 0) return;
+      if (!replay.resolved && replay.pending.length > 0) { heldOutOfBand.push(bytes); return; }
+      onOutput(bytes.toString('utf8'));
     };
     /** Close the replay window: hand over whatever we were still holding. */
     const closeReplayWindow = () => {
@@ -336,7 +349,7 @@ export function openPtyShell({
       // window (to keep ordering), and it almost always arrives before the successor's
       // replay, which still has a WebSocket to open. The banner would reprint — this
       // bug, resurrected by the fix for the ordering one.
-      if (held === 0 && heldStderr.length === 0) return;
+      if (held === 0 && heldOutOfBand.length === 0) return;
       const { emit, state } = flushReplay(replay);
       replay = state;
       if (held > 0) {
@@ -352,9 +365,8 @@ export function openPtyShell({
         });
       }
       deliver(emit);
-      releaseStderr();
+      releaseOutOfBand();
     };
-    closeCurrentReplayWindow = closeReplayWindow;
 
     cmd.stdout.on('data', (chunk) => {
       // The terminal is gone (killed, or a real exit): nothing may reach the client
@@ -378,10 +390,10 @@ export function openPtyShell({
         if (cmd === current) { deliver(toBuf(chunk)); return; }
         // A successor is already wired and may be HOLDING a replay — bytes that are
         // older in the session's stream than this drain. Emitting straight into the
-        // client would render them out of order (and interleave escape sequences).
-        // Close that window first, then speak.
-        closeCurrentReplayWindow();
-        onOutput(toStr(chunk));
+        // client would render them out of order (and interleave escape sequences), so
+        // they queue behind it. Closing that window to make room instead would tear a
+        // half-received replay in two — see `emitOutOfBand`.
+        emitOutOfBand(toBuf(chunk));
         return;
       }
       // Any inbound data proves the connection recovered; reset the failure budget.
@@ -391,7 +403,7 @@ export function openPtyShell({
       const { emit, state } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
       deliver(emit);
-      if (replay.resolved) { cancelTimers(); releaseStderr(); return; }
+      if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over:
       // on the next quiet gap, and on a deadline a chatty shell cannot push out by
       // talking.
@@ -408,12 +420,10 @@ export function openPtyShell({
       // tearing the very banner we are trying to suppress. So it queues behind the
       // held bytes and goes out when the window closes. On a tty the shell's stderr is
       // folded into stdout anyway, so this listener is defensive rather than hot.
-      // A dead command that has been superseded: its own window is long closed, so the
-      // bytes it is still draining would jump whatever the LIVE command is holding —
-      // the same reordering the stdout drain guards against.
-      if (stale && cmd !== current) { closeCurrentReplayWindow(); onOutput(toStr(chunk)); return; }
-      if (!replay.resolved && replay.pending.length > 0) { heldStderr.push(toBuf(chunk)); return; }
-      onOutput(toStr(chunk));
+      // Whether this command is the live one or a superseded one still draining, the
+      // rule is the same: never dedupe stderr, and never let it jump the stdout a
+      // replay window is holding.
+      emitOutOfBand(toBuf(chunk));
     });
     // The SDK emits 'spawn' only AFTER the WebSocket actually opens. A confirmed
     // open is the authoritative signal the connection is healthy — reset the

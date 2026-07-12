@@ -1269,6 +1269,101 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([history, '$ echo done\r\n']);
     });
 
+    it('given a drain that lands BEFORE the reconnect wires a successor, records it (the next replay dedupes it)', async () => {
+      // The ordinary case: the SDK drains the dying socket's buffer immediately, well
+      // inside the reconnect's backoff. This command is still the wired one, so those
+      // bytes ARE part of the stream the next attach will replay — record them, or the
+      // replay would re-deliver them as if they were new.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      cmd._stdout.emit('data', 'last words\r\n'); // drained while still wired
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', `${BANNER}last words\r\n`); // the replay carries them
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // Delivered exactly once: the replay of them was recognised and suppressed.
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}last words\r\n`);
+    });
+
+    it('given a drain that lands BETWEEN replay frames, neither tears the replay nor poisons the history', async () => {
+      // A scrollback burst is not one WebSocket frame, and the dead socket's events are
+      // separate macrotasks from the new socket's — so a straggling drain lands in the
+      // middle of a replay that is only half received. Force-closing the window to make
+      // room for it would flush that half VERBATIM (reprinting the banner) and splice
+      // the drained byte into `seen`, leaving the anchor unmatchable for the life of the
+      // terminal — an idle shell never emits the 8 KiB of fresh output needed to scroll
+      // it out, so the banner would reprint on EVERY later cycle.
+      const cmd = buildFakeCommand();
+      const attach1 = buildFakeCommand();
+      const attach2 = buildFakeCommand();
+      const attach3 = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession
+        .mockReturnValueOnce(attach1)
+        .mockReturnValueOnce(attach2)
+        .mockReturnValueOnce(attach3);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      // The replay arrives in TWO frames, and the dead socket drains between them.
+      attach1._stdout.emit('data', BANNER.slice(0, 14));
+      cmd._stdout.emit('data', 'X');
+      attach1._stdout.emit('data', BANNER.slice(14));
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // The replay was suppressed whole, and the drained byte still reached the user.
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}X`);
+
+      // ...and the history is intact, so ordinary idle cycles keep deduping.
+      attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach2._stdout.emit('data', BANNER);
+      await vi.advanceTimersByTimeAsync(2000);
+      attach2._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attach3._stdout.emit('data', BANNER);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}X`); // still exactly one banner
+    });
+
+    it('given stderr while a replay is being held, releases it AFTER the held stdout (never dropped, never ahead)', async () => {
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'unalignable stdout\r\n'); // held
+      attachCmd._stderr.emit('data', 'a warning\r\n'); // must not jump it, must not vanish
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const shown = outputs(onOutput).join('');
+      expect(shown).toContain('a warning\r\n');
+      expect(shown.indexOf('unalignable stdout')).toBeLessThan(shown.indexOf('a warning'));
+    });
+
     it('given stderr from a SUPERSEDED command, does not jump the replay its successor is holding', async () => {
       // Same reordering hazard as the stdout drain: the dead command's own window is
       // long closed, so without the guard its bytes would render ahead of the older
@@ -1292,6 +1387,18 @@ describe('openPtyShell', () => {
       // The held stdout came out FIRST, then the late stderr — wire order preserved.
       const shown = outputs(onOutput).join('');
       expect(shown.indexOf('unalignable output')).toBeLessThan(shown.indexOf('late stderr'));
+    });
+
+    it('given an EMPTY stderr chunk, emits nothing', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('spawn');
+      cmd._stderr.emit('data', '');
+
+      expect(onOutput).not.toHaveBeenCalled();
     });
 
     it('given stderr arrives after the terminal is killed, does not deliver it', async () => {
