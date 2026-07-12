@@ -158,8 +158,26 @@ export const MAX_MATCH_CANDIDATES = 8;
  */
 const HASH_BASE = 131;
 
+/**
+ * Byte-folds performed, for tests only.
+ *
+ * The memo below and the rolling chain carried in `ReplayState.hash` are PURE PERFORMANCE: delete
+ * either and every behavioural test still passes while per-chunk work silently returns to
+ * O(anchor) — the quadratic this search exists to close. Work done is invisible in the emitted
+ * bytes, so a counter is the only seam a test can hold those two guards by. Both of the O(anchor)
+ * loops they eliminate fold, and nothing on the steady-state path does; a warm chunk folds ZERO.
+ */
+let folds = 0;
+export const foldCount = (): number => folds;
+export const resetFoldCount = (): void => {
+  folds = 0;
+};
+
 /** One step of the fold, pinned to int32 so two paths to the same value always compare equal. */
-const fold = (hash: number, byte: number): number => (Math.imul(hash, HASH_BASE) + byte) | 0;
+const fold = (hash: number, byte: number): number => {
+  folds += 1;
+  return (Math.imul(hash, HASH_BASE) + byte) | 0;
+};
 
 type AnchorHash = { anchor: Buffer; target: number; pow: number };
 

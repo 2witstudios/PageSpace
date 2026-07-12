@@ -7,10 +7,12 @@ import {
   MAX_SEEN_BYTES,
   MIN_CORROBORATION_BYTES,
   flushReplay,
+  foldCount,
   freshReplayState,
   materializeSeen,
   planReplayEmission,
   rememberDelivered,
+  resetFoldCount,
 } from '../replay-dedupe';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest. There IS a
@@ -701,5 +703,31 @@ describe('buffering an unalignable replay (pure)', () => {
     expect(first.pending.equals(firstBytes)).toBe(true); // the first fork is untouched
     expect(first.pending.equals(Buffer.concat([base, buf('AAAA')]))).toBe(true);
     expect(second.pending.equals(Buffer.concat([base, buf('BBBB')]))).toBe(true); // no 'AAAA' spliced in
+  });
+
+  it('given a replay already longer than the anchor, should hash each further frame in O(frame), not O(anchor)', () => {
+    // The two guards that keep the search's own hashing off the quadratic — memoizing the
+    // anchor's hash per attach, and carrying the window's rolling hash between chunks — are
+    // PURE PERFORMANCE. Delete either and every other test in this file still passes, while
+    // each 256-byte frame silently starts re-folding the whole 8 KiB anchor: the O(anchor)
+    // per-chunk cost this search exists to escape, on the process every terminal shares.
+    //
+    // Work done is invisible in the emitted bytes, so this counts FOLDS — exact and identical
+    // on every machine, where a wall-clock threshold would be flaky or vacuous.
+    let state = freshReplayState();
+    resetFoldCount();
+    while (state.pending.length < MAX_ANCHOR_BYTES + FRAME.length) {
+      state = planReplayEmission({ seen: UNMATCHABLE, chunk: FRAME, state }).state;
+    }
+    // Cold: the anchor hashed once, and the first full-width window folded once. Not per frame.
+    expect(foldCount()).toBeLessThanOrEqual(2 * MAX_ANCHOR_BYTES);
+
+    resetFoldCount();
+    for (let i = 0; i < 100; i += 1) {
+      state = planReplayEmission({ seen: UNMATCHABLE, chunk: FRAME, state }).state;
+    }
+
+    expect(state.pending.length).toBeGreaterThan(MAX_ANCHOR_BYTES); // still searching, still holding
+    expect(foldCount()).toBe(0); // warm: the window ROLLS. 100 frames, zero re-folds.
   });
 });
