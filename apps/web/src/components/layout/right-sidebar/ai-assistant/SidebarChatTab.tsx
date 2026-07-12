@@ -1143,6 +1143,12 @@ const SidebarChatTab: React.FC = () => {
     sidebarChatId,
     stop,
     isStreaming,
+    // The callback READS this (it is what keeps Stop from resolving the previous turn's
+    // messageId during the submitted window). Omitting it meant the memo only happened to stay
+    // fresh because lastAssistantMessageId co-varies on the submitted -> streaming transition —
+    // an accident, not a guarantee. It is one refactor away from Stop silently capturing a stale
+    // value and aborting the wrong message while the real generation keeps billing.
+    isActuallyStreaming,
     lastAssistantMessageId,
   ]);
 
