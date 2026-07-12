@@ -151,10 +151,17 @@ export const MAX_MATCH_CANDIDATES = 8;
  * attack can still cost us a suppression — never a byte, and never the event loop.
  *
  * The honest cost of the trade: `indexOf` is native (a SIMD memmem) and this is a JS byte loop,
- * so the BENIGN unalignable case got slower — a 4 MiB replay in 256-byte frames goes 9ms -> 25ms,
- * worst chunk 1ms -> 3ms. That is throughput spread across 16k handlers. It buys away a 588ms
- * stall inside ONE of them, on input an adversary picks. Worth it, but it is a cost, not a free
- * win, and the numbers belong here rather than in the commit that made them.
+ * so the BENIGN unalignable case got SLOWER. Two harnesses measured that penalty as 3-4x and as
+ * ~11x, so take the ratio as "single digits to low double digits" and not as a figure — it moves
+ * with machine and framing, and an earlier version of this comment stated one to three digits of
+ * precision it had not earned.
+ *
+ * The shape is what matters, and the shape is stable: the loss is THROUGHPUT, spread thin. A 4 MiB
+ * replay costs single-digit milliseconds more in total, across ~16k handlers, and the worst SINGLE
+ * handler stays about a millisecond either way (measured ~0.8ms with `indexOf`, ~1.0ms here) — no
+ * frame becomes a stall. What it buys is the removal of one: 588ms of solid event loop inside a
+ * single 'data' handler, on bytes an adversary picks. Trading a little throughput everywhere for a
+ * stall nowhere is the right trade on a shared process, but it IS a cost, not a free win.
  */
 const HASH_BASE = 131;
 
