@@ -298,6 +298,25 @@ describe('listProjects', () => {
 });
 
 describe('removeProject', () => {
+  it('given the free text the project was CREATED with, should normalize the lookup and still remove it', async () => {
+    // `addProject` persists the CANONICAL name, so a raw-name lookup would 404
+    // — whatever text created a project must also be able to delete it.
+    const { deps, store } = makeDeps();
+    const added = await addProject({
+      machineId: TERMINAL_ID,
+      actor,
+      name: 'My Cool Feature',
+      repoUrl: 'https://github.com/o/r.git',
+      deps,
+    });
+    expect(added).toMatchObject({ ok: true, project: { name: 'my-cool-feature' } });
+
+    const result = await removeProject({ machineId: TERMINAL_ID, name: 'My Cool Feature', deps });
+
+    expect(result).toEqual({ ok: true });
+    expect(await store.findByName(TERMINAL_ID, 'my-cool-feature')).toBeNull();
+  });
+
   it('given an existing project, should rm -rf its directory and delete the tracking row', async () => {
     const existing: MachineProjectRecord = {
       id: 'p1',

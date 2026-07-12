@@ -591,6 +591,33 @@ describe('attachBranch', () => {
 });
 
 describe('killBranch', () => {
+  it('given the free text the branch was CREATED with, should normalize the lookup and still kill it', async () => {
+    // Whatever text created a branch must also be able to kill it — addProject
+    // /spawnBranch persist the CANONICAL name, so a raw-name lookup would 404.
+    const { host, killCalls } = makeFakeHost();
+    const { deps, store } = makeDeps({ host });
+    const spawned = await spawnBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'My Cool Feature',
+      actor,
+      deps,
+    });
+    if (!spawned.ok) throw new Error('expected ok');
+
+    const result = await killBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'My Cool Feature',
+      store,
+      host,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(killCalls).toContain(spawned.sandboxId);
+    expect(await store.findByName(TERMINAL_ID, PROJECT_NAME, 'my-cool-feature')).toBeNull();
+  });
+
   it('given an existing branch, should DELETE its Sprite through the MachineHost seam and drop the tracking row', async () => {
     const { host, killCalls } = makeFakeHost();
     const { deps, store } = makeDeps({ host });

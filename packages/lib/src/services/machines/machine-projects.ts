@@ -223,6 +223,13 @@ export async function listProjects({
 
 export type RemoveProjectResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
 
+/**
+ * Remove a project. Normalizes its lookup key for the same reason
+ * `attachBranch`/`killBranch` do: `addProject` persists the CANONICAL name, so
+ * whatever free text created a project must also be able to delete it. A name
+ * read back from `listProjects` is already canonical and passes through
+ * unchanged, because normalization is idempotent.
+ */
 export async function removeProject({
   machineId,
   name,
@@ -232,7 +239,8 @@ export async function removeProject({
   name: string;
   deps: MachineProjectsDeps;
 }): Promise<RemoveProjectResult> {
-  const existing = await deps.store.findByName(machineId, name);
+  const normalized = normalizeProjectName(name);
+  const existing = await deps.store.findByName(machineId, normalized);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   // Best-effort filesystem cleanup — the tracking row is removed regardless of
@@ -242,7 +250,7 @@ export async function removeProject({
   await safeRemoveDirectory(machineId, existing.path, deps);
 
   try {
-    await deps.store.remove(machineId, name);
+    await deps.store.remove(machineId, normalized);
     return { ok: true };
   } catch {
     return { ok: false, reason: 'error' };
