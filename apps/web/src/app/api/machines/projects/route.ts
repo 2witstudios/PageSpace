@@ -40,6 +40,11 @@ function requireMachineId(machineId: unknown): { ok: true; machineId: string } |
   return { ok: true, machineId };
 }
 
+/** One message for both fields, so the two guards below cannot drift apart. */
+function missingNameOrRepoUrl(): NextResponse {
+  return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
+}
+
 const ADD_PROJECT_DENIAL_STATUS: Record<string, number> = {
   invalid_name: 400,
   invalid_repo_url: 400,
@@ -90,17 +95,15 @@ export async function POST(request: Request) {
   // branches route draws the same line (`requireName`).
   //
   // `repoUrl` is NOT normalized (there is no way to turn a non-HTTPS remote into an
-  // HTTPS one), so it is only checked for presence here and validated for real by
-  // `isValidRepoUrl` inside `addProject`. It still has to be non-empty for this
-  // message to be true of it.
-  // Two statements, not one `||` over aliased booleans: TypeScript's narrowing does
-  // not flow out of that, so `body.name` would stay `unknown` at the call below.
-  if (typeof body.name !== 'string' || !hasNameContent(body.name)) {
-    return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
-  }
-  if (typeof body.repoUrl !== 'string' || body.repoUrl.trim().length === 0) {
-    return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
-  }
+  // HTTPS one), so it is only checked for PRESENCE here — `isValidRepoUrl`, inside
+  // `addProject`, remains the real validator. It still has to be non-empty for the
+  // message below to be true of it.
+  //
+  // Two separate statements rather than one `||` over aliased booleans: TypeScript's
+  // narrowing does not flow out of that form, so `body.name` would still be `unknown`
+  // at the `addProject` call.
+  if (typeof body.name !== 'string' || !hasNameContent(body.name)) return missingNameOrRepoUrl();
+  if (typeof body.repoUrl !== 'string' || body.repoUrl.trim().length === 0) return missingNameOrRepoUrl();
 
   if (!(await canAccessMachine(auth.userId, parsed.machineId))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });

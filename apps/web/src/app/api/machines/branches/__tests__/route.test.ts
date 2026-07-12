@@ -95,7 +95,7 @@ describe('GET /api/machines/branches', () => {
     expect(res.status).toBe(400);
   });
 
-  it.each(['   ', '..', '//'])(
+  it.each(['   ', '..', '.', '//'])(
     'given the nameless projectName %j, returns 400 rather than listing the branches of the project called "project"',
     async (projectName) => {
       // `listBranches` normalizes its project key, so a nameless value would
