@@ -430,8 +430,14 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       await POST(makeRequest(), makeContext());
 
       expect(mockTakeOverConversationStreams).toHaveBeenCalledTimes(1);
+      // Exact values. Both are known constants here, so expect.any(String) would have accepted a
+      // route that SWAPPED them — and a takeover keyed on the wrong conversation aborts the wrong
+      // streams, or none, while a second generation starts beside the first.
       expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
-        expect.objectContaining({ conversationId: expect.any(String), channelId: expect.any(String) }),
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          channelId: 'user:user-1:global',
+        }),
       );
       expect(mockTakeOverConversationStreams.mock.invocationCallOrder[0])
         .toBeLessThan(mockCreateStreamLifecycle.mock.invocationCallOrder[0]);

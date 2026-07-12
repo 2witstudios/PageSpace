@@ -413,6 +413,34 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       expect(body).not.toContain('after-revoke');
     });
 
+    // THE OTHER HALF OF THE BACKSTOP. `hasViewAccess()` is `pageOk && canSubscribe()`, and every
+    // test in this block only ever varied canUserViewPage — canSubscribeToStream was pinned true
+    // in beforeEach and never flipped. So `return canSubscribe();` could be deleted from
+    // hasViewAccess and the whole suite stayed green, while a conversation UN-SHARED mid-stream
+    // kept streaming, token by token, to someone who may no longer read it. Page access and
+    // conversation access are revoked independently; both halves must hold, on every tick.
+    it('given the conversation is UN-SHARED mid-stream, should abort the join even though page access still holds', async () => {
+      vi.useFakeTimers();
+      vi.mocked(canUserViewPage).mockResolvedValue(true); // page access never lapses
+      let subscribable = true;
+      mockCanSubscribeToStream.mockImplementation(async () => subscribable);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      expect(response.status).toBe(200);
+
+      // The owner flips the conversation back to private while this subscriber is mid-stream.
+      subscribable = false;
+      await vi.advanceTimersByTimeAsync(RECHECK_INTERVAL_MS);
+
+      testRegistry.push(mockMessageId, { type: 'text', text: 'after-unshare' });
+
+      const body = await readSSEBody(response);
+
+      expect(body).toContain('data: {"done":true,"aborted":true}\n\n');
+      expect(body).not.toContain('after-unshare');
+    });
+
     it('given permission is revoked mid-stream, should unsubscribe from the registry', async () => {
       vi.useFakeTimers();
       let allowed = true;

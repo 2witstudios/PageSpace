@@ -17,6 +17,7 @@ const {
   mockSaveMessageToDatabase,
   mockGetConversation,
   mockHasConflictingMessageOwner,
+  mockTakeOverConversationStreams,
   mockCreateConversation,
 } = vi.hoisted(() => ({
   mockCreateStreamLifecycle: vi.fn(),
@@ -26,6 +27,7 @@ const {
   mockSaveMessageToDatabase: vi.fn().mockResolvedValue(undefined),
   mockGetConversation: vi.fn().mockResolvedValue(null), // default: legacy (no row) → broadcast
   mockHasConflictingMessageOwner: vi.fn().mockResolvedValue(false),
+  mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
   mockCreateConversation: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -42,6 +44,10 @@ interface MockStreamTextOptions {
 const captured = vi.hoisted(() => ({
   createUIMessageStreamOptions: {} as MockUIStreamOptions,
   streamTextOptions: {} as MockStreamTextOptions,
+}));
+
+vi.mock('@/lib/ai/core/stream-takeover', () => ({
+  takeOverConversationStreams: mockTakeOverConversationStreams,
 }));
 
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
@@ -347,6 +353,14 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     vi.clearAllMocks();
     captured.createUIMessageStreamOptions = {};
     captured.streamTextOptions = {};
+    // clearAllMocks() clears CALLS, not IMPLEMENTATIONS. Seven tests below use mockResolvedValue
+    // (not ...Once), so without these two lines each one leaked its fixture into every later test
+    // — including the lifecycle-invocation test, which was silently running against an
+    // already-owned conversation instead of the intended "no row" default. It passed either way,
+    // which is exactly why nobody noticed.
+    mockGetConversation.mockResolvedValue(null);
+    mockHasConflictingMessageOwner.mockResolvedValue(false);
+    mockTakeOverConversationStreams.mockResolvedValue({ aborted: [], reconciled: [] });
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     mockCreateStreamLifecycle.mockResolvedValue({
       pushPart: mockLifecyclePushPart,
@@ -436,7 +450,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
     });
 
-    it('given an existing conversation owned by another user but explicitly SHARED, should allow it', async () => {
+    it('given an existing conversation owned by another user but explicitly SHARED, should allow it AND propagate isShared', async () => {
       mockGetConversation.mockResolvedValue({
         id: CONV_ID, userId: 'someone-else', isShared: true, contextId: 'page-1',
       });
@@ -444,7 +458,14 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const response = await POST(makeRequest({ conversationId: CONV_ID }));
 
       expect(response.status).not.toBe(403);
-      expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+      // NOT just `toHaveBeenCalled()`. `isShared` rides the chat:stream_start broadcast, and
+      // useChannelStreamSocket DROPS a co-member's stream when it is false — so this flag is the
+      // sole signal that makes a shared conversation visible to anyone but its owner. Asserting
+      // only that the lifecycle was called let a hardcoded `false` pass every test in the suite
+      // while every shared conversation went dark for every co-member.
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: CONV_ID, isShared: true }),
+      );
     });
 
     it('given an existing conversation belonging to a DIFFERENT page, should 403', async () => {
@@ -484,6 +505,44 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
 
       expect(response.status).not.toBe(403);
       expect(mockCreateStreamLifecycle).toHaveBeenCalled();
+    });
+  });
+
+  // AC5 — takeover, never 409. This route called takeOverConversationStreams and NOTHING asserted
+  // it: the module was not even mocked, so the real function ran against a db mock with no
+  // .update(), threw, and was swallowed by its own catch. The call site could have been deleted
+  // and every test would still have passed.
+  describe('per-conversation takeover (AC5)', () => {
+    it('takes over the conversation before starting a new generation', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-7' }));
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith({
+        conversationId: CONV_ID,
+        channelId: 'page-1',
+      });
+    });
+
+    it('takes over BEFORE creating the new lifecycle — the other order would abort the stream it just started', async () => {
+      await POST(makeRequest({ browserSessionId: 'session-7' }));
+
+      const takeoverAt = mockTakeOverConversationStreams.mock.invocationCallOrder[0];
+      const lifecycleAt = mockCreateStreamLifecycle.mock.invocationCallOrder[0];
+      expect(takeoverAt).toBeLessThan(lifecycleAt);
+    });
+
+    // Never 409. A rejection would SELF-LOCK the conversation: the terminal status write is
+    // fire-and-forget and dies with its process, so a crashed generation leaves a permanently
+    // 'streaming' row. The user would be locked out of their own chat.
+    it('given a stream was already in flight, still proceeds — takeover, not rejection', async () => {
+      mockTakeOverConversationStreams.mockResolvedValue({
+        aborted: ['msg-previous'],
+        reconciled: ['msg-previous'],
+      });
+
+      const response = await POST(makeRequest({ browserSessionId: 'session-7' }));
+
+      expect(response.status).not.toBe(409);
+      expect(mockCreateStreamLifecycle).toHaveBeenCalledTimes(1);
     });
   });
 

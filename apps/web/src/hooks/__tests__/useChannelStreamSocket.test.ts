@@ -1526,7 +1526,13 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
       expect(onOwnStreamBootstrap).toHaveBeenCalledTimes(1);
-      expect(onOwnStreamBootstrap).toHaveBeenCalledWith({ messageId: 'msg-own-bootstrap', conversationId: expect.any(String) });
+      // The STREAM's conversation, asserted exactly — not expect.any(String), which would have
+      // accepted the channelId ('page-a'), the messageId, or ''. This value decides which
+      // conversation's Stop button lights up; a wrong one lights the wrong surface.
+      expect(onOwnStreamBootstrap).toHaveBeenCalledWith({
+        messageId: 'msg-own-bootstrap',
+        conversationId: 'conv-1',
+      });
     });
 
     it('given a bootstrapped stream from a remote tab, should not fire onOwnStreamBootstrap', async () => {
