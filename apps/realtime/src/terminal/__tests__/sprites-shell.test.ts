@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { openPtyShell, planReconnect, sessionIds } from '../sprites-shell';
 import { appendScrollback } from '../terminal-session-map';
 import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest — the
 // repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
@@ -1122,6 +1123,37 @@ describe('openPtyShell', () => {
       }
 
       expect(outputs(onOutput).join('')).toBe(afterRecovery); // recovered, and stayed recovered
+    });
+
+    it('given a replay that overflows the byte cap, REPORTS it (the one give-up that never reaches the window close)', async () => {
+      // The cap failure is the one that does not heal: a ring bigger than MAX_PENDING_BYTES
+      // means the anchor (which sits at a replay's END) is never reached, so the scrollback
+      // reprints on every reconnect, forever. And it is the give-up that resolves inside the
+      // pure core — `closeReplayWindow`, and its log, never run. If it did not report here,
+      // the only failure the cap exists to catch would be the only silent one.
+      const info = vi.spyOn(loggers.realtime, 'info');
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      // A ring larger than the cap, arriving in frames — so it overflows before the anchor.
+      const frame = 'z'.repeat(512 * 1024);
+      for (let i = 0; i < 9; i += 1) attachCmd._stdout.emit('data', `frame ${i} ${frame}`);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const reported = info.mock.calls.filter(
+        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'pending-cap',
+      );
+      expect(reported.length).toBeGreaterThan(0); // it says so, instead of failing silently
+      info.mockRestore();
     });
 
     it('given a replay that overflows the byte cap, emits it and leaves a usable history', async () => {

@@ -402,6 +402,26 @@ export function openPtyShell({
       releaseOutOfBand();
       onOutput(bytes.toString('utf8'));
     };
+    /**
+     * A replay we could not place. Both give-up paths report here, because a give-up means
+     * this terminal is not deduping — it is reprinting its scrollback — and the two causes
+     * are the two constants that bracket a server value nobody has measured:
+     *
+     * - `window-closed`: the anchor never appeared. Likeliest cause is a scrollback ring
+     *   SMALLER than MAX_ANCHOR_BYTES, which no replay can contain.
+     * - `pending-cap`: the replay outgrew MAX_PENDING_BYTES before the anchor arrived. The
+     *   anchor sits at a replay's END, so this means the ring is BIGGER than the cap — and
+     *   that one does not heal. It will reprint on every reconnect, forever, until the cap
+     *   is raised past the ring.
+     */
+    const reportUnaligned = (cause: 'window-closed' | 'pending-cap', bytes: number) => {
+      loggers.realtime.info('Agent terminal replay unaligned (scrollback will reprint)', {
+        cause,
+        unalignedBytes: bytes,
+        seenBytes: seenTail.bytes,
+      });
+    };
+
     /** Close the replay window: hand over whatever we were still holding. */
     const closeReplayWindow = () => {
       cancelTimers();
@@ -409,18 +429,7 @@ export function openPtyShell({
       const held = replay.pending.length;
       const { emit, state, aligned } = flushReplay(replay);
       replay = state;
-      if (held > 0) {
-        // The replay could not be aligned against what this client has already seen,
-        // so it goes out verbatim — correct, but it means the scrollback reprints.
-        // The likeliest cause is a server-side scrollback ring smaller than the anchor
-        // we search for, which no documentation pins down: log it, because otherwise
-        // this feature can degrade to a silent no-op and the bug report comes back
-        // looking identical to the one it fixed.
-        loggers.realtime.info('Agent terminal replay window closed unaligned (scrollback may reprint)', {
-          heldBytes: held,
-          seenBytes: seenTail.bytes,
-        });
-      }
+      if (held > 0) reportUnaligned('window-closed', held);
       // A give-up: these bytes RESTART the history rather than extending it — see `deliver`.
       deliver(emit, aligned ? 'append' : 'restart');
       releaseOutOfBand();
@@ -486,8 +495,12 @@ export function openPtyShell({
 
       const { emit, state, aligned } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
-      // An unaligned emission is a give-up: it re-emits bytes the history may already hold,
-      // so it RESTARTS that history instead of extending it (see `deliver`).
+      // An unaligned emission is a give-up: it re-emits bytes the history may already hold, so
+      // it RESTARTS that history instead of extending it (see `deliver`). It also has to be
+      // REPORTED — this is the byte-cap give-up, and it resolves the window inside the pure
+      // core, so `closeReplayWindow` (and its log) never runs. Without this line the one
+      // failure the cap exists to catch is the only one that happens silently.
+      if (!aligned) reportUnaligned('pending-cap', emit.length);
       deliver(emit, aligned ? 'append' : 'restart');
       if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
       // Boundary still unknown. Hold these bytes — but bound the hold twice over: on the

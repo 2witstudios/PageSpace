@@ -139,8 +139,9 @@ export const MAX_MATCH_CANDIDATES = 8;
  *
  * So this errs large, deliberately. Erring large costs transient memory during a reconnect;
  * erring small costs the entire feature for the terminals that need it most — the ones with
- * a lot of scrollback. The `closeReplayWindow` log fires on every give-up, so if the ring
- * ever does outgrow this, it says so rather than silently reverting to the bug.
+ * a lot of scrollback. The shell reports EVERY give-up (`reportUnaligned`), this one with
+ * `cause: 'pending-cap'`, so a ring that outgrows the cap says so in the logs instead of
+ * quietly reverting to the bug.
  */
 export const MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
