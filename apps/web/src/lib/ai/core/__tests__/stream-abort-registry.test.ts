@@ -463,6 +463,37 @@ describe('stream-abort-registry', () => {
       });
     });
 
+    // An abort ends the stream here just as surely as a natural finish, and leaves the same window:
+    // the terminal write is fire-and-forget, so the row still reads 'streaming' with a fresh
+    // heartbeat for a moment. A SECOND Stop naming it (a double-click, or a surface that aborts by
+    // messageId) would otherwise escalate and time out against that live heartbeat — warning that a
+    // generation is "still running and still billing" seconds after we killed it ourselves.
+    it('remembers a stream it ABORTED, not only one that finished naturally', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.abortStream({ streamId: 'stream-1', userId: 'user-1' });
+
+      expect(registry.wasRecentlyFinishedHere({ streamId: 'stream-1' })).toBe(true);
+      assert({
+        given: 'a second Stop naming a stream this instance already aborted',
+        should: 'know it is over — under its messageId too, which is the name most surfaces use',
+        actual: registry.wasRecentlyFinishedHere({ messageId: 'msg-1' }),
+        expected: true,
+      });
+    });
+
+    // A REFUSED abort (wrong user) must not tombstone: the stream is still running, and a later
+    // Stop from its real owner has to escalate.
+    it('does not remember a stream whose abort was refused', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.abortStream({ streamId: 'stream-1', userId: 'user-2' });
+
+      expect(registry.wasRecentlyFinishedHere({ messageId: 'msg-1' })).toBe(false);
+    });
+
     it('does not claim a stream that is still running here', async () => {
       const registry = await import('../stream-abort-registry');
 

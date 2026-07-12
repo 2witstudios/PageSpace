@@ -52,7 +52,29 @@ const streamIdToMessageId = new Map<string, string>();
  * far short of the heartbeat staleness window.
  */
 const recentlyFinished = new Map<string, number>();
-const FINISHED_TOMBSTONE_TTL_MS = 60 * 1000;
+
+/**
+ * It must outlive the tail of `onFinish` — the gap between unregistering the controller and writing
+ * the terminal status, which covers message persistence, credit settlement, and a per-tool-call
+ * billing loop. That tail has no tight upper bound, so a minute is not obviously enough; the whole
+ * request is capped at `maxDuration` (5 min), which is.
+ *
+ * Erring long is cheap here and erring short is not. A tombstone can only ever suppress the
+ * escalation of a name THIS process finished, and a name is never reused (messageId and streamId
+ * are per-request cuid2s — and registration clears the tombstone anyway, so even a reuse is safe).
+ * Whereas an expired tombstone means a Stop on a finishing stream escalates, times out against a
+ * heartbeat that is still beating, and falsely warns the user their agent is still billing.
+ */
+const FINISHED_TOMBSTONE_TTL_MS = 5 * 60 * 1000;
+
+/** This process owned this stream, and it is over. Records BOTH of its names. */
+const rememberFinishedHere = (streamId: string): void => {
+  const now = Date.now();
+  const messageId = streamIdToMessageId.get(streamId);
+
+  recentlyFinished.set(streamId, now);
+  if (messageId !== undefined) recentlyFinished.set(messageId, now);
+};
 
 const linkStream = (streamId: string, messageId: string): void => {
   // Clear any stale reverse entries before re-linking — otherwise a later
@@ -250,6 +272,17 @@ export const abortStream = ({
   }
 
   entry.controller.abort();
+
+  // Tombstone BEFORE unlinking, while the messageId is still reachable from the streamId.
+  //
+  // An abort ends the stream here just as surely as a natural finish does, and it leaves the same
+  // window: the terminal write is fire-and-forget, so the row still reads 'streaming' with a fresh
+  // heartbeat for a moment afterwards. A SECOND Stop naming that stream (a double-click, or one of
+  // the surfaces that aborts by messageId) would otherwise miss the registry, find no tombstone,
+  // escalate, and time out against that live heartbeat — warning the user that a generation is
+  // "still running and still billing" seconds after we killed it ourselves.
+  rememberFinishedHere(streamId);
+
   registry.delete(streamId);
   unlinkStream(streamId);
 
@@ -268,12 +301,7 @@ export const abortStream = ({
  * billing" alarm).
  */
 export const removeStream = ({ streamId }: { streamId: string }): void => {
-  const now = Date.now();
-  const messageId = streamIdToMessageId.get(streamId);
-
-  recentlyFinished.set(streamId, now);
-  if (messageId !== undefined) recentlyFinished.set(messageId, now);
-
+  rememberFinishedHere(streamId);
   registry.delete(streamId);
   unlinkStream(streamId);
 };

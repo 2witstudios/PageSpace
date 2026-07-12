@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
+import { assert } from './riteway';
 import {
   isStreamRowLive,
   decideStreamTakeover,
   STREAM_HEARTBEAT_STALE_MS,
+  type StreamLivenessRow,
 } from '../stream-liveness';
 
 const NOW = new Date('2026-07-11T12:00:00.000Z').getTime();
@@ -126,6 +128,47 @@ describe('decideStreamTakeover', () => {
 
       expect(decision.abort).toEqual(['stopped', 'dead', 'live-elsewhere']);
       expect(decision.reconcile).toEqual(['stopped', 'dead']);
+    });
+  });
+});
+
+describe('decideStreamTakeover — a beat that stops BY DESIGN is not a death', () => {
+  // The lifecycle caps the heartbeat at STREAM_MAX_LIFETIME_MS as a backstop against a leaked
+  // interval; the GENERATION has no such cap. So past the cap, silence is the expected state of a
+  // perfectly healthy long run (a deep-research or tool-loop stream still going at T+61min).
+  //
+  // Reconciling on a stale beat there writes status='aborted', parts=[] over a stream that is STILL
+  // GENERATING — hiding it from every subscriber, destroying its only crash-recovery snapshot, and
+  // leaving it calling write tools and billing. That is the one write this module must never make.
+  const now = new Date('2026-07-12T14:00:00Z').getTime();
+  const longRow = (over: Partial<StreamLivenessRow> = {}): StreamLivenessRow => ({
+    messageId: 'msg-long',
+    startedAt: new Date(now - 2 * 60 * 60 * 1000),
+    lastHeartbeatAt: new Date(now - 61 * 60 * 1000),
+    ...over,
+  });
+
+  it('refuses to reconcile a row that has outlived the heartbeat cap', () => {
+    assert({
+      given: 'a long generation past the cap, whose heartbeat therefore stopped by design',
+      should: 'leave its row alone — a silent beat is not proof of death here',
+      actual: decideStreamTakeover({ rows: [longRow()], now }).reconcile,
+      expected: [],
+    });
+  });
+
+  // The guard must not swallow the case it sits next to: a row we ACTUALLY aborted is proven
+  // finished, whatever its heartbeat says, and must still be driven terminal.
+  it('still reconciles a row it actually aborted, even past the cap', () => {
+    assert({
+      given: 'a past-the-cap row that the abort registry actually stopped',
+      should: 'reconcile it — we have proof it is finished',
+      actual: decideStreamTakeover({
+        rows: [longRow()],
+        abortedMessageIds: ['msg-long'],
+        now,
+      }).reconcile,
+      expected: ['msg-long'],
     });
   });
 });

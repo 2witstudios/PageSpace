@@ -25,19 +25,12 @@
  * teaches people to ignore the alarm that matters.
  */
 
-import { isStreamRowLive, STREAM_HEARTBEAT_STALE_MS, type StreamLivenessRow } from '@/lib/ai/core/stream-liveness';
-import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
-
-/**
- * Has this row aged past the point where its heartbeat means anything?
- *
- * The lifecycle stops beating at `startedAt + STREAM_MAX_LIFETIME_MS` — deliberately, as a backstop
- * against a leaked interval. The GENERATION has no such cap. So beyond that horizon a silent
- * heartbeat is the expected state of a perfectly healthy stream, and "stale" stops being evidence
- * of death.
- */
-const hasOutlivedHeartbeatCap = (row: StreamLivenessRow, now: number): boolean =>
-  now - row.startedAt.getTime() > STREAM_MAX_LIFETIME_MS;
+import {
+  hasOutlivedHeartbeatCap,
+  isStreamRowLive,
+  STREAM_HEARTBEAT_STALE_MS,
+  type StreamLivenessRow,
+} from '@/lib/ai/core/stream-liveness';
 
 /**
  * The outcome a caller reports to the client.

@@ -1,3 +1,5 @@
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
+
 /**
  * Liveness and takeover decisions for server-owned streams.
  *
@@ -40,6 +42,22 @@ export interface StreamLivenessRow {
   lastHeartbeatAt: Date | null;
   startedAt: Date;
 }
+
+/**
+ * Has this row aged past the point where a silent heartbeat means anything?
+ *
+ * The lifecycle stops beating at `startedAt + STREAM_MAX_LIFETIME_MS` — deliberately, as a backstop
+ * against a leaked interval (see MAX_HEARTBEAT_MS there). The GENERATION has no such cap: a long
+ * tool loop or a deep-research run can still be going at T+61min.
+ *
+ * So past that horizon, silence is the EXPECTED state of a perfectly healthy stream, and "stale"
+ * stops being evidence of death. Anything that drives a row TERMINAL on the strength of a stale
+ * heartbeat must therefore exclude these rows, or it will write `status='aborted', parts=[]` over a
+ * stream that is still generating — hiding it from every subscriber and destroying its only
+ * crash-recovery snapshot, while it keeps calling write tools and keeps billing.
+ */
+export const hasOutlivedHeartbeatCap = (row: StreamLivenessRow, now: number): boolean =>
+  now - row.startedAt.getTime() > STREAM_MAX_LIFETIME_MS;
 
 export const isStreamRowLive = (
   row: StreamLivenessRow,
@@ -106,7 +124,16 @@ export const decideStreamTakeover = ({
   return {
     abort: rows.map((r) => r.messageId),
     reconcile: rows
-      .filter((r) => aborted.has(r.messageId) || !isStreamRowLive(r, now, staleAfterMs))
+      .filter((r) => (
+        // We stopped it. Proven finished, whatever its heartbeat says.
+        aborted.has(r.messageId)
+        // Or its heartbeat says its process is gone — but ONLY while the heartbeat still means
+        // something. Past the cap the beat stops by design (see hasOutlivedHeartbeatCap), so a
+        // silent row there may be a perfectly healthy long generation, and driving it terminal
+        // would erase a stream that is still running. We cannot prove it is dead, so we do not
+        // touch it.
+        || (!isStreamRowLive(r, now, staleAfterMs) && !hasOutlivedHeartbeatCap(r, now))
+      ))
       .map((r) => r.messageId),
   };
 };

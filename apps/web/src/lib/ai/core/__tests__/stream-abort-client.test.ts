@@ -363,22 +363,41 @@ describe('stream-abort-client', () => {
   });
 
   describe('createStreamTrackingFetch', () => {
-    it('extracts X-Stream-Id header and stores it', async () => {
+    it('extracts X-Stream-Id header and stores it for as long as the stream is running', async () => {
       const client = await import('../stream-abort-client');
 
-      const mockResponse = {
-        headers: {
-          get: vi.fn().mockReturnValue('extracted-stream-id'),
-        },
-      } as unknown as Response;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            controller.enqueue(new TextEncoder().encode('tok'));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { 'X-Stream-Id': 'extracted-stream-id' } },
+      );
 
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(response);
 
       const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
-      await trackingFetch('/api/ai/chat', { method: 'POST' });
+      const tracked = await trackingFetch('/api/ai/chat', { method: 'POST' });
 
-      expect(mockResponse.headers.get).toHaveBeenCalledWith('X-Stream-Id');
+      // The headers have landed but the tokens are still arriving: this is exactly the window in
+      // which Stop must be able to name the stream.
       expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBe('extracted-stream-id');
+
+      // Drain the body — the generation is now over.
+      const reader = tracked.body!.getReader();
+      while (!(await reader.read()).done) { /* drain */ }
+
+      // The streamId names THIS generation and dies with it. Keeping it meant that from the SECOND
+      // turn of a conversation onward, the map held the PREVIOUS turn's id until the new headers
+      // landed — so a Stop pressed in the TTFB window named a stream that had already finished.
+      assert({
+        given: 'a generation whose response body has ended',
+        should: 'forget its streamId, so no later Stop can name a stream that is already over',
+        actual: client.getActiveStreamId({ chatId: 'chat-123' }),
+        expected: undefined,
+      });
     });
 
     it('does not set streamId when header is missing', async () => {

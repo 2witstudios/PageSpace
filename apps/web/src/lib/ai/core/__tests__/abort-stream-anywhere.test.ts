@@ -56,10 +56,12 @@ beforeEach(() => {
 });
 
 describe('abortStreamAnywhere — naming precedence', () => {
-  // messageId names the stream exactly; conversationId is only the fallback for the window before
-  // either server-minted name exists client-side. Preferring the fallback would abort EVERY stream
-  // on the conversation, not the one the user pointed at.
-  it('prefers messageId over both other names', async () => {
+  // The precise name is tried FIRST and, when it resolves, it is the whole answer: a hit returns
+  // immediately without ever touching the conversation. Preferring the conversation while a precise
+  // name resolves would abort every stream on it, not the one the user pointed at.
+  it('prefers messageId, and does not touch the conversation when it resolves', async () => {
+    mockAbortStreamByMessageId.mockReturnValue(HIT);
+
     await abortStreamAnywhere({
       messageId: 'msg-1',
       streamId: 'stream-1',
@@ -72,11 +74,25 @@ describe('abortStreamAnywhere — naming precedence', () => {
     expect(mockAbortConversationStreams).not.toHaveBeenCalled();
   });
 
-  it('prefers streamId over conversationId', async () => {
+  it('prefers streamId over conversationId when it resolves', async () => {
+    mockAbortStream.mockReturnValue(HIT);
+
     await abortStreamAnywhere({ streamId: 'stream-1', conversationId: 'conv-1', userId: 'user-a' });
 
     expect(mockAbortStream).toHaveBeenCalledWith({ streamId: 'stream-1', userId: 'user-a' });
     expect(mockAbortConversationStreams).not.toHaveBeenCalled();
+  });
+
+  // But a precise name that MISSES must not end the search. The client's streamId can be stale (it
+  // holds the previous turn's until the new response headers land), and the stream the user is
+  // actually trying to stop may be right here on this instance. Stopping at the miss would leave it
+  // running while the UI said "Send".
+  it('still tries the conversation when a precise name misses', async () => {
+    mockAbortStream.mockReturnValue(MISS);
+
+    await abortStreamAnywhere({ streamId: 'stale-stream', conversationId: 'conv-1', userId: 'user-a' });
+
+    expect(mockAbortConversationStreams).toHaveBeenCalledWith({ conversationId: 'conv-1', userId: 'user-a' });
   });
 
   it('falls back to conversationId when it is the only name the client has', async () => {
@@ -176,16 +192,58 @@ describe('abortStreamAnywhere — local first, then cross-instance', () => {
   it('stays silent about a stream that finished on this instance moments ago', async () => {
     mockAbortStreamByMessageId.mockReturnValue(MISS);
     mockWasRecentlyFinishedHere.mockReturnValue(true);
+    // Its terminal write is fire-and-forget, so the row can still read 'streaming' and be marked.
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-1'], failed: false });
 
     const result = await abortStreamAnywhere({ messageId: 'msg-1', userId: 'user-a' });
 
-    expect(mockMarkAbortRequested).not.toHaveBeenCalled();
+    // The tombstone's real job: keep it OUT OF THE WAIT SET. Nothing here will ever settle it,
+    // because there is nothing here left to do the settling — so waiting would time out against a
+    // still-live heartbeat and warn about a generation that has already completed.
     expect(mockAwaitAbortSettled).not.toHaveBeenCalled();
     assert({
       given: 'a Stop pressed while the generation was finishing on THIS instance',
       should: 'report not_found — which the client treats as silent — never a false "still billing"',
       actual: { aborted: result.aborted, code: result.code },
       expected: { aborted: false, code: 'not_found' },
+    });
+  });
+
+  // THE TRAP the tombstone sets if it is consulted too early.
+  //
+  // The client's activeStreams map holds the PREVIOUS turn's streamId until the new response
+  // headers land, so a Stop pressed in the TTFB window of turn 2 names turn 1's (finished) stream.
+  // If "this name finished here" were allowed to short-circuit, that Stop would return not_found —
+  // which the UI stays SILENT about — while turn 2 kept generating, kept calling write tools, and
+  // kept billing. That is precisely the bug this PR exists to eliminate, re-entered through the
+  // fix for it. The name-fallback is what saves it: a stale name matches no in-flight row, so the
+  // mark falls through to the conversation and stops the generation that is ACTUALLY running.
+  it('escalates by conversation when a STALE name finished here but the conversation is still generating', async () => {
+    mockAbortStream.mockReturnValue(MISS);
+    // The name the client sent is turn 1's — this instance finished it.
+    mockWasRecentlyFinishedHere.mockImplementation(
+      ({ streamId, messageId }: { streamId?: string; messageId?: string }) =>
+        streamId === 'stream-turn-1' || messageId === 'msg-turn-1',
+    );
+    mockAbortConversationStreams.mockResolvedValue({ aborted: [] });
+    // The mark falls back to the conversation and finds turn 2, which is live on another instance.
+    mockMarkAbortRequested.mockResolvedValue({ marked: ['msg-turn-2'], failed: false });
+    mockAwaitAbortSettled.mockResolvedValue({
+      aborted: ['msg-turn-2'], reconcile: [], stillLive: [], code: 'aborted',
+    });
+
+    const result = await abortStreamAnywhere({
+      streamId: 'stream-turn-1',
+      conversationId: 'conv-1',
+      userId: 'user-a',
+    });
+
+    expect(mockMarkAbortRequested).toHaveBeenCalled();
+    assert({
+      given: "a Stop naming the previous turn's finished stream while the next turn is generating",
+      should: 'stop the generation that is actually running — never report the silent not_found',
+      actual: { aborted: result.aborted, code: result.code },
+      expected: { aborted: true, code: 'aborted' },
     });
   });
 

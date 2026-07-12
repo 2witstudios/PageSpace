@@ -347,14 +347,30 @@ export const createStreamTrackingFetch = ({
       setActiveStreamId({ chatId, streamId });
     }
 
-    if (!channelId) return response;
+    // The streamId names THIS generation, and it dies with it. Forget it when the body ends.
+    //
+    // It used to be cleared only on a conversation switch or unmount, so from the SECOND turn of a
+    // conversation onward the map held the PREVIOUS turn's streamId until the new response headers
+    // landed. A Stop pressed in that window (the 0.5-3s TTFB gap — the single most likely moment
+    // for it) therefore named a stream that had already finished. The server now falls back to the
+    // conversation and stops the right generation regardless, but there is no reason to hand it a
+    // name we know is dead.
+    const forgetStream = () => {
+      if (chatId) clearActiveStreamId({ chatId });
+    };
+
+    if (!channelId) return withBodyCompletion(response, forgetStream);
+
+    const consumedChannelId = channelId;
     if (!response.ok) {
-      unmarkChannelConsuming(channelId);
+      unmarkChannelConsuming(consumedChannelId);
       return response;
     }
 
-    const consumedChannelId = channelId;
-    return withBodyCompletion(response, () => unmarkChannelConsuming(consumedChannelId));
+    return withBodyCompletion(response, () => {
+      unmarkChannelConsuming(consumedChannelId);
+      forgetStream();
+    });
   };
 };
 

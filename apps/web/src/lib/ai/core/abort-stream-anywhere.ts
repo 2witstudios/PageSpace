@@ -97,17 +97,26 @@ export const abortStreamAnywhere = async ({
     if (abortStream({ streamId, userId }).aborted) return ABORTED;
   }
 
-  // It finished HERE, moments ago. Nothing is running, so say nothing — see the docblock. Without
-  // this, the most ordinary Stop of all (pressed as the last tokens render) is indistinguishable
-  // from a stream owned by another instance, and gets escalated into a false "still billing" alarm.
-  if ((messageId || streamId) && wasRecentlyFinishedHere({ messageId, streamId })) {
-    return NOT_FOUND;
-  }
+  // NOTE — there is deliberately NO "did it finish here?" short-circuit at this point, and adding
+  // one back would be a serious bug.
+  //
+  // It looks like the obvious move: the tombstone says this instance finished the stream, so
+  // nothing is running, so return not_found and skip the escalation. But a client's `streamId` can
+  // be STALE — the activeStreams map holds the previous turn's id until the new response headers
+  // land — so "this name finished here" does NOT imply "nothing is running on this conversation".
+  // Turn 2 may be generating right now. Short-circuiting on the name would return not_found, which
+  // the UI stays silent about by design, while turn 2 kept calling write tools and kept billing.
+  // That is the exact bug this whole PR exists to eliminate.
+  //
+  // The name-fallback below is what saves that case: a stale streamId matches no in-flight row, so
+  // the mark falls through to the conversation and stops the generation that is ACTUALLY running.
+  // The tombstone still does its job — it is applied to the WAIT SET further down, which is the
+  // only place it was ever needed.
 
-  // The conversation path cannot short-circuit the same way: it names a SET, and stopping the
-  // rows this instance owns says nothing about a sibling stream owned by another instance. So we
-  // stop what we can, then escalate — but we never wait on the ones we ourselves just stopped.
-  const locallyAborted = conversationId && !messageId && !streamId
+  // Anything this instance owns on this conversation, stopped in-process. Note this runs even when
+  // a precise name was supplied but missed: that name may simply be stale, and the stream may be
+  // right here.
+  const locallyAborted = conversationId
     ? (await abortConversationStreams({ conversationId, userId })).aborted
     : [];
 
