@@ -680,12 +680,19 @@ export function buildAgentTerminalHandlers({
           closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
           scrollback: [],
           hasOutput: false,
-          // Only a DEFINITIVE positive is recorded. `resumed` fails safe on the
-          // wire, but this is durable session state that every reattach for the
-          // next 30 minutes inherits — freezing a guess made during one transient
-          // listing failure into it would keep answering with that guess long
-          // after the Sprite could have been asked again.
-          resumedAtCreate: liveness === 'live',
+          // Fails safe, EXACTLY as the wire does. The reattach path has no way to
+          // say "unknown" — it re-derives `resumed` from this field — so recording
+          // `false` for an unknown liveness would put a live agent straight back
+          // into the window this field exists to close: `hasOutput` is still false
+          // in the moment before its first byte, and a pane re-mounting there (a
+          // torn-down mount carries its unspent prompt into the next connect) would
+          // be told "fresh boot, safe to type".
+          //
+          // Recording `true` for an unknown costs a prompt the user retypes, and it
+          // stops costing anything the instant the agent speaks and `hasOutput`
+          // takes over. Recording `false` costs a line typed into a live agent
+          // sitting at a confirmation. The asymmetry decides it.
+          resumedAtCreate: resumed,
           scrollbackBytes: 0,
           reAuthInterval: undefined,
           idleTimer: undefined,

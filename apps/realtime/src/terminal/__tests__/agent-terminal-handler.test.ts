@@ -1657,6 +1657,38 @@ describe('buildAgentTerminalHandlers', () => {
       expect(order).toEqual(['listSessions', 'openShell']);
     });
 
+    it('given a shell that speaks the instant it opens, should have announced `ready` FIRST', async () => {
+      // The invariant is not "listSessions before openShell" — it is that NOTHING
+      // awaits between `openShell` and the `ready` emit. An attach replays the
+      // session's scrollback immediately, so any await in that span lets output
+      // overtake `ready`, and a client that types its prompt on first output types
+      // it into an agent it has not yet been told was already running. Asserting
+      // the emit ORDER pins that directly: insert an await anywhere in the span and
+      // this fails, where an openShell/listSessions order-log would not.
+      openShell = vi.fn((args: { onOutput: (data: string) => void }) => {
+        // The replay lands as soon as the socket is wired.
+        queueMicrotask(() => args.onOutput('replayed scrollback'));
+        return shell;
+      }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      checkAuth = vi.fn().mockResolvedValue(
+        makeAuthSuccess({
+          streamSessionId: 'sess-existing',
+          sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
+        }),
+      ) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const events = socket.emit.mock.calls.map(([event]: [string]) => event);
+      const ready = events.indexOf('agent-terminal:ready');
+      const output = events.indexOf('agent-terminal:output');
+      expect(ready).toBeGreaterThanOrEqual(0);
+      expect(output).toBeGreaterThanOrEqual(0);
+      expect(ready).toBeLessThan(output);
+    });
+
     it('given a Sprite that never answers, should give up and open the shell anyway', async () => {
       // Unbounded, this would gate the shell from opening AT ALL: no PTY, the
       // concurrency slot and billing hold both held, and — because finishCreate()
@@ -1678,10 +1710,16 @@ describe('buildAgentTerminalHandlers', () => {
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
     });
 
-    it('given a listing that FAILS, should not freeze that guess onto the session', async () => {
-      // `resumed: true` fails safe on the wire, but `resumedAtCreate` is durable
-      // state every reattach inherits for the next 30 minutes. A transient 429 must
-      // not keep answering for the rest of the session's life.
+    it('given a listing that FAILS, should fail safe on the session too, not just on the wire', async () => {
+      // The reattach path cannot say "unknown" — it re-derives `resumed` from
+      // `resumedAtCreate`. Recording `false` for an unknown liveness would put a
+      // live agent back into the very window that field exists to close: in the
+      // moment before its first byte, `hasOutput` is false, so a pane re-mounting
+      // there (carrying the prompt its torn-down mount never spent) would be told
+      // "fresh boot, safe to type" and would type into a running agent.
+      //
+      // An unknown recorded as resumed costs a prompt the user retypes, and stops
+      // costing anything the moment the agent speaks. The asymmetry decides it.
       const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
       auth.sprite.listSessions = vi.fn(async () => {
         throw new Error('429');
@@ -1692,7 +1730,35 @@ describe('buildAgentTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
-      expect(sessionMap.getByKey('branch1:agent:cli')?.resumedAtCreate).toBe(false);
+      expect(sessionMap.getByKey('branch1:agent:cli')?.resumedAtCreate).toBe(true);
+    });
+
+    it('given a listing that failed, a REATTACH before the first byte should still say resumed', async () => {
+      // The end-to-end shape of the same hazard: the connect could not confirm
+      // liveness, the agent IS running, and a second pane attaches before it has
+      // spoken. `hasOutput` is false, so only the durable verdict can answer.
+      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      auth.sprite.listSessions = vi.fn(async () => {
+        throw new Error('429');
+      }) as unknown as typeof auth.sprite.listSessions;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      const reconnectSocket = makeSocket();
+      const { onConnect: onReconnect } = buildAgentTerminalHandlers({
+        sessionMap,
+        openShell,
+        checkAuth,
+        socket: reconnectSocket,
+        persistStreamSessionId,
+      });
+      await onReconnect({ ...validPayload, connectionId: 'pane-b' });
+
+      expect(reconnectSocket.emit).toHaveBeenCalledWith(
+        'agent-terminal:ready',
+        expect.objectContaining({ connectionId: 'pane-b', resumed: true }),
+      );
     });
   });
 });
