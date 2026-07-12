@@ -494,20 +494,23 @@ export function buildAgentTerminalHandlers({
    * further disconnect can arrive for a socket that has already left. It runs for
    * the life of the process. On the free tier (one terminal) that locks the user out.
    *
-   * So the window must be the WHOLE of `onConnect`, not merely the create.
+   * So the window is the WHOLE of `onConnect`, and every path out of it DECLINES
+   * rather than binding-and-undoing. Both halves of that matter:
    *
-   * How it is settled depends on what the connect was about to do, and the two are
-   * NOT interchangeable:
+   *   - An ATTACH must not happen, because `attachToLiveSession` STEALS the session
+   *     (`sessionMap.reattach` drops the previous owner's socket entry). A dead pane
+   *     that attached-then-tore-down would take a LIVE pane's terminal away from it
+   *     and kill the PTY 30 minutes later, with the user still watching. Declining
+   *     leaves the session exactly as it was: a live viewer, or a reap already ticking.
+   *   - A CREATE must not happen either. Tearing an abandoned create down afterwards
+   *     is safe (nobody else is watching a PTY that did not exist a moment ago) but
+   *     it is not free: the reap is armed for DETACHED_IDLE_MS, so it would hold a
+   *     concurrency slot and bill the machine's payer for thirty minutes of Sprite
+   *     runtime for an agent nobody ever saw.
    *
-   *   - A connect that CREATED the session owns it outright — nobody else is
-   *     watching a PTY that did not exist a moment ago — so it detaches it and arms
-   *     the reap (`settleAbandon`).
-   *   - A connect that was about to ATTACH must simply NOT ATTACH (`abandoned`).
-   *     Attaching-then-tearing-down is not equivalent: `attachToLiveSession` STEALS
-   *     the session (`sessionMap.reattach` drops the previous owner's socket entry),
-   *     so a dead pane would take a LIVE pane's terminal away from it and then kill
-   *     the PTY 30 minutes later. Declining leaves the session exactly as it was,
-   *     with whatever it already had — a live viewer, or a reap already ticking.
+   * The check sits after the last `await` before the PTY exists (`sessionLiveness`);
+   * `openShell` is synchronous, so nothing can be abandoned between the check and the
+   * session being installed. Once installed, an ordinary disconnect collects it.
    */
   const connectingConnectionIds = new Set<string>();
   /** Connects whose pane went away before they had bound a session. */
@@ -519,23 +522,32 @@ export function buildAgentTerminalHandlers({
   }
 
   /**
-   * Call immediately after a connect CREATES a session. If the pane left while we
-   * were getting here, the disconnect it sent found nothing to
-   * act on — so act on it now, exactly as a normal disconnect would: detach the
-   * viewer and arm the idle reap that releases the slot and settles the billing.
+   * The key a session is filed under on its VIEWER side.
+   *
+   * `connectionId` is a UUID the CLIENT mints, and `agentTerminalSessionMap` is one
+   * shared, server-wide instance — so filing by the bare id lets one client's chosen
+   * string address ANOTHER client's session. Two sockets picking the same id (a
+   * buggy client, or a hostile one: it is validated only as a non-empty string) then
+   * collide inside the map, where `setNew` silently overwrites the socket entry of a
+   * session that is still running. That session is then unreachable: no viewer, no
+   * armed reap, so its PTY, its concurrency slot and its billing heartbeat run for
+   * the life of the process — billed to the MACHINE's payer, not the caller's. Worse,
+   * the first socket's later disconnect resolves to the SECOND socket's session and
+   * reaps it, killing a terminal someone else is watching.
+   *
+   * Namespacing by the server-assigned socket id makes that collision unrepresentable
+   * rather than merely detected: a client can only ever name its own connections.
    */
-  function settleAbandon(connectionId: string) {
-    if (abandonedWhileConnecting.has(connectionId)) disconnectConnection(connectionId);
-  }
+  const socketKey = (connectionId: string) => `${socket.id}\u0000${connectionId}`;
 
   function disconnectConnection(connectionId: string) {
-    const session = sessionMap.getBySocket(connectionId);
+    const session = sessionMap.getBySocket(socketKey(connectionId));
     activeConnectionIds.delete(connectionId);
     if (!session) return;
     const { sessionKey } = session;
     session.outputFn = () => {};
     session.closedFn = () => {};
-    sessionMap.detach(connectionId);
+    sessionMap.detach(socketKey(connectionId));
     session.idleTimer = setTimeout(() => {
       session.releaseSlot();
       session.command.kill();
@@ -564,7 +576,7 @@ export function buildAgentTerminalHandlers({
     session.viewerUserId = viewerUserId;
     session.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
     session.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
-    sessionMap.reattach(sessionKey, connectionId);
+    sessionMap.reattach(sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
     // client holding a starting prompt must not type it. Asking `hasOutput` rather
@@ -732,6 +744,26 @@ export function buildAgentTerminalHandlers({
       // `planReconnect` already applies on every reconnect.
       const attachSessionId = liveness === 'gone' ? undefined : (sandbox.streamSessionId ?? undefined);
 
+      // The pane is already gone. Do not START the agent just to reap it.
+      //
+      // Tearing an abandoned create down AFTER the fact is safe (nobody else is
+      // watching a PTY that did not exist a moment ago) — but safe is not free. The
+      // reap is armed for DETACHED_IDLE_MS, so a pane closed during a cold boot would
+      // hold a concurrency slot and bill the MACHINE's payer for thirty minutes of
+      // Sprite runtime for an agent nobody ever saw. On the free tier (one terminal)
+      // that is a thirty-minute lockout from the user's own machine — a smaller
+      // version of the very harm this machinery exists to prevent.
+      //
+      // This is the last `await` before the PTY exists, and everything from here to
+      // `setNew` is synchronous, so no abandonment can slip past this check. Nothing
+      // is stranded by leaving: the key claim is released in the `finally` below, so
+      // a racer parked on it wakes, finds no session, and creates one itself.
+      if (abandoned(connectionId)) {
+        releaseSlot();
+        if (holdId) void billing?.releaseHold(holdId).catch(() => {});
+        return;
+      }
+
       const session: TerminalSession = {
         command: null as unknown as PtyShell,
         sandboxId,
@@ -829,13 +861,8 @@ export function buildAgentTerminalHandlers({
       }
 
       session.command = shell;
-      sessionMap.setNew(sessionKey, connectionId, session);
+      sessionMap.setNew(sessionKey, socketKey(connectionId), session);
       activeConnectionIds.add(connectionId);
-
-      // The pane went away while this was being built. It is a live PTY now, with
-      // nobody watching it — detach it exactly as a normal disconnect would, so it
-      // arms the idle reap that releases the slot and settles the billing window.
-      settleAbandon(connectionId);
 
       // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
       // re-hold on an interval so a realtime restart loses at most one interval
@@ -933,17 +960,20 @@ export function buildAgentTerminalHandlers({
       }
       const connectionId = validation.value.connectionId ?? socket.id;
 
-      // A connectionId is a UUID the CLIENT mints, and the whole lifecycle below is
-      // keyed on it: the sets that decide what a disconnect means, and the session
-      // map's socket→session entry. Reusing one for a second concurrent connect
-      // therefore does not merely confuse the bookkeeping, it defeats it — the first
-      // connect's `finally` clears the abandon mark the second is relying on, and
-      // `setNew` overwrites the socket entry of a session that is still running,
-      // orphaning its PTY, its concurrency slot and its billing heartbeat for the
-      // life of the process. Since a session is billed to the MACHINE's payer, that
-      // is someone else's money and someone else's tier limit. The real client mints
-      // a fresh id per mount and disconnects on unmount, so this never fires for
-      // honest traffic — but "the client wouldn't do that" is not an invariant.
+      // Reusing an id THIS SOCKET already has in flight does not merely confuse the
+      // bookkeeping, it defeats it: the first connect's `finally` clears the abandon
+      // mark the second is relying on, and the second's `setNew` displaces the first's
+      // still-running session — leaving a PTY with no viewer and no armed reap, its
+      // concurrency slot and billing heartbeat running for the life of the process.
+      //
+      // Cross-SOCKET reuse is not checked here, and must not be: these sets are this
+      // socket's own, so a check against them could never have seen another socket's
+      // ids anyway. That collision is prevented at the source instead, by `socketKey`
+      // — a client can only ever name its own connections.
+      //
+      // The real client mints a fresh UUID per mount and disconnects on unmount, so
+      // this never fires for honest traffic — but "the client wouldn't do that" is
+      // not an invariant.
       if (activeConnectionIds.has(connectionId) || connectingConnectionIds.has(connectionId)) {
         socket.emit('agent-terminal:error', { message: 'Agent terminal connectionId already in use', connectionId });
         return;
@@ -964,7 +994,7 @@ export function buildAgentTerminalHandlers({
     onInput(payload: unknown) {
       const connectionId = readConnectionId(payload) ?? socket.id;
       if (!activeConnectionIds.has(connectionId)) return;
-      const session = sessionMap.getBySocket(connectionId);
+      const session = sessionMap.getBySocket(socketKey(connectionId));
       if (!session) return;
       const p = payload as { data?: string };
       if (typeof p?.data === 'string' && p.data.length <= MAX_INPUT_BYTES) {
@@ -975,7 +1005,7 @@ export function buildAgentTerminalHandlers({
     onResize(payload: unknown) {
       const connectionId = readConnectionId(payload) ?? socket.id;
       if (!activeConnectionIds.has(connectionId)) return;
-      const session = sessionMap.getBySocket(connectionId);
+      const session = sessionMap.getBySocket(socketKey(connectionId));
       if (!session) return;
       const p = payload as { cols?: number; rows?: number };
       if (typeof p?.cols === 'number' && typeof p?.rows === 'number' && Number.isFinite(p.cols) && Number.isFinite(p.rows)) {

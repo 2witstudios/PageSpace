@@ -36,6 +36,14 @@ function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: Return
   return { id, data: { user: { id: userId } }, emit: vi.fn() };
 }
 
+/**
+ * The key a session is filed under on its viewer side. The handler namespaces the
+ * client-minted `connectionId` with the SERVER-assigned socket id (see `socketKey`),
+ * so that two clients choosing the same id cannot address each other's sessions.
+ * Tests must ask for the same key the handler files under, or they assert nothing.
+ */
+const viewer = (connectionId: string, socketId = 'sock1') => `${socketId}\u0000${connectionId}`;
+
 function makeShell(): PtyShell & { write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> } {
   return { write: vi.fn(), resize: vi.fn(), kill: vi.fn() };
 }
@@ -282,7 +290,7 @@ describe('buildAgentTerminalHandlers', () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
-      expect(sessionMap.getBySocket('sock1')).toBeDefined();
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
 
@@ -307,7 +315,7 @@ describe('buildAgentTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
-      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeUndefined();
       expect(openShell).not.toHaveBeenCalled();
     });
 
@@ -353,7 +361,7 @@ describe('buildAgentTerminalHandlers', () => {
       await onConnect(validPayload);
 
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
-      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeUndefined();
       expect(auth.releaseSlot).toHaveBeenCalled();
     });
 
@@ -622,8 +630,8 @@ describe('buildAgentTerminalHandlers', () => {
       expect(attackerSocket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
       expect(attackerSocket.emit).not.toHaveBeenCalledWith('agent-terminal:ready', expect.anything());
       // The victim's live session is untouched and still owned by the original socket.
-      expect(sessionMap.getBySocket('sock1')).toBeDefined();
-      expect(sessionMap.getBySocket('attacker-sock')).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
+      expect(sessionMap.getBySocket(viewer('attacker-sock', 'attacker-sock'))).toBeUndefined();
     });
 
     it('given two CONCURRENT cold connects for the same key, should open exactly ONE PTY — the second joins the first', async () => {
@@ -652,7 +660,7 @@ describe('buildAgentTerminalHandlers', () => {
       // Both panes end up on the one live session.
       const session = sessionMap.getByKey('branch1:agent:cli');
       expect(session).toBeDefined();
-      expect(sessionMap.getBySocket('pane-b')).toBe(session);
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toBe(session);
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ connectionId: 'pane-b', scrollback: expect.any(String) }));
     });
 
@@ -737,7 +745,7 @@ describe('buildAgentTerminalHandlers', () => {
       expect(openShell).toHaveBeenCalledTimes(1);
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
       // The second connect reattached the shared session onto pane-b.
-      expect(sessionMap.getBySocket('pane-b')).toMatchObject({ sessionKey: 'branch1:agent:cli' });
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toMatchObject({ sessionKey: 'branch1:agent:cli' });
     });
 
     it('given a successful connect, should set up a re-auth interval on the session', async () => {
@@ -917,8 +925,8 @@ describe('buildAgentTerminalHandlers', () => {
       await onConnect({ ...validPayload, name: 'cli', connectionId: 'pane-a' });
       await onConnect({ ...validPayload, name: 'reviewer', connectionId: 'pane-b' });
 
-      expect(sessionMap.getBySocket('pane-a')).toMatchObject({ sessionKey: 'branch1:agent:cli' });
-      expect(sessionMap.getBySocket('pane-b')).toMatchObject({ sessionKey: 'branch1:agent:reviewer' });
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toMatchObject({ sessionKey: 'branch1:agent:cli' });
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toMatchObject({ sessionKey: 'branch1:agent:reviewer' });
 
       // Input routed by connectionId reaches the pane it was typed into, not whichever pane connected last.
       onInput({ data: 'echo a\n', connectionId: 'pane-a' });
@@ -966,8 +974,8 @@ describe('buildAgentTerminalHandlers', () => {
 
       onDisconnect({ connectionId: 'pane-a' });
 
-      expect(sessionMap.getBySocket('pane-a')).toBeUndefined();
-      expect(sessionMap.getBySocket('pane-b')).toBeDefined();
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toBeDefined();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined(); // shell survives until the idle timeout, same as a single-pane disconnect
     });
 
@@ -986,8 +994,8 @@ describe('buildAgentTerminalHandlers', () => {
 
       onDisconnect();
 
-      expect(sessionMap.getBySocket('pane-a')).toBeUndefined();
-      expect(sessionMap.getBySocket('pane-b')).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toBeUndefined();
     });
 
     it('given a DIFFERENT socket referencing a connectionId it never established itself, should ignore it rather than acting on another socket\'s session', async () => {
@@ -1016,7 +1024,7 @@ describe('buildAgentTerminalHandlers', () => {
       expect(shell.resize).not.toHaveBeenCalled();
 
       attackerHandlers.onDisconnect({ connectionId: 'victim-pane' });
-      expect(sessionMap.getBySocket('victim-pane')).toBeDefined(); // still alive — the attacker's disconnect was a no-op
+      expect(sessionMap.getBySocket(viewer('victim-pane'))).toBeDefined(); // still alive — the attacker's disconnect was a no-op
     });
 
     it('given two connects on the SAME socket resolving to the SAME sessionKey, the second reattach steals the first connectionId\'s socket mapping — onInput/onResize/onDisconnect for the now-dangling first connectionId should no-op rather than throw', async () => {
@@ -1031,7 +1039,7 @@ describe('buildAgentTerminalHandlers', () => {
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, connectionId: 'pane-b' });
-      expect(sessionMap.getBySocket('pane-a')).toBeUndefined(); // stolen by the pane-b reattach
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toBeUndefined(); // stolen by the pane-b reattach
 
       expect(() => onInput({ data: 'ls\n', connectionId: 'pane-a' })).not.toThrow();
       expect(() => onResize({ cols: 80, rows: 24, connectionId: 'pane-a' })).not.toThrow();
@@ -1104,7 +1112,7 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(openShell).not.toHaveBeenCalled();
       expect(auth.releaseSlot).toHaveBeenCalled();
-      expect(sessionMap.getBySocket('sock1')).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeUndefined();
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
     });
 
@@ -1804,23 +1812,23 @@ describe('buildAgentTerminalHandlers', () => {
   });
 
   describe('a pane that leaves DURING a cold create', () => {
-    it('should not leave a live PTY behind with nobody watching it', async () => {
+    it('should not START the agent at all — not start it and reap it 30 minutes later', async () => {
       // The disconnect arrives before the connect has registered anything to
-      // disconnect: the create is still resolving the Sprite and asking which
-      // sessions it has. Dropped, the create finishes into the void — a session with
-      // no viewer, never detached, so the idle reap that releases its concurrency
-      // slot and settles its billing never arms. An agent CLI sits at its prompt
-      // forever, so nothing else collects it: it runs for the life of the process.
+      // disconnect: the create is still resolving the Sprite. Dropped, the create
+      // finishes into the void — a session with no viewer, never detached, so the
+      // idle reap that releases its slot and settles its billing never arms, and the
+      // agent CLI sits at its prompt for the life of the process.
+      //
+      // But merely tearing it down on arrival is not enough. The reap is armed for
+      // DETACHED_IDLE_MS, so booting the agent anyway would hold a concurrency slot
+      // and bill the machine's payer for THIRTY MINUTES of Sprite runtime for a pane
+      // that had already left — a free-tier user (one terminal) locked out of their
+      // own machine for half an hour. The pane is gone; do not start the agent.
       const auth = makeAuthSuccess();
       const resolveSandbox = auth.resolveSandbox;
-      let releaseSandbox!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        releaseSandbox = resolve;
-      });
-      // Hold the create open in the window this bug lives in: the Sprite is being
-      // resolved and woken, and nothing has been registered to disconnect yet.
+      const gate = deferred<void>();
       auth.resolveSandbox = vi.fn(async () => {
-        await gate;
+        await gate.promise;
         return resolveSandbox();
       }) as unknown as typeof auth.resolveSandbox;
       checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
@@ -1831,17 +1839,15 @@ describe('buildAgentTerminalHandlers', () => {
 
       // The pane goes away mid-boot (tab closed, workspace switched, StrictMode).
       handlers.onDisconnect({ connectionId: 'sock1' });
-      releaseSandbox();
+      gate.resolve();
       await connecting;
       await vi.advanceTimersByTimeAsync(0);
 
-      // The session exists, but it is DETACHED: the idle reap is armed, so the slot
-      // and the billing window are released rather than held for the process's life.
-      const session = sessionMap.getByKey('branch1:agent:cli');
-      expect(session?.idleTimer).toBeDefined();
-      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
+      // No PTY was ever opened, no session installed, and the slot handed straight
+      // back — not thirty minutes from now.
+      expect(openShell).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
       expect(auth.releaseSlot).toHaveBeenCalled();
-      expect(shell.kill).toHaveBeenCalled();
     });
 
     it('given a SECOND pane that joined the create, should not let its attach cancel the reap', async () => {
@@ -1874,11 +1880,11 @@ describe('buildAgentTerminalHandlers', () => {
       await Promise.all([creating, joining]);
       await vi.advanceTimersByTimeAsync(0);
 
-      const session = sessionMap.getByKey('branch1:agent:cli');
-      expect(session?.idleTimer).toBeDefined();
-      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
+      // Nothing was started for either of them, and the slot went straight back. The
+      // joiner in particular must not resurrect what the creator declined to boot.
+      expect(openShell).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
       expect(auth.releaseSlot).toHaveBeenCalled();
-      expect(shell.kill).toHaveBeenCalled();
     });
 
     it('given a pane that leaves during the ACCESS CHECK of a reattach, should not cancel the reap', async () => {
@@ -1950,12 +1956,48 @@ describe('buildAgentTerminalHandlers', () => {
 
       const session = sessionMap.getByKey('branch1:agent:cli');
       // Pane A still owns it: not stolen, not detached, no reap armed…
-      expect(sessionMap.getBySocket('pane-a')).toBe(session);
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toBe(session);
       expect(session?.idleTimer).toBeUndefined();
       // …and it is still alive long after the reap would have fired.
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
       expect(shell.kill).not.toHaveBeenCalled();
       expect(auth.releaseSlot).not.toHaveBeenCalled();
+    });
+
+    it('given ANOTHER socket that picks the same connectionId, should not orphan the first socket\'s PTY', async () => {
+      // The session map is one shared, server-wide instance, so filing a session under
+      // the bare client-minted id would let one client's chosen string address another
+      // client's session. A second socket picking the same id (a buggy client, or a
+      // hostile one — it is validated only as a non-empty string) would have its
+      // `setNew` displace the first session's socket entry: no viewer, no armed reap,
+      // its PTY and concurrency slot and billing heartbeat running for the life of the
+      // process, billed to the MACHINE's payer. And the first socket's later disconnect
+      // would then resolve to the SECOND socket's session and reap it — killing a
+      // terminal somebody else is watching.
+      //
+      // The per-socket duplicate guard cannot see this: it is this socket's own set.
+      // The key itself has to make the collision unrepresentable.
+      const first = makeAuthSuccess({ sessionKey: 'branch1:agent:cli' });
+      checkAuth = vi.fn().mockResolvedValue(first) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const owner = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await owner.onConnect({ ...validPayload, connectionId: 'shared-id' });
+      const live = sessionMap.getByKey('branch1:agent:cli');
+
+      // A different socket, a different terminal — but the same connectionId.
+      const second = makeAuthSuccess({ sessionKey: 'branch1:agent:other' });
+      checkAuth = vi.fn().mockResolvedValue(second) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const otherSocket = makeSocket('sock2', 'user2');
+      const intruder = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: otherSocket, persistStreamSessionId });
+      await intruder.onConnect({ ...validPayload, name: 'other', connectionId: 'shared-id' });
+
+      // The first socket's session is still its own — not displaced, not orphaned.
+      expect(sessionMap.getBySocket(viewer('shared-id'))).toBe(live);
+      expect(sessionMap.getBySocket(viewer('shared-id', 'sock2'))).toBe(sessionMap.getByKey('branch1:agent:other'));
+
+      // And the owner's disconnect collects the OWNER's session, not the intruder's.
+      owner.onDisconnect({ connectionId: 'shared-id' });
+      expect(live?.idleTimer).toBeDefined();
+      expect(sessionMap.getByKey('branch1:agent:other')?.idleTimer).toBeUndefined();
     });
 
     it('refuses a connectionId that is already in use on this socket', async () => {
@@ -1966,25 +2008,40 @@ describe('buildAgentTerminalHandlers', () => {
       // session that is still running — orphaning its PTY, its concurrency slot and
       // its billing heartbeat for the life of the process. That bill is the MACHINE
       // owner's, not the caller's, so this is refused rather than trusted.
-      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      // A REALISTIC checkAuth: the session key derives from the target, so a different
+      // terminal is a different key. (A fixture that hard-codes one key would send the
+      // second connect down the reattach path, which opens no shell either way — the
+      // test would pass against the very bug it is meant to catch.)
+      const first = makeAuthSuccess({ sessionKey: 'branch1:agent:cli' });
+      const second = makeAuthSuccess({ sessionKey: 'branch1:agent:other' });
+      checkAuth = vi.fn(async ({ name }: { name: string }) =>
+        name === 'cli' ? first : second,
+      ) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
 
       await handlers.onConnect({ ...validPayload, connectionId: 'pane-a' });
+      const live = sessionMap.getByKey('branch1:agent:cli');
       openShell.mockClear();
+
+      // The same id, a DIFFERENT terminal: without the guard this opens a second PTY
+      // and `setNew` displaces the first session's socket entry — leaving it with no
+      // viewer and no armed reap, running (and billing) for the life of the process.
       await handlers.onConnect({ ...validPayload, name: 'other', connectionId: 'pane-a' });
 
       assert({
-        given: 'a second connect reusing a live connectionId',
-        should: 'be refused, opening no second PTY that nothing could ever collect',
+        given: 'a second connect reusing a live connectionId for a different terminal',
+        should: 'be refused, leaving the first session reachable rather than orphaning its PTY',
         actual: {
           opened: openShell.mock.calls.length,
+          firstStillOwned: sessionMap.getBySocket(viewer('pane-a')) === live,
+          firstOrphaned: live !== undefined && live.idleTimer === undefined && sessionMap.getBySocket(viewer('pane-a')) !== live,
           errored: socket.emit.mock.calls.some(
             ([event, payload]) =>
               event === 'agent-terminal:error' &&
               (payload as { message: string }).message.includes('already in use'),
           ),
         },
-        expected: { opened: 0, errored: true },
+        expected: { opened: 0, firstStillOwned: true, firstOrphaned: false, errored: true },
       });
     });
   });
