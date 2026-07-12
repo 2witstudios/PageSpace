@@ -41,18 +41,34 @@ import XtermTerminal from './XtermTerminal';
 
 /** A socket that records emits and lets a test drive the server's events. */
 function fakeSocket() {
-  const handlers = new Map<string, (payload: unknown) => void>();
+  // A SET of handlers per event, and a working `off` — every pane in the grid
+  // registers on this one socket, so a Map of one handler per event could never
+  // hold two panes at once, and a no-op `off` could never catch a teardown that
+  // failed to unregister. Both are the machinery the prompt latches rest on.
+  const handlers = new Map<string, Set<(payload: unknown) => void>>();
   const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
   return {
     socket: {
-      on: (event: string, handler: (payload: unknown) => void) => handlers.set(event, handler),
-      off: () => {},
+      on: (event: string, handler: (payload: unknown) => void) => {
+        const set = handlers.get(event) ?? new Set();
+        set.add(handler);
+        handlers.set(event, set);
+      },
+      off: (event: string, handler: (payload: unknown) => void) => {
+        handlers.get(event)?.delete(handler);
+      },
       emit: (event: string, payload: Record<string, unknown>) => emitted.push({ event, payload }),
     } as unknown as Socket,
     emitted,
-    /** The connectionId this pane announced on connect — every event is tagged with it. */
+    /** The connectionIds the mounted panes announced — every event is tagged with one. */
+    connectionIds: () =>
+      emitted
+        .filter((entry) => entry.event === 'agent-terminal:connect')
+        .map((entry) => entry.payload.connectionId as string),
     connectionId: () => emitted.find((entry) => entry.event === 'agent-terminal:connect')?.payload.connectionId,
-    server: (event: string, payload: Record<string, unknown>) => handlers.get(event)?.(payload),
+    server: (event: string, payload: Record<string, unknown>) =>
+      handlers.get(event)?.forEach((handler) => handler(payload)),
+    listenerCount: (event: string) => handlers.get(event)?.size ?? 0,
     hasHandlers: () => handlers.size > 0,
   };
 }
@@ -272,10 +288,17 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     });
   });
 
-  test('a pane unmounted mid-boot never types at the agent afterwards', async () => {
+  test('a pane unmounted mid-boot types nothing more, and does NOT spend the prompt', async () => {
     const fake = fakeSocket();
+    const onSent = vi.fn();
     const { unmount } = render(
-      <XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} initialInput="fix the build" />
+      <XtermTerminal
+        socket={fake.socket}
+        sessionId="s1"
+        connectPayload={CONNECT}
+        initialInput="fix the build"
+        onInitialInputSent={onSent}
+      />
     );
     await waitFor(() => expect(fake.hasHandlers()).toBe(true));
 
@@ -286,9 +309,9 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     assert({
       given: 'a pane closed (or a workspace switched away from) while its agent was still booting',
       should:
-        'cancel the pending write — a timer left armed would type into a terminal whose pane is gone. Whether the NEXT connect may deliver the prompt is decided there, from resumed/scrollback',
-      actual: inputs(fake.emitted),
-      expected: [],
+        'cancel the pending write but KEEP the prompt — spending it here would kill the re-mount path (StrictMode does exactly this in dev). Whether the next connect may deliver it is decided there, from resumed/scrollback',
+      actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length, listeners: fake.listenerCount('agent-terminal:output') },
+      expected: { typed: [], promptSpent: 0, listeners: 0 },
     });
   });
 
@@ -334,6 +357,76 @@ describe('XtermTerminal — starting-prompt delivery', () => {
       should: 'deliver at once — it is demonstrably up, and no reason to make the user wait out the backstop',
       actual: inputs(fake.emitted),
       expected: ['fix the build', '\r'],
+    });
+  });
+
+  test('two panes on ONE socket: only the prompted pane is typed at, and closing one leaves the other alive', async () => {
+    // Every pane in the grid shares a single socket, so each sees the others'
+    // events. This is the machinery `isMine` and the per-mount latches rest on —
+    // and until now the fake socket could not even hold two panes at once.
+    const fake = fakeSocket();
+    const paneA = render(
+      <XtermTerminal socket={fake.socket} sessionId="a" connectPayload={CONNECT} initialInput="fix the build" />
+    );
+    render(<XtermTerminal socket={fake.socket} sessionId="b" connectPayload={{ ...CONNECT, name: 'codex-b2' }} />);
+    await waitFor(() => expect(fake.connectionIds().length).toBe(2));
+    const [idA, idB] = fake.connectionIds();
+
+    // B boots and draws. A must not read that as its own agent waking up.
+    fake.server('agent-terminal:ready', { connectionId: idB });
+    fake.server('agent-terminal:output', { data: 'codex> ', connectionId: idB });
+    const afterBOnly = inputs(fake.emitted);
+
+    // Now A's own agent comes up.
+    fake.server('agent-terminal:ready', { connectionId: idA });
+    fake.server('agent-terminal:output', { data: 'claude> ', connectionId: idA });
+
+    paneA.unmount();
+    const listenersAfterAClosed = fake.listenerCount('agent-terminal:output');
+
+    assert({
+      given: "two panes multiplexed on one socket, only one of them holding a starting prompt",
+      should:
+        "type the prompt only when A's OWN agent is up — a sibling's output must never spend it — and leave B's listener registered when A is closed",
+      actual: {
+        typedOnBsOutput: afterBOnly,
+        typedOnAsOutput: inputs(fake.emitted),
+        listenersAfterAClosed,
+      },
+      expected: {
+        typedOnBsOutput: [],
+        typedOnAsOutput: ['fix the build', '\r'],
+        listenersAfterAClosed: 1,
+      },
+    });
+  });
+
+  test('output that flows without a ready is never typed at, and the prompt is not spent', async () => {
+    // Every server path emits `ready` today, so this is not reachable — but the
+    // delivery gate is now hard, and a future error path that streams output
+    // without announcing readiness would leave the prompt undelivered AND unspent.
+    // Pin the intent so that path is caught rather than shipped.
+    const fake = fakeSocket();
+    const onSent = vi.fn();
+    render(
+      <XtermTerminal
+        socket={fake.socket}
+        sessionId="s1"
+        connectPayload={CONNECT}
+        initialInput="fix the build"
+        onInitialInputSent={onSent}
+      />
+    );
+    await waitFor(() => expect(fake.hasHandlers()).toBe(true));
+
+    fake.server('agent-terminal:output', { data: 'something', connectionId: fake.connectionId() });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    assert({
+      given: 'a pane receiving output but never a ready',
+      should: 'type nothing — with no ready there is no `resumed`, so there is no way to know what it would be typing into',
+      actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length },
+      expected: { typed: [], promptSpent: 0 },
     });
   });
 });

@@ -1626,4 +1626,73 @@ describe('buildAgentTerminalHandlers', () => {
       );
     });
   });
+
+  describe('the liveness check must not delay `ready` past the shell\'s first output', () => {
+    it('given a stored session id, should ask the Sprite BEFORE opening the shell', async () => {
+      // The invariant: `agent-terminal:ready` carries `resumed`, and it must reach
+      // the client before any output can. `openPtyShell` may attach to a live
+      // session, and every attach REPLAYS its scrollback immediately — so an await
+      // between openShell and the emit lets that replay overtake `ready`, and a
+      // client that types its starting prompt on first output types it into an
+      // agent it has not yet been told was already running. Enforced here, not by a
+      // comment: re-inline the await and this fails.
+      const order: string[] = [];
+      const auth = makeAuthSuccess({
+        streamSessionId: 'sess-existing',
+        sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
+      });
+      auth.sprite.listSessions = vi.fn(async () => {
+        order.push('listSessions');
+        return [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }];
+      });
+      openShell = vi.fn(() => {
+        order.push('openShell');
+        return shell;
+      }) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(order).toEqual(['listSessions', 'openShell']);
+    });
+
+    it('given a Sprite that never answers, should give up and open the shell anyway', async () => {
+      // Unbounded, this would gate the shell from opening AT ALL: no PTY, the
+      // concurrency slot and billing hold both held, and — because finishCreate()
+      // never runs — every later connect for this terminal blocked behind the
+      // create claim. A terminal that will not open and cannot be retried is far
+      // worse than not knowing whether its agent was running.
+      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      auth.sprite.listSessions = vi.fn(() => new Promise(() => {})) as unknown as typeof auth.sprite.listSessions;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const connecting = onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(6000);
+      await connecting;
+
+      // The shell opened, and the client was told the safe thing (an unknown agent
+      // is treated as still running, so no prompt is typed at it).
+      expect(openShell).toHaveBeenCalled();
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
+    });
+
+    it('given a listing that FAILS, should not freeze that guess onto the session', async () => {
+      // `resumed: true` fails safe on the wire, but `resumedAtCreate` is durable
+      // state every reattach inherits for the next 30 minutes. A transient 429 must
+      // not keep answering for the rest of the session's life.
+      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      auth.sprite.listSessions = vi.fn(async () => {
+        throw new Error('429');
+      }) as unknown as typeof auth.sprite.listSessions;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: true });
+      expect(sessionMap.getByKey('branch1:agent:cli')?.resumedAtCreate).toBe(false);
+    });
+  });
 });

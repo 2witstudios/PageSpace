@@ -391,29 +391,62 @@ function startSettleHeartbeat(
   return interval;
 }
 
+/** How long the connect will wait to hear which sessions a Sprite has. */
+const LIST_SESSIONS_TIMEOUT_MS = 5_000;
+
 /**
- * Is this exec session one the Sprite ACTUALLY still has?
+ * Whether the Sprite ACTUALLY still has this exec session — and whether we could
+ * find out at all.
  *
+ * `unknown` is a first-class answer, not a boolean in disguise. The caller does
+ * two different things with the verdict, and only one of them may act on a guess:
+ * what it tells the CLIENT (fail safe — see `resumedFor`) and what it records on
+ * the SESSION, which every later reattach inherits for the next 30 minutes. A
+ * transient 429 must not freeze a guess into that.
+ */
+type SessionLiveness = 'live' | 'gone' | 'unknown';
+
+/**
  * `streamSessionId` on the row only records a session that existed at some point:
  * exec sessions do not survive a Sprite pause, and nothing ever clears the column
  * (see `updateStreamSessionId` — it only ever writes a new id over an old one).
  *
- * A listing failure answers "unknown", and unknown is treated as STILL RUNNING.
- * The caller uses this to decide whether a client may type a starting prompt into
- * the terminal, and the two ways of being wrong are not symmetric: refusing to
- * type at an agent that turns out to be fresh costs the user a prompt they can
- * retype, while typing at one that turns out to be live can answer a confirmation
- * it was waiting on.
+ * BOUNDED, because this now gates the shell from opening at all. There is no
+ * timeout anywhere in the `listSessions` chain, and a stalled control plane would
+ * otherwise mean: no PTY, a concurrency slot and a billing hold both held, and —
+ * because `finishCreate()` never runs — every subsequent connect for this terminal
+ * blocked behind the create claim. A terminal that will not open and cannot be
+ * retried is a far worse failure than not knowing whether its agent was running.
  */
-async function isSessionLive(sprite: SpriteInstanceLike, streamSessionId: string | null): Promise<boolean> {
-  if (!streamSessionId) return false;
+async function sessionLiveness(sprite: SpriteInstanceLike, streamSessionId: string | null): Promise<SessionLiveness> {
+  if (!streamSessionId) return 'gone';
 
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const sessions = await sprite.listSessions();
-    return sessions.some((session) => session.id === streamSessionId);
+    const timeout = new Promise<'unknown'>((resolve) => {
+      timer = setTimeout(() => resolve('unknown'), LIST_SESSIONS_TIMEOUT_MS);
+    });
+    const listing = sprite
+      .listSessions()
+      .then((sessions): SessionLiveness => (sessions.some((session) => session.id === streamSessionId) ? 'live' : 'gone'));
+
+    return await Promise.race([listing, timeout]);
   } catch {
-    return true;
+    return 'unknown';
+  } finally {
+    clearTimeout(timer);
   }
+}
+
+/**
+ * What to TELL a client about an agent it may be about to type a starting prompt
+ * into. Fails safe: an unknown liveness is reported as resumed, because the two
+ * ways of being wrong are not symmetric — refusing to type at an agent that turns
+ * out to be fresh costs the user a prompt they can retype, while typing at one
+ * that turns out to be live can answer a confirmation it was waiting on.
+ */
+function resumedFor(liveness: SessionLiveness): boolean {
+  return liveness !== 'gone';
 }
 
 export function buildAgentTerminalHandlers({
@@ -629,7 +662,8 @@ export function buildAgentTerminalHandlers({
         // `ready` does. A client that types a starting prompt on first output
         // would then type it without yet knowing the agent was resumed, which is
         // precisely the hazard `resumed` exists to prevent.
-        const resumed = await isSessionLive(sprite, sandbox.streamSessionId);
+        const liveness = await sessionLiveness(sprite, sandbox.streamSessionId);
+        const resumed = resumedFor(liveness);
 
         const session: TerminalSession = {
           command: null as unknown as PtyShell,
@@ -646,7 +680,12 @@ export function buildAgentTerminalHandlers({
           closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
           scrollback: [],
           hasOutput: false,
-          resumedAtCreate: resumed,
+          // Only a DEFINITIVE positive is recorded. `resumed` fails safe on the
+          // wire, but this is durable session state that every reattach for the
+          // next 30 minutes inherits — freezing a guess made during one transient
+          // listing failure into it would keep answering with that guess long
+          // after the Sprite could have been asked again.
+          resumedAtCreate: liveness === 'live',
           scrollbackBytes: 0,
           reAuthInterval: undefined,
           idleTimer: undefined,
