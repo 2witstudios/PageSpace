@@ -59,14 +59,59 @@ export const clearActiveStreamId = ({ chatId }: { chatId: string }): void => {
  * Abort an active stream by calling the server-side abort endpoint
  * Returns true if abort was requested, false if no active stream
  */
+/**
+ * Abort by CONVERSATION — the only name the client holds from t=0.
+ *
+ * Both `streamId` and `messageId` are minted server-side, and the client does not learn either
+ * until the response headers land. A real agent send spends 0.5-3 seconds before that (auth,
+ * rate limit, DB reads, context assembly, connecting to the provider). Stop pressed in that
+ * window — precisely when a user who has spotted a typo presses it — had NOTHING to name: the
+ * `activeStreams` map was empty, the abort was a guaranteed no-op, the local fetch was cancelled,
+ * and the button flipped back to Send.
+ *
+ * And cancelling the fetch stops nothing. Streams are deliberately server-owned and survive a
+ * client disconnect — that is the whole architecture. So the generation kept running, kept
+ * calling write tools, and kept BILLING, while the UI told the user it had stopped.
+ *
+ * This is the fallback that makes Stop always able to say something true. Server-side it only
+ * ever stops the caller's OWN streams (see abort-conversation-streams.ts).
+ */
+export const abortActiveStreamByConversation = async ({
+  conversationId,
+}: {
+  conversationId: string;
+}): Promise<{ aborted: boolean; reason: string }> => {
+  try {
+    const response = await fetchWithAuth('/api/ai/abort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId }),
+    });
+    return await response.json();
+  } catch {
+    return { aborted: false, reason: 'Failed to call abort endpoint' };
+  }
+};
+
 export const abortActiveStream = async ({
   chatId,
+  /**
+   * The conversation this chat is streaming, when known. Used ONLY as a fallback: if the
+   * activeStreams map has no entry — which is the norm before the response headers land — we
+   * still have a name for the stream, and Stop must not silently no-op. See
+   * abortActiveStreamByConversation.
+   */
+  conversationId,
 }: {
   chatId: string;
+  conversationId?: string | null;
 }): Promise<{ aborted: boolean; reason: string }> => {
   const streamId = activeStreams.get(chatId);
 
   if (!streamId) {
+    if (conversationId) {
+      return abortActiveStreamByConversation({ conversationId });
+    }
     return { aborted: false, reason: 'No active stream for this chat' };
   }
 

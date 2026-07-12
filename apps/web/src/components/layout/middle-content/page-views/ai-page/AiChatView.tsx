@@ -688,11 +688,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       void abortActiveStreamByMessageId({ messageId });
       return;
     }
-    // No assistant id yet (submitted, before first chunk): fall back to the chatId map.
-    // The transport's chatId is always page.id (Chat never recreates on conversation switch),
-    // so try streamTrackingId first (desired key) then page.id (actual registration key).
-    if (streamTrackingId) void abortActiveStream({ chatId: streamTrackingId });
-    if (streamTrackingId !== page.id) void abortActiveStream({ chatId: page.id });
+    // No assistant id yet (submitted, before the first chunk). The chatId map is EMPTY here, not
+    // stale: setActiveStreamId only runs once the response headers land, and a real send spends
+    // 0.5-3s before that. So pass the conversationId — the one name we hold from t=0 — and the
+    // abort falls back to it. Without that, Stop in this window was a guaranteed no-op: the fetch
+    // was cancelled, the button flipped back to Send, and the server (which deliberately survives
+    // client disconnect) kept generating, kept running write tools, and kept billing.
+    const conversationId = currentConversationIdRef.current;
+    if (streamTrackingId) void abortActiveStream({ chatId: streamTrackingId, conversationId });
+    if (streamTrackingId !== page.id) void abortActiveStream({ chatId: page.id, conversationId });
   }, [chatStop, ownStreamMessageId, status, lastAssistantMessageId, streamTrackingId, page.id]);
 
   usePageSocketRoom(page.id);
