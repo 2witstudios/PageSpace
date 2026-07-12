@@ -61,8 +61,14 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
   // reload, or leave and return — unmount this host and kill every warm
   // terminal).
   const isKnownMachine = selectedMachineId !== null && machines.some((m) => m.id === selectedMachineId);
+  // What the host actually DISPLAYS — not merely what the URL selects. The drain
+  // must gate on this same value: opening a session into a machine the host is
+  // keeping hidden would mount an xterm inside a `display:none` container, where
+  // `fit()` measures a zero-sized box and the PTY is created at a bogus geometry
+  // — wrapping its output for the life of the session.
+  const displayedMachineId = isKnownMachine ? selectedMachineId : null;
 
-  useDrainPendingSession(selectedMachineId);
+  useDrainPendingSession(displayedMachineId);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -78,11 +84,7 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
         />
       )}
 
-      <MachineKeepAliveHost
-        driveId={driveId}
-        activePageId={isKnownMachine ? selectedMachineId : null}
-        machineIds={stickyMachineIds}
-      />
+      <MachineKeepAliveHost driveId={driveId} activePageId={displayedMachineId} machineIds={stickyMachineIds} />
     </div>
   );
 }

@@ -35,6 +35,7 @@ vi.mock('@/components/layout/middle-content/MachineKeepAliveHost', () => ({
 
 import DevelopmentLayout from '../layout';
 import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { useMachineWorkspaceStore } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 const machine = (id: string) => ({ id, title: id, updatedAt: '2026-07-12T00:00:00.000Z' });
 
@@ -140,6 +141,22 @@ describe('DevelopmentLayout', () => {
     render(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
     expect(screen.getByText(/administrator privileges/i)).toBeDefined();
+  });
+
+  test('does not open a session into a machine the host is keeping HIDDEN', () => {
+    // The drain must gate on what is DISPLAYED, not on what the URL selects. If a
+    // machine is transiently missing from the list the host hides every pane, and
+    // opening a session then mounts an xterm inside a `display:none` container —
+    // fit() measures a zero-sized box and the PTY is created at a bogus geometry,
+    // wrapping its output for the life of the session.
+    mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [] }));
+    usePendingSessionStore.setState({ pending: { machineId: 'machine-1', scope: { name: 'agent-1' } } });
+
+    render(<DevelopmentLayout>{null}</DevelopmentLayout>);
+
+    expect(hostRenders.at(-1)!.activePageId).toBeNull();
+    // Held, not applied — it converges once the machine is displayed again.
+    expect(useMachineWorkspaceStore.getState().workspaces['machine-1']).toBeUndefined();
   });
 
   test('drops an unconverged session intent when the surface is left', () => {
