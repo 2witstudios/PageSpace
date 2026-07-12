@@ -408,9 +408,11 @@ export function openPtyShell({
      * are the two constants that bracket a server value nobody has measured:
      *
      * - `window-closed`: the anchor never appeared before the window shut. A scrollback ring
-     *   SMALLER than MAX_ANCHOR_BYTES can never contain it, and that is the likeliest cause —
-     *   but a socket dying mid-replay reaches here too (the 'error' and 'exit' handlers close
-     *   the window), and that one is a one-off, not a standing condition.
+     *   smaller than the anchor — which is `min(seenBytes, MAX_ANCHOR_BYTES)`, so this only
+     *   bites a terminal whose history has outgrown the ring — can never contain it. A socket
+     *   dying mid-replay reaches here too (the 'error' and 'exit' handlers close the window),
+     *   and that one is a one-off, not a standing condition. `seenBytes` in the log tells them
+     *   apart: at the MAX_ANCHOR_BYTES bound, suspect the ring; well below it, suspect the socket.
      * - `pending-cap`: the replay outgrew MAX_PENDING_BYTES before the anchor arrived. The
      *   anchor sits at a replay's END, so this means the ring is BIGGER than the cap — and
      *   that one does not heal. It will reprint on every reconnect, forever, until the cap
