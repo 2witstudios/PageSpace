@@ -965,13 +965,14 @@ describe('openPtyShell', () => {
 
     it('given a reconnect attach that dies BEFORE it opens, keeps the history (an empty flush must not wipe it)', async () => {
       // A pre-open drop (cold Sprite wake, flapping WS) reaches closeReplayWindow on a command
-      // that never received a byte. Nothing was held, so nothing was given up on — and
-      // `flushReplay` says so: it returns `history: 'append'` rather than calling an empty
-      // flush a give-up. If it called that a give-up, the caller would RESTART its history
-      // from an emission of zero bytes, erasing the anchor, and the next attach would reprint
-      // the whole scrollback: the bug this module exists to remove, fired by a socket that
-      // said nothing at all. `deliver`'s zero-length early return is a second line of defence
-      // behind that; the pure `flushReplay` case is what makes it unreachable.
+      // that never received a byte, and the window closes over an empty hold. What this test
+      // pins is `deliver`'s zero-length early return, which runs BEFORE the restart wipe: an
+      // emission of no bytes must never replace the history, or one silent socket would erase
+      // the anchor and the next attach would reprint the whole scrollback — the bug this module
+      // exists to remove, fired by a socket that said nothing at all. (Delete that early return
+      // and this test fails; it fires three times here.) `flushReplay` refusing to CALL an empty
+      // flush a give-up is the other half — it stops a reprint being reported that never
+      // happened — and that half is pinned in the pure test, not this one.
       const cmd = buildFakeCommand();
       const dies = buildFakeCommand();
       const replays = buildFakeCommand();
@@ -1444,7 +1445,7 @@ describe('openPtyShell', () => {
     });
 
     it('given a session with FAR more history than the anchor, still dedupes a full-ring replay', async () => {
-      // Every other shell test here uses a ~31-byte banner, i.e. `seen` smaller than
+      // Every other shell test here uses a 33-byte banner, i.e. `seen` smaller than
       // MAX_ANCHOR_BYTES — the regime where the anchor is the whole of `seen` and
       // trivially matches. Production leaves that regime within seconds. This is the
       // real shape: a long-running session, an 8 KiB anchor taken from the tail of a
@@ -1458,7 +1459,7 @@ describe('openPtyShell', () => {
       openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
       cmd._emitter.emit('message', announces('sess-1'));
       cmd._emitter.emit('spawn');
-      const history = line('build step', 4000); // ~60 KiB, well past the 8 KiB anchor
+      const history = line('build step', 4000); // ~65 KiB, well past the 8 KiB anchor
       cmd._stdout.emit('data', history);
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));

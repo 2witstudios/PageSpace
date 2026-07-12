@@ -623,13 +623,14 @@ describe('buffering an unalignable replay (pure)', () => {
   const FRAME = Buffer.alloc(256, 0x62); // a WS frame's worth of replay
 
   it('given a replay buffered frame by frame, should grow the buffer in O(log n) allocations, not one per frame', () => {
-    // Re-copying `pending` on every frame is quadratic in the bytes the SANDBOX chose:
-    // 4 MiB of output in 256-byte frames became tens of GB of memcpy on the process every
-    // terminal shares — ~6.4s of it, against ~5ms once the buffer grows into an arena.
-    // Counting backing allocations pins that amortized growth without a wall-clock
-    // assertion: over the 2000 frames below, a copy per frame mints 2000 buffers and
-    // doubling mints 6. (At this size the copy costs only ~70ms — the blow-up is at the
-    // cap, which is why the assertion counts allocations rather than measuring time.)
+    // Re-copying `pending` on every frame is quadratic in the bytes the SANDBOX chose: at the
+    // 4 MiB cap, 256-byte frames mean ~34 GB of memcpy on the process every terminal shares —
+    // seconds of it, against milliseconds once the buffer grows into an arena.
+    //
+    // The assertion counts ALLOCATIONS, not time, and deliberately so: the wall-clock cost of
+    // the copy varies several-fold across runtimes and machines (so a threshold would be either
+    // flaky or vacuous), while the allocation count is exact and identical everywhere — over
+    // the 2000 frames below, a copy per frame mints 2000 backing buffers; doubling mints 6.
     let state = freshReplayState();
     const backings = new Set<ArrayBufferLike>();
     for (let i = 0; i < 2_000; i += 1) {

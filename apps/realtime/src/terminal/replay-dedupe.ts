@@ -457,9 +457,12 @@ export function planReplayEmission({
  */
 export function flushReplay(state: ReplayState): ReplayEmission {
   // Nothing held is not a give-up. A window can close over an attach that never received a
-  // byte — a socket that died before it opened — and calling THAT a give-up would tell the
-  // caller to restart its history from an empty emission, wiping the anchor and reprinting
-  // the whole scrollback on the next attach. Nothing was given up on; say so.
+  // byte — a socket that died before it opened — and calling THAT a give-up would report a
+  // reprint that never happened and hand the caller a 'restart' with nothing to restart FROM.
+  // Today's caller absorbs that (`deliver` refuses zero-length bytes before it wipes), so the
+  // damage would be a false alarm rather than a lost anchor — but a contract that says "replace
+  // your history with these zero bytes" is a trap laid for the next one. Nothing was given up
+  // on; say so.
   if (state.resolved || state.pending.length === 0) {
     return { emit: EMPTY, state: RESOLVED, history: 'append' };
   }
