@@ -360,8 +360,8 @@ export type AttachBranchResult =
  */
 export async function attachBranch({
   machineId,
-  projectName,
-  branchName,
+  projectName: requestedProjectName,
+  branchName: requestedBranchName,
   store,
   host,
 }: {
@@ -371,14 +371,17 @@ export async function attachBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<AttachBranchResult> {
-  const project = normalizeProjectName(projectName);
-  const normalized = normalizeBranchName(branchName);
-  const existing = await store.findByName(machineId, project, normalized);
+  // Shadow the raw params with their canonical forms, as `spawnBranch` does, so no
+  // line below can reach the untrusted text by accident.
+  const projectName = normalizeProjectName(requestedProjectName);
+  const branchName = normalizeBranchName(requestedBranchName);
+
+  const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   const handle = await host.attach({ machineId: existing.sandboxId });
   if (!handle) return { ok: false, reason: 'vanished' };
-  return { ok: true, sandboxId: handle.machineId, branchName: normalized };
+  return { ok: true, sandboxId: handle.machineId, branchName };
 }
 
 /**
@@ -412,8 +415,8 @@ export type KillBranchResult = { ok: true } | { ok: false; reason: 'not_found' |
  */
 export async function killBranch({
   machineId,
-  projectName,
-  branchName,
+  projectName: requestedProjectName,
+  branchName: requestedBranchName,
   store,
   host,
 }: {
@@ -423,9 +426,10 @@ export async function killBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<KillBranchResult> {
-  const project = normalizeProjectName(projectName);
-  const normalized = normalizeBranchName(branchName);
-  const existing = await store.findByName(machineId, project, normalized);
+  const projectName = normalizeProjectName(requestedProjectName);
+  const branchName = normalizeBranchName(requestedBranchName);
+
+  const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
@@ -437,6 +441,6 @@ export async function killBranch({
     return { ok: false, reason: 'error' };
   }
 
-  await store.remove(machineId, project, normalized);
+  await store.remove(machineId, projectName, branchName);
   return { ok: true };
 }

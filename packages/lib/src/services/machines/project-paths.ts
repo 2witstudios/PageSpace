@@ -12,7 +12,7 @@
  */
 
 import { resolvePathWithinSync } from '../../security/path-validator';
-import { slugifySegment, hasNameContent, destroysNameContent, slugDigest } from './name-slug';
+import { slugifySegment, disambiguateSlug, truncateWithDigest } from './name-slug';
 
 /** Root directory on a Machine's filesystem under which every Project is cloned. */
 export const PROJECTS_ROOT = '/workspace/projects';
@@ -31,9 +31,6 @@ export function isValidProjectName(name: string): boolean {
     PROJECT_NAME_RE.test(name)
   );
 }
-
-/** Trailing separators, for trimming an edge the length cut exposed. */
-const TRAILING_SEPARATORS_RE = /[.-]+$/;
 
 /** What an input with nothing sluggable left in it becomes ("   ", "🚀", "../"). */
 const PROJECT_NAME_FALLBACK = 'project';
@@ -65,32 +62,19 @@ export function normalizeProjectName(rawInput: string): string {
   const input = rawInput.trim();
   if (isValidProjectName(input)) return input;
 
-  // Whenever the ASCII charset destroys content that identifies WHICH name was
-  // meant (`日本語 repo`, `🚀`), keep a digest of the original — otherwise two
-  // distinct repos collapse onto one directory and the second is rejected as a
-  // duplicate. Structural noise (`..`, `   `) is genuinely nameless and falls
-  // back; losing ASCII punctuation is the one loss we accept (see name-slug.ts).
-  let name = slugifySegment(input);
+  // `disambiguateSlug` keeps a digest whenever the charset destroyed content that
+  // identifies WHICH name was meant (`日本語 repo`, `🚀`) — otherwise two distinct
+  // repos collapse onto one clone directory and the second is rejected as a duplicate.
+  const slug = disambiguateSlug(input, slugifySegment(input));
 
-  if (name.length === 0) {
-    // A content-free name (`..`, `//`, `   `) has no identity to preserve — every
-    // one of them means "no name", so sharing the fallback is correct rather than
-    // a collision. The routes reject NAMELESS input (they guard on this very
-    // predicate, not on `.trim()`), so the fallback is unreachable from the API and
-    // remains only to keep this function total for non-route callers.
-    if (!hasNameContent(input)) return PROJECT_NAME_FALLBACK;
-    name = `x${slugDigest(input)}`;
-  } else if (destroysNameContent(input)) {
-    name = `${name}-${slugDigest(input)}`;
-  }
+  // A content-free name (`..`, `//`, `   `) has no identity to preserve — every one
+  // of them means "no name", so sharing the fallback is correct rather than a
+  // collision. The routes reject NAMELESS input (they guard on `hasNameContent`, not
+  // on `.trim()`), so the fallback is unreachable from the API and remains only to
+  // keep this function total for non-route callers.
+  if (slug.length === 0) return PROJECT_NAME_FALLBACK;
 
-  if (name.length > MAX_PROJECT_NAME_LENGTH) {
-    // The cut is lossy too — reserve room for a digest so two over-long names
-    // cannot collapse onto one clone directory.
-    const digest = slugDigest(input);
-    const room = MAX_PROJECT_NAME_LENGTH - digest.length - 1;
-    name = `${name.slice(0, room).replace(TRAILING_SEPARATORS_RE, '')}-${digest}`;
-  }
+  const name = truncateWithDigest(slug, input, MAX_PROJECT_NAME_LENGTH);
 
   return isValidProjectName(name) ? name : PROJECT_NAME_FALLBACK;
 }

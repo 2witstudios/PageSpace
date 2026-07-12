@@ -12,7 +12,7 @@
  */
 
 import { createHmac } from 'crypto';
-import { slugifySegment, hasNameContent, destroysNameContent, slugDigest } from './name-slug';
+import { slugifySegment, disambiguateSlug, truncateWithDigest } from './name-slug';
 
 export interface BranchSessionKeyInput {
   tenantId: string;
@@ -70,9 +70,6 @@ export function isValidBranchName(name: string): boolean {
   return true;
 }
 
-/** Every separator a ref may carry, for trimming an edge the length cut exposed. */
-const TRAILING_REF_SEPARATORS_RE = /[./-]+$/;
-
 const LOCK_SUFFIX = '.lock';
 
 /** What an input with nothing sluggable left in it becomes ("   ", "🚀", "..."). */
@@ -90,28 +87,12 @@ function rewriteLockSuffix(segment: string): string {
 }
 
 /**
- * Normalize one `/`-separated component, disambiguating it whenever the ASCII
- * charset destroyed content that identifies WHICH name was meant.
- *
- * The ref is a branch-terminal's identity, so a lossy rewrite is not a cosmetic
- * problem — it is a cross-attach. `日本語 feature` must not become plain
- * `feature` (someone else's branch), and `日本語` must not become the same thing
- * as `한국어`. Both keep a digest of the original segment.
- *
- * Losing ASCII punctuation is the one loss we accept: `a b` and `a!b` were
- * always going to mean one branch, and demanding otherwise would make the common
- * case (`My Cool Feature`) ugly for no safety gain.
+ * Normalize one `/`-separated component. `rewriteLockSuffix` runs BEFORE
+ * `disambiguateSlug` (see its doc) — a segment must be a legal ref *before* a
+ * digest is appended to it, or `foo.lock` would keep its forbidden ending.
  */
 function normalizeBranchSegment(segment: string): string {
-  const slug = rewriteLockSuffix(slugifySegment(segment));
-
-  if (slug.length === 0) {
-    // Structural noise (`..`, `.`) is genuinely nameless — dropping it is what
-    // keeps `../escape` → `escape`. Anything else had a name, so keep a token.
-    return hasNameContent(segment) ? `x${slugDigest(segment)}` : '';
-  }
-
-  return destroysNameContent(segment) ? `${slug}-${slugDigest(segment)}` : slug;
+  return disambiguateSlug(segment, rewriteLockSuffix(slugifySegment(segment)));
 }
 
 /**
@@ -164,17 +145,7 @@ export function normalizeBranchName(rawInput: string): string {
     .map(normalizeBranchSegment)
     .filter((segment) => segment.length > 0);
 
-  let name = segments.join('/');
-
-  if (name.length > MAX_BRANCH_NAME_LENGTH) {
-    // Cutting to fit is itself lossy: two different over-long names would cut to
-    // the SAME ref and cross-attach. So the cut reserves room for a digest of the
-    // original input. The appended digest is alphanumeric, which also means the
-    // cut can no longer strand a `.lock` ending or a trailing separator.
-    const digest = slugDigest(input);
-    const room = MAX_BRANCH_NAME_LENGTH - digest.length - 1;
-    name = `${name.slice(0, room).replace(TRAILING_REF_SEPARATORS_RE, '')}-${digest}`;
-  }
+  const name = truncateWithDigest(segments.join('/'), input, MAX_BRANCH_NAME_LENGTH);
 
   return isValidBranchName(name) ? name : BRANCH_NAME_FALLBACK;
 }

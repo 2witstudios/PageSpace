@@ -59,11 +59,11 @@ export function planAddProject({
   if (!isValidRepoUrl(repoUrl)) return { ok: false, reason: 'invalid_repo_url' };
 
   const normalized = normalizeProjectName(name);
-  // Unreachable given the normalizer's invariant (its output always satisfies
-  // `isValidProjectName`); kept as the second confinement gate, so a regression
-  // in either the normalizer or `resolvePathWithinSync` fails closed here
-  // rather than escaping PROJECTS_ROOT.
   const path = resolveProjectPath(normalized);
+  // Unreachable given the normalizer's invariant (its output always satisfies
+  // `isValidProjectName`); kept as the second confinement gate, so a regression in
+  // either the normalizer or `resolvePathWithinSync` fails closed HERE rather than
+  // escaping PROJECTS_ROOT.
   if (!path) return { ok: false, reason: 'invalid_name' };
 
   if (existingNames.includes(normalized)) return { ok: false, reason: 'duplicate_name' };
@@ -250,15 +250,15 @@ export type RemoveProjectResult = { ok: true } | { ok: false; reason: 'not_found
  */
 export async function removeProject({
   machineId,
-  name,
+  name: requestedName,
   deps,
 }: {
   machineId: string;
   name: string;
   deps: MachineProjectsDeps;
 }): Promise<RemoveProjectResult> {
-  const normalized = normalizeProjectName(name);
-  const existing = await deps.store.findByName(machineId, normalized);
+  const name = normalizeProjectName(requestedName);
+  const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   // Best-effort filesystem cleanup — the tracking row is removed regardless of
@@ -268,7 +268,7 @@ export async function removeProject({
   await safeRemoveDirectory(machineId, existing.path, deps);
 
   try {
-    await deps.store.remove(machineId, normalized);
+    await deps.store.remove(machineId, name);
     return { ok: true };
   } catch {
     return { ok: false, reason: 'error' };

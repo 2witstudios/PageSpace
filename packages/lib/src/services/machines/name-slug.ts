@@ -156,3 +156,47 @@ export function slugDigest(input: string): string {
   }
   return (hash >>> 0).toString(36);
 }
+
+/**
+ * Decide what to do about content the ASCII charset ate, so a lossy rewrite can
+ * never collide two DIFFERENT names onto one key. `slug` is whatever the caller's
+ * own pipeline produced — a branch segment has already had its `.lock` ending
+ * rewritten, which must happen BEFORE the digest is appended or `foo.lock` plus a
+ * non-ASCII character would yield `foo.lock-<digest>` instead of `foo-lock-<digest>`.
+ *
+ * This is the single most safety-critical rule in name normalization, which is why
+ * it lives here once rather than in both normalizers. A name IS the identity of the
+ * thing it names — a branch name is hashed into a Sprite session key and used as the
+ * store's lookup key — so dropping `日本語` and calling the result `feature` does not
+ * produce an ugly name, it produces SOMEONE ELSE'S BRANCH. `日本語` and `한국어` must
+ * not both become `branch`, and `日本語 feature` must not become plain `feature`.
+ *
+ * The one loss we accept is ASCII punctuation: `a b` and `a!b` were always going to
+ * mean one name, and insisting otherwise would make the common case (`My Cool
+ * Feature`) ugly for no safety gain.
+ *
+ * Returns `''` when the input carried no name at all (`..`, `.`, `   `), leaving the
+ * caller to decide what namelessness means — a branch segment vanishes (which is what
+ * turns `../escape` into `escape`), a project name falls back.
+ */
+export function disambiguateSlug(input: string, slug: string): string {
+  if (slug.length === 0) return hasNameContent(input) ? `x${slugDigest(input)}` : '';
+  return destroysNameContent(input) ? `${slug}-${slugDigest(input)}` : slug;
+}
+
+/** Every separator a name may carry, for trimming an edge the length cut exposed. */
+const TRAILING_NAME_SEPARATORS_RE = /[./-]+$/;
+
+/**
+ * Cut an over-long name to fit, reserving room for a digest of the ORIGINAL input.
+ *
+ * The cut is itself lossy: two different over-long names would otherwise cut to the
+ * SAME key and cross-attach. The digest keeps them apart. Because it is alphanumeric,
+ * the cut also can no longer strand a `.lock` ending or a trailing separator.
+ */
+export function truncateWithDigest(name: string, source: string, maxLength: number): string {
+  if (name.length <= maxLength) return name;
+  const digest = slugDigest(source);
+  const room = maxLength - digest.length - 1;
+  return `${name.slice(0, room).replace(TRAILING_NAME_SEPARATORS_RE, '')}-${digest}`;
+}
