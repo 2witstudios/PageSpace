@@ -139,6 +139,12 @@ describe('POST /api/machines/projects', () => {
     expect(mockAddProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'My Cool Feature' }));
   });
 
+  it('given an EMPTY name, returns 400 rather than normalizing it into a directory called "project"', async () => {
+    const res = await POST(req({ machineId: 't1', name: '', repoUrl: 'https://github.com/o/r.git' }));
+    expect(res.status).toBe(400);
+    expect(mockAddProject).not.toHaveBeenCalled();
+  });
+
   it('given a duplicate name, returns 409', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockAddProject.mockResolvedValue({ ok: false, reason: 'duplicate_name' });

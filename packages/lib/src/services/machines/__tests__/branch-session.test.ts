@@ -129,7 +129,11 @@ describe('normalizeBranchName', () => {
     // [free text a user typed, the git ref it becomes]
     ['My Cool Feature', 'my-cool-feature'],
     ['feat/JIRA-123 Fix!!', 'feat/jira-123-fix'],
-    ['émoji 🚀 branch', 'emoji-branch'],
+    // The emoji is content the ASCII charset cannot express, so a digest keeps
+    // this apart from a plain `emoji branch` (see the collision tests below).
+    ['émoji 🚀 branch', 'emoji-branch-7rmlpe'],
+    // ...but an accent alone folds losslessly to ASCII, so no digest is needed.
+    ['émoji branch', 'emoji-branch'],
     // Free text git would REJECT still slugifies (lowercased, `_`→`-`).
     ['CAPS FEATURE', 'caps-feature'],
     ['a_b c', 'a-b-c'],
@@ -168,11 +172,11 @@ describe('normalizeBranchName', () => {
     ['   ', 'branch'],
     ['...', 'branch'],
     ['//', 'branch'],
-    // Length cap, and the separator the cut exposes gets trimmed...
-    ['a'.repeat(250), 'a'.repeat(200)],
-    [`${'a'.repeat(199)}-b-c`, 'a'.repeat(199)],
-    // ...including a `.lock` suffix the cut itself minted.
-    [`${'x'.repeat(195)}.lockdown`, `${'x'.repeat(195)}-lock`],
+    // The length cap is itself lossy — two different over-long names would cut
+    // to the SAME ref — so the cut reserves room for a digest of the original.
+    ['a'.repeat(250), `${'a'.repeat(193)}-62a0y7`],
+    [`${'a'.repeat(199)}-b-c`, `${'a'.repeat(192)}-1x5nok5`],
+    [`${'x'.repeat(195)}.lockdown`, `${'x'.repeat(193)}-px8620`],
   ])('given %j, should normalize to %j', (input, expected) => {
     expect(normalizeBranchName(input)).toBe(expected);
   });
@@ -193,6 +197,30 @@ describe('normalizeBranchName', () => {
     for (const name of ['main', 'feature/foo', 'fix-123', 'release/1.2.3', 'a', 'a-b-c.d']) {
       expect(normalizeBranchName(name)).toBe(name);
     }
+  });
+
+  it('given a name whose non-ASCII part is only PART of it, should still not collide', () => {
+    // The subtle one: `日本語 feature` slugifies to `feature` — an entirely
+    // different branch that may already exist and belong to someone else. It is
+    // not enough to digest names the charset annihilates ENTIRELY; any destroyed
+    // identity-bearing content must disambiguate.
+    expect(normalizeBranchName('日本語 feature')).not.toBe('feature');
+    expect(normalizeBranchName('🚀 launch')).not.toBe('launch');
+    expect(normalizeBranchName('feature/日本語-fix')).not.toBe('feature/fix');
+    expect(normalizeBranchName('日本語 feature')).not.toBe(normalizeBranchName('中文 feature'));
+
+    // Losing ASCII punctuation stays lossless-enough — these SHOULD be one branch.
+    expect(normalizeBranchName('a b')).toBe(normalizeBranchName('a!b'));
+  });
+
+  it('given two over-long names with a common prefix, should NOT cut them onto one ref', () => {
+    // The length cap is lossy too: both used to become 200 `a`s.
+    const long = 'a'.repeat(250);
+    const longer = `${'a'.repeat(250)}-different`;
+    expect(normalizeBranchName(long)).not.toBe(normalizeBranchName(longer));
+    expect(normalizeBranchName(long).length).toBeLessThanOrEqual(200);
+    expect(normalizeBranchName(longer).length).toBeLessThanOrEqual(200);
+    expect(isValidBranchName(normalizeBranchName(longer))).toBe(true);
   });
 
   it('given names the ASCII charset annihilates, should NOT collapse them onto one ref', () => {

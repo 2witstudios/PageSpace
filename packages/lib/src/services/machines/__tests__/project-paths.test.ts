@@ -92,7 +92,8 @@ describe('normalizeProjectName', () => {
   it.each([
     // [free text a user typed, the directory name it becomes]
     ['My Cool Feature', 'my-cool-feature'],
-    ['émoji 🚀 project', 'emoji-project'],
+    ['émoji 🚀 project', 'emoji-project-1v5fxn'],
+    ['émoji project', 'emoji-project'],
     ['repo!!!  name', 'repo-name'],
     // A project name is ONE segment — `/` carries no structure here.
     ['feat/JIRA-123 Fix!!', 'feat-jira-123-fix'],
@@ -111,9 +112,10 @@ describe('normalizeProjectName', () => {
     ['', 'project'],
     ['   ', 'project'],
     ['..', 'project'],
-    // Length cap, with the separator the cut exposes trimmed off.
-    ['a'.repeat(150), 'a'.repeat(100)],
-    [`${'a'.repeat(99)}-bc`, 'a'.repeat(99)],
+    // The length cap is lossy, so the cut reserves room for a digest — two
+    // over-long names must not collapse onto one clone directory.
+    ['a'.repeat(150), `${'a'.repeat(93)}-rm68rf`],
+    [`${'a'.repeat(99)}-bc`, `${'a'.repeat(93)}-v7hm5m`],
   ])('given %j, should normalize to %j', (input, expected) => {
     expect(normalizeProjectName(input)).toBe(expected);
   });

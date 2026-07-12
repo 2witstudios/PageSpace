@@ -12,7 +12,7 @@
  */
 
 import { resolvePathWithinSync } from '../../security/path-validator';
-import { slugifySegment, hasNameContent, slugDigest } from './name-slug';
+import { slugifySegment, hasNameContent, destroysNameContent, slugDigest } from './name-slug';
 
 /** Root directory on a Machine's filesystem under which every Project is cloned. */
 export const PROJECTS_ROOT = '/workspace/projects';
@@ -62,17 +62,26 @@ export const PROJECT_NAME_FALLBACK = 'project';
 export function normalizeProjectName(input: string): string {
   if (isValidProjectName(input)) return input;
 
-  // A name the charset annihilated (`日本語`, `🚀`) keeps a deterministic token
-  // rather than collapsing onto the shared fallback — otherwise two distinct
-  // repos would fight over one directory and the second would be rejected as a
-  // duplicate. Structural noise (`..`, `   `) has no content and does fall back.
+  // Whenever the ASCII charset destroys content that identifies WHICH name was
+  // meant (`日本語 repo`, `🚀`), keep a digest of the original — otherwise two
+  // distinct repos collapse onto one directory and the second is rejected as a
+  // duplicate. Structural noise (`..`, `   `) is genuinely nameless and falls
+  // back; losing ASCII punctuation is the one loss we accept (see name-slug.ts).
   let name = slugifySegment(input);
-  if (name.length === 0 && hasNameContent(input)) {
+
+  if (name.length === 0) {
+    if (!hasNameContent(input)) return PROJECT_NAME_FALLBACK;
     name = `x${slugDigest(input)}`;
+  } else if (destroysNameContent(input)) {
+    name = `${name}-${slugDigest(input)}`;
   }
 
   if (name.length > MAX_PROJECT_NAME_LENGTH) {
-    name = name.slice(0, MAX_PROJECT_NAME_LENGTH).replace(TRAILING_SEPARATORS_RE, '');
+    // The cut is lossy too — reserve room for a digest so two over-long names
+    // cannot collapse onto one clone directory.
+    const digest = slugDigest(input);
+    const room = MAX_PROJECT_NAME_LENGTH - digest.length - 1;
+    name = `${name.slice(0, room).replace(TRAILING_SEPARATORS_RE, '')}-${digest}`;
   }
 
   return isValidProjectName(name) ? name : PROJECT_NAME_FALLBACK;

@@ -81,8 +81,11 @@ export async function POST(request: Request) {
   const parsed = requireMachineId(body.machineId);
   if (!parsed.ok) return parsed.error;
 
-  if (typeof body.name !== 'string' || typeof body.repoUrl !== 'string') {
-    return NextResponse.json({ error: 'name and repoUrl are required strings' }, { status: 400 });
+  // An EMPTY name is a MISSING field, not free text to be normalized — accepting
+  // it would silently clone the repo into a directory called `project`. The
+  // branches route draws the same line (`requireString`).
+  if (typeof body.name !== 'string' || body.name.length === 0 || typeof body.repoUrl !== 'string') {
+    return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
   }
 
   if (!(await canAccessMachine(auth.userId, parsed.machineId))) {

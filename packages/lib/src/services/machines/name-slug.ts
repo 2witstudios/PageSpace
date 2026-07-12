@@ -48,16 +48,42 @@ export function slugifySegment(input: string): string {
 }
 
 /** Nothing but separators and whitespace — structural noise (`..`, `.`, `   `, `//`), not a name. */
-const NOISE_ONLY_RE = /^[\s._/-]*$/;
+const NOISE_ONLY_RE = /^[\s./-]*$/;
 
 /**
  * Does this text carry any actual name content, as opposed to being pure
- * structure? `..` and `   ` carry none and are safe to DROP; `日本語` and `🚀`
- * carry plenty even though the ASCII charset annihilates them, and dropping
- * those would be a correctness bug — see `slugDigest`.
+ * structure? `..` and `   ` carry none and are safe to DROP; `日本語`, `🚀` and
+ * `___` carry plenty even though the ASCII slug charset annihilates them, and
+ * dropping those would be a correctness bug — see `slugDigest`.
  */
 export function hasNameContent(input: string): boolean {
   return !NOISE_ONLY_RE.test(input);
+}
+
+/** Survives slugification unchanged. */
+const CHARSET_RE = /[a-z0-9.-]/;
+/** ASCII whitespace and punctuation — STRUCTURE. Losing it does not change which name was meant. */
+const ASCII_STRUCTURE_RE = /[\s!-/:-@[-`{-~]/;
+
+/**
+ * Did slugification DESTROY identity-bearing content — a letter, digit, or
+ * symbol from a script the ASCII charset cannot express (`日本語`, `Ω`, `🚀`)?
+ *
+ * This is the difference between a lossless tidy-up and a lossy one. Dropping
+ * ASCII punctuation is lossless in the sense that matters: `a b` and `a!b` were
+ * always going to mean one branch, and the design accepts that. Dropping `日本語`
+ * is NOT — it silently turns `日本語 feature` into plain `feature`, which is a
+ * DIFFERENT branch that may already exist and belong to someone else. The caller
+ * appends `slugDigest` whenever this returns true, so the two stay apart.
+ */
+export function destroysNameContent(input: string): boolean {
+  const folded = input.normalize('NFKD').replace(DIACRITICS_RE, '').toLowerCase();
+  for (const character of folded) {
+    if (CHARSET_RE.test(character)) continue;
+    if (ASCII_STRUCTURE_RE.test(character)) continue;
+    return true;
+  }
+  return false;
 }
 
 const FNV_OFFSET_BASIS = 2166136261;
@@ -71,7 +97,7 @@ const FNV_PRIME = 16777619;
  * branch-terminal's identity — it is hashed into the Sprite session key and is
  * the store's lookup key — so if every non-Latin name collapsed onto one
  * fallback, `spawnBranch('日本語')` followed by `spawnBranch('한국어')` would
- * report `resumed: true` and handt the second user the FIRST user's Sprite and
+ * report `resumed: true` and hand the second user the FIRST user's Sprite and
  * filesystem. Likewise `feature/日本語` must not silently become plain
  * `feature` and collide with a real `feature` branch.
  *
