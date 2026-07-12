@@ -34,12 +34,19 @@ import type { SandboxActorContext, SandboxQuotaDeps } from '../sandbox/tool-runn
 import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from '../sandbox/execution-policy';
 import type { ExecutableSandbox } from '../sandbox/sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../sandbox/audit';
-import { resolveProjectPath, isValidRepoUrl } from './project-paths';
+import { resolveProjectPath, isValidRepoUrl, normalizeProjectName } from './project-paths';
 import { isUniqueViolation, type MachineProjectStore, type MachineProjectRecord } from './machine-projects-store';
 
 export type AddProjectDenialReason = 'invalid_name' | 'invalid_repo_url' | 'duplicate_name';
 
-/** Pure decision: is this (name, repoUrl) addable to a machine with these existing project names? */
+/**
+ * Pure decision: is this (name, repoUrl) addable to a machine with these
+ * existing project names? The name is free text — it is NORMALIZED into a
+ * directory-safe slug rather than rejected (`normalizeProjectName`), and the
+ * normalized form is what the duplicate check, the clone path, and the
+ * persisted row all use. The repo URL still rejects, since there is no
+ * meaningful way to normalize a non-HTTPS remote into an HTTPS one.
+ */
 export function planAddProject({
   name,
   repoUrl,
@@ -48,12 +55,19 @@ export function planAddProject({
   name: string;
   repoUrl: string;
   existingNames: string[];
-}): { ok: true; path: string } | { ok: false; reason: AddProjectDenialReason } {
+}): { ok: true; name: string; path: string } | { ok: false; reason: AddProjectDenialReason } {
   if (!isValidRepoUrl(repoUrl)) return { ok: false, reason: 'invalid_repo_url' };
-  const path = resolveProjectPath(name);
+
+  const normalized = normalizeProjectName(name);
+  const path = resolveProjectPath(normalized);
+  // Unreachable given the normalizer's invariant (its output always satisfies
+  // `isValidProjectName`); kept as the second confinement gate, so a regression in
+  // either the normalizer or `resolvePathWithinSync` fails closed HERE rather than
+  // escaping PROJECTS_ROOT.
   if (!path) return { ok: false, reason: 'invalid_name' };
-  if (existingNames.includes(name)) return { ok: false, reason: 'duplicate_name' };
-  return { ok: true, path };
+
+  if (existingNames.includes(normalized)) return { ok: false, reason: 'duplicate_name' };
+  return { ok: true, name: normalized, path };
 }
 
 export interface MachineActorContext {
@@ -175,6 +189,24 @@ export async function addProject({
     return { ok: false, reason: 'clone_failed', detail: result.error };
   }
   if (result.exitCode !== 0) {
+    // KNOWN, PRE-EXISTING RACE (not introduced here, and deliberately not fixed
+    // here): two concurrent adds of the same project both clone into this one
+    // path. The loser's clone fails *because* the winner's succeeded
+    // ("destination path already exists"), and this cleanup then `rm -rf`s the
+    // WINNER's fresh checkout while their row lives on — a project pointing at an
+    // empty directory.
+    //
+    // Normalization widens the trigger from "two callers typed the same text" to
+    // "two callers typed the same NAME" (`My Repo` / `my repo`), so it is worth
+    // stating plainly. It is not fixable by reordering or by re-checking here:
+    // reserving the name before the clone (tried, reverted) merely trades this for
+    // a worse bug — the row becomes visible mid-clone, so a delete-then-re-add
+    // during a slow clone leaves an orphan directory no row can reach.
+    //
+    // The real fix is structural and belongs in its own PR: make the clone path
+    // unique per ROW (`${name}-${id}`) rather than per name, so no two operations
+    // can ever own the same directory, and make every destructive store op
+    // id-scoped. Both `removeProject` below and this path need it.
     await safeRemoveDirectory(machineId, plan.path, deps);
     return { ok: false, reason: 'clone_failed', detail: result.stderr || result.stdout };
   }
@@ -183,7 +215,9 @@ export async function addProject({
     const project = await deps.store.create({
       ownerId: actor.userId,
       machineId,
-      name,
+      // The normalized name — never the raw text the caller typed. Persisting
+      // anything else would desync the row from the directory just cloned.
+      name: plan.name,
       repoUrl,
       path: plan.path,
       now: deps.now(),
@@ -207,15 +241,23 @@ export async function listProjects({
 
 export type RemoveProjectResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
 
+/**
+ * Remove a project. Normalizes its lookup key for the same reason
+ * `attachBranch`/`killBranch` do: `addProject` persists the CANONICAL name, so
+ * whatever free text created a project must also be able to delete it. A name
+ * read back from `listProjects` is already canonical and passes through
+ * unchanged, because normalization is idempotent.
+ */
 export async function removeProject({
   machineId,
-  name,
+  name: requestedName,
   deps,
 }: {
   machineId: string;
   name: string;
   deps: MachineProjectsDeps;
 }): Promise<RemoveProjectResult> {
+  const name = normalizeProjectName(requestedName);
   const existing = await deps.store.findByName(machineId, name);
   if (!existing) return { ok: false, reason: 'not_found' };
 

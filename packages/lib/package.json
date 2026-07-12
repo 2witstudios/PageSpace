@@ -592,6 +592,11 @@
       "import": "./dist/services/machines/project-paths.js",
       "require": "./dist/services/machines/project-paths.js"
     },
+    "./services/machines/name-slug": {
+      "types": "./dist/services/machines/name-slug.d.ts",
+      "import": "./dist/services/machines/name-slug.js",
+      "require": "./dist/services/machines/name-slug.js"
+    },
     "./services/machines/machine-projects-store": {
       "types": "./dist/services/machines/machine-projects-store.d.ts",
       "import": "./dist/services/machines/machine-projects-store.js",
@@ -1723,6 +1728,9 @@
       ],
       "services/machines/project-paths": [
         "./dist/services/machines/project-paths.d.ts"
+      ],
+      "services/machines/name-slug": [
+        "./dist/services/machines/name-slug.d.ts"
       ],
       "services/machines/machine-projects-store": [
         "./dist/services/machines/machine-projects-store.d.ts"
