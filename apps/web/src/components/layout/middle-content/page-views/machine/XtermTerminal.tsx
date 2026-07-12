@@ -6,8 +6,14 @@ import type { Terminal as XtermTerminalInstance } from '@xterm/xterm';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useXtermTheme } from '@/hooks/useXtermTheme';
 import { getCssVar } from '@/lib/theme/css-color-resolution';
+import { toPtyInput } from './pty-input';
 
 const FALLBACK_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace";
+
+/** How long to wait for a cold agent to print something before writing the
+ * starting prompt anyway. Some agents boot silently; the prompt still has to
+ * go in, and a wait this short is invisible next to a Sprite cold boot. */
+const PROMPT_BACKSTOP_MS = 3000;
 
 export interface AgentTerminalConnectPayload {
   machineId: string;
@@ -22,13 +28,21 @@ interface XtermTerminalProps {
   /** Uniquely identifies this PTY session's scope tuple — used as the effect's re-connect key and the useEditingStore session id. Callers should key their component with this same value so switching scope re-mounts instead of reusing stale listeners. */
   sessionId: string;
   connectPayload: AgentTerminalConnectPayload;
+  /** Typed into the PTY (with a trailing newline) once it's ready — the optional starting prompt from the pane's agent picker. Sent AT MOST ONCE per mount; the caller must drop it (see `onInitialInputSent`) so a later re-mount doesn't retype it at a running agent. */
+  initialInput?: string;
+  onInitialInputSent?(): void;
   onReady?(): void;
   onError?(message: string): void;
 }
 
-export default function XtermTerminal({ socket, sessionId, connectPayload, onReady, onError }: XtermTerminalProps) {
+export default function XtermTerminal({ socket, sessionId, connectPayload, initialInput, onInitialInputSent, onReady, onError }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XtermTerminalInstance | null>(null);
+  // Read at ready-time, not captured in the connect effect's deps — same reason
+  // as onReady/onError below: this component must not re-mount (and re-attach
+  // its PTY) just because the parent re-rendered with a new closure.
+  const initialInputRef = useRef({ input: initialInput, onSent: onInitialInputSent });
+  initialInputRef.current = { input: initialInput, onSent: onInitialInputSent };
   const theme = useXtermTheme();
   // Read at creation time only — the connect effect below is intentionally
   // NOT keyed on `theme` (see its own comment), so later theme changes are
@@ -90,14 +104,104 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
         const isMine = (payload: { connectionId?: string } | undefined) =>
           payload?.connectionId === undefined || payload.connectionId === connectionId;
 
+        /**
+         * The starting prompt goes in as INPUT, exactly as if the user had typed
+         * it — the agent CLI is the PTY's foreground process, so it reads the
+         * line off its own stdin.
+         *
+         * WHEN it goes in matters. On a cold start the bridge emits `ready` the
+         * moment the binary is exec'd, which is not the moment an interactive
+         * agent (a raw-mode TUI) starts reading stdin — writing into that window
+         * risks the prompt being discarded as the app takes over the tty. So the
+         * write waits for the agent's FIRST OUTPUT (it is up and drawing), with a
+         * timer as the backstop for an agent that prints nothing on boot.
+         *
+         * IT ONLY EVER LANDS IN A FRESH BOOT. An agent that is already running has
+         * reached some state of its own — a half-typed answer, a `y/n`
+         * confirmation — and a line plus a carriage return arriving there is
+         * destructive. Two signals say the PTY was already alive, and the prompt
+         * is DISCARDED (spent, not written) on either:
+         *
+         *   - `resumed`, from the bridge: it picked up a Sprite exec session that
+         *     was still running. This is the one the client cannot infer — after a
+         *     realtime restart, a connect to an agent running for hours takes the
+         *     bridge's CREATE path and would otherwise look exactly like a cold
+         *     boot.
+         *   - a NON-EMPTY `scrollback`: a reattach to a PTY that has already
+         *     printed. (An empty scrollback is a reattach to a PTY that has
+         *     emitted nothing — the boot this pane is waiting for, reached through
+         *     a re-mount. React's StrictMode does exactly that in development, so
+         *     treating every reattach as unsafe would mean the prompt never worked
+         *     while developing this feature.)
+         *
+         * Latched, because `ready` can fire more than once for one terminal and
+         * output certainly can.
+         */
+        let initialInputSent = false;
+        let promptTimer: ReturnType<typeof setTimeout> | undefined;
+        // Nothing may be typed before `ready` has been SEEN, because `ready` is
+        // what carries `resumed` — the answer to "is this agent already running".
+        // Output can beat it here (it is the server's ordering, not ours, and the
+        // server does work between opening the shell and announcing it), and
+        // typing on first output alone would type into an agent whose state we had
+        // not yet been told.
+        let readySeen = false;
+        /** Has the agent drawn anything? Proof it is up and reading its stdin. */
+        let outputSeen = false;
+
+        /** Spends the prompt without writing it — for a session that is past
+         * taking one. The caller drops it either way, so it can never come back. */
+        const discardInitialInput = () => {
+          if (initialInputSent) return;
+          initialInputSent = true;
+          clearTimeout(promptTimer);
+          initialInputRef.current.onSent?.();
+        };
+
+        const sendInitialInput = () => {
+          const { input, onSent } = initialInputRef.current;
+          if (!input || initialInputSent || !readySeen) return;
+          // A disconnected socket BUFFERS this emit and flushes it on reconnect,
+          // carrying a connectionId the server no longer knows — so it is dropped
+          // there, while `onSent` here would already have spent the prompt. Keep it
+          // unspent instead: whether a later connect may deliver it is decided by
+          // that connect's own `resumed`, which is the only safe judge.
+          if (socket.connected === false) return;
+          initialInputSent = true;
+          clearTimeout(promptTimer);
+          for (const chunk of toPtyInput(input)) {
+            socket.emit('agent-terminal:input', { data: chunk, connectionId });
+          }
+          // Only now is the prompt spent — the caller drops it, so a later
+          // re-mount reattaches instead of typing it at a running agent again.
+          onSent?.();
+        };
+
         const handleOutput = (payload: { data: string; connectionId?: string }) => {
           if (!isMine(payload)) return;
           terminal.write(payload.data);
+          outputSeen = true;
+          // The agent is alive and drawing; it can take its prompt — but only once
+          // `ready` has told us WHICH agent this is (see `readySeen`).
+          sendInitialInput();
         };
-        const handleReady = (payload: { scrollback?: string; connectionId?: string } = {}) => {
+        const handleReady = (payload: { scrollback?: string; resumed?: boolean; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
+          readySeen = true;
           if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
+
+          // Already running (see above): the prompt is spent, never written.
+          const alreadyRunning = payload.resumed === true || Boolean(payload.scrollback);
+          if (alreadyRunning) {
+            discardInitialInput();
+          } else if (outputSeen) {
+            // It was already drawing before this arrived: it is up, and now we know
+            // it is a fresh boot. No reason to make the user wait out the backstop.
+            sendInitialInput();
+          } else if (initialInputRef.current.input && !initialInputSent && promptTimer === undefined) {
+            promptTimer = setTimeout(sendInitialInput, PROMPT_BACKSTOP_MS);
+          }
           onReady?.();
         };
         const handleClosed = (payload: { exitCode: number; connectionId?: string }) => {
@@ -131,6 +235,13 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
         const resize: { observer?: ResizeObserver } = {};
         teardown = () => {
           resize.observer?.disconnect();
+          // The pending write is cancelled, but the prompt is NOT spent: this pane
+          // may be going away only for a moment (StrictMode remounts it in
+          // development; a workspace switch remounts it later), and the agent it
+          // was meant for may still be booting. Whether the next connect may
+          // deliver it is decided there, from `resumed`/`scrollback` — not guessed
+          // here.
+          clearTimeout(promptTimer);
           onData.dispose();
           socket.off('agent-terminal:output', handleOutput);
           socket.off('agent-terminal:ready', handleReady);
@@ -148,10 +259,10 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
           useEditingStore.getState().endEditing(sessionId);
         };
 
-        // The tracking row for this scope must already exist — the Terminal
-        // tab's add-terminal dialog reserves it (spawnAgentTerminal) before it's
-        // ever offered as something to open, so connecting here only ever
-        // attaches to (or resumes) an already-known session.
+        // The tracking row for this scope must already exist — a pane's agent
+        // picker (or the tab's add-terminal dialog) reserves it via
+        // spawnAgentTerminal before the pane is ever bound to it, so connecting
+        // here only ever attaches to (or resumes) an already-known session.
         socket.emit('agent-terminal:connect', { ...connectPayload, connectionId, cols: terminal.cols, rows: terminal.rows });
 
         resize.observer = new ResizeObserver(() => {

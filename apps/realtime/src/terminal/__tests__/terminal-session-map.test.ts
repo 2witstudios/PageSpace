@@ -11,6 +11,8 @@ function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
     closedFn: vi.fn(),
     scrollback: [],
     scrollbackBytes: 0,
+    hasOutput: false,
+    resumedAtCreate: false,
     reAuthInterval: undefined,
     idleTimer: undefined,
   };
@@ -222,5 +224,35 @@ describe('appendScrollback', () => {
     const emoji = '🚀'; // 4 bytes in UTF-8, 2 UTF-16 code units
     appendScrollback(session, emoji);
     expect(session.scrollbackBytes).toBe(4);
+  });
+});
+
+describe('appendScrollback — hasOutput', () => {
+  it('given a chunk BIGGER than the whole scrollback cap, should still record that the PTY has spoken', () => {
+    const session = fakeSession();
+
+    // The chunk is pushed, then trimmed straight back off: the buffer ends up
+    // EMPTY for a session that has just produced 64KB+ of output.
+    appendScrollback(session, 'x'.repeat(MAX_SCROLLBACK_BYTES + 1));
+
+    expect({
+      given: 'one output chunk larger than MAX_SCROLLBACK_BYTES',
+      should:
+        'leave hasOutput true even though the trim emptied the buffer — a client that reads an empty scrollback as "still booting, safe to type" would otherwise type a starting prompt into an agent that has been screaming output',
+      actual: { scrollback: session.scrollback.length, hasOutput: session.hasOutput },
+      expected: { scrollback: 0, hasOutput: true },
+    }).toEqual({
+      given: 'one output chunk larger than MAX_SCROLLBACK_BYTES',
+      should:
+        'leave hasOutput true even though the trim emptied the buffer — a client that reads an empty scrollback as "still booting, safe to type" would otherwise type a starting prompt into an agent that has been screaming output',
+      actual: { scrollback: 0, hasOutput: true },
+      expected: { scrollback: 0, hasOutput: true },
+    });
+  });
+
+  it('given no output at all, should report hasOutput false', () => {
+    const session = fakeSession();
+
+    expect(session.hasOutput).toBe(false);
   });
 });

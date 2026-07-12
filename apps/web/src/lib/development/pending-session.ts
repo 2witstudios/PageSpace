@@ -39,15 +39,14 @@ function activePaneScope(workspace: WorkspaceState): OpenTerminalScope | null {
  * Two things make this trickier than it looks, and both were live bugs:
  *
  * 1. The intent CANNOT be applied when it is made. The clicked session may
- *    belong to a machine whose pane region isn't mounted, and writing a pane
- *    into the store ahead of that mount does not survive: `MachineWorkspace`
- *    disposes its workspace on unmount and rebuilds it on mount, destroying
- *    anything authored early. So the intent is held and re-evaluated as state
- *    arrives, and it CONVERGES rather than firing once — it keeps asking until
- *    the workspace reports the session in its active pane. That is what makes it
- *    survive the workspace being torn down and rebuilt underneath it (React
- *    StrictMode does exactly this on first mount). Re-applying is harmless
- *    because `openTerminal` is idempotent.
+ *    belong to a machine whose pane region isn't mounted, so there is no
+ *    workspace on screen to open it into yet. The intent is therefore held and
+ *    re-evaluated as state arrives, and it CONVERGES rather than firing once —
+ *    it keeps asking until the machine's ACTIVE workspace reports the session in
+ *    its active pane. Converging (rather than firing once) is also what makes it
+ *    survive a remount of the pane region, which React StrictMode does on first
+ *    mount. Re-applying is harmless because `openTerminal` is idempotent: it
+ *    selects the workspace the session already lives in.
  *
  * 2. "The user isn't on that machine yet" and "the user went somewhere else"
  *    are INDISTINGUISHABLE from a single commit — both are just
