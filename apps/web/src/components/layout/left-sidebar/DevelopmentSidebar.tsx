@@ -151,6 +151,9 @@ function MachineList({
 
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 
+/** Only the machine row addresses a URL, so only it is selectable. */
+const isMachineNode = (node: MachineTreeNode) => node.level === 'machine';
+
 /**
  * One machine in the aggregated tree. Selecting the machine row routes to its
  * detail pane; the projects/branches below it are the shared `MachineTree`, and
@@ -180,8 +183,6 @@ function MachineTreeSection({
     if (isSheetBreakpoint) setLeftSheetOpen(false);
   }, [router, driveId, machineId, isSheetBreakpoint, setLeftSheetOpen]);
 
-  const onSelectNode = useCallback(() => openMachine(), [openMachine]);
-
   const onOpenTerminal = useCallback(
     (scope: OpenTerminalScope) => {
       // Open the session into the machine's workspace BEFORE routing: the pane
@@ -192,6 +193,13 @@ function MachineTreeSection({
       ensureWorkspace(machineId);
       openTerminal(machineId, scope);
       openMachine();
+      // KNOWN GAP: if the user is already on THIS machine with a non-Terminal tab
+      // active, the pane is created but stays behind that tab — MachineView's tabs
+      // are uncontrolled (defaultValue="terminal"), so nothing here can focus them.
+      // Landing the session is still correct (it's there when they return to the
+      // Terminal tab); making the click also switch tabs needs MachineView's active
+      // tab to become controlled, which is deliberately left to the follow-up rather
+      // than fought over with the in-flight terminal-UX work (#2017).
     },
     [ensureWorkspace, openTerminal, machineId, openMachine],
   );
@@ -210,8 +218,10 @@ function MachineTreeSection({
       // N machines on screen: collapsed until asked for, so mounting the surface
       // doesn't fire a project fetch per machine.
       defaultExpanded={false}
-      onSelectNode={onSelectNode}
-      isNodeSelectable={(node) => node.level === 'machine'}
+      // MachineTree passes the clicked node; only the machine row is selectable
+      // here, so the node adds nothing the closure doesn't already know.
+      onSelectNode={openMachine}
+      isNodeSelectable={isMachineNode}
       selectedNode={selected ? MACHINE_NODE : null}
       renderNodeChildren={renderNodeChildren}
     />
