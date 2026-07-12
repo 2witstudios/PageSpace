@@ -328,7 +328,7 @@ export function openPtyShell({
     let opened = false;
 
     // Every attach REPLAYS the session's scrollback (sprites.dev/api). The history is
-    // materialized on this command's FIRST inbound byte and frozen from then on: frozen,
+    // materialized on this command's first STDOUT byte (stderr never snapshots) and frozen
     // so it cannot shift underneath a replay that is still being classified — but not
     // before, because the dying socket's last bytes usually arrive in the gap between the
     // reconnect wiring this command and its replay landing (a socket drains its buffer at

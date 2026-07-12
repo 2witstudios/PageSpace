@@ -5,9 +5,11 @@ import { appendScrollback } from '../terminal-session-map';
 import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
-// riteway-style assertion (given/should/actual/expected) on top of vitest — the
-// repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
-// a handful of pure-function cases, so keep the contract, drop the package.
+// riteway-style assertion (given/should/actual/expected) on top of vitest. There IS a
+// shared `assert` next door (`./riteway`), used by five sibling suites, but it asserts
+// INSIDE an `it`, whereas this one DECLARES the `it` — which is what lets the pure cases
+// below read as a table of given/should rows rather than a wall of test bodies. Same
+// contract, different shape; the riteway package itself is not a dependency.
 function assert<T>({ given, should, actual, expected }: { given: string; should: string; actual: T; expected: T }): void {
   it(`given ${given}, should ${should}`, () => {
     expect(actual).toEqual(expected);

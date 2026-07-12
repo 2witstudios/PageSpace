@@ -127,12 +127,15 @@ export const MIN_CORROBORATION_BYTES = 4 * 1024;
  * compare, on the realtime process's event loop, driven by bytes the sandbox
  * chose. Giving up early is safe — it emits verbatim.
  *
- * It bounds a CHUNK's search (8 candidates, each a compare of at most `seen`), not an
- * ATTACH's: every chunk gets a fresh budget, so output engineered to be self-similar can
- * spend the full budget on all of them. What bounds the total is the replay window the
- * caller closes and MAX_PENDING_BYTES — worst measured is ~1.5s of CPU for a 4 MiB
- * replay in 64-byte frames, spent ~23µs at a time between chunks. It costs throughput,
- * never a stalled event loop.
+ * It bounds a CHUNK's search (8 candidates, each a compare of at most `seen`, so at most
+ * ~512 KiB of comparing per chunk), not an ATTACH's: every chunk gets a fresh budget, so
+ * output engineered to be self-similar can spend the full budget on all of them. What bounds
+ * the TOTAL is the replay window the caller closes and MAX_PENDING_BYTES.
+ *
+ * The shape of that cost is what matters, and it is a bound rather than a measurement:
+ * the work is paid per chunk, between chunks, so it costs throughput and never a stalled
+ * event loop. (Timings here are worth little — every attempt to pin one produced a different
+ * number depending on how the adversarial input was built.)
  */
 export const MAX_MATCH_CANDIDATES = 8;
 

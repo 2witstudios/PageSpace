@@ -13,9 +13,11 @@ import {
   rememberDelivered,
 } from '../replay-dedupe';
 
-// riteway-style assertion (given/should/actual/expected) on top of vitest — the
-// repo doesn't vendor riteway and bun-only rules forbid adding a dependency for
-// a handful of pure-function cases, so keep the contract, drop the package.
+// riteway-style assertion (given/should/actual/expected) on top of vitest. There IS a
+// shared `assert` next door (`./riteway`), used by five sibling suites, but it asserts
+// INSIDE an `it`, whereas this one DECLARES the `it` — which is what lets the pure cases
+// below read as a table of given/should rows rather than a wall of test bodies. Same
+// contract, different shape; the riteway package itself is not a dependency.
 function assert<T>({ given, should, actual, expected }: { given: string; should: string; actual: T; expected: T }): void {
   it(`given ${given}, should ${should}`, () => {
     expect(actual).toEqual(expected);
@@ -403,7 +405,7 @@ describe('the pending cap vs the server ring (pure)', () => {
     // it again 45 seconds later. Forever. This pins the working side of that line.
     const lines = (n: number) =>
       Buffer.from(Array.from({ length: n }, (_, i) => `line ${i} of a long session\r\n`).join(''), 'utf8');
-    const stream = lines(120_000); // ~3.4 MB: a big ring, but under the cap
+    const stream = lines(120_000); // 3.44 MiB: a big ring, but under the 4 MiB cap
     expect(stream.length).toBeLessThan(MAX_PENDING_BYTES);
 
     let tail = EMPTY_SEEN;
