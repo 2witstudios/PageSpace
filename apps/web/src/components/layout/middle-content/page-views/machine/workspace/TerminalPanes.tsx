@@ -1,19 +1,39 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
+import { toast } from 'sonner';
 import type { Socket } from 'socket.io-client';
 import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
-import { useMachineWorkspaceStore, selectWorkspace, type OpenTerminalScope, type TerminalPaneState } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import {
+  useMachineWorkspaceStore,
+  selectWorkspace,
+  selectActiveNode,
+  autoSessionName,
+  type OpenTerminalScope,
+  type TerminalPaneState,
+} from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { PaneLoading, PaneNotice } from '../tabs/tab-states';
 
 const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
 
 export type { TerminalPaneState };
+
+const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
 
 interface TerminalPanesProps {
   machineId: string;
@@ -24,19 +44,51 @@ function paneSessionId(machineId: string, scope: OpenTerminalScope): string {
   return `agent-terminal:${machineId}:${scope.projectName ?? ''}:${scope.branchName ?? ''}:${scope.name}`;
 }
 
+/** Spawn is one act, so the session name is minted rather than asked for. */
+function freshNameSuffix(): string {
+  return crypto.randomUUID().replace(/-/g, '');
+}
+
 export default function TerminalPanes({ machineId, socket }: TerminalPanesProps) {
   const workspace = useMachineWorkspaceStore(selectWorkspace(machineId));
+  // The node whose grid is on screen — machine, project, or branch. Everything
+  // a pane here spawns runs at THIS node's scope (a branch node's panes all
+  // share that branch's checkout).
+  const node = useMachineWorkspaceStore(selectActiveNode(machineId));
   const splitRight = useMachineWorkspaceStore((state) => state.splitRight);
   const splitDown = useMachineWorkspaceStore((state) => state.splitDown);
   const closePane = useMachineWorkspaceStore((state) => state.closePane);
   const selectPane = useMachineWorkspaceStore((state) => state.selectPane);
+  const bindPaneTerminal = useMachineWorkspaceStore((state) => state.bindPaneTerminal);
+  const clearPanePrompt = useMachineWorkspaceStore((state) => state.clearPanePrompt);
+  const dismissPicker = useMachineWorkspaceStore((state) => state.dismissPicker);
+  const { addAgentTerminal } = useAgentTerminals(machineId, node.projectName ?? null, node.branchName ?? null);
   const isMobile = useMobile();
+
+  /**
+   * Split-and-pick: create the session AND place it, in one act. The session
+   * record is a side-effect of picking an agent — auto-named, never prompted
+   * for — and the pane it was picked in is bound to it the moment the spawn
+   * resolves, so the agent belongs to a pane from the first frame it exists.
+   */
+  const spawnIntoPane = useCallback(
+    async (paneId: string, agentType: AgentRuntimeType, prompt?: string) => {
+      const created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
+      bindPaneTerminal(
+        machineId,
+        paneId,
+        { projectName: node.projectName, branchName: node.branchName, name: created.name },
+        prompt,
+      );
+    },
+    [addAgentTerminal, bindPaneTerminal, machineId, node.projectName, node.branchName],
+  );
 
   // Briefly undefined between this component's first render and the
   // mounting MachineWorkspace's ensureWorkspace effect committing.
   if (!workspace) return null;
 
-  const { columns, activePaneId } = workspace;
+  const { columns, activePaneId, pendingPickerPaneId } = workspace;
   const panes = columns.flatMap((column) => column.panes);
   const canClose = panes.length > 1;
 
@@ -50,10 +102,16 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     pane,
     isActive: pane.id === activeId,
     canClose,
+    // A split just made this pane, so its picker takes focus — the user asked
+    // for a new agent, not for a blank rectangle to go find a control in.
+    pickerFocused: pane.id === pendingPickerPaneId,
     onSelect: () => selectPane(machineId, pane.id),
     onSplitRight: () => splitRight(machineId, pane.id),
     onSplitDown: () => splitDown(machineId, pane.id),
     onClose: () => closePane(machineId, pane.id),
+    onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
+    onPickerFocused: () => dismissPicker(machineId, pane.id),
+    onPromptSent: () => clearPanePrompt(machineId, pane.id),
   });
 
   // A phone cannot hold a split grid: two columns at 375px give each terminal
@@ -183,10 +241,14 @@ function TerminalPane({
   isActive,
   canClose,
   canSplit,
+  pickerFocused,
   onSelect,
   onSplitRight,
   onSplitDown,
   onClose,
+  onSpawn,
+  onPickerFocused,
+  onPromptSent,
 }: {
   socket: Socket | null | undefined;
   machineId: string;
@@ -195,10 +257,15 @@ function TerminalPane({
   canClose: boolean;
   /** False on narrow viewports, where a split would produce two unusable slivers. */
   canSplit: boolean;
+  /** This pane's picker should take focus — it was just made by a split. */
+  pickerFocused: boolean;
   onSelect(): void;
   onSplitRight(): void;
   onSplitDown(): void;
   onClose(): void;
+  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onPickerFocused(): void;
+  onPromptSent(): void;
 }) {
   const sessionId = pane.scope ? paneSessionId(machineId, pane.scope) : null;
   // With neither a split nor a close to offer (a lone pane on a phone), the
@@ -259,13 +326,108 @@ function TerminalPane({
       )}
       <div className="relative min-h-0 flex-1">
         {!pane.scope || !sessionId ? (
-          <PaneNotice
-            title="No terminal open"
-            description="Pick a session from the Sessions sidebar, or add one from any node in the tree."
-          />
+          <PaneAgentPicker focused={pickerFocused} onSpawn={onSpawn} onFocused={onPickerFocused} />
         ) : (
-          <TerminalPaneStream key={sessionId} socket={socket} machineId={machineId} scope={pane.scope} sessionId={sessionId} />
+          <TerminalPaneStream
+            key={sessionId}
+            socket={socket}
+            machineId={machineId}
+            scope={pane.scope}
+            sessionId={sessionId}
+            pendingPrompt={pane.pendingPrompt}
+            onPromptSent={onPromptSent}
+          />
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An empty pane's inline agent picker — the whole spawn flow, in the pane the
+ * agent will run in. Pick a type, optionally say what it should start on, and
+ * the agent is created AND placed here in one action: no modal, no name step,
+ * no separate "now assign it to a pane" click.
+ *
+ * The starting prompt is optional on purpose — Enter on the type is the fast
+ * path (the agent boots to its own prompt), and the textarea is there for when
+ * the user already knows the first thing to say.
+ */
+function PaneAgentPicker({
+  focused,
+  onSpawn,
+  onFocused,
+}: {
+  focused: boolean;
+  onSpawn(agentType: AgentRuntimeType, prompt?: string): Promise<void>;
+  onFocused(): void;
+}) {
+  const [agentType, setAgentType] = useState<AgentRuntimeType>(AGENT_TYPES[0]);
+  const [prompt, setPrompt] = useState('');
+  const [spawning, setSpawning] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+
+  // Consume the focus intent once. Clearing it in the store (onFocused) is what
+  // stops a later unrelated re-render from yanking the caret back here while
+  // the user is typing in a sibling pane.
+  useEffect(() => {
+    if (!focused) return;
+    promptRef.current?.focus();
+    onFocused();
+  }, [focused, onFocused]);
+
+  const submit = async () => {
+    setSpawning(true);
+    try {
+      // A spawned pane re-renders with a terminal in it, unmounting this picker
+      // — so `spawning` is only ever cleared on the failure path.
+      await onSpawn(agentType, prompt.trim() || undefined);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
+      setSpawning(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+      <div className="text-center">
+        <p className="text-sm font-medium">Spawn an agent</p>
+        <p className="text-xs text-muted-foreground">It runs in this node&apos;s filesystem.</p>
+      </div>
+      <div className="flex w-full max-w-xs flex-col gap-2">
+        <Select value={agentType} onValueChange={(value) => setAgentType(value as AgentRuntimeType)}>
+          <SelectTrigger aria-label="Agent type" className="h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {AGENT_TYPES.map((type) => (
+              <SelectItem key={type} value={type}>
+                {type}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Textarea
+          ref={promptRef}
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="Starting prompt (optional)"
+          aria-label="Starting prompt"
+          rows={2}
+          className="resize-none text-sm"
+          // Enter submits; Shift+Enter is a newline — the prompt is usually one
+          // line, and reaching for the button to spawn would put the click back
+          // into a flow whose whole point is not having one.
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              if (!spawning) void submit();
+            }
+          }}
+        />
+        <Button size="sm" disabled={spawning} onClick={() => void submit()}>
+          {spawning ? 'Spawning…' : 'Spawn agent'}
+        </Button>
       </div>
     </div>
   );
@@ -283,11 +445,16 @@ function TerminalPaneStream({
   machineId,
   scope,
   sessionId,
+  pendingPrompt,
+  onPromptSent,
 }: {
   socket: Socket | null | undefined;
   machineId: string;
   scope: OpenTerminalScope;
   sessionId: string;
+  /** The picker's starting prompt, typed into the PTY once it's ready. */
+  pendingPrompt?: string;
+  onPromptSent(): void;
 }) {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -303,6 +470,8 @@ function TerminalPaneStream({
           socket={socket}
           sessionId={sessionId}
           connectPayload={{ machineId, projectName: scope.projectName, branchName: scope.branchName, name: scope.name }}
+          initialInput={pendingPrompt}
+          onInitialInputSent={onPromptSent}
           onReady={handleReady}
           onError={handleError}
         />

@@ -18,6 +18,22 @@ const selectPane = vi.fn();
 const splitRight = vi.fn();
 const splitDown = vi.fn();
 const closePane = vi.fn();
+const bindPaneTerminal = vi.fn();
+const clearPanePrompt = vi.fn();
+const dismissPicker = vi.fn();
+
+/** The spawn the picker performs — the only reason TerminalPanes touches the API. */
+const addAgentTerminal = vi.fn(async (name: string, agentType: string) => ({ name, agentType, resumed: false }));
+vi.mock('@/hooks/useAgentTerminals', () => ({
+  useAgentTerminals: () => ({
+    agentTerminals: [],
+    isLoading: false,
+    error: undefined,
+    mutate: vi.fn(),
+    addAgentTerminal,
+    removeAgentTerminal: vi.fn(),
+  }),
+}));
 
 /** Two panes side by side in two columns — a layout only a wide screen can make. */
 const SPLIT_WORKSPACE: WorkspaceState = {
@@ -26,24 +42,59 @@ const SPLIT_WORKSPACE: WorkspaceState = {
     { id: 'col-2', panes: [{ id: 'pane-2', scope: { name: 'right' } }] },
   ],
   activePaneId: 'pane-2',
+  pendingPickerPaneId: null,
 };
 
 /** One pane, nothing to split into and nothing to close — the phone default. */
 const SOLO_WORKSPACE: WorkspaceState = {
   columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'solo' } }] }],
   activePaneId: 'pane-1',
+  pendingPickerPaneId: null,
+};
+
+/** An empty pane: no terminal in it, so it offers the inline agent picker. */
+const EMPTY_WORKSPACE: WorkspaceState = {
+  columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+  activePaneId: 'pane-1',
+  pendingPickerPaneId: null,
+};
+
+/** The same empty pane, freshly made by a split — its picker should take focus. */
+const JUST_SPLIT_WORKSPACE: WorkspaceState = {
+  ...EMPTY_WORKSPACE,
+  pendingPickerPaneId: 'pane-1',
 };
 
 let workspace: WorkspaceState = SPLIT_WORKSPACE;
+/** The node whose grid is on screen — panes spawn agents at THIS scope. */
+let activeNode: MachineNodeScope = { projectName: 'app', branchName: 'main' };
 
-vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', () => ({
-  useMachineWorkspaceStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({ workspaces: { m1: workspace }, selectPane, splitRight, splitDown, closePane }),
-  selectWorkspace: (machineId: string) => (state: { workspaces: Record<string, WorkspaceState> }) =>
-    state.workspaces[machineId],
-}));
+// Only the store HOOK is faked; workspaceKey/selectWorkspace/selectActiveNode/
+// autoSessionName stay real, so these tests exercise the same node-keyed lookup
+// the app does rather than a lookalike.
+vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', async () => {
+  const actual = await vi.importActual<typeof import('@/stores/machine-workspace/useMachineWorkspaceStore')>(
+    '@/stores/machine-workspace/useMachineWorkspaceStore',
+  );
+  return {
+    ...actual,
+    useMachineWorkspaceStore: (selector: (state: Record<string, unknown>) => unknown) =>
+      selector({
+        workspaces: { [workspaceKey('m1', activeNode)]: workspace },
+        activeNodes: { m1: activeNode },
+        selectPane,
+        splitRight,
+        splitDown,
+        closePane,
+        bindPaneTerminal,
+        clearPanePrompt,
+        dismissPicker,
+      }),
+  };
+});
 
 import TerminalPanes from './TerminalPanes';
+import { workspaceKey, type MachineNodeScope } from '@/stores/machine-workspace/workspace-reducer';
 
 // A pane only mounts its terminal once a socket exists; nothing in these tests
 // touches the socket itself (XtermTerminal is stubbed above).
@@ -56,6 +107,7 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     workspace = SPLIT_WORKSPACE;
+    activeNode = { projectName: 'app', branchName: 'main' };
   });
 
   test('a wide viewport renders every pane of the split, with the split controls', async () => {
@@ -178,6 +230,106 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
         chip: document.querySelector('.backdrop-blur-sm') !== null,
       },
       expected: { split: false, close: false, chip: false },
+    });
+  });
+});
+
+describe('TerminalPanes (split-and-pick spawn)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onDesktop();
+    workspace = EMPTY_WORKSPACE;
+    activeNode = { projectName: 'app', branchName: 'main' };
+  });
+
+  test('an empty pane picks an agent and gets it running — ONE action, no modal, no name step', async () => {
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.type(screen.getByLabelText('Starting prompt'), 'fix the build');
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    const [spawnedName, spawnedType] = addAgentTerminal.mock.calls[0] ?? [];
+    assert({
+      given: 'an empty pane, an agent type (the default) and an optional starting prompt',
+      should:
+        'spawn the session — auto-named, never prompted for — at the ACTIVE NODE\'s scope and bind it to that pane, in one action',
+      actual: {
+        spawns: addAgentTerminal.mock.calls.length,
+        agentType: spawnedType,
+        autoNamed: spawnedName?.startsWith(`${spawnedType}-`),
+        bind: bindPaneTerminal.mock.calls[0],
+      },
+      expected: {
+        spawns: 1,
+        agentType: 'pagespace-cli',
+        autoNamed: true,
+        bind: [
+          'm1',
+          'pane-1',
+          { projectName: 'app', branchName: 'main', name: spawnedName },
+          'fix the build',
+        ],
+      },
+    });
+  });
+
+  test('the starting prompt is optional — picking an agent alone is enough', async () => {
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    assert({
+      given: 'a pick with no starting prompt typed',
+      should: 'still spawn and bind, carrying no prompt — the agent just boots to its own',
+      actual: {
+        spawns: addAgentTerminal.mock.calls.length,
+        prompt: bindPaneTerminal.mock.calls[0]?.[3],
+      },
+      expected: { spawns: 1, prompt: undefined },
+    });
+  });
+
+  test('a pane made by a split opens its picker FOCUSED', async () => {
+    workspace = JUST_SPLIT_WORKSPACE;
+
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'the empty pane a split just created',
+      should: 'focus its picker (and consume the pending-picker flag) rather than leave the user facing a blank pane',
+      actual: {
+        focused: document.activeElement === screen.getByLabelText('Starting prompt'),
+        consumed: dismissPicker.mock.calls[0],
+      },
+      expected: { focused: true, consumed: ['m1', 'pane-1'] },
+    });
+  });
+
+  test('an empty pane that was NOT just split does not steal focus', async () => {
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'an empty pane the user did not just create (a restored grid, say)',
+      should: 'leave focus alone — auto-focus is the split\'s intent, not every empty pane\'s',
+      actual: document.activeElement === screen.getByLabelText('Starting prompt'),
+      expected: false,
+    });
+  });
+
+  test('a failed spawn leaves the pane empty and its picker usable', async () => {
+    addAgentTerminal.mockRejectedValueOnce(new Error('name_in_use'));
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    assert({
+      given: 'a spawn the API rejected',
+      should: 'bind nothing and re-offer the picker — a pane bound to a session that does not exist would connect to nothing',
+      actual: {
+        bound: bindPaneTerminal.mock.calls.length,
+        canRetry: screen.queryByRole('button', { name: 'Spawn agent' }) !== null,
+      },
+      expected: { bound: 0, canRetry: true },
     });
   });
 });

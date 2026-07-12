@@ -1,7 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useMachineWorkspaceStore, selectWorkspace, type WorkspaceState } from '../useMachineWorkspaceStore';
+import { assert } from '@/stores/__tests__/riteway';
+import {
+  useMachineWorkspaceStore,
+  selectWorkspace,
+  selectActiveNode,
+  selectNodeWorkspace,
+  type WorkspaceState,
+} from '../useMachineWorkspaceStore';
 
-const reset = () => useMachineWorkspaceStore.setState({ workspaces: {} });
+const reset = () => useMachineWorkspaceStore.setState({ workspaces: {}, activeNodes: {} });
+
+const store = () => useMachineWorkspaceStore.getState();
+
+const BRANCH_NODE = { projectName: 'app', branchName: 'main' };
+const OTHER_BRANCH = { projectName: 'app', branchName: 'fix' };
 
 function allPanes(workspace: WorkspaceState | undefined) {
   return workspace?.columns.flatMap((column) => column.panes) ?? [];
@@ -210,25 +222,138 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
-  it('given actions on a machineId that was never ensured, should be a no-op', () => {
-    useMachineWorkspaceStore.getState().openTerminal('never-ensured', { name: 'ghost' });
-    useMachineWorkspaceStore.getState().splitRight('never-ensured', 'anything');
-    useMachineWorkspaceStore.getState().splitDown('never-ensured', 'anything');
-    useMachineWorkspaceStore.getState().closePane('never-ensured', 'anything');
-    useMachineWorkspaceStore.getState().selectPane('never-ensured', 'anything');
+  it('given pane actions on a machineId that was never ensured, should be a no-op', () => {
+    store().splitRight('never-ensured', 'anything');
+    store().splitDown('never-ensured', 'anything');
+    store().closePane('never-ensured', 'anything');
+    store().selectPane('never-ensured', 'anything');
 
-    const workspace = selectWorkspace('never-ensured')(useMachineWorkspaceStore.getState());
+    assert({
+      given: 'pane actions naming a machineId with no workspace (never ensured, or already disposed)',
+      should: 'be a no-op — a stale click racing an unmount must not resurrect a grid',
+      actual: selectWorkspace('never-ensured')(store()),
+      expected: undefined,
+    });
+  });
 
-    expect({
-      given: 'actions on a machineId that was never ensured',
-      should: 'be a no-op',
-      actual: workspace,
-      expected: undefined,
-    }).toEqual({
-      given: 'actions on a machineId that was never ensured',
-      should: 'be a no-op',
-      actual: undefined,
-      expected: undefined,
+  it('given openTerminal on a node with no grid yet, should create that node grid on demand', () => {
+    store().openTerminal('m1', { projectName: 'app', branchName: 'main', name: 'claude-a1b2c3' });
+
+    const workspace = selectWorkspace('m1')(store());
+    assert({
+      given: 'a session opened under a node the user has never visited (so it owns no grid yet)',
+      should: 'create that node grid and open the session in it — the alternative is a click that silently does nothing',
+      actual: allPanes(workspace)[0]?.scope,
+      expected: { projectName: 'app', branchName: 'main', name: 'claude-a1b2c3' },
+    });
+  });
+
+  it('given a node is selected, should give it its own grid and leave the machine grid alone', () => {
+    store().ensureWorkspace('m1');
+    const machineFirstPane = allPanes(selectWorkspace('m1')(store()))[0].id;
+    store().splitRight('m1', machineFirstPane);
+
+    store().selectNode('m1', BRANCH_NODE);
+
+    assert({
+      given: 'a branch node selected after the machine node was split in two',
+      should: 'show the branch its OWN fresh single-pane grid — a node is a workspace, not a view of one shared grid',
+      actual: {
+        onScreenPanes: allPanes(selectWorkspace('m1')(store())).length,
+        machineNodePanes: allPanes(selectNodeWorkspace('m1', {})(store())).length,
+        activeNode: selectActiveNode('m1')(store()),
+      },
+      expected: { onScreenPanes: 1, machineNodePanes: 2, activeNode: BRANCH_NODE },
+    });
+  });
+
+  it('given a node is re-selected, should restore the grid it had, not a fresh one', () => {
+    store().ensureWorkspace('m1');
+    store().selectNode('m1', BRANCH_NODE);
+    store().splitDown('m1', selectWorkspace('m1')(store())!.activePaneId);
+    store().selectNode('m1', OTHER_BRANCH);
+
+    store().selectNode('m1', BRANCH_NODE);
+
+    assert({
+      given: 'a branch re-selected after visiting another branch (reattach: its PTYs survive the reap window)',
+      should: 'restore its pane grid — the panes come back and reattach, rather than the user losing their layout',
+      actual: allPanes(selectWorkspace('m1')(store())).length,
+      expected: 2,
+    });
+  });
+
+  it('given a split on one node, should not touch a sibling node grid', () => {
+    store().ensureWorkspace('m1');
+    store().selectNode('m1', BRANCH_NODE);
+    store().splitRight('m1', selectWorkspace('m1')(store())!.activePaneId);
+
+    assert({
+      given: 'a split performed while a branch node is active',
+      should: 'land in that branch grid only — sibling nodes each keep their own layout',
+      actual: {
+        branch: allPanes(selectNodeWorkspace('m1', BRANCH_NODE)(store())).length,
+        otherBranch: selectNodeWorkspace('m1', OTHER_BRANCH)(store()),
+      },
+      expected: { branch: 2, otherBranch: undefined },
+    });
+  });
+
+  it('given openTerminal for a session under another node, should switch to that node and open it there', () => {
+    store().ensureWorkspace('m1');
+
+    store().openTerminal('m1', { ...BRANCH_NODE, name: 'claude-a1b2c3' });
+
+    const workspace = selectWorkspace('m1')(store());
+    assert({
+      given: "a session opened from the sidebar that belongs to a branch other than the node on screen",
+      should: 'switch to that branch grid and open the session there — never into a grid whose checkout it does not run in',
+      actual: {
+        activeNode: selectActiveNode('m1')(store()),
+        scope: allPanes(workspace).find((pane) => pane.id === workspace?.activePaneId)?.scope,
+        machineNodeUntouched: allPanes(selectNodeWorkspace('m1', {})(store()))[0].scope,
+      },
+      expected: {
+        activeNode: BRANCH_NODE,
+        scope: { ...BRANCH_NODE, name: 'claude-a1b2c3' },
+        machineNodeUntouched: null,
+      },
+    });
+  });
+
+  it('given bindPaneTerminal, should bind the session and its starting prompt to that exact pane', () => {
+    store().ensureWorkspace('m1');
+    store().selectNode('m1', BRANCH_NODE);
+    const paneId = selectWorkspace('m1')(store())!.activePaneId;
+    store().splitRight('m1', paneId);
+
+    store().bindPaneTerminal('m1', paneId, { ...BRANCH_NODE, name: 'claude-a1b2c3' }, 'fix the build');
+
+    const pane = allPanes(selectWorkspace('m1')(store())).find((p) => p.id === paneId);
+    assert({
+      given: 'an agent picked in the first pane, resolving after a split moved focus to the new pane',
+      should: 'bind it (and its starting prompt) to the pane it was picked in, and focus that pane',
+      actual: { scope: pane?.scope, pendingPrompt: pane?.pendingPrompt, active: selectWorkspace('m1')(store())?.activePaneId === paneId },
+      expected: { scope: { ...BRANCH_NODE, name: 'claude-a1b2c3' }, pendingPrompt: 'fix the build', active: true },
+    });
+  });
+
+  it('given disposeWorkspace, should drop EVERY node grid of that machine', () => {
+    store().ensureWorkspace('m1');
+    store().selectNode('m1', BRANCH_NODE);
+    store().ensureWorkspace('m2');
+
+    store().disposeWorkspace('m1');
+
+    assert({
+      given: 'the Machine page unmounting after several nodes were visited',
+      should: 'drop every one of its node grids (a per-node leak would be silently inherited by the next mount) and leave other machines alone',
+      actual: {
+        m1Keys: Object.keys(store().workspaces).filter((key) => key.startsWith('m1')).length,
+        m1ActiveNode: store().activeNodes['m1'],
+        m2: allPanes(selectWorkspace('m2')(store())).length,
+      },
+      expected: { m1Keys: 0, m1ActiveNode: undefined, m2: 1 },
     });
   });
 });

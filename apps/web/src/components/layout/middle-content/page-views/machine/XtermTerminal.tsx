@@ -22,13 +22,21 @@ interface XtermTerminalProps {
   /** Uniquely identifies this PTY session's scope tuple — used as the effect's re-connect key and the useEditingStore session id. Callers should key their component with this same value so switching scope re-mounts instead of reusing stale listeners. */
   sessionId: string;
   connectPayload: AgentTerminalConnectPayload;
+  /** Typed into the PTY (with a trailing newline) once it's ready — the optional starting prompt from the pane's agent picker. Sent AT MOST ONCE per mount; the caller must drop it (see `onInitialInputSent`) so a later re-mount doesn't retype it at a running agent. */
+  initialInput?: string;
+  onInitialInputSent?(): void;
   onReady?(): void;
   onError?(message: string): void;
 }
 
-export default function XtermTerminal({ socket, sessionId, connectPayload, onReady, onError }: XtermTerminalProps) {
+export default function XtermTerminal({ socket, sessionId, connectPayload, initialInput, onInitialInputSent, onReady, onError }: XtermTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XtermTerminalInstance | null>(null);
+  // Read at ready-time, not captured in the connect effect's deps — same reason
+  // as onReady/onError below: this component must not re-mount (and re-attach
+  // its PTY) just because the parent re-rendered with a new closure.
+  const initialInputRef = useRef({ input: initialInput, onSent: onInitialInputSent });
+  initialInputRef.current = { input: initialInput, onSent: onInitialInputSent };
   const theme = useXtermTheme();
   // Read at creation time only — the connect effect below is intentionally
   // NOT keyed on `theme` (see its own comment), so later theme changes are
@@ -94,10 +102,22 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, onRea
           if (!isMine(payload)) return;
           terminal.write(payload.data);
         };
+        let initialInputSent = false;
         const handleReady = (payload: { scrollback?: string; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
           if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
+          // The starting prompt goes in as INPUT, exactly as if the user had
+          // typed it — the agent CLI is already the PTY's foreground process by
+          // now, so it reads the line off its own stdin. Guarded per mount
+          // because `ready` can legitimately fire more than once for one
+          // terminal (a reattach after a socket reconnect replays it).
+          const { input, onSent } = initialInputRef.current;
+          if (input && !initialInputSent) {
+            initialInputSent = true;
+            socket.emit('agent-terminal:input', { data: `${input}\r`, connectionId });
+            onSent?.();
+          }
           onReady?.();
         };
         const handleClosed = (payload: { exitCode: number; connectionId?: string }) => {
