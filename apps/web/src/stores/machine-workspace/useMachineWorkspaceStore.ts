@@ -59,6 +59,9 @@ export type {
 };
 export { autoSessionName, panesOf, MACHINE_NODE_SCOPE };
 
+/** Bump when the persisted shape changes; see the `migrate`/`merge` note below. */
+const PERSISTED_VERSION = 1;
+
 interface MachineWorkspaceStoreState {
   /** Every machine's workspaces, keyed by the Machine page's own id. */
   machines: Record<string, MachineWorkspacesState>;
@@ -260,16 +263,27 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
     }),
     {
       name: 'machine-workspace-storage',
-      // Bump whenever the persisted shape changes in a way `sanitizeMachines`
-      // cannot already absorb.
-      version: 1,
+      version: PERSISTED_VERSION,
       // Only the state — the actions are rebuilt on every load. A restored grid
       // reattaches to its PTYs, which is the whole reason to persist it.
       partialize: (state) => ({ machines: state.machines }),
-      // What comes back out of storage was written by whichever version of this
-      // app the user last ran: treat it as untrusted input, not as our own state.
-      // Anything unrenderable is dropped — a lost pane layout is recoverable, a
-      // throw during render is a Machine page the user can never open again.
+
+      // What comes out of storage was written by whichever version of this app
+      // the user last ran. It is untrusted input, not our own state: a shape this
+      // code can't render (a renamed field, a restructured column) would reach
+      // `columns.flatMap` and throw during render — and a throw here is a Machine
+      // page the user can never open again, with no way to clear this storage
+      // from inside the app. So every load is scrubbed down to what is
+      // renderable. Losing a stale pane layout is recoverable; the alternative
+      // is not.
+      //
+      // BOTH hooks, on purpose, because zustand runs them on different paths:
+      // `merge` runs on EVERY rehydrate (it is the safety net), while `migrate`
+      // runs ONLY when the stored version differs from `version` — and if it is
+      // absent on that path, zustand logs a console error and hands the old blob
+      // to `merge` anyway. They agree by delegating to the same function. A
+      // future shape change bumps `version`; it only needs real migration code
+      // here if it wants to PRESERVE old state rather than drop it.
       migrate: (persisted) => ({
         machines: sanitizeMachines((persisted as { machines?: unknown } | null)?.machines),
       }),

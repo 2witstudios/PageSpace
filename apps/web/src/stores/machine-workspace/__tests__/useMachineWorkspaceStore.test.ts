@@ -19,6 +19,7 @@ const SESSION = { ...BRANCH_SCOPE, name: 'claude-a1b2c3' };
 
 describe('useMachineWorkspaceStore', () => {
   beforeEach(() => {
+    window.localStorage.clear();
     useMachineWorkspaceStore.setState({ machines: {} });
   });
 
@@ -321,6 +322,76 @@ describe('useMachineWorkspaceStore', () => {
       should: 'drop it and show the one left',
       actual: { active: activeOf('m1')?.id, count: workspacesOf(selectMachine('m1')(store())).length },
       expected: { active: firstId, count: 1 },
+    });
+  });
+
+  it('given a persisted blob from an older, incompatible version, should still come up usable', () => {
+    // A real round trip through the persist middleware, not a hand-set state:
+    // this is what a returning user's browser actually hands the store.
+    window.localStorage.setItem(
+      'machine-workspace-storage',
+      JSON.stringify({
+        version: 0,
+        state: {
+          machines: {
+            m1: {
+              // Written by a previous version of this app: no `columns`. Rendered
+              // as-is it throws (columns.flatMap of undefined) and the Machine
+              // page is dead for good — there is no in-app way to clear this key.
+              workspaces: { old: { id: 'old', name: 'Old', scope: {}, activePaneId: 'p' } },
+              order: ['old'],
+              activeWorkspaceId: 'old',
+            },
+          },
+        },
+      }),
+    );
+
+    useMachineWorkspaceStore.persist.rehydrate();
+    store().ensureMachine('m1');
+
+    assert({
+      given: "a returning user whose stored workspaces were written by an older, incompatible version",
+      should: 'drop what cannot be rendered and rebuild a usable workspace, rather than crash the page or render nothing',
+      actual: { panes: paneIds(activeOf('m1')).length, name: activeOf('m1')?.name },
+      expected: { panes: 1, name: 'Workspace 1' },
+    });
+  });
+
+  it('given a persisted blob this version CAN render, should restore the grid', () => {
+    const workspace = {
+      id: 'ws-1',
+      name: 'claude-a1b2c3',
+      scope: BRANCH_SCOPE,
+      columns: [
+        { id: 'c1', panes: [{ id: 'p1', scope: SESSION, pendingPrompt: 'stale prompt' }] },
+        { id: 'c2', panes: [{ id: 'p2', scope: null }] },
+      ],
+      activePaneId: 'p1',
+      pendingPickerPaneId: 'p2',
+    };
+    window.localStorage.setItem(
+      'machine-workspace-storage',
+      JSON.stringify({
+        version: 1,
+        state: { machines: { m1: { workspaces: { 'ws-1': workspace }, order: ['ws-1'], activeWorkspaceId: 'ws-1' } } },
+      }),
+    );
+
+    useMachineWorkspaceStore.persist.rehydrate();
+
+    const restored = activeOf('m1');
+    assert({
+      given: 'a workspace restored from storage after a reload (its PTYs survive their reap window)',
+      should:
+        'come back with its panes intact so they reattach — but WITHOUT the transient bits: an undelivered prompt must never be typed at an agent that has been running since, and a picker must not steal the caret on load',
+      actual: {
+        panes: paneIds(restored).length,
+        session: panesOf(restored!)[0].scope,
+        prompt: panesOf(restored!)[0].pendingPrompt,
+        picker: restored?.pendingPickerPaneId,
+      },
+      expected: { panes: 2, session: SESSION, prompt: undefined, picker: null },
     });
   });
 });
