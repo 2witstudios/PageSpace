@@ -6,8 +6,14 @@ import type { Terminal as XtermTerminalInstance } from '@xterm/xterm';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useXtermTheme } from '@/hooks/useXtermTheme';
 import { getCssVar } from '@/lib/theme/css-color-resolution';
+import { toPtyInput } from './pty-input';
 
 const FALLBACK_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace";
+
+/** How long to wait for a cold agent to print something before writing the
+ * starting prompt anyway. Some agents boot silently; the prompt still has to
+ * go in, and a wait this short is invisible next to a Sprite cold boot. */
+const PROMPT_BACKSTOP_MS = 3000;
 
 export interface AgentTerminalConnectPayload {
   machineId: string;
@@ -98,25 +104,48 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const isMine = (payload: { connectionId?: string } | undefined) =>
           payload?.connectionId === undefined || payload.connectionId === connectionId;
 
+        /**
+         * The starting prompt goes in as INPUT, exactly as if the user had typed
+         * it — the agent CLI is the PTY's foreground process, so it reads the
+         * line off its own stdin.
+         *
+         * WHEN it goes in matters. On a cold start the bridge emits `ready` the
+         * moment the binary is exec'd, which is not the moment an interactive
+         * agent (a raw-mode TUI) starts reading stdin — writing into that window
+         * risks the prompt being discarded as the app takes over the tty. So the
+         * write waits for the agent's FIRST OUTPUT (it is up and drawing), with a
+         * timer as the backstop for an agent that prints nothing on boot.
+         *
+         * Latched, because `ready` can fire more than once for one terminal (a
+         * reattach after a socket reconnect replays it) and output certainly can.
+         */
+        let initialInputSent = false;
+        let promptTimer: ReturnType<typeof setTimeout> | undefined;
+        const sendInitialInput = () => {
+          const { input, onSent } = initialInputRef.current;
+          if (!input || initialInputSent) return;
+          initialInputSent = true;
+          clearTimeout(promptTimer);
+          for (const chunk of toPtyInput(input)) {
+            socket.emit('agent-terminal:input', { data: chunk, connectionId });
+          }
+          // Only now is the prompt spent — the caller drops it, so a later
+          // re-mount reattaches instead of typing it at a running agent again.
+          onSent?.();
+        };
+
         const handleOutput = (payload: { data: string; connectionId?: string }) => {
           if (!isMine(payload)) return;
           terminal.write(payload.data);
+          // The agent is alive and drawing; it can take its prompt.
+          sendInitialInput();
         };
-        let initialInputSent = false;
         const handleReady = (payload: { scrollback?: string; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
           if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
-          // The starting prompt goes in as INPUT, exactly as if the user had
-          // typed it — the agent CLI is already the PTY's foreground process by
-          // now, so it reads the line off its own stdin. Guarded per mount
-          // because `ready` can legitimately fire more than once for one
-          // terminal (a reattach after a socket reconnect replays it).
-          const { input, onSent } = initialInputRef.current;
-          if (input && !initialInputSent) {
-            initialInputSent = true;
-            socket.emit('agent-terminal:input', { data: `${input}\r`, connectionId });
-            onSent?.();
+          if (initialInputRef.current.input && !initialInputSent && promptTimer === undefined) {
+            promptTimer = setTimeout(sendInitialInput, PROMPT_BACKSTOP_MS);
           }
           onReady?.();
         };
@@ -151,6 +180,7 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const resize: { observer?: ResizeObserver } = {};
         teardown = () => {
           resize.observer?.disconnect();
+          clearTimeout(promptTimer);
           onData.dispose();
           socket.off('agent-terminal:output', handleOutput);
           socket.off('agent-terminal:ready', handleReady);

@@ -1,14 +1,24 @@
 /**
  * Machine Workspace — functional core.
  *
- * Pure, framework-free state transitions for the pane layout shared between
- * the Machine page's Terminal-tab tree sidebar and TerminalPanes (its pane
- * region). IDs are passed in rather than generated here, so every
- * transition is deterministic and independently testable.
+ * Pure, framework-free state transitions for the Machine page's middle view.
+ * IDs are passed in rather than generated here, so every transition is
+ * deterministic and independently testable.
  *
- * Layout is a two-level structure — a horizontal row of columns, each an
- * independent vertical stack of panes — deliberately not a full recursive
- * split tree. splitRight adds a column; splitDown stacks within one.
+ * THE MODEL (PurePoint-exact): a **workspace** is a sidebar item that OWNS a
+ * pane grid. A machine holds MANY workspaces and exactly one is active; the
+ * middle view always renders the active workspace's grid, so selecting a
+ * different workspace switches the WHOLE middle view to that item's combination
+ * of terminals. (What it replaces: one grid per machine, where opening a
+ * terminal only overwrote the active pane and the view never really switched.)
+ *
+ * Two levels, therefore two kinds of transition here:
+ *   - grid-level  (WorkspaceState): the existing two-level column/pane split —
+ *     a horizontal row of columns, each an independent vertical stack of panes.
+ *     Deliberately NOT a recursive split tree. splitRight adds a column;
+ *     splitDown stacks within one. Unchanged, now applied PER workspace.
+ *   - machine-level (MachineWorkspacesState): which workspaces exist, their
+ *     order, and which one is active.
  */
 
 /** Identifies which terminal to open in a pane — neither `projectName` nor
@@ -21,11 +31,11 @@ export interface OpenTerminalScope {
 }
 
 /**
- * A node in the Machine → Project → Branch tree, as the pane layer sees it:
- * an {@link OpenTerminalScope} minus the session name. Every node owns its own
- * pane grid (node-as-workspace) — a branch node's grid holds the agents working
- * in that branch's checkout. Structurally identical to `MachineTreeNode` but
- * deliberately independent of it: the store must not depend on a component.
+ * The node container a workspace lives under — an {@link OpenTerminalScope}
+ * minus the session name. Nodes are STRUCTURE, not the grid-owning unit: a
+ * workspace's scope says which checkout its panes' agents run in (a branch
+ * scope = that branch's working tree), while the grid itself belongs to the
+ * workspace.
  */
 export interface MachineNodeScope {
   projectName?: string;
@@ -33,18 +43,12 @@ export interface MachineNodeScope {
 }
 
 /** The Machine node itself (neither project nor branch). A shared constant so
- * selectors can hand out a stable default without a new object per render. */
+ * callers can hand out a stable default without a new object per render. */
 export const MACHINE_NODE_SCOPE: MachineNodeScope = Object.freeze({});
 
-/** The node a session lives under — a session's scope IS its node plus a name. */
+/** The node a session lives under — a session's scope IS a node plus a name. */
 export function nodeOfTerminalScope(scope: OpenTerminalScope): MachineNodeScope {
   return { projectName: scope.projectName, branchName: scope.branchName };
-}
-
-/** The store key for one node's grid. NUL-joined for the same reason the tree's
- * node keys are: project and branch names can contain '/' and ':'. */
-export function workspaceKey(machineId: string, node: MachineNodeScope): string {
-  return `${machineId}\u0000${node.projectName ?? ''}\u0000${node.branchName ?? ''}`;
 }
 
 export function isSameNodeScope(a: MachineNodeScope, b: MachineNodeScope): boolean {
@@ -64,7 +68,14 @@ export interface TerminalColumnState {
   panes: TerminalPaneState[];
 }
 
+/** One sidebar item's pane grid. */
 export interface WorkspaceState {
+  id: string;
+  /** Auto-named — the user is never asked. Shown in the sidebar by sub-task 3. */
+  name: string;
+  /** The node container this workspace hangs under; every agent spawned into
+   * one of its panes runs in this scope's checkout. */
+  scope: MachineNodeScope;
   columns: TerminalColumnState[];
   activePaneId: string;
   /** The empty pane whose inline agent picker should take focus — set when a
@@ -73,10 +84,34 @@ export interface WorkspaceState {
   pendingPickerPaneId: string | null;
 }
 
-export function initialWorkspace(firstId: string): WorkspaceState {
+/** Every workspace of one machine, plus which one the middle view is showing. */
+export interface MachineWorkspacesState {
+  workspaces: Record<string, WorkspaceState>;
+  /** Sidebar order — insertion order, stable across selection. */
+  order: string[];
+  activeWorkspaceId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Grid level — one workspace's panes
+// ---------------------------------------------------------------------------
+
+export function newWorkspace(params: {
+  id: string;
+  name: string;
+  scope: MachineNodeScope;
+  firstPaneId: string;
+  /** A workspace born from an existing session opens with that session in its
+   * first pane; one born empty opens with the agent picker. */
+  firstPaneScope?: OpenTerminalScope | null;
+}): WorkspaceState {
+  const { id, name, scope, firstPaneId, firstPaneScope = null } = params;
   return {
-    columns: [{ id: firstId, panes: [{ id: firstId, scope: null }] }],
-    activePaneId: firstId,
+    id,
+    name,
+    scope,
+    columns: [{ id: firstPaneId, panes: [{ id: firstPaneId, scope: firstPaneScope }] }],
+    activePaneId: firstPaneId,
     pendingPickerPaneId: null,
   };
 }
@@ -107,13 +142,6 @@ function mapPane(
       panes: column.panes.map((pane) => (pane.id === paneId ? update(pane) : pane)),
     })),
   };
-}
-
-/** Opens a terminal into the ACTIVE pane — an explicit target rather than
- * guessing from array position, which would silently overwrite the wrong
- * pane whenever a second pane existed. */
-export function openTerminal(state: WorkspaceState, scope: OpenTerminalScope): WorkspaceState {
-  return assignPane(state, state.activePaneId, scope);
 }
 
 /**
@@ -178,7 +206,7 @@ export function splitRight(
   // The new pane is empty, so it shows the agent picker; pointing
   // pendingPickerPaneId at it opens that picker focused, rather than leaving
   // the user looking at a blank pane and hunting for the next click.
-  return { columns, activePaneId: newPaneId, pendingPickerPaneId: newPaneId };
+  return { ...state, columns, activePaneId: newPaneId, pendingPickerPaneId: newPaneId };
 }
 
 /** Splits `fromPaneId` downward — a new pane appended to `fromPaneId`'s
@@ -193,7 +221,7 @@ export function splitDown(state: WorkspaceState, fromPaneId: string, newPaneId: 
       : column
   );
 
-  return { columns, activePaneId: newPaneId, pendingPickerPaneId: newPaneId };
+  return { ...state, columns, activePaneId: newPaneId, pendingPickerPaneId: newPaneId };
 }
 
 /** Removing the very last remaining pane is a no-op — a workspace never has
@@ -217,12 +245,98 @@ export function closePane(state: WorkspaceState, id: string): WorkspaceState {
   const activePaneId = state.activePaneId === id ? columns[0].panes[0].id : state.activePaneId;
   const pendingPickerPaneId = state.pendingPickerPaneId === id ? null : state.pendingPickerPaneId;
 
-  return { columns, activePaneId, pendingPickerPaneId };
+  return { ...state, columns, activePaneId, pendingPickerPaneId };
 }
 
 export function selectPane(state: WorkspaceState, id: string): WorkspaceState {
   if (!findPaneLocation(state, id)) return state;
   return { ...state, activePaneId: id };
+}
+
+/** Every pane of a workspace, flattened — the panes are what the sidebar must
+ * NOT list separately (a split pane belongs to its workspace, not to the tree). */
+export function panesOf(state: WorkspaceState): TerminalPaneState[] {
+  return state.columns.flatMap((column) => column.panes);
+}
+
+// ---------------------------------------------------------------------------
+// Machine level — which workspaces exist, and which one the view shows
+// ---------------------------------------------------------------------------
+
+export function initialMachineWorkspaces(workspace: WorkspaceState): MachineWorkspacesState {
+  return {
+    workspaces: { [workspace.id]: workspace },
+    order: [workspace.id],
+    activeWorkspaceId: workspace.id,
+  };
+}
+
+/** Adds a workspace and shows it — a workspace is created because the user
+ * asked for it, so it is what they want to be looking at. */
+export function addWorkspace(state: MachineWorkspacesState, workspace: WorkspaceState): MachineWorkspacesState {
+  if (state.workspaces[workspace.id]) return setActiveWorkspace(state, workspace.id);
+  return {
+    workspaces: { ...state.workspaces, [workspace.id]: workspace },
+    order: [...state.order, workspace.id],
+    activeWorkspaceId: workspace.id,
+  };
+}
+
+/**
+ * THE FIX: selecting a workspace switches the ENTIRE middle view to that
+ * workspace's grid — every pane, in the layout it was left in — not just the
+ * contents of one pane. An unknown id is a no-op rather than a blank view.
+ */
+export function setActiveWorkspace(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
+  if (!state.workspaces[workspaceId] || state.activeWorkspaceId === workspaceId) return state;
+  return { ...state, activeWorkspaceId: workspaceId };
+}
+
+/** Applies a grid transition to ONE workspace, addressed by id.
+ *
+ * Callers name the workspace EXPLICITLY rather than letting this resolve
+ * "the active one" at write time: a write can land after the user has switched
+ * workspaces (a spawn resolving from a cold Sprite boot, a `ready` event), and
+ * pane ids only mean anything within their own grid. Resolving late would apply
+ * the write to whichever grid happened to be on screen by then — usually one
+ * with no such pane, silently dropping it. */
+export function updateWorkspace(
+  state: MachineWorkspacesState,
+  workspaceId: string,
+  transition: (workspace: WorkspaceState) => WorkspaceState
+): MachineWorkspacesState {
+  const workspace = state.workspaces[workspaceId];
+  if (!workspace) return state;
+
+  const next = transition(workspace);
+  if (next === workspace) return state;
+
+  return { ...state, workspaces: { ...state.workspaces, [workspaceId]: next } };
+}
+
+export function workspacesOf(state: MachineWorkspacesState): WorkspaceState[] {
+  return state.order.map((id) => state.workspaces[id]).filter(Boolean);
+}
+
+/**
+ * The id of the workspace owned by one session — derived from the session
+ * rather than random, so clicking that sidebar row again lands on the SAME
+ * workspace, with whatever panes were split into it still there. NUL-joined:
+ * project and branch names can contain '/' and ':'.
+ */
+export function sessionWorkspaceId(scope: OpenTerminalScope): string {
+  return `session\u0000${scope.projectName ?? ''}\u0000${scope.branchName ?? ''}\u0000${scope.name}`;
+}
+
+/** Auto-name for a workspace the user created empty ("Workspace 1", "Workspace
+ * 2", …) — first free index, so closing #2 and adding again reuses the gap
+ * instead of drifting upward forever. */
+export function nextWorkspaceName(state: MachineWorkspacesState): string {
+  const taken = new Set(workspacesOf(state).map((workspace) => workspace.name));
+  for (let index = 1; ; index++) {
+    const name = `Workspace ${index}`;
+    if (!taken.has(name)) return name;
+  }
 }
 
 const AUTO_NAME_SUFFIX_LENGTH = 6;
@@ -231,8 +345,8 @@ const AUTO_NAME_SUFFIX_LENGTH = 6;
  * The auto-name for a split-and-pick spawn. Picking an agent is ONE act — no
  * name step — but `agent_terminals` rows are still keyed by name within a
  * scope, so one is minted here: the agent type (what the user actually chose,
- * so the name still means something in a session list) plus a short unique
- * suffix, since a node routinely runs several agents of the same type.
+ * so the name still means something) plus a short unique suffix, since a
+ * workspace routinely runs several agents of the same type.
  *
  * `suffix` is passed in rather than generated, keeping this pure. The output
  * always satisfies `isValidAgentTerminalName` (`/^[A-Za-z0-9][A-Za-z0-9_-]*$/`)
