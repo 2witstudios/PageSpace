@@ -16,13 +16,14 @@ import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWor
  */
 interface PendingSessionStoreState {
   pending: PendingSession | null;
-  /** `fromMachineId` is the machine selected at click time — see `PendingSession`. */
-  requestSession: (machineId: string, scope: OpenTerminalScope, fromMachineId: string | null) => void;
+  requestSession: (machineId: string, scope: OpenTerminalScope) => void;
   clearPending: () => void;
 }
 
 export const usePendingSessionStore = create<PendingSessionStoreState>((set) => ({
   pending: null,
-  requestSession: (machineId, scope, fromMachineId) => set({ pending: { machineId, scope, fromMachineId } }),
+  requestSession: (machineId, scope) => set({ pending: { machineId, scope, createdAt: Date.now() } }),
+  // Identity-stable when there's nothing to clear, so a no-op clear can't
+  // re-render (and so the drain effect can call it unconditionally).
   clearPending: () => set((state) => (state.pending === null ? state : { pending: null })),
 }));

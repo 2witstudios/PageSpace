@@ -47,7 +47,7 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
   const drive = drives.find((d) => d.id === driveId);
   const canManage = canManageDrive(drive);
 
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const isAdmin = user?.role === 'admin';
 
   // The same gate MachineView applies, moved one level earlier: a non-admin who
@@ -80,6 +80,7 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-1">
             <MachineList
+              authLoading={authLoading}
               isAdmin={isAdmin}
               driveId={driveId}
               machines={machines}
@@ -107,6 +108,7 @@ function ListNotice({ children }: { children: string }) {
  * condition's negation.
  */
 function MachineList({
+  authLoading,
   isAdmin,
   driveId,
   machines,
@@ -114,6 +116,7 @@ function MachineList({
   error,
   selectedMachineId,
 }: {
+  authLoading: boolean;
   isAdmin: boolean;
   driveId: string | undefined;
   machines: DriveMachine[];
@@ -121,6 +124,9 @@ function MachineList({
   error: Error | undefined;
   selectedMachineId: string | null;
 }) {
+  // Until auth resolves, `role` is simply unknown — saying "you're not an admin"
+  // then would flash the refusal at an admin on every cold load.
+  if (authLoading) return <ListNotice>Loading…</ListNotice>;
   // Same wording MachineView uses, so the surface and the page refuse a
   // non-admin identically.
   if (!isAdmin) return <ListNotice>Machine access requires administrator privileges</ListNotice>;
@@ -140,7 +146,6 @@ function MachineList({
           machineId={machine.id}
           title={machine.title}
           selected={machine.id === selectedMachineId}
-          selectedMachineId={selectedMachineId}
         />
       ))}
     </>
@@ -164,24 +169,30 @@ function MachineTreeSection({
   machineId,
   title,
   selected,
-  selectedMachineId,
 }: {
   driveId: string;
   machineId: string;
   title: string;
   selected: boolean;
-  /** The machine currently open — recorded on a session intent so the drain can tell a pending navigation from a real one. */
-  selectedMachineId: string | null;
 }) {
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const requestSession = usePendingSessionStore((state) => state.requestSession);
+  const clearPending = usePendingSessionStore((state) => state.clearPending);
 
-  const openMachine = useCallback(() => {
+  const navigateToMachine = useCallback(() => {
     router.push(`/dashboard/${driveId}/development/${machineId}`);
     if (isSheetBreakpoint) setLeftSheetOpen(false);
   }, [router, driveId, machineId, isSheetBreakpoint, setLeftSheetOpen]);
+
+  const openMachine = useCallback(() => {
+    // Picking the machine itself (not one of its sessions) says the user wants
+    // this machine as it is — so an older, still-unconverged session intent must
+    // not follow them here and take over the pane.
+    clearPending();
+    navigateToMachine();
+  }, [clearPending, navigateToMachine]);
 
   const onOpenTerminal = useCallback(
     (scope: OpenTerminalScope) => {
@@ -189,10 +200,9 @@ function MachineTreeSection({
       // once that machine's pane region exists. Writing the pane straight into
       // the workspace store from here would not survive — MachineWorkspace
       // disposes its workspace on unmount and rebuilds it on mount, destroying
-      // anything authored ahead of it. `selectedMachineId` rides along so the
-      // drain can tell this in-flight navigation from the user going elsewhere.
-      requestSession(machineId, scope, selectedMachineId);
-      openMachine();
+      // anything authored ahead of it.
+      requestSession(machineId, scope);
+      navigateToMachine();
       // KNOWN GAP: if the user is already on THIS machine with a non-Terminal tab
       // active, the session lands in the pane but stays behind that tab —
       // MachineView's tabs are uncontrolled (defaultValue="terminal"), so nothing
@@ -200,7 +210,7 @@ function MachineTreeSection({
       // controlled, left to the follow-up rather than fought over with the
       // in-flight terminal-UX work (#2017).
     },
-    [requestSession, machineId, selectedMachineId, openMachine],
+    [requestSession, machineId, navigateToMachine],
   );
 
   const renderNodeChildren = useCallback(
