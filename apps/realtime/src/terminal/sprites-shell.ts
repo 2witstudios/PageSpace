@@ -748,8 +748,8 @@ export function openPtyShell({
           sessionGeneration += 1;
           wiredBinding = { id: currentSessionId };
           current = sprite.attachSession(currentSessionId, { cols: lastCols, rows: lastRows });
-          // A transparent in-place reconnect: the viewer never left, so a give-up on THIS
-          // attach's replay is discarded rather than shown — see `resolveGiveUpAction`.
+          // A transparent in-place reconnect: the viewer never left, so a SMALL give-up on
+          // THIS attach's replay is discarded rather than shown — see `resolveGiveUpAction`.
           wire(current, 'transparent-attach');
           reconnecting = false;
           return;
@@ -778,7 +778,7 @@ export function openPtyShell({
       currentSessionId = plan.id;
       current = sprite.attachSession(plan.id, { cols: lastCols, rows: lastRows });
       // Same reasoning as the optimistic-reattach branch above: the viewer has been
-      // continuously attached, so this reconnect's give-up (if any) is discarded.
+      // continuously attached, so a SMALL give-up on this reconnect (if any) is discarded.
       wire(current, 'transparent-attach');
       reconnecting = false;
     } catch {
