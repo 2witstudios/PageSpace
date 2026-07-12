@@ -295,13 +295,8 @@ export function openPtyShell({
   // A binding is an object, not an id, because a freshly CREATED session does not know
   // its id until its socket announces it — the binding is filled in then, and every
   // command holding it sees the update.
-  type SessionBinding = { id: string | undefined; replaysPriorOutput: boolean };
-  let wiredBinding: SessionBinding = {
-    id: sessionId,
-    // An initial attach replays the session's scrollback; an initial create has no prior
-    // output to replay.
-    replaysPriorOutput: sessionId !== undefined,
-  };
+  type SessionBinding = { id: string | undefined };
+  let wiredBinding: SessionBinding = { id: sessionId };
 
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
@@ -413,7 +408,7 @@ export function openPtyShell({
       cancelTimers();
       if (closed) return;
       const held = replay.pending.length;
-      const { emit, state } = flushReplay(replay);
+      const { emit, state, aligned } = flushReplay(replay);
       replay = state;
       if (held > 0) {
         // The replay could not be aligned against what this client has already seen,
@@ -427,9 +422,8 @@ export function openPtyShell({
           seenBytes: seenTail.bytes,
         });
       }
-      // Unaligned by construction (`flushReplay` only emits what it could not place), so
-      // these bytes RESTART the history rather than extending it — see `deliver`.
-      deliver(emit, 'restart');
+      // A give-up: these bytes RESTART the history rather than extending it — see `deliver`.
+      deliver(emit, aligned ? 'append' : 'restart');
       releaseOutOfBand();
     };
 
@@ -471,6 +465,14 @@ export function openPtyShell({
         // will emit AND record them itself — recording here as well would put the same bytes
         // in the history twice, and a history that repeats itself is no longer a run of the
         // stream. The anchor would match nothing, forever. A repeated line is survivable.
+        //
+        // Known residual: `wiredReplayStarted` is per-COMMAND, so a drain that arrives two
+        // generations late (its session reattached, replayed these bytes, and dropped again)
+        // is recorded a second time and the run breaks. It costs ONE reprint — the next
+        // unaligned flush restarts the history from the replay — and it needs a dead socket
+        // still pushing frames a whole reconnect cycle later, which a closed WebSocket does
+        // not do. Closing it properly would mean tracking which bytes were already recorded:
+        // exactly the bookkeeping whose every previous incarnation cost us bytes.
         emitOutOfBand(toBuf(chunk));
         return;
       }
@@ -586,7 +588,7 @@ export function openPtyShell({
 
   function launchFreshSession(): void {
     currentSessionId = undefined;
-    const binding: SessionBinding = { id: undefined, replaysPriorOutput: false };
+    const binding: SessionBinding = { id: undefined };
     wiredBinding = binding;
     // A brand-new shell shares no history with the one the client was watching, so
     // there is nothing of ITS output on the client's screen: clear the history, or
@@ -688,7 +690,7 @@ export function openPtyShell({
           // behavior) — a dead id just errors and re-enters reconnect once listing
           // recovers.
           sessionGeneration += 1;
-          wiredBinding = { id: currentSessionId, replaysPriorOutput: true };
+          wiredBinding = { id: currentSessionId };
           current = sprite.attachSession(currentSessionId, { cols: lastCols, rows: lastRows });
           wire(current);
           reconnecting = false;
@@ -712,7 +714,7 @@ export function openPtyShell({
         return;
       }
       sessionGeneration += 1;
-      wiredBinding = { id: plan.id, replaysPriorOutput: true };
+      wiredBinding = { id: plan.id };
       currentSessionId = plan.id;
       current = sprite.attachSession(plan.id, { cols: lastCols, rows: lastRows });
       wire(current);

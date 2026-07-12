@@ -1626,14 +1626,16 @@ describe('openPtyShell', () => {
       expect(onExit).toHaveBeenCalledWith(0);
     });
 
-    it('given an UNNAMED dead session, a fresh UNNAMED session does not claim its drain', async () => {
-      // Both bindings have an undefined id until their sessions announce themselves. If the
-      // guard compared ids alone, `undefined === undefined` would read as "same session, a
-      // replay is coming" — and a fresh session, whose history is empty, resolves on its
-      // first chunk and discards the hold. The dead shell's last words vanish.
+    it('given an UNNAMED dead session, a fresh UNNAMED session neither claims nor records its drain', async () => {
+      // Both bindings have an undefined id until their sessions announce themselves, so an
+      // id-only comparison reads `undefined === undefined` as "same session" — and the fresh
+      // session, which has not snapshotted yet, would RECORD the dead one's bytes as its own
+      // history. That history then contains bytes no replay of the new session can ever
+      // hold, so its anchor matches nothing and the banner reprints on every later cycle.
       const cmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
-      const sprite = buildFakeSprite(cmd, { sessions: [] });
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [], attachCmd });
       sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
       const onOutput = vi.fn();
 
@@ -1643,12 +1645,71 @@ describe('openPtyShell', () => {
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500); // a fresh session is wired; it has no id yet
-      cmd._stdout.emit('data', 'panic: last words\r\n'); // the dead socket drains
+      cmd._stdout.emit('data', 'panic: last words\r\n'); // the dead socket drains, unrecorded
+      freshCmd._emitter.emit('message', announces('sess-2'));
       freshCmd._emitter.emit('spawn');
-      freshCmd._stdout.emit('data', '$ '); // the new shell speaks, resolving its window
+      freshCmd._stdout.emit('data', BANNER); // the new shell's own banner
+
+      // Delivered AT ONCE. Had the drain been recorded as this session's history, its banner
+      // would not have matched that history, so it would have been held as an unalignable
+      // replay and only released when the window timed out — a needless half-second stall on
+      // a brand-new shell, and a give-up flush that exists for nothing.
+      expect(outputs(onOutput).join('').endsWith(BANNER)).toBe(true);
       await vi.advanceTimersByTimeAsync(2000);
 
-      expect(outputs(onOutput).join('')).toContain('panic: last words\r\n');
+      const afterCreate = outputs(onOutput).join('');
+      expect(afterCreate).toContain('panic: last words\r\n'); // delivered
+
+      // The new session's history is clean, so its own idle cycle dedupes.
+      sprite.listSessions.mockResolvedValue([{ id: 'sess-2', command: 'bash', isActive: true, tty: true }]);
+      freshCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', BANNER); // sess-2's replay
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput).join('')).toBe(afterCreate); // nothing reprinted
+    });
+
+    it('given a drain from ANOTHER session landing before the fresh one speaks, does not record it', async () => {
+      // The `sameSession` half of the guard. The dead session is NAMED and the fresh one is
+      // NAMED — different ids — and the drain lands in the window before the fresh session's
+      // first byte, i.e. while it could still be recorded. Recording it would splice bytes
+      // into the new session's history that its scrollback can never contain.
+      const cmd = buildFakeCommand();
+      const freshCmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [], attachCmd });
+      sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500); // sess-1 is gone; sess-2 is wired
+      freshCmd._emitter.emit('message', announces('sess-2'));
+      cmd._stdout.emit('data', 'sess-1 last words\r\n'); // drains BEFORE sess-2 says anything
+      freshCmd._emitter.emit('spawn');
+      freshCmd._stdout.emit('data', BANNER);
+
+      // Delivered AT ONCE — see the unnamed case above: a drain recorded as this session's
+      // history would leave its own banner unalignable, held, and released only on a timeout.
+      const shownNow = outputs(onOutput).join('');
+      expect(shownNow.endsWith(BANNER)).toBe(true);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const afterCreate = outputs(onOutput).join('');
+      expect(afterCreate).toContain('sess-1 last words\r\n'); // delivered
+
+      sprite.listSessions.mockResolvedValue([{ id: 'sess-2', command: 'bash', isActive: true, tty: true }]);
+      freshCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', BANNER); // sess-2's replay
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(outputs(onOutput).join('')).toBe(afterCreate); // sess-2's history was never poisoned
     });
 
     it('given the REATTACH dies before replaying, the fresh session delivers the drain WITHOUT poisoning the history', async () => {
