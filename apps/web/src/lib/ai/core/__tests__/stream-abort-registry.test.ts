@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { assert } from './riteway';
 
 // Mock cuid2 to return predictable IDs
 vi.mock('@paralleldrive/cuid2', () => ({
@@ -422,6 +423,44 @@ describe('stream-abort-registry', () => {
 
       expect(registry.wasRecentlyFinishedHere({ messageId: 'msg-elsewhere' })).toBe(false);
       expect(registry.wasRecentlyFinishedHere({ streamId: 'stream-elsewhere' })).toBe(false);
+    });
+
+    // The tombstone must never become the very bug it exists to prevent. If a messageId (or
+    // streamId) is reused by a NEW generation, the stale tombstone would answer for the DEAD one:
+    // a Stop aimed at the live stream would be reported as "nothing in flight" and swallowed in
+    // silence, while it kept generating and kept billing.
+    it('forgets a finished stream the moment its name is reused by a new generation', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.removeStream({ streamId: 'stream-1' });
+      expect(registry.wasRecentlyFinishedHere({ messageId: 'msg-1' })).toBe(true);
+
+      // The same messageId re-registers — a new, LIVE generation.
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-2', messageId: 'msg-1' });
+
+      assert({
+        given: 'a messageId reused by a new generation after a previous one finished',
+        should: 'no longer report it as finished — a Stop for the LIVE stream must not be swallowed',
+        actual: registry.wasRecentlyFinishedHere({ messageId: 'msg-1' }),
+        expected: false,
+      });
+    });
+
+    it('forgets a finished stream when its streamId is reused', async () => {
+      const registry = await import('../stream-abort-registry');
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-1' });
+      registry.removeStream({ streamId: 'stream-1' });
+
+      registry.createStreamAbortController({ userId: 'user-1', streamId: 'stream-1', messageId: 'msg-2' });
+
+      assert({
+        given: 'a streamId reused by a new generation',
+        should: 'no longer report it as finished',
+        actual: registry.wasRecentlyFinishedHere({ streamId: 'stream-1' }),
+        expected: false,
+      });
     });
 
     it('does not claim a stream that is still running here', async () => {

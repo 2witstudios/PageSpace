@@ -68,6 +68,14 @@ const linkStream = (streamId: string, messageId: string): void => {
   }
   messageIdToStreamId.set(messageId, streamId);
   streamIdToMessageId.set(streamId, messageId);
+
+  // A stream that is STARTING is not a stream that finished. If either of its names carries a
+  // tombstone from a previous generation, it must go now — otherwise `wasRecentlyFinishedHere`
+  // would answer for the dead one, and a Stop aimed at THIS live generation would be reported as
+  // "nothing in flight" and swallowed in silence, while it kept generating and kept billing. The
+  // tombstone exists to prevent exactly that failure; it must not become a way to cause it.
+  recentlyFinished.delete(messageId);
+  recentlyFinished.delete(streamId);
 };
 
 const unlinkStream = (streamId: string): void => {
@@ -141,6 +149,11 @@ export const createStreamAbortController = ({
     createdAt: Date.now(),
     userId,
   });
+
+  // This stream is starting, so it is not finished — whatever a tombstone from a previous
+  // generation may say. `linkStream` clears both names, but it only runs when a messageId was
+  // given, so the streamId is cleared here too.
+  recentlyFinished.delete(streamId);
 
   if (messageId) {
     linkStream(streamId, messageId);
