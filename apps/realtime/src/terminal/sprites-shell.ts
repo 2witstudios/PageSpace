@@ -267,6 +267,18 @@ export function openPtyShell({
   // Cancels the replay-window timers of whichever command is currently wired, so a
   // teardown doesn't leave one armed against a shell nobody is watching any more.
   let cancelReplayTimers: () => void = () => {};
+  // Whether the WIRED command has taken its history snapshot yet — i.e. whether its replay
+  // has begun. It decides whether a late drain may be RECORDED as history, and getting it
+  // wrong breaks the one invariant everything here rests on: `seen` must be a contiguous
+  // run of the session's stream.
+  //
+  // Before the snapshot: record. The bytes join the anchor, so the replay that also carries
+  // them recognises them, suppresses them, and records nothing further. One copy, one entry.
+  // After it: do NOT record. The anchor is already frozen without them, so the replay will
+  // emit them itself and record them itself — recording them here too would put the same
+  // bytes in the history twice, and a history that repeats itself is no longer a run of the
+  // stream. The anchor would then match nothing, forever.
+  let wiredReplayStarted = false;
   // Emits bytes that must NOT be deduped and must NOT jump whatever the live command is
   // holding — stderr, and the last words of a dead socket that nothing will replay.
   // Hoisted because a DEAD command has to queue behind the LIVE command's replay, and
@@ -290,21 +302,7 @@ export function openPtyShell({
     // output to replay.
     replaysPriorOutput: sessionId !== undefined,
   };
-  // A drain we are holding because a REATTACH is expected to replay it. Held, not
-  // dropped: the reattach can die before its replay ever lands, and if the reconnect
-  // after that creates a fresh session, the session that held these bytes is gone and
-  // nothing will ever deliver them. So they are discarded only once a replay has
-  // actually been processed (`replayAccountedForDrain`), and handed over if a fresh
-  // session supersedes them instead (`launchFreshSession`).
-  let unreplayedDrain: Buffer[] = [];
-  let unreplayedDrainBytes = 0;
-  // Whether the WIRED command has already processed a replay. Once it has, that replay
-  // carried everything the dead socket could still drain — those bytes came FROM the
-  // server, so they were in its ring at attach time. A drain arriving after that point
-  // must therefore be dropped, not held: holding it strands bytes the client already
-  // has, and a later fresh session would flush them a second time. The hold has to be
-  // decided by STATE at push time, not by an event that already fired.
-  let wiredReplayProcessed = false;
+
   // Bumped on every session (re)establishment (attach or fresh-create). A fresh
   // session's id arrives asynchronously on its own socket; if a LATER
   // establishment supersedes it before that frame lands, the stale announcement
@@ -332,13 +330,18 @@ export function openPtyShell({
     // the structural boundary the reconnect keys on — see the 'error' handler.
     let opened = false;
 
-    // Every attach REPLAYS the session's scrollback (sprites.dev/api). Materialized
-    // once, here, so the history can't shift underneath a replay that is still being
-    // classified — and per-command, so each (re)establishment gets a clean slate.
-    const seen = materializeSeen(seenTail);
+    // Every attach REPLAYS the session's scrollback (sprites.dev/api). The history is
+    // materialized on this command's FIRST inbound byte and frozen from then on: frozen,
+    // so it cannot shift underneath a replay that is still being classified — but not
+    // before, because the dying socket's last bytes usually arrive in the gap between the
+    // reconnect wiring this command and its replay landing (a socket drains its buffer at
+    // once; a new one has a backoff and a handshake to get through). Taking the snapshot
+    // late is what lets those bytes be part of the anchor, so the replay that carries them
+    // recognises and suppresses them instead of showing them twice.
+    let seen: Buffer | undefined;
+    wiredReplayStarted = false;
     // The session THIS command drives. Compared against the wired one at drain time.
     const myBinding = wiredBinding;
-    wiredReplayProcessed = false;
     let replay: ReplayState = freshReplayState();
     // The replay window closes on whichever comes first: a quiet gap (`settleTimer`,
     // re-armed per chunk) or the hard deadline (`windowTimer`, armed at the first
@@ -353,9 +356,23 @@ export function openPtyShell({
       windowTimer = undefined;
     };
     cancelReplayTimers = cancelTimers;
-    const deliver = (bytes: Buffer) => {
+    /**
+     * Hand bytes to the client, and record them as history — `seen` is exactly "what this
+     * client has been shown", and it is what the next reconnect's replay is matched
+     * against.
+     *
+     * `restart` is for an UNALIGNED emission: a replay we could not place, re-emitted
+     * verbatim. Those bytes are (mostly) a duplicate of history we already hold, so
+     * APPENDING them would leave `seen` no longer a contiguous run of the session's stream
+     * — and the anchor is nothing but a bet on that run. For an idle terminal, where the
+     * whole history is smaller than the anchor bound, a broken run matches no replay ever
+     * again and the banner reprints on every 45s cycle from then on: this module's own bug,
+     * latched permanently by one blip. Replacing the history with the replayed bytes
+     * restores the invariant, because a replay IS a contiguous run of that stream.
+     */
+    const deliver = (bytes: Buffer, mode: 'append' | 'restart' = 'append') => {
       if (bytes.length === 0) return;
-      // Bytes the client HAS are the bytes the next reconnect must not repeat.
+      if (mode === 'restart') seenTail = EMPTY_SEEN;
       seenTail = rememberDelivered(seenTail, bytes);
       onOutput(bytes.toString('utf8'));
     };
@@ -391,18 +408,8 @@ export function openPtyShell({
       releaseOutOfBand();
       onOutput(bytes.toString('utf8'));
     };
-    /**
-     * Close the replay window: hand over whatever we were still holding.
-     *
-     * `socketDead` is the difference between a window that stops early and one that will
-     * never receive another byte, and it decides the fate of a HELD DRAIN. A drain sits at
-     * the END of the session's ring, so a partial replay — a prefix — cannot have carried
-     * it. While the socket lives, the rest of that burst still streams in (the window is
-     * resolved now, so it passes straight through) and delivers it. Once the socket is
-     * dead, nothing will. Asking "did any replay byte arrive?" instead of "can more
-     * arrive?" throws the drain away on exactly the path it exists to survive.
-     */
-    const closeReplayWindow = (socketDead = false) => {
+    /** Close the replay window: hand over whatever we were still holding. */
+    const closeReplayWindow = () => {
       cancelTimers();
       if (closed) return;
       const held = replay.pending.length;
@@ -420,90 +427,70 @@ export function openPtyShell({
           seenBytes: seenTail.bytes,
         });
       }
-      deliver(emit);
+      // Unaligned by construction (`flushReplay` only emits what it could not place), so
+      // these bytes RESTART the history rather than extending it — see `deliver`.
+      deliver(emit, 'restart');
       releaseOutOfBand();
-      // A live socket will finish its burst — the drain rides in on the rest of it. A dead
-      // one will not, and a prefix cannot have carried bytes that sit at the ring's end.
-      if (held > 0 && !socketDead) replayAccountedForDrain();
     };
 
     cmd.stdout.on('data', (chunk) => {
-      // The terminal is gone (killed, or a real exit): nothing may reach the client
-      // after that, and nothing may re-arm a timer against a shell nobody is watching.
+      // The terminal is gone (killed, or a real exit): nothing may reach the client after
+      // that, and nothing may re-arm a timer against a shell nobody is watching.
       if (closed) return;
-      // A dead socket can still drain chunks its stream had buffered. Forward them —
-      // dropping them would lose the dying shell's last words whenever the reconnect
-      // CREATES a fresh session rather than reattaching, because nothing would ever
-      // replay them. The window is already closed (the 'error' handler closes it), so
-      // they pass straight through.
+
+      // A dead socket can still drain bytes its stream had buffered — the shell's last
+      // words, its panic. They are never dropped, and they are never held: holding them
+      // for a replay that "will carry them" needs a proof nothing can actually give (the
+      // replay may be partial, the socket may die, the session may be gone), and every
+      // attempt at that proof has cost bytes. Deliver them now, and let the ONE mechanism
+      // this module already has for not showing a byte twice do its job:
       //
-      // But only RECORD them while this command is still the wired one. `seenTail`
-      // must stay a contiguous suffix of the stream the NEXT attach will replay; a
-      // drain that lands after the successor is wired has already missed its `seen`
-      // snapshot (and, on the create path, a reset), so recording it would splice a
-      // byte into the history that belongs to no session's stream. The anchor would
-      // then match nothing, forever — and an idle shell never emits the 8 KiB of
-      // fresh output needed to scroll the poison out. The banner would reprint on
-      // every watchdog cycle: precisely the bug this file exists to prevent.
+      // - Same session as the wired command? RECORD them. The wired command's replay
+      //   carries them too, and because the history is snapshotted on that command's first
+      //   inbound byte (see `seen`), these bytes are in its anchor — so the replay
+      //   recognises them and suppresses them. Delivered exactly once, in order, with no
+      //   bookkeeping to get wrong.
+      // - A different session (a fresh shell replaced the dead one)? Its scrollback has
+      //   never held a byte of this output, so nothing will replay it — and recording it
+      //   would splice bytes into the history that no replay can contain, leaving the
+      //   anchor unmatchable. Show it, do not record it.
       if (stale) {
-        // Still the wired command: the reconnect has not chosen yet. Deliver AND record
-        // — these bytes are part of the stream a reattach would replay, so `seen` must
-        // end with them or that replay would hand them over a second time.
+        // No successor is wired yet, so no history snapshot has been taken: record. Whatever
+        // the reconnect does next, its snapshot will contain these bytes — an attach's replay
+        // will recognise them and suppress them, and a fresh session clears the history
+        // anyway. This is the ordinary case: a dying socket flushes its buffer at once, while
+        // the new one still has a backoff and a handshake ahead of it.
         if (cmd === current) { deliver(toBuf(chunk)); return; }
-        // Superseded. If the successor REATTACHED, the session's scrollback still holds
-        // this drain and the replay is already carrying it: emitting it here would show
-        // it twice, and (once that window resolves) in the middle of the tail the replay
-        // is still streaming. So hold it, and let the replay do the delivering — but HOLD
-        // it, don't drop it: that attach can die before its replay ever lands, and if the
-        // next reconnect creates a fresh session, nothing would ever have delivered it.
-        // Is the wired command reattached to the very session these bytes came from? Only
-        // then is a replay coming for them — a scrollback holds its own session's output
-        // and nothing else.
-        const replayWillCarryThem =
-          wiredBinding.replaysPriorOutput &&
-          myBinding.id !== undefined &&
-          myBinding.id === wiredBinding.id;
-        if (replayWillCarryThem) {
-          // That replay has already been processed, so it already carried these bytes.
-          if (wiredReplayProcessed) return;
-          // Under the cap, wait for the replay to deliver them. Past it, stop waiting: the
-          // replay would only have duplicated these bytes anyway, and duplication is the
-          // failure this design accepts — an unbounded buffer of sandbox-chosen bytes on
-          // the shared process is not.
-          if (unreplayedDrainBytes + chunk.length <= MAX_HELD_SIDE_BYTES) {
-            const held = toBuf(chunk);
-            unreplayedDrain.push(held);
-            unreplayedDrainBytes += held.length;
-            return;
-          }
-          // Past the cap. Release what is queued FIRST, then this chunk — emitting the
-          // newest ahead of the ones already waiting would scramble the very output we are
-          // preserving.
-          flushUnreplayedDrain();
-        }
-        // A fresh session replays nothing, so these last words of the dead shell — its
-        // panic, its stack trace — exist nowhere else. Emit them, queued behind whatever
-        // the new session is holding so they cannot render ahead of it.
-        //
-        // They can still land AFTER the new shell's banner, which is out of order with
-        // respect to the old session's stream. That is inherent and deliberate: the bytes
-        // physically arrived late, the banner is already on the user's screen, and the
-        // only alternative — withholding a live session's output until a dead socket
-        // finishes draining — trades a cosmetic seam for a stalled terminal.
+        // A successor is wired. Record only if it is attached to THIS session and has not yet
+        // taken its snapshot — then these bytes still join its anchor and its replay will
+        // recognise them. Delivered exactly once.
+        const sameSession = myBinding.id !== undefined && myBinding.id === wiredBinding.id;
+        if (sameSession && !wiredReplayStarted) { deliver(toBuf(chunk)); return; }
+        // Otherwise: show them, record nothing. Either they belong to a session nothing will
+        // replay, or the replay is already classifying against a history that lacks them and
+        // will emit AND record them itself — recording here as well would put the same bytes
+        // in the history twice, and a history that repeats itself is no longer a run of the
+        // stream. The anchor would match nothing, forever. A repeated line is survivable.
         emitOutOfBand(toBuf(chunk));
         return;
       }
       // Any inbound data proves the connection recovered; reset the failure budget.
       opened = true;
       consecutiveFailures = 0;
+      // The first byte of this attach freezes the history it will be matched against.
+      if (seen === undefined) {
+        seen = materializeSeen(seenTail);
+        wiredReplayStarted = true;
+      }
 
-      const { emit, state } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
+      const { emit, state, aligned } = planReplayEmission({ seen, chunk: toBuf(chunk), state: replay });
       replay = state;
-      deliver(emit);
-      if (replay.resolved) { cancelTimers(); releaseOutOfBand(); replayAccountedForDrain(); return; }
-      // Boundary still unknown. Hold these bytes — but bound the hold twice over:
-      // on the next quiet gap, and on a deadline a chatty shell cannot push out by
-      // talking.
+      // An unaligned emission is a give-up: it re-emits bytes the history may already hold,
+      // so it RESTARTS that history instead of extending it (see `deliver`).
+      deliver(emit, aligned ? 'append' : 'restart');
+      if (replay.resolved) { cancelTimers(); releaseOutOfBand(); return; }
+      // Boundary still unknown. Hold these bytes — but bound the hold twice over: on the
+      // next quiet gap, and on a deadline a chatty shell cannot push out by talking.
       if (settleTimer !== undefined) clearTimeout(settleTimer);
       settleTimer = setTimeout(closeReplayWindow, REPLAY_SETTLE_MS);
       if (windowTimer === undefined) windowTimer = setTimeout(closeReplayWindow, REPLAY_WINDOW_MS);
@@ -544,11 +531,9 @@ export function openPtyShell({
       // Ignore the stale exit that trails a keepalive 'error' on the same dead
       // command — only an exit WITHOUT a preceding error is a real shell exit.
       if (stale) return;
-      // The shell's last words may still be sitting in the replay buffer, or held for a
-      // replay that is now never coming — there is no reconnect after an exit. Hand both
-      // over before the terminal closes, or they die with it.
-      closeReplayWindow(true);
-      flushUnreplayedDrain();
+      // The shell's last words may still be sitting in the replay buffer: there is no
+      // reconnect coming to re-deliver them, so hand them over before the exit.
+      closeReplayWindow();
       fatal(code ?? -1);
     });
     // A single failed open emits 'error' more than once on the SAME command — the
@@ -571,10 +556,7 @@ export function openPtyShell({
       // scrollback for good. Emitting them cannot lose anything, and cannot
       // duplicate anything either: they join `seen`, so if a reattach DOES replay
       // them, that replay dedupes against them.
-      //
-      // The socket is dead, so a replay this window only PARTLY received cannot have
-      // carried a held drain: keep holding it for the reconnect to resolve.
-      closeReplayWindow(true);
+      closeReplayWindow();
       stale = true;
       // Remember WHY this command died, STRUCTURALLY: if it never reported an open
       // (no 'spawn', no byte of output), its socket never came up, so the session
@@ -601,25 +583,6 @@ export function openPtyShell({
   // ambiguous. Reported via `onSessionId` so the caller persists THIS session's
   // id (whether this is the terminal's first shell or a reconnect fallback
   // replacing a dangling one).
-  /** The wired session's replay has been handled — anything it was carrying is delivered. */
-  function replayAccountedForDrain(): void {
-    wiredReplayProcessed = true;
-    unreplayedDrain = [];
-    unreplayedDrainBytes = 0;
-  }
-
-  /**
-   * Hand over a drain nothing is going to replay. Never recorded into `seen`: these bytes
-   * belong to a session that is gone, so no future replay can contain them, and splicing
-   * them into the history would leave the anchor unmatchable.
-   */
-  function flushUnreplayedDrain(): void {
-    if (unreplayedDrain.length === 0 || closed) return;
-    const out = Buffer.concat(unreplayedDrain);
-    unreplayedDrain = [];
-    unreplayedDrainBytes = 0;
-    onOutput(out.toString('utf8'));
-  }
 
   function launchFreshSession(): void {
     currentSessionId = undefined;
@@ -635,10 +598,6 @@ export function openPtyShell({
     // this order, recording those bytes into `seen` poisons it visibly — and a test says
     // so.
     seenTail = EMPTY_SEEN;
-    // No replay is coming for the drain we were holding: the session that produced it is
-    // gone, and a fresh shell's scrollback knows nothing about it. These are the dead
-    // shell's last words — hand them over now, or they are lost for good.
-    flushUnreplayedDrain();
     const gen = (sessionGeneration += 1);
     // The cwd is NOT passed as a createSession option: the server chdirs into it
     // and fails the open outright if it is gone, and a sandbox command can delete

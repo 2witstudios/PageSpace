@@ -118,6 +118,28 @@ export const MAX_MATCH_CANDIDATES = 8;
  */
 export const MAX_PENDING_BYTES = 1024 * 1024;
 
+/**
+ * `aligned` is the difference between "these bytes continue the stream" and "we gave up
+ * and re-emitted bytes the history may already hold".
+ *
+ * It exists because `seen` must stay a CONTIGUOUS RUN of the session's stream — that is
+ * the whole basis of the anchor. An unaligned emission is a replay we could not place, so
+ * appending it to the history splices a duplicate of the past into it, and the run breaks.
+ * For an idle terminal — where `seen` is smaller than the anchor bound, so the anchor IS
+ * the whole history, which is the exact shape the 45s watchdog cycles on — a broken run can
+ * never match any future replay, and the banner reprints on every cycle from then on. One
+ * transient blip would permanently restore the bug this module exists to remove.
+ *
+ * So an unaligned emission does not extend the history: it REPLACES it (see the caller).
+ * The bytes of a replay are themselves a contiguous run of the session's stream, so taking
+ * them as the new history restores the invariant instead of corrupting it.
+ */
+export type ReplayEmission = {
+  emit: Buffer;
+  state: ReplayState;
+  aligned: boolean;
+};
+
 export type ReplayState = {
   /** Replayed bytes received in THIS attach that we can't yet classify. */
   pending: Buffer;
@@ -264,12 +286,12 @@ export function planReplayEmission({
   seen: Buffer;
   chunk: Buffer;
   state: ReplayState;
-}): { emit: Buffer; state: ReplayState } {
+}): ReplayEmission {
   if (state.resolved || seen.length === 0) {
     // `pending` is empty on every path that reaches here today (`seen` is frozen
     // for the life of an attach). Emitting it rather than assuming that keeps a
     // future caller who DOES recompute it from silently dropping buffered output.
-    return { emit: concat(state.pending, chunk), state: RESOLVED };
+    return { emit: concat(state.pending, chunk), state: RESOLVED, aligned: true };
   }
 
   const pending = concat(state.pending, chunk);
@@ -288,7 +310,7 @@ export function planReplayEmission({
   let at = pending.indexOf(anchor, from);
   for (let tried = 0; at !== -1 && tried < MAX_MATCH_CANDIDATES; tried += 1) {
     if (corroborated({ seen, pending, at, anchorLength: anchor.length })) {
-      return { emit: pending.subarray(at + anchor.length), state: RESOLVED };
+      return { emit: pending.subarray(at + anchor.length), state: RESOLVED, aligned: true };
     }
     // Not the boundary — the anchor's bytes merely recur here. Keep looking past it.
     at = pending.indexOf(anchor, at + 1);
@@ -297,12 +319,12 @@ export function planReplayEmission({
   // Unalignable. Hold the bytes until the caller closes the window — and if they
   // overflow first, emit them: duplication is survivable, losing them is not.
   if (pending.length > MAX_PENDING_BYTES) {
-    return { emit: pending, state: RESOLVED };
+    return { emit: pending, state: RESOLVED, aligned: false };
   }
   // A match can still begin in the last `anchor.length - 1` bytes: those are the only
   // start positions the next chunk could complete.
   const scanned = Math.max(0, pending.length - anchor.length + 1);
-  return { emit: EMPTY, state: { pending, scanned, resolved: false } };
+  return { emit: EMPTY, state: { pending, scanned, resolved: false }, aligned: true };
 }
 
 /**
@@ -316,7 +338,7 @@ export function planReplayEmission({
  * replayed one, and trimming it would delete output the client never saw. An
  * unalignable replay costs a redraw. That is the whole trade.
  */
-export function flushReplay(state: ReplayState): { emit: Buffer; state: ReplayState } {
-  if (state.resolved) return { emit: EMPTY, state };
-  return { emit: state.pending, state: RESOLVED };
+export function flushReplay(state: ReplayState): ReplayEmission {
+  if (state.resolved) return { emit: EMPTY, state, aligned: true };
+  return { emit: state.pending, state: RESOLVED, aligned: false };
 }
