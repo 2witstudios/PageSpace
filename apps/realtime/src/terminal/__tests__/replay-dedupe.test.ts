@@ -13,6 +13,7 @@ import {
   planReplayEmission,
   rememberDelivered,
   resetFoldCount,
+  resolveGiveUpAction,
 } from '../replay-dedupe';
 
 // riteway-style assertion (given/should/actual/expected) on top of vitest. There IS a
@@ -732,5 +733,33 @@ describe('buffering an unalignable replay (pure)', () => {
 
     expect(state.pending.length).toBeGreaterThan(MAX_ANCHOR_BYTES); // still searching, still holding
     expect(foldCount()).toBe(0); // warm: the window ROLLS. 100 frames, zero re-folds.
+  });
+});
+
+/**
+ * The give-up TERMINAL ACTION — what a caller does with an unaligned replay's bytes once
+ * `planReplayEmission`/`flushReplay` have already decided they cannot be placed. Detection is
+ * unchanged (both still hand back the whole burst); this is the decision built on top of it.
+ */
+describe('resolveGiveUpAction (pure)', () => {
+  assert({
+    given: 'a transparent in-place attach reconnect (the viewer never left)',
+    should: 'discard the burst — every byte it could carry has already been shown, live',
+    actual: resolveGiveUpAction({ attachKind: 'transparent-attach' }),
+    expected: 'discard',
+  });
+
+  assert({
+    given: 'a fresh session create (the old one is gone, nothing of it is on screen)',
+    should: 'emit the burst verbatim — today\'s baseline give-up behavior',
+    actual: resolveGiveUpAction({ attachKind: 'fresh' }),
+    expected: 'emit',
+  });
+
+  assert({
+    given: 'a fresh-viewer attach (a cold connect, or this shell\'s very first wire())',
+    should: 'emit the burst verbatim — discard is scoped to transparent reconnects only',
+    actual: resolveGiveUpAction({ attachKind: 'fresh' }),
+    expected: 'emit',
   });
 });

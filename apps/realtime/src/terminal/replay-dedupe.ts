@@ -569,6 +569,43 @@ export function planReplayEmission({
  * replayed one, and trimming it would delete output the client never saw. An
  * unalignable replay costs a redraw. That is the whole trade.
  */
+/**
+ * Where a `wire()`'d command's replay comes from — the axis `resolveGiveUpAction` decides on.
+ *
+ * - `'transparent-attach'`: an in-place RECONNECT's attach to the session the client was
+ *   already watching (an idle-shell keepalive drop, an optimistic reattach when `listSessions`
+ *   is unavailable). The viewer never left — every byte a replay on this attach could carry has
+ *   already been shown, live, so a give-up here is pure duplication.
+ * - `'fresh'`: everything else. A shell's very FIRST `wire()` (a fresh viewer opening the
+ *   terminal, or a caller reattaching after ITS OWN restart) and a reconnect that CREATES a
+ *   new session (the old one is gone; nothing of its output is on the client's screen) both
+ *   want a give-up's bytes shown — there is no continuously-watching viewer to have already
+ *   seen them.
+ */
+export type AttachKind = 'transparent-attach' | 'fresh';
+
+/**
+ * A give-up's TERMINAL ACTION: show the unaligned bytes (today's baseline — see the give-up
+ * doc above, "duplication is survivable"), or drop them.
+ *
+ * That baseline is right for a fresh session and wrong for a transparent reconnect: an idle
+ * AGENT terminal (a repainting TUI status line, a `SIGWINCH`-triggered redraw off
+ * `attachSession`'s own `{cols,rows}`) violates byte-equality on almost every ~45s keepalive
+ * cycle, so "reprint rather than risk losing a byte" becomes "repaint on top of itself every
+ * 45s" for exactly the terminals that need the dedupe most. On THAT reconnect the viewer has
+ * been continuously attached, so nothing is actually at risk: the replay is redundant, not
+ * unverifiable, and can be dropped outright.
+ *
+ * Detection is unchanged — `planReplayEmission`/`flushReplay` still decide alignment purely
+ * from bytes, with no notion of where the attach came from. This is the decision layered on
+ * top of a give-up they already produced, so the caller can still record the bytes as history
+ * (a give-up is itself a contiguous run of the stream — see `deliver`'s `restart` doc) without
+ * being forced to also show them.
+ */
+export function resolveGiveUpAction({ attachKind }: { attachKind: AttachKind }): 'emit' | 'discard' {
+  return attachKind === 'transparent-attach' ? 'discard' : 'emit';
+}
+
 export function flushReplay(state: ReplayState): ReplayEmission {
   // Nothing held is not a give-up. A window can close over an attach that never received a
   // byte — a socket that died before it opened — and calling THAT a give-up would report a

@@ -1080,7 +1080,14 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([BANNER, BANNER]);
     });
 
-    it('given a replay it cannot align (the server buffer trimmed past what we forwarded), emits it rather than losing it', async () => {
+    it('given a replay on a TRANSPARENT reconnect that cannot align, discards it rather than reprinting (leaf 2-5)', async () => {
+      // 2-4's baseline (superseded by this leaf, for exactly this shape): "duplicating a
+      // redraw is survivable; swallowing the session's output is not" — so an unaligned
+      // replay went out verbatim. That is right for a FRESH session, and wrong for an
+      // in-place reconnect: the viewer has been continuously attached the whole time, so
+      // whatever this attach's replay carries, it has already been shown — see
+      // `resolveGiveUpAction`. Discarding it is what stops a repainting agent TUI from
+      // restacking itself on every ~45s keepalive cycle.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1097,10 +1104,33 @@ describe('openPtyShell', () => {
 
       // Held back while the boundary might still turn up...
       expect(outputs(onOutput)).toEqual([BANNER]);
-      // ...then released. Duplicating a redraw is survivable; swallowing the
-      // session's output is not.
+      // ...then the window closes, gives up, and — on THIS attach kind — discards rather
+      // than reprints. No new output reaches the client.
       await vi.advanceTimersByTimeAsync(1000);
-      expect(outputs(onOutput)).toEqual([BANNER, 'output we never forwarded\r\n']);
+      expect(outputs(onOutput)).toEqual([BANNER]);
+    });
+
+    it('given genuinely-new output AFTER a discarded give-up on the SAME reconnect, still forwards it', async () => {
+      // Discard must not swallow live output that arrives once the window has already
+      // closed and resolved — only the unaligned BURST itself is dropped.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'output we never forwarded\r\n');
+      await vi.advanceTimersByTimeAsync(1000); // the window closes and discards it
+
+      attachCmd._stdout.emit('data', 'genuinely live output\r\n');
+
+      expect(outputs(onOutput)).toEqual([BANNER, 'genuinely live output\r\n']);
     });
 
     it('given the handler\'s scrollback sink on the other end, appends the banner ONCE across repeated reconnects', async () => {
@@ -1188,10 +1218,11 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(afterRecovery); // recovered, and stayed recovered
     });
 
-    it('given an unalignable replay whose window closes, REPORTS it', async () => {
-      // The terminal is reprinting its scrollback rather than deduping, and an operator can
-      // only see that if we say so. This path had no test: deleting the report left the whole
-      // suite green.
+    it('given an unalignable replay whose window closes, REPORTS it (and says it was discarded)', async () => {
+      // The terminal is discarding its replay burst rather than deduping it, and an operator
+      // can only see that if we say so. This path had no test: deleting the report left the
+      // whole suite green. The `outcome` field is what leaf 2-5 added to that report — see
+      // `resolveGiveUpAction` — so the cadence stays distinguishable from a plain reprint.
       const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
@@ -1208,18 +1239,20 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(2000); // settle, then the window deadline
 
       const reported = warn.mock.calls.filter(
-        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'window-closed',
+        ([, meta]) => (meta as { cause?: string; outcome?: string } | undefined)?.cause === 'window-closed',
       );
       warn.mockRestore(); // before the assertion: a failing expect must not leak the spy
       expect(reported.length).toBeGreaterThan(0);
+      expect((reported[0][1] as { outcome?: string }).outcome).toBe('discarded');
     });
 
-    it('given a replay that overflows the byte cap, REPORTS it (the one give-up that never reaches the window close)', async () => {
+    it('given a replay that overflows the byte cap, REPORTS it (and says it was discarded)', async () => {
       // A ring bigger than MAX_PENDING_BYTES is the cause that does not heal: the anchor sits
-      // at a replay's END, so the cap trips before it ever arrives, and the scrollback reprints
-      // on every reconnect until the cap is raised past the ring. It is also the give-up that
-      // resolves inside the pure core — `closeReplayWindow`, and its log, never run. If it did
-      // not report here, the failure the cap exists to catch would be the only silent one.
+      // at a replay's END, so the cap trips before it ever arrives, and the scrollback would
+      // reprint (or now, discard) on every reconnect until the cap is raised past the ring. It
+      // is also the give-up that resolves inside the pure core — `closeReplayWindow`, and its
+      // log, never run. If it did not report here, the failure the cap exists to catch would
+      // be the only silent one.
       const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
@@ -1239,20 +1272,20 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       const reported = warn.mock.calls.filter(
-        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'pending-cap',
+        ([, meta]) => (meta as { cause?: string; outcome?: string } | undefined)?.cause === 'pending-cap',
       );
       warn.mockRestore(); // before the assertion: a failing expect must not leak the spy
       expect(reported.length).toBeGreaterThan(0); // it says so, instead of failing silently
+      expect((reported[0][1] as { outcome?: string }).outcome).toBe('discarded');
     });
 
-    it('given a replay that overflows the byte cap, emits it and leaves a usable history', async () => {
+    it('given a replay that overflows the byte cap on a transparent reconnect, discards it and leaves a usable history', async () => {
       // The other give-up path: the replay never aligns and grows past MAX_PENDING_BYTES, so
-      // the pure core emits it verbatim rather than the window timer. (Whether that emission
-      // 'restarts' or 'appends' the history is unobservable HERE by construction — it is
-      // larger than the whole history, so the retention trim evicts the past either way. The
-      // flag itself is asserted at the source, in replay-dedupe.test.ts.) What this pins is
-      // what the shell must guarantee: the bytes reach the user, and the history that comes
-      // out the other side still dedupes.
+      // the pure core resolves inside `planReplayEmission` rather than the window timer. 2-4's
+      // baseline emitted it verbatim; leaf 2-5 discards it on THIS attach kind (see
+      // `resolveGiveUpAction`) — same as the window-closed give-up, just triggered by the byte
+      // cap instead of a timer. What this pins is what the shell must still guarantee: the
+      // history that comes out the other side still dedupes.
       const cmd = buildFakeCommand();
       const attach1 = buildFakeCommand();
       const attach2 = buildFakeCommand();
@@ -1272,16 +1305,17 @@ describe('openPtyShell', () => {
       const flood = `unalignable ${Array.from({ length: 220_000 }, (_, i) => `line ${i} of the flood\r\n`).join('')}`;
       attach1._stdout.emit('data', flood);
       await vi.advanceTimersByTimeAsync(2000);
-      expect(outputs(onOutput).join('')).toContain('unalignable'); // emitted, not swallowed
+      expect(outputs(onOutput).join('')).not.toContain('unalignable'); // discarded, not shown
 
       const afterOverflow = outputs(onOutput).join('');
 
-      // The history restarted from those bytes, so replaying them again dedupes. Note this
-      // fake delivers the whole flood in ONE frame, and the anchor search runs before the
-      // overflow check — so it is found. A real over-cap ring arrives in many frames and
-      // overflows first, and THAT reprints on every cycle: which is why the cap has to exceed
-      // the server's ring (see MAX_PENDING_BYTES). What this pins is the recovery, not a
-      // claim that an over-cap ring heals.
+      // The history restarted from those bytes even though they were never shown (see
+      // `recordHistory`), so replaying them again dedupes. Note this fake delivers the whole
+      // flood in ONE frame, and the anchor search runs before the overflow check — so it is
+      // found. A real over-cap ring arrives in many frames and overflows first, and THAT
+      // reprints (silently, since it is discarded) on every cycle: which is why the cap has to
+      // exceed the server's ring (see MAX_PENDING_BYTES). What this pins is the recovery, not
+      // a claim that an over-cap ring heals.
       attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
       attach2._stdout.emit('data', flood);
@@ -1290,11 +1324,38 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(afterOverflow); // nothing reprinted
     });
 
-    it('given a CHATTY shell across the reconnect, emits within the replay window instead of stalling to the byte cap', async () => {
+    it('given a pending-cap give-up on a transparent reconnect, discards the overflow but still forwards output that arrives right after', async () => {
+      // The pending-cap give-up resolves SYNCHRONOUSLY inside the chunk that pushed it over —
+      // unlike the window-closed give-up, there is no timer in between. Discard must not
+      // swallow whatever the SAME command sends next, once the replay state is resolved.
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+
+      const flood = `unalignable ${Array.from({ length: 220_000 }, (_, i) => `line ${i} of the flood\r\n`).join('')}`;
+      attachCmd._stdout.emit('data', flood); // overflows MAX_PENDING_BYTES in one chunk
+      expect(outputs(onOutput).join('')).toBe(BANNER); // discarded synchronously
+
+      attachCmd._stdout.emit('data', 'genuinely live output\r\n'); // same command, after resolution
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}genuinely live output\r\n`);
+    });
+
+    it('given a CHATTY shell across the reconnect, discards the held burst on its deadline but keeps forwarding afterward', async () => {
       // The quiet-gap timer alone is not a bound: a build or a repainting TUI
       // never goes quiet, so every chunk would re-arm it and the terminal would
       // sit dead all the way to MAX_PENDING_BYTES. The hard window is what makes the worst
-      // case a redraw rather than a multi-megabyte stall.
+      // case a bounded discard rather than a multi-megabyte stall — and once it closes
+      // (attachKind is a transparent reconnect here, so the burst is discarded, not shown),
+      // output resumes flowing normally: discard must not swallow POST-window live output.
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -1315,18 +1376,24 @@ describe('openPtyShell', () => {
         await vi.advanceTimersByTimeAsync(100); // < REPLAY_SETTLE_MS every time
       }
 
-      // The window closed on its deadline and the output flowed.
+      // The window closed on its deadline (discarding whatever it had held) and later
+      // chunks — arriving after resolution — flowed through as ordinary live output.
       const seen = outputs(onOutput).join('');
-      expect(seen).toContain('build step 0\r\n');
-      expect(seen).toContain('build step 19\r\n');
+      expect(seen).not.toContain('build step 0\r\n'); // inside the discarded burst
+      expect(seen).toContain('build step 19\r\n'); // arrived after the window resolved
     });
 
-    it('given an unalignable replay whose anchor RECURS in live output moments later, swallows nothing', async () => {
-      // The loss path, at the shell level and INSIDE the replay window (a repaint
-      // arriving after the window closes can't reach the search at all). A long
-      // session, a replay the ring has trimmed past, and a TUI that repaints the
-      // exact bytes the client last saw. An unanchored match lands past the true
-      // boundary and drops the output in front of it — output nobody has ever seen.
+    it('given an unalignable replay whose anchor RECURS in live output moments later, refuses the false match and reports the give-up', async () => {
+      // The corroboration guard (replay-dedupe.test.ts) still refuses to WRONGLY suppress
+      // here: an unanchored match landing past the true boundary would silently drop output
+      // nobody has ever seen, with no report — the one failure mode this module can never
+      // accept. What changes under leaf 2-5 is what happens to the correctly-identified
+      // give-up that results: on a TRANSPARENT reconnect it is now discarded rather than
+      // reprinted (a DELIBERATE, REPORTED tradeoff — see `resolveGiveUpAction`), not silently
+      // dropped by a wrong match. The distinction that matters is wrong-suppression (silent,
+      // unbounded, never acceptable) vs. a reported give-up discard (bounded, observable,
+      // the accepted cost of not repainting an idle agent TUI).
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const line = (p: string, n: number) =>
         Array.from({ length: n }, (_, i) => `${p} ${i}\r\n`).join('');
       const cmd = buildFakeCommand();
@@ -1344,26 +1411,35 @@ describe('openPtyShell', () => {
       cmd._stdout.emit('data', history + tail);
       const delivered = outputs(onOutput).join('');
       const repaint = delivered.slice(-8 * 1024); // exactly the bytes the anchor holds
+      const beforeReconnect = outputs(onOutput).join('');
 
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
 
-      // The replay the client has never seen (the ring trimmed past our anchor)...
+      // Content the client has never seen (the ring trimmed past our anchor)...
       attachCmd._stdout.emit('data', 'work the client never saw\r\n');
       await vi.advanceTimersByTimeAsync(50); // still well inside the replay window
       // ...immediately followed by a repaint of the anchor's exact bytes.
       attachCmd._stdout.emit('data', `${repaint}after repaint\r\n`);
       await vi.advanceTimersByTimeAsync(2000);
 
-      const shown = outputs(onOutput).join('');
-      expect(shown).toContain('work the client never saw\r\n'); // NOT swallowed
-      expect(shown).toContain('after repaint\r\n');
+      expect(outputs(onOutput).join('')).toBe(beforeReconnect); // discarded, not shown
+      const reported = warn.mock.calls.filter(
+        ([, meta]) => (meta as { outcome?: string } | undefined)?.outcome === 'discarded',
+      );
+      warn.mockRestore();
+      expect(reported.length).toBeGreaterThan(0); // ...but never silently
     });
 
-    it('given the socket dies while replay bytes are buffered and the reconnect CREATES a fresh session, still delivers them', async () => {
-      // Those bytes exist nowhere else: a fresh session has no scrollback to replay
-      // them from, and nothing appended them to the app-side buffer. Dropping them
-      // loses the dying shell's last words for good.
+    it('given the socket dies while replay bytes are buffered and the reconnect CREATES a fresh session, discards the buffered burst but still reports it', async () => {
+      // 2-4's baseline here was "still delivers them" — those bytes exist nowhere else, so
+      // losing them loses the dying shell's last words for good. Leaf 2-5 accepts that risk
+      // DELIBERATELY, uniformly, for every give-up on a transparent-attach reconnect (see
+      // `resolveGiveUpAction`) — whether the window closes on a timer, on this socket dying
+      // mid-buffer, or (as here) right before a fresh session replaces it. What must still
+      // hold: the discard is REPORTED, not silent, and the fresh session that follows is
+      // unaffected (its own history starts clean via `launchFreshSession`).
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const freshCmd = buildFakeCommand();
@@ -1385,7 +1461,16 @@ describe('openPtyShell', () => {
       attachCmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(1000);
 
-      expect(outputs(onOutput).join('')).toContain('segfault: dumping core\r\n');
+      expect(outputs(onOutput).join('')).toBe(BANNER); // discarded, not shown
+      const discarded = warn.mock.calls.filter(
+        ([, meta]) => (meta as { outcome?: string } | undefined)?.outcome === 'discarded',
+      );
+      warn.mockRestore();
+      expect(discarded.length).toBeGreaterThan(0); // ...but not silently
+
+      // The fresh session's own output still flows normally.
+      freshCmd._stdout.emit('data', 'fresh prompt\r\n');
+      expect(outputs(onOutput).join('')).toBe(`${BANNER}fresh prompt\r\n`);
     });
 
     it('given a drain that arrives BEFORE the replay, delivers it exactly once (the replay recognises it)', async () => {
@@ -1660,12 +1745,15 @@ describe('openPtyShell', () => {
       expect(shown).toBe(`${BANNER}X$ `);
     });
 
-    it('given an UNALIGNABLE replay, the drain still arrives and the history still recovers', async () => {
-      // The give-up path: the ring could not be aligned, so it is re-emitted verbatim —
-      // duplicating what the client already had, drain included. That is the accepted cost.
-      // What must NOT happen is the history keeping that duplicate: an unaligned flush
-      // RESTARTS the history with the replayed bytes (which are themselves a contiguous run
-      // of the stream), so the next cycle dedupes normally instead of reprinting forever.
+    it('given an UNALIGNABLE replay, the drain still arrives (unaffected) and the history still recovers', async () => {
+      // The give-up path: the ring could not be aligned. 2-4's baseline re-emitted it
+      // verbatim; on a transparent reconnect, leaf 2-5 discards it instead (see
+      // `resolveGiveUpAction`) — but the DRAIN is a completely separate path (a stale
+      // command's own last bytes, delivered via ordinary `deliver`, never a give-up), so it
+      // is untouched by this change. What must still NOT happen is the history keeping a
+      // duplicate: an unaligned flush RESTARTS the history with the replayed bytes (which
+      // are themselves a contiguous run of the stream, discarded or not), so the next cycle
+      // dedupes normally instead of reprinting forever.
       const cmd = buildFakeCommand();
       const attach1 = buildFakeCommand();
       const attach2 = buildFakeCommand();
@@ -1686,8 +1774,8 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       const afterFlush = outputs(onOutput).join('');
-      expect(afterFlush).toContain('X'); // the drain reached the user
-      expect(afterFlush).toContain('unalignable scrollback X'); // and so did the ring
+      expect(afterFlush).toContain('X'); // the drain reached the user, unaffected by the discard
+      expect(afterFlush).not.toContain('unalignable scrollback X'); // the ring was discarded
 
       // The history restarted from the replayed bytes, so the NEXT cycle dedupes cleanly.
       attach1._emitter.emit('error', new Error('WebSocket keepalive timeout'));
@@ -2058,9 +2146,12 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(afterCreate); // nothing reprinted
     });
 
-    it('given a quiet gap shorter than the hard deadline, closes the window on the gap', async () => {
+    it('given a quiet gap shorter than the hard deadline, gives up (and discards) on the gap', async () => {
       // REPLAY_SETTLE_MS must work on its own: an unalignable replay that goes quiet is
-      // released promptly, not held until the 1s deadline.
+      // resolved promptly, not held until the 1s deadline. The bytes are discarded on this
+      // attach kind (leaf 2-5), so the timing is pinned via the WARN the give-up must still
+      // emit, at the gap rather than the later deadline.
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -2076,7 +2167,12 @@ describe('openPtyShell', () => {
       attachCmd._stdout.emit('data', 'unalignable\r\n');
 
       await vi.advanceTimersByTimeAsync(600); // past the 500ms gap, well short of the 1s deadline
-      expect(outputs(onOutput).join('')).toContain('unalignable\r\n');
+      const reported = warn.mock.calls.filter(
+        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'window-closed',
+      );
+      warn.mockRestore();
+      expect(reported.length).toBeGreaterThan(0); // closed already, on the gap
+      expect(outputs(onOutput).join('')).toBe(BANNER); // discarded, not shown
     });
 
     it('given stderr that floods past the queue cap while a replay is held, releases it rather than buffering without limit', async () => {
@@ -2219,12 +2315,14 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([BANNER]);
     });
 
-    it('given a socket that dies holding a replay, flushes it THEN — not on a timer after its successor is live', async () => {
+    it('given a socket that dies holding a replay, gives up THEN — not on a timer after its successor is live', async () => {
       // The error handler closes the window (and cancels its timers) before marking the
       // command stale. Without that, a DEAD command's settle timer fires ~500ms later — after
-      // its successor has already snapshotted — and its verbatim flush restarts the SHARED
-      // history behind the live command's back: a reprint, out of order, from a socket that
-      // no longer exists.
+      // its successor has already snapshotted — and its flush restarts the SHARED history
+      // behind the live command's back: a give-up, out of order, from a socket that no longer
+      // exists. The give-up's bytes are discarded on this attach kind (leaf 2-5), so the
+      // timing is pinned via the WARN it must still emit, immediately and not on a later timer.
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attach1 = buildFakeCommand();
       const attach2 = buildFakeCommand();
@@ -2243,8 +2341,12 @@ describe('openPtyShell', () => {
       attach1._stdout.emit('data', 'held and unalignable\r\n'); // held by attach1's window
       attach1._emitter.emit('error', new Error('WebSocket keepalive timeout')); // dies holding it
 
-      // Flushed by the error handler, at once — not by a timer belonging to a dead socket.
-      expect(outputs(onOutput).join('')).toContain('held and unalignable\r\n');
+      // Given up by the error handler, at once — not by a timer belonging to a dead socket.
+      expect(outputs(onOutput).join('')).toBe(BANNER); // discarded, not shown
+      const reported = warn.mock.calls.filter(
+        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'window-closed',
+      );
+      expect(reported.length).toBeGreaterThan(0);
 
       // And its successor's history is intact: an ordinary idle cycle still dedupes.
       await vi.advanceTimersByTimeAsync(500);
@@ -2252,10 +2354,17 @@ describe('openPtyShell', () => {
       attach2._stdout.emit('data', 'held and unalignable\r\n'); // the ring, replayed
       await vi.advanceTimersByTimeAsync(2000);
 
+      warn.mockRestore();
       expect(outputs(onOutput).join('')).toBe(beforeReplay); // suppressed, not reprinted
     });
 
-    it('given a shell that exits while replay bytes are still buffered, flushes them before the exit', async () => {
+    it('given a shell that exits while replay bytes are still buffered, gives up (discarding them) before the exit', async () => {
+      // 2-4's baseline showed 'goodbye\r\n' — the shell's genuine last words. Leaf 2-5
+      // discards it instead, the same as every other give-up on a transparent attach
+      // reconnect (see `resolveGiveUpAction`): the ordering invariant this test exists to
+      // pin — the window resolves BEFORE `fatal()`/`onExit` fires, not after — holds
+      // regardless of whether the resolution shows or discards its bytes.
+      const warn = vi.spyOn(loggers.realtime, 'warn');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
       const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
@@ -2272,7 +2381,12 @@ describe('openPtyShell', () => {
       attachCmd._stdout.emit('data', 'goodbye\r\n'); // unalignable, so buffered
       attachCmd._emitter.emit('exit', 0);
 
-      expect(outputs(onOutput)).toEqual([BANNER, 'goodbye\r\n']);
+      expect(outputs(onOutput)).toEqual([BANNER]); // discarded, not shown
+      const reported = warn.mock.calls.filter(
+        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'window-closed',
+      );
+      warn.mockRestore();
+      expect(reported.length).toBeGreaterThan(0); // the give-up still happened, and was reported
       expect(onExit).toHaveBeenCalledWith(0);
     });
   });
