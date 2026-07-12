@@ -9,9 +9,7 @@ import { parseSelectedMachineId } from '@/lib/development/development-route';
 import { useStickyMachineIds } from '@/lib/development/use-sticky-machine-ids';
 import { useDrainPendingSession } from '@/lib/development/use-drain-pending-session';
 import { DetailState } from '@/lib/development/DetailState';
-
-/** Never changes across this layout's lifetime — global browsing has no per-drive context to reset the sticky set on. */
-const GLOBAL_SCOPE = 'global';
+import { resolveDisplayedMachine } from '@/lib/development/displayed-machine';
 
 /**
  * The GLOBAL Development surface's detail region — the driveless twin of
@@ -26,6 +24,20 @@ const GLOBAL_SCOPE = 'global';
  * `/dashboard/{driveId}/development` tree — or this host (and every terminal
  * it's keeping warm) would be torn down the moment the URL picked up a drive
  * segment.
+ *
+ * KNOWN TRADEOFF this doesn't solve: the user can still leave this route tree
+ * directly, e.g. by switching drives (or clicking the sidebar's "Development"
+ * nav item while a drive is active), which points at
+ * `/dashboard/{driveId}/development` — a different tree — and unmounts this
+ * host, disconnecting every terminal it was keeping warm across EVERY drive,
+ * not just the one being left. This mirrors an already-accepted tradeoff
+ * elsewhere in this surface (switching drives already tears down the OTHER
+ * drive's warm terminals — "a PTY stream must not outlive its drive context",
+ * see `useStickyMachineIds`), and the disconnect is recoverable (the PTY
+ * itself survives server-side and the terminal reconnects on remount) rather
+ * than data loss. Solving it for real would mean hoisting a single
+ * `MachineKeepAliveHost` above BOTH route trees, which is a larger change than
+ * this fix warrants — noted here rather than attempted.
  */
 export default function GlobalDevelopmentLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? '';
@@ -40,15 +52,12 @@ export default function GlobalDevelopmentLayout({ children }: { children: React.
   const { drives, isLoading, error } = useAllMachines(isAdmin);
   const machines = useMemo(() => drives.flatMap((drive) => drive.machines), [drives]);
   // Add-only for the life of this layout — see the hook's doc comment for why
-  // a fetch blip must not evict a warm terminal.
-  const stickyMachineIds = useStickyMachineIds(machines, GLOBAL_SCOPE);
+  // a fetch blip must not evict a warm terminal. `undefined` (rather than a
+  // constant sentinel string) is this hook's own idiom for "no scope to reset
+  // on" — global browsing has no per-drive context to leave.
+  const stickyMachineIds = useStickyMachineIds(machines, undefined);
 
-  // Same two-questions split as the drive-scoped layout: "does this machine
-  // still exist" (the latest fetch) vs. "which machines may stay mounted"
-  // (the sticky set) are answered separately so a fetch blip costs a notice,
-  // never a dead terminal.
-  const isKnownMachine = selectedMachineId !== null && machines.some((m) => m.id === selectedMachineId);
-  const displayedMachineId = isKnownMachine ? selectedMachineId : null;
+  const { isKnownMachine, displayedMachineId } = resolveDisplayedMachine(machines, selectedMachineId);
 
   useDrainPendingSession(displayedMachineId);
 

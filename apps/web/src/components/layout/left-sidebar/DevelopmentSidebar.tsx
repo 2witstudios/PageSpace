@@ -18,12 +18,10 @@ import { canManageDrive } from '@/hooks/usePermissions';
 import { useDriveMachines, useAllMachines, type DriveMachine, type DriveMachineGroup } from '@/hooks/useDriveMachines';
 import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
 import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
-import { parseSelectedMachineId } from '@/lib/development/development-route';
+import { parseSelectedMachineId, buildMachineHref } from '@/lib/development/development-route';
 import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
 import SessionLeaves from '@/components/layout/middle-content/page-views/machine/workspace/SessionLeaves';
-
-const GLOBAL_BASE_PATH = '/dashboard/development';
 
 /**
  * The Development surface's left sidebar. Two modes, one component (mirroring
@@ -134,10 +132,44 @@ function ListNotice({ children }: { children: string }) {
 }
 
 /**
- * The drive-scoped list body. Its states are mutually exclusive, so they're
- * early returns rather than a stack of `&&` guards each having to re-state
- * every earlier condition's negation.
+ * The one ordering-sensitive guard chain both list bodies need, shared so a
+ * future fix to the ordering (e.g. why error is checked ahead of loading, or
+ * loading ahead of empty) only has to be made once. Returns the notice to
+ * show, or `null` when the caller should render its actual list.
+ *
+ * Order matters: auth-pending and non-admin come first so a cold load or a
+ * refused user never sees "Failed"/"empty" wording instead. Error is checked
+ * ahead of loading and empty because SWR reports `isLoading: false` with no
+ * data on its error path — indistinguishable from "genuinely empty" unless
+ * error is checked first — but only when there's nothing to show yet: a
+ * background poll's error must not tear down a list the caller already has.
  */
+function resolveListNotice({
+  authLoading,
+  isAdmin,
+  hasError,
+  isLoading,
+  isEmpty,
+  emptyMessage,
+}: {
+  authLoading: boolean;
+  isAdmin: boolean;
+  hasError: boolean;
+  isLoading: boolean;
+  isEmpty: boolean;
+  emptyMessage: string;
+}): string | null {
+  if (authLoading) return 'Loading…';
+  // Same wording MachineView uses, so the surface and the page refuse a
+  // non-admin identically.
+  if (!isAdmin) return 'Machine access requires administrator privileges';
+  if (hasError && isEmpty) return 'Failed to load machines';
+  if (isLoading) return 'Loading…';
+  if (isEmpty) return emptyMessage;
+  return null;
+}
+
+/** The drive-scoped list body: every machine in one drive. */
 function DriveMachineList({
   authLoading,
   isAdmin,
@@ -157,29 +189,22 @@ function DriveMachineList({
   selectedMachineId: string | null;
   isSheetBreakpoint: boolean;
 }) {
-  // Until auth resolves, `role` is simply unknown — saying "you're not an admin"
-  // then would flash the refusal at an admin on every cold load.
-  if (authLoading) return <ListNotice>Loading…</ListNotice>;
-  // Same wording MachineView uses, so the surface and the page refuse a
-  // non-admin identically.
-  if (!isAdmin) return <ListNotice>Machine access requires administrator privileges</ListNotice>;
-  // Only when the failure left us with NOTHING to show. The list polls, and SWR
-  // keeps the last good data while setting `error` on a failed revalidation — so
-  // reporting the error ahead of the data would let one blip of a background poll
-  // tear down the whole tree (losing every expansion and its session leaves) while
-  // the app still holds a perfectly good list.
-  if (error && machines.length === 0) return <ListNotice>Failed to load machines</ListNotice>;
-  if (isLoading) return <ListNotice>Loading…</ListNotice>;
-  if (machines.length === 0) return <ListNotice>No machines in this drive yet</ListNotice>;
-
-  const basePath = `/dashboard/${driveId}/development`;
+  const notice = resolveListNotice({
+    authLoading,
+    isAdmin,
+    hasError: !!error,
+    isLoading,
+    isEmpty: machines.length === 0,
+    emptyMessage: 'No machines in this drive yet',
+  });
+  if (notice) return <ListNotice>{notice}</ListNotice>;
 
   return (
     <>
       {machines.map((machine) => (
         <MachineTreeSection
           key={machine.id}
-          basePath={basePath}
+          driveId={driveId}
           machineId={machine.id}
           title={machine.title}
           selected={machine.id === selectedMachineId}
@@ -190,12 +215,7 @@ function DriveMachineList({
   );
 }
 
-/**
- * The GLOBAL list body: every drive's machines, grouped under a drive header.
- * Same early-return shape as {@link DriveMachineList} — the states it guards
- * against (auth pending, non-admin, failed fetch, empty) are identical, just
- * over every drive instead of one.
- */
+/** The GLOBAL list body: every drive's machines, grouped under a drive header. */
 function GlobalMachineList({
   authLoading,
   isAdmin,
@@ -213,11 +233,15 @@ function GlobalMachineList({
   selectedMachineId: string | null;
   isSheetBreakpoint: boolean;
 }) {
-  if (authLoading) return <ListNotice>Loading…</ListNotice>;
-  if (!isAdmin) return <ListNotice>Machine access requires administrator privileges</ListNotice>;
-  if (error && drives.length === 0) return <ListNotice>Failed to load machines</ListNotice>;
-  if (isLoading) return <ListNotice>Loading…</ListNotice>;
-  if (drives.length === 0) return <ListNotice>No machines across your drives yet</ListNotice>;
+  const notice = resolveListNotice({
+    authLoading,
+    isAdmin,
+    hasError: !!error,
+    isLoading,
+    isEmpty: drives.length === 0,
+    emptyMessage: 'No machines across your drives yet',
+  });
+  if (notice) return <ListNotice>{notice}</ListNotice>;
 
   return (
     <>
@@ -229,7 +253,7 @@ function GlobalMachineList({
           {drive.machines.map((machine) => (
             <MachineTreeSection
               key={machine.id}
-              basePath={GLOBAL_BASE_PATH}
+              driveId={undefined}
               machineId={machine.id}
               title={machine.title}
               selected={machine.id === selectedMachineId}
@@ -254,21 +278,20 @@ const isMachineNode = (node: MachineTreeNode) => node.level === 'machine';
  * rows "selectable" would hand them a click action that goes nowhere (and would
  * cost them their expand-on-label-click affordance).
  *
- * `basePath` is `/dashboard/{driveId}/development` in drive-scoped mode or
- * `/dashboard/development` in global mode — the surface the machine's detail
- * route belongs to. Global mode deliberately does NOT route into
+ * `driveId` is the drive this row's caller is scoped to — `undefined` in
+ * global mode. It's only ever used to build the href via the centralized
+ * `buildMachineHref` (which is also what keeps global mode from routing into
  * `/dashboard/{driveId}/development/{machineId}` even though the drive is
- * known: crossing into that route tree would remount the global layout's
- * keep-alive host, tearing down every terminal it's keeping warm.
+ * known — see that function's doc comment for why).
  */
 function MachineTreeSection({
-  basePath,
+  driveId,
   machineId,
   title,
   selected,
   isSheetBreakpoint,
 }: {
-  basePath: string;
+  driveId: string | undefined;
   machineId: string;
   title: string;
   selected: boolean;
@@ -282,9 +305,9 @@ function MachineTreeSection({
   const focusTerminal = useMachineTabStore((state) => state.focusTerminal);
 
   const navigateToMachine = useCallback(() => {
-    router.push(`${basePath}/${machineId}`);
+    router.push(buildMachineHref(driveId, machineId));
     if (isSheetBreakpoint) setLeftSheetOpen(false);
-  }, [router, basePath, machineId, isSheetBreakpoint, setLeftSheetOpen]);
+  }, [router, driveId, machineId, isSheetBreakpoint, setLeftSheetOpen]);
 
   const openMachine = useCallback(() => {
     // Picking the machine itself (not one of its sessions) says the user wants

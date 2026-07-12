@@ -15,23 +15,16 @@ export interface DriveMachineGroup {
   machines: DriveMachine[];
 }
 
-const fetcher = (url: string) =>
-  fetchWithAuth(url).then(async (res) => {
+/** Shared by both machines-fetching hooks below — the per-drive and global responses only differ in shape, not in how a failure is reported. */
+function machinesFetcher<T>(url: string): Promise<T> {
+  return fetchWithAuth(url).then(async (res) => {
     if (!res.ok) {
       const body = await res.json().catch(() => null);
       throw new Error(body?.error ?? 'Failed to fetch machines');
     }
-    return res.json() as Promise<{ machines: DriveMachine[] }>;
+    return res.json() as Promise<T>;
   });
-
-const globalFetcher = (url: string) =>
-  fetchWithAuth(url).then(async (res) => {
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      throw new Error(body?.error ?? 'Failed to fetch machines');
-    }
-    return res.json() as Promise<{ drives: DriveMachineGroup[] }>;
-  });
+}
 
 /**
  * Every Machine page in a drive — the root tier of the Development surface's
@@ -60,7 +53,7 @@ export function useDriveMachines(driveId: string | null) {
   // Machine page is touched). It's because the consumers key on the IDS alone:
   // `useStickyMachineIds` and the host's `validKey` both collapse the list to its
   // ids, so a payload that carries new timestamps but the same machines is inert.
-  const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
+  const { data, error, isLoading, mutate } = useSWR(key, machinesFetcher<{ machines: DriveMachine[] }>, {
     refreshInterval: 30_000,
   });
 
@@ -86,7 +79,7 @@ export function useDriveMachines(driveId: string | null) {
 export function useAllMachines(enabled: boolean) {
   const key = enabled ? '/api/machines' : null;
 
-  const { data, error, isLoading, mutate } = useSWR(key, globalFetcher, {
+  const { data, error, isLoading, mutate } = useSWR(key, machinesFetcher<{ drives: DriveMachineGroup[] }>, {
     refreshInterval: 30_000,
   });
 

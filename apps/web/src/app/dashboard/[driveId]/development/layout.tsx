@@ -8,6 +8,7 @@ import { parseSelectedMachineId } from '@/lib/development/development-route';
 import { useStickyMachineIds } from '@/lib/development/use-sticky-machine-ids';
 import { useDrainPendingSession } from '@/lib/development/use-drain-pending-session';
 import { DetailState } from '@/lib/development/DetailState';
+import { resolveDisplayedMachine } from '@/lib/development/displayed-machine';
 
 /**
  * The Development surface's detail region.
@@ -44,29 +45,11 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
   // doc comment) — a PTY stream must not outlive its drive context.
   const stickyMachineIds = useStickyMachineIds(machines, driveId);
 
-  // Two different questions, two different answers — conflating them is what made
-  // an earlier version both kill live terminals AND never report a deleted one.
-  //
-  // "Does this machine still exist?" is answered by the LATEST fetch: a machine
-  // that's gone must stop being shown, or "Machine not found" is unreachable.
-  // "Which machines may stay mounted?" is answered by the STICKY set, because a
-  // machine can drop out of a fetch without being deleted (see below) and
-  // unmounting it would disconnect a running terminal.
-  //
-  // So a machine that vanishes stops being *displayed* immediately, while its
-  // terminal stays warm (hidden) until the LRU ages it out. A fetch blip
-  // therefore costs the user a notice, never a dead session — and the notice IS
-  // transient, because `useDriveMachines` polls (without that, a single blip
-  // would hide a live machine for the rest of the session, and both ways out —
-  // reload, or leave and return — unmount this host and kill every warm
-  // terminal).
-  const isKnownMachine = selectedMachineId !== null && machines.some((m) => m.id === selectedMachineId);
-  // What the host actually DISPLAYS — not merely what the URL selects. The drain
-  // must gate on this same value: opening a session into a machine the host is
-  // keeping hidden would mount an xterm inside a `display:none` container, where
-  // `fit()` measures a zero-sized box and the PTY is created at a bogus geometry
-  // — wrapping its output for the life of the session.
-  const displayedMachineId = isKnownMachine ? selectedMachineId : null;
+  // The notice IS transient when a machine vanishes, because `useDriveMachines`
+  // polls (without that, a single blip would hide a live machine for the rest
+  // of the session, and both ways out — reload, or leave and return — unmount
+  // this host and kill every warm terminal).
+  const { isKnownMachine, displayedMachineId } = resolveDisplayedMachine(machines, selectedMachineId);
 
   useDrainPendingSession(displayedMachineId);
 

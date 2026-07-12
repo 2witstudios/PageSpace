@@ -142,6 +142,45 @@ describe('listMachinesAcrossDrives', () => {
     expect(await listMachinesAcrossDrives(deps, 'user-1')).toEqual([]);
   });
 
+  test('one drive failing to scan does not blank the whole global list', async () => {
+    const deps: GlobalMachineListDeps = {
+      findAccessibleDrives: vi.fn(async () => [
+        { id: 'drive-1', name: 'Alpha' },
+        { id: 'drive-broken', name: 'Broken' },
+        { id: 'drive-2', name: 'Beta' },
+      ]),
+      findMachinePagesInDrive: vi.fn(async (driveId: string) => {
+        if (driveId === 'drive-broken') throw new Error('connection reset');
+        return driveId === 'drive-1' ? [machine('m-1')] : [machine('m-2')];
+      }),
+      canUserViewPage: vi.fn(async () => true),
+    };
+
+    const result = await listMachinesAcrossDrives(deps, 'user-1');
+
+    expect(result.map((g) => g.driveId)).toEqual(['drive-1', 'drive-2']);
+  });
+
+  test('a drive whose visibility check throws does not blank the whole global list', async () => {
+    const deps: GlobalMachineListDeps = {
+      findAccessibleDrives: vi.fn(async () => [
+        { id: 'drive-1', name: 'Alpha' },
+        { id: 'drive-broken', name: 'Broken' },
+      ]),
+      findMachinePagesInDrive: vi.fn(async (driveId: string) =>
+        driveId === 'drive-broken' ? [machine('m-broken')] : [machine('m-1')],
+      ),
+      canUserViewPage: vi.fn(async (_userId: string, pageId: string) => {
+        if (pageId === 'm-broken') throw new Error('permission lookup failed');
+        return true;
+      }),
+    };
+
+    const result = await listMachinesAcrossDrives(deps, 'user-1');
+
+    expect(result.map((g) => g.driveId)).toEqual(['drive-1']);
+  });
+
   test('checks visibility against the acting user for every drive', async () => {
     const deps = buildGlobalDeps(
       [{ id: 'drive-1', name: 'Alpha' }],

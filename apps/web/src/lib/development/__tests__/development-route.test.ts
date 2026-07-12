@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { parseSelectedMachineId } from '../development-route';
+import { parseSelectedMachineId, buildMachineHref } from '../development-route';
 
 describe('parseSelectedMachineId', () => {
   test('reads the machine id out of the detail URL', () => {
@@ -29,5 +29,22 @@ describe('parseSelectedMachineId', () => {
 
   test('a drive-scoped path is not mistaken for the global one', () => {
     expect(parseSelectedMachineId('/dashboard/drive-1/development/machine-1', undefined)).toBeNull();
+  });
+});
+
+describe('buildMachineHref', () => {
+  test('builds a drive-scoped machine href', () => {
+    expect(buildMachineHref('drive-1', 'machine-1')).toBe('/dashboard/drive-1/development/machine-1');
+  });
+
+  test('builds a GLOBAL machine href, never embedding the drive', () => {
+    expect(buildMachineHref(undefined, 'machine-1')).toBe('/dashboard/development/machine-1');
+  });
+
+  test('round-trips with parseSelectedMachineId for every driveId', () => {
+    for (const driveId of ['drive-1', undefined]) {
+      const href = buildMachineHref(driveId, 'machine-1');
+      expect(parseSelectedMachineId(href, driveId)).toBe('machine-1');
+    }
   });
 });
