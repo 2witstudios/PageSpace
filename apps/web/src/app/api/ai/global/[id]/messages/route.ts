@@ -1087,11 +1087,16 @@ MENTION PROCESSING:
       }).catch(() => {});
     }
 
-    // Same per-conversation in-flight guard as POST /api/ai/chat. A stream is a
-    // server-owned entity: at most one may be generating on a conversation at a time.
-    // Without this the global assistant happily starts a second generation on the same
-    // conversation — two agents, two assistant rows, two bills. Takeover, not 409; see
-    // stream-liveness.ts for why rejecting would self-lock the conversation.
+    // Same per-conversation in-flight guard as POST /api/ai/chat. Without it the global
+    // assistant happily starts a second generation on the same conversation — two agents, two
+    // assistant rows, two bills. Takeover, not 409; see stream-liveness.ts for why rejecting
+    // would self-lock the conversation.
+    //
+    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
+    // comment used to claim that it did. See the docblock on takeOverConversationStreams: the
+    // SELECT there and the INSERT in createStreamLifecycle are not atomic together, so two
+    // near-simultaneous sends can both find nothing in flight and both proceed. It narrows the
+    // window; it does not close it.
     await takeOverConversationStreams({
       conversationId,
       channelId,
