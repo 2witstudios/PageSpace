@@ -34,7 +34,7 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
   const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
   const selectedMachineId = parseSelectedMachineId(pathname, driveId);
 
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const isAdmin = user?.role === 'admin';
 
   // Same SWR key (and same admin gate) as the sidebar, so this is a cache read
@@ -52,6 +52,7 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
 
       {selectedMachineId && (
         <DetailState
+          authLoading={authLoading}
           isAdmin={isAdmin}
           isLoading={isLoading}
           error={error}
@@ -72,16 +73,22 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
  * host declines to mount.
  */
 function DetailState({
+  authLoading,
   isAdmin,
   isLoading,
   error,
   isKnownMachine,
 }: {
+  authLoading: boolean;
   isAdmin: boolean;
   isLoading: boolean;
   error: Error | undefined;
   isKnownMachine: boolean;
 }) {
+  // `role` isn't persisted across a reload, so on every cold load it is briefly
+  // unknown. Refusing the user in that window would flash "you're not an admin"
+  // at an admin refreshing the page — the same gate the sidebar applies.
+  if (authLoading) return <DetailNotice title="Opening machine…" />;
   if (!isAdmin) return <DetailNotice title="Machine access requires administrator privileges" />;
   // Before "not found": a failed fetch leaves `machines` empty with isLoading
   // false, which is indistinguishable from "this machine doesn't exist" unless

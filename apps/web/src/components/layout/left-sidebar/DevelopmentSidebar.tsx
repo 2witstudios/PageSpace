@@ -17,6 +17,7 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { useDriveMachines, type DriveMachine } from '@/hooks/useDriveMachines';
 import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
 import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
@@ -180,6 +181,7 @@ function MachineTreeSection({
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const requestSession = usePendingSessionStore((state) => state.requestSession);
   const clearPending = usePendingSessionStore((state) => state.clearPending);
+  const focusTerminal = useMachineTabStore((state) => state.focusTerminal);
 
   const navigateToMachine = useCallback(() => {
     router.push(`/dashboard/${driveId}/development/${machineId}`);
@@ -196,21 +198,20 @@ function MachineTreeSection({
 
   const onOpenTerminal = useCallback(
     (scope: OpenTerminalScope) => {
-      // Record the intent and navigate; the surface's layout opens the session
-      // once that machine's pane region exists. Writing the pane straight into
-      // the workspace store from here would not survive — MachineWorkspace
+      // Bring the machine's Terminal tab forward FIRST. Only that tab mounts the
+      // machine's workspace, so on a machine parked on Code/Diff/Settings the
+      // session would otherwise have nowhere to land — the click would do
+      // nothing at all.
+      focusTerminal(machineId);
+      // Then record the intent and navigate; the surface's layout opens the
+      // session once that machine's pane region exists. Writing the pane straight
+      // into the workspace store from here would not survive — MachineWorkspace
       // disposes its workspace on unmount and rebuilds it on mount, destroying
       // anything authored ahead of it.
       requestSession(machineId, scope);
       navigateToMachine();
-      // KNOWN GAP: if the user is already on THIS machine with a non-Terminal tab
-      // active, the session lands in the pane but stays behind that tab —
-      // MachineView's tabs are uncontrolled (defaultValue="terminal"), so nothing
-      // here can focus them. Focusing needs MachineView's active tab to become
-      // controlled, left to the follow-up rather than fought over with the
-      // in-flight terminal-UX work (#2017).
     },
-    [requestSession, machineId, navigateToMachine],
+    [focusTerminal, requestSession, machineId, navigateToMachine],
   );
 
   const renderNodeChildren = useCallback(
