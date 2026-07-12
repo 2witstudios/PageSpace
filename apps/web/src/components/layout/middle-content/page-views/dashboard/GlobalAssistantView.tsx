@@ -286,7 +286,7 @@ const GlobalAssistantView: React.FC = () => {
   // CHAT CONFIGURATION
   // ============================================
 
-  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat');
+  const agentTransport = useChatTransport(agentConversationId, '/api/ai/chat', selectedAgent?.id ?? null);
 
   // Agent mode chat config
   const agentChatConfig = useMemo(() => {

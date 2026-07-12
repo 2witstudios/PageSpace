@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useSocket } from './useSocket';
+import { useAuth } from './useAuth';
+import { useSocketStore } from '@/stores/useSocketStore';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import { consumeStreamJoin } from '@/lib/ai/core/stream-join-client';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
+import { shouldAttachStream } from '@/lib/ai/streams/shouldAttachStream';
+import { isChannelConsuming } from '@/lib/ai/streams/consumingChannels';
+import {
+  shouldRefreshOnReconnect,
+  type ConnectionStatus,
+} from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { shouldSkipBootstrappedStream } from '@/lib/ai/streams/shouldSkipBootstrappedStream';
 import { claimBootstrapConsumer, releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
@@ -36,12 +44,42 @@ interface ActiveStreamRow {
 }
 
 export interface UseChannelStreamSocketOptions {
-  /** Fires once per messageId on clean finalize (SSE resolve or socket complete); NOT on SSE error. */
-  onStreamComplete?: (messageId: string, conversationId?: string) => void;
+  /**
+   * Fires once per messageId on finalize (SSE resolve, or socket complete).
+   *
+   * `info.joinFailed` means the SSE join never succeeded — usually because the stream
+   * lives on another web instance, whose in-process multicast registry we cannot reach.
+   * The stream itself was fine; we just couldn't watch it. Whatever parts the store held
+   * are a stale snapshot at best, so the store entry has ALREADY been dropped and the
+   * consumer must reload the (durably persisted) message from the DB rather than
+   * synthesize a bubble from what it has. Consumers that key on "is there still a store
+   * entry?" would otherwise silently do nothing and lose the reply.
+   */
+  onStreamComplete?: (
+    messageId: string,
+    conversationId?: string,
+    info?: { joinFailed: boolean },
+  ) => void;
   /** Fires once per messageId when DB bootstrap finds an in-flight stream from this browser session. */
-  onOwnStreamBootstrap?: (event: { messageId: string }) => void;
+  onOwnStreamBootstrap?: (event: { messageId: string; conversationId: string }) => void;
   /** Fires once per own-bootstrapped messageId on any finalize path (resolve, complete, or error). */
   onOwnStreamFinalize?: (event: { messageId: string }) => void;
+  /**
+   * Fires after every bootstrap with the messageIds the server says are STILL live on this
+   * channel. The authoritative answer to "is the stream I am holding state for still
+   * running?".
+   *
+   * Consumers hold ownership state (a claimed Stop slot, a streaming flag) that is only
+   * ever released by `onOwnStreamFinalize` — and there are paths where that event can
+   * never fire. The socket effect tears down and rebuilds on a socket-instance swap (an
+   * `auth:refreshed` reconnect builds a brand-new `io()`), and on teardown it deliberately
+   * does NOT finalize; if the stream ended during that gap, nothing is left to announce it
+   * and the consumer's flag strands `true` forever — a Stop button over a dead stream and,
+   * on the surfaces that OR it into `useStreamingRegistration`, permanent SWR suppression.
+   *
+   * Bootstrap already knows the truth, so it tells you: reconcile your claim against this.
+   */
+  onActiveStreamsSnapshot?: (liveMessageIds: ReadonlySet<string>) => void;
   /**
    * Fires when a remote user submits a message in this channel.
    *
@@ -112,6 +150,12 @@ export function useChannelStreamSocket(
   options?: UseChannelStreamSocketOptions,
 ): { rejoinActiveStreams: () => void } {
   const socket = useSocket();
+  // The signed-in user's id, so handleStreamStart can tell "my stream in another tab"
+  // from "another member's private conversation". Kept in a ref so it never re-registers
+  // the socket handlers.
+  const { user } = useAuth();
+  const localUserIdRef = useRef<string | null>(user?.id ?? null);
+  localUserIdRef.current = user?.id ?? null;
   // Holds the latest runBootstrap closure so rejoinActiveStreams can call it without
   // needing to be in the effect's dep array (the effect re-creates this on every run).
   const bootstrapRef = useRef<(() => void) | null>(null);
@@ -119,6 +163,7 @@ export function useChannelStreamSocket(
   const onStreamCompleteRef = useRef(options?.onStreamComplete);
   const onOwnStreamBootstrapRef = useRef(options?.onOwnStreamBootstrap);
   const onOwnStreamFinalizeRef = useRef(options?.onOwnStreamFinalize);
+  const onActiveStreamsSnapshotRef = useRef(options?.onActiveStreamsSnapshot);
   const onUserMessageRef = useRef(options?.onUserMessage);
   const onMessageEditedRef = useRef(options?.onMessageEdited);
   const onMessageDeletedRef = useRef(options?.onMessageDeleted);
@@ -130,6 +175,7 @@ export function useChannelStreamSocket(
   onStreamCompleteRef.current = options?.onStreamComplete;
   onOwnStreamBootstrapRef.current = options?.onOwnStreamBootstrap;
   onOwnStreamFinalizeRef.current = options?.onOwnStreamFinalize;
+  onActiveStreamsSnapshotRef.current = options?.onActiveStreamsSnapshot;
   onUserMessageRef.current = options?.onUserMessage;
   onMessageEditedRef.current = options?.onMessageEdited;
   onMessageDeletedRef.current = options?.onMessageDeleted;
@@ -152,14 +198,25 @@ export function useChannelStreamSocket(
     // Bootstrap-discovered own-stream messageIds. Acts as both an "is-own"
     // lookup and a one-shot guard for onOwnStreamFinalize.
     const ownStreamIds = new Set<string>();
+    // Streams whose SSE join failed. The common cause is benign but important:
+    // the multicast registry is per-process, so a stream owned by another web
+    // instance 404s here. Such a stream is still very much alive server-side —
+    // we just can't watch its tokens. What we CAN do is wait for its
+    // chat:stream_complete and reload the (durably persisted) message from the
+    // DB, which is what this set enables in handleStreamComplete below.
+    const joinFailed = new Set<string>();
 
     const { addStream, appendPart, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
-    const fireComplete = (messageId: string, conversationId?: string) => {
+    const fireComplete = (
+      messageId: string,
+      conversationId?: string,
+      info?: { joinFailed: boolean },
+    ) => {
       if (processed.has(messageId)) return;
       processed.add(messageId);
-      onStreamCompleteRef.current?.(messageId, conversationId);
+      onStreamCompleteRef.current?.(messageId, conversationId, info);
     };
 
     const fireOwnFinalize = (messageId: string) => {
@@ -194,7 +251,7 @@ export function useChannelStreamSocket(
           controllers.delete(messageId);
           releaseBootstrapConsumer(messageId);
           try {
-            fireComplete(messageId, conversationId);
+            fireComplete(messageId, conversationId, { joinFailed: false });
           } finally {
             removeStream(messageId);
             fireOwnFinalize(messageId);
@@ -204,10 +261,23 @@ export function useChannelStreamSocket(
           if (cancelled) return;
           controllers.delete(messageId);
           releaseBootstrapConsumer(messageId);
-          // Mark as processed so a subsequent chat:stream_complete event for
-          // the same messageId is a no-op for onStreamComplete: the catch
-          // path already finalized this stream locally.
-          processed.add(messageId);
+          // Deliberately NOT processed.add(messageId) here. A failed join does not
+          // mean the stream failed — the usual cause is that it lives on another web
+          // instance, where the per-process multicast registry can't see it. It is
+          // still generating, and it will still broadcast chat:stream_complete when
+          // it finishes. Suppressing that event (which is what processed.add did)
+          // left the finished assistant message unloaded: the ghost vanished and
+          // nothing replaced it. Marking the join as failed instead lets
+          // handleStreamComplete reload the persisted message from the DB.
+          //
+          // Unless completion already happened: a join commonly 404s *because* the
+          // stream just ended and the registry entry was deleted, in which case
+          // chat:stream_complete can land before this rejection settles. It has
+          // already finalized the stream, so there is nothing left to mark — and
+          // adding the id here would leave an entry no later event ever clears.
+          if (!processed.has(messageId)) {
+            joinFailed.add(messageId);
+          }
           // When the store was seeded from a persisted snapshot
           // (skipReplayCount > 0), a failed join usually means the
           // originator's process died — its in-memory registry is gone and
@@ -229,7 +299,15 @@ export function useChannelStreamSocket(
     // (or a mobile resume) doesn't lose visibility on what's currently happening
     // in this channel. Re-running is idempotent: claimBootstrapConsumer +
     // shouldSkipBootstrappedStream skip streams already being consumed.
+    // runBootstrap can be in flight more than once (mount, the reconnect effect, and
+    // rejoinActiveStreams all trigger it independently) and responses are not ordered. A
+    // slow older response landing after a newer one would carry a snapshot that predates a
+    // claim made in between — and releasing on it would kill the Stop button for a live
+    // stream. Only the newest run's snapshot is authoritative.
+    let bootstrapGeneration = 0;
+
     const runBootstrap = async () => {
+      const generation = (bootstrapGeneration += 1);
       try {
         const res = await fetchWithAuth(
           `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
@@ -242,6 +320,11 @@ export function useChannelStreamSocket(
         for (const stream of data.streams ?? []) {
           if (shouldSkipBootstrappedStream(stream.messageId, processed, controllers)) continue;
           const isOwn = isOwnStream(stream.triggeredBy, localBrowserSessionId);
+          // Bootstrap also re-runs on socket reconnect, which can land while this
+          // tab's useChat is mid-POST on its own stream — attaching to the multicast
+          // as well would render every remaining token twice. `isOwn` alone can't
+          // tell us that (it survives a reload; consuming state doesn't).
+          if (!shouldAttachStream({ isOwn, isConsuming: isChannelConsuming(channelId) })) continue;
           // Seed the persisted snapshot as the stream's initial parts so the
           // restored mid-stream content renders immediately — without waiting
           // on (or depending on) the live multicast, which is unavailable if
@@ -271,9 +354,21 @@ export function useChannelStreamSocket(
           });
           if (isOwn) {
             ownStreamIds.add(stream.messageId);
-            onOwnStreamBootstrapRef.current?.({ messageId: stream.messageId });
+            onOwnStreamBootstrapRef.current?.({
+              messageId: stream.messageId,
+              conversationId: stream.conversationId,
+            });
           }
           startConsume(stream.messageId, stream.conversationId, persistedParts.length);
+        }
+
+        // The server's word on what is still running. Consumers reconcile any ownership
+        // state they are holding against it — see onActiveStreamsSnapshot. Superseded runs
+        // stay silent: their answer is stale, and acting on it releases live claims.
+        if (generation === bootstrapGeneration) {
+          onActiveStreamsSnapshotRef.current?.(
+            new Set((data.streams ?? []).map((stream) => stream.messageId)),
+          );
         }
       } catch (err) {
         if (cancelled) return;
@@ -289,7 +384,38 @@ export function useChannelStreamSocket(
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
       if (payload.pageId !== channelId) return;
-      if (isOwnStream(payload.triggeredBy, localBrowserSessionId)) return;
+      // Not ours to watch. A page room holds every member of the page, but conversations
+      // are private by default (`listConversations` shows you only `userId = you OR
+      // isShared`), so most streams on this channel are somebody else's private chat.
+      // The server refuses those joins anyway — this just avoids making the request:
+      // otherwise every member's client fires a doomed /stream-join per assistant
+      // message, each one an authz denial in the audit log.
+      //
+      // Skip ONLY on certainty, in both directions:
+      //
+      //   - `isShared` must be an explicit `false`. During a rolling deploy an
+      //     originator on the previous build sends no such field, and dropping on
+      //     `undefined` would black out multiplayer for shared conversations.
+      //   - we must actually KNOW who we are. `useAuth()` returns `user: null` until
+      //     auth resolves, and treating "unknown" as "not me" would drop the user's OWN
+      //     private stream in that window — the precise failure this whole PR exists to
+      //     fix.
+      //
+      // When in doubt, attach and let the server decide: an unauthorized join is a quiet
+      // 404 that the client already handles benignly. The server is the authority here;
+      // this check exists only to avoid firing a request that is certain to be refused.
+      const localUserId = localUserIdRef.current;
+      const startedBySomeoneElse = localUserId !== null && payload.triggeredBy.userId !== localUserId;
+      if (startedBySomeoneElse && payload.isShared === false) return;
+
+      const isOwn = isOwnStream(payload.triggeredBy, localBrowserSessionId);
+      // The ONLY reason to decline a live stream: this browser context is already
+      // reading its tokens off the POST body, so joining the multicast too would
+      // double-render. This used to be a blanket `isOwn` skip, which meant a
+      // reloaded tab — still "own" via sessionStorage, but consuming nothing —
+      // dropped its own stream forever and showed an empty chat while the server
+      // kept generating. See consumingChannels.ts / shouldAttachStream.ts.
+      if (!shouldAttachStream({ isOwn, isConsuming: isChannelConsuming(channelId) })) return;
       if (controllers.has(payload.messageId)) return;
 
       addStream({
@@ -297,9 +423,17 @@ export function useChannelStreamSocket(
         pageId: payload.pageId,
         conversationId: payload.conversationId,
         triggeredBy: payload.triggeredBy,
-        isOwn: false,
+        isOwn,
         startedAt: payload.startedAt,
       });
+
+      if (isOwn) {
+        ownStreamIds.add(payload.messageId);
+        onOwnStreamBootstrapRef.current?.({
+          messageId: payload.messageId,
+          conversationId: payload.conversationId,
+        });
+      }
 
       startConsume(payload.messageId, payload.conversationId);
     };
@@ -311,8 +445,17 @@ export function useChannelStreamSocket(
         controller.abort();
         controllers.delete(payload.messageId);
       }
+      // If the SSE join failed, whatever parts we hold are a stale snapshot at best
+      // — the authoritative message is in the DB. Dropping the store entry BEFORE
+      // firing makes consumers take their reload-from-DB branch
+      // (shouldReloadOnComountComplete) instead of synthesizing a truncated bubble.
+      const didJoinFail = joinFailed.has(payload.messageId);
+      if (didJoinFail) {
+        joinFailed.delete(payload.messageId);
+        removeStream(payload.messageId);
+      }
       try {
-        fireComplete(payload.messageId, payload.conversationId);
+        fireComplete(payload.messageId, payload.conversationId, { joinFailed: didJoinFail });
       } finally {
         removeStream(payload.messageId);
         fireOwnFinalize(payload.messageId);
@@ -380,6 +523,21 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
+      // Release every own-stream claim we handed out. This is the ONLY chance: `cancelled`
+      // is latched on this effect closure, so every future runBootstrap — including the
+      // reconnect re-bootstrap and rejoinActiveStreams, which both call through
+      // bootstrapRef into THIS closure — returns early. onActiveStreamsSnapshot can
+      // therefore never fire again on this channel, and a consumer holding a claim would
+      // strand it forever: a Stop button over a stream it can no longer reach, and (on the
+      // surfaces that OR the flag into useStreamingRegistration) permanent SWR suppression.
+      // The effect only re-arms on a [socket, channelId] change, which may never come —
+      // the global channel's id is fixed for the whole session.
+      //
+      // Deliberately fired AFTER `cancelled` (unlike the SSE path, which must NOT run its
+      // clean-finalize here): this is an explicit teardown of ownership, not a completion.
+      for (const msgId of [...ownStreamIds]) {
+        fireOwnFinalize(msgId);
+      }
       clearPageStreams(channelId);
     };
 
@@ -418,6 +576,27 @@ export function useChannelStreamSocket(
 
   // Stable callback; the ref always points at the latest runBootstrap closure.
   const rejoinActiveStreams = useCallback(() => { bootstrapRef.current?.(); }, []);
+
+  // Re-bootstrap on socket reconnect. The effect above keys on [socket, channelId],
+  // and socket.io reconnects the SAME instance in place — so without this, a
+  // connection drop silently costs us every chat:stream_start emitted while we were
+  // away, and the tab stays blind to a live stream until it is reloaded. Bootstrap
+  // is idempotent (claimBootstrapConsumer + shouldSkipBootstrappedStream), so
+  // re-running it is safe. Mirrors useAgentChannelMultiplayer's reconnect handler.
+  const socketConnectionStatus = useSocketStore((s) => s.connectionStatus);
+  const prevConnectionStatusRef = useRef<ConnectionStatus | null>(null);
+  const hasInitialConnectRef = useRef(false);
+  useEffect(() => {
+    if (!channelId) return;
+    const prev = prevConnectionStatusRef.current;
+    prevConnectionStatusRef.current = socketConnectionStatus;
+    if (shouldRefreshOnReconnect(prev, socketConnectionStatus, hasInitialConnectRef.current)) {
+      bootstrapRef.current?.();
+    }
+    if (prev !== 'connected' && socketConnectionStatus === 'connected') {
+      hasInitialConnectRef.current = true;
+    }
+  }, [channelId, socketConnectionStatus]);
 
   return { rejoinActiveStreams };
 }

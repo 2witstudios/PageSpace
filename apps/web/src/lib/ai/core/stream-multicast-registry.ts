@@ -1,6 +1,11 @@
 import type { UIMessage } from 'ai';
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
 
-const MAX_STREAM_AGE_MS = 10 * 60 * 1000;
+// Hard cap on how long an entry survives without finish() — a leak backstop, not a policy.
+// Shares STREAM_MAX_LIFETIME_MS with the abort registry and the heartbeat cap: if this were
+// shorter, a still-running long generation would be reported as live by /active-streams
+// while no client could join it any more.
+const MAX_STREAM_AGE_MS = STREAM_MAX_LIFETIME_MS;
 
 export type UIMessagePart = UIMessage['parts'][number];
 

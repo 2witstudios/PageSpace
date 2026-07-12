@@ -148,6 +148,169 @@ describe('stream-abort-client', () => {
     });
   });
 
+  // AC1: the transport is the choke point where a client declares "I am consuming this
+  // stream's body". It is the ONLY reason the client's own chat:stream_start is
+  // uninteresting to it — and the reason a RELOADED tab (fresh module state, empty set)
+  // re-attaches to its own stream instead of dropping it forever.
+  describe('createStreamTrackingFetch — consuming-channel marking', () => {
+    const streamingResponse = (chunks: string[] = ['data']) => {
+      const encoder = new TextEncoder();
+      let i = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (i >= chunks.length) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(encoder.encode(chunks[i]));
+          i += 1;
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+
+    const drain = async (response: Response) => {
+      const reader = response.body!.getReader();
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    };
+
+    it('given a POST in flight, should mark the channel as consuming BEFORE the request leaves (it must not lose the race against broadcastAiStreamStart)', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      let markedAtRequestTime = false;
+      vi.mocked(fetchWithAuth).mockImplementationOnce(async () => {
+        markedAtRequestTime = consuming.isChannelConsuming('page-1');
+        return streamingResponse();
+      });
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
+
+      expect(markedAtRequestTime).toBe(true);
+      await drain(response);
+    });
+
+    // THE FREEZE. useChat only rebuilds its `Chat` when its `id` changes, every surface passes a
+    // CONSTANT id, and `Chat` binds its transport once in the constructor — so the FIRST transport
+    // a surface builds serves every POST for the life of that surface. Baking the keys into this
+    // closure froze them at whatever conversation/agent the surface happened to start with: after
+    // one switch the streamId was WRITTEN under the old chatId and READ under the new one (a
+    // guaranteed abort miss — the local fetch stops, the server keeps generating and billing), and
+    // the wrong channel was marked consuming (so the tab failed to recognise its OWN stream on the
+    // socket, joined its own multicast, and rendered the reply twice).
+    //
+    // The keys must be resolved at CALL time. One fetch, one switch, current keys.
+    it('given the surface switched conversation, should use the CURRENT keys — not the ones it was built with', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      let chatId = 'conv-1';
+      let channelId: string | undefined = 'agent-1';
+      const trackingFetch = client.createStreamTrackingFetch({
+        getChatId: () => chatId,
+        getChannelId: () => channelId,
+      });
+
+      // The surface moves on — exactly the switch the frozen closure could not see.
+      chatId = 'conv-2';
+      channelId = 'agent-2';
+
+      let markedChannel: string | null = null;
+      vi.mocked(fetchWithAuth).mockImplementationOnce(async () => {
+        markedChannel = consuming.isChannelConsuming('agent-2') ? 'agent-2'
+          : consuming.isChannelConsuming('agent-1') ? 'agent-1' : null;
+        const base = streamingResponse();
+        return new Response(base.body, { status: 200, headers: { 'X-Stream-Id': 'stream-xyz' } });
+      });
+
+      const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
+
+      // The CURRENT channel is marked, not the one the transport was born with.
+      expect(markedChannel).toBe('agent-2');
+      // ...and the streamId is filed under the CURRENT conversation, so Stop can find it.
+      expect(client.getActiveStreamId({ chatId: 'conv-2' })).toBe('stream-xyz');
+      expect(client.getActiveStreamId({ chatId: 'conv-1' })).toBeUndefined();
+
+      await drain(response);
+    });
+
+    it('given the response body finishes, should unmark the channel', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a', 'b']));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
+
+      // Still consuming while tokens are arriving — the headers landing is NOT the end.
+      expect(consuming.isChannelConsuming('page-1')).toBe(true);
+
+      await drain(response);
+
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given the body is cancelled (user hits Stop), should unmark the channel', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a', 'b', 'c']));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
+
+      await response.body!.cancel('user stopped');
+
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given the fetch rejects, should unmark the channel (a stale mark would make this tab ignore its own stream forever)', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('network down'));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+
+      await expect(trackingFetch('/api/ai/chat', { method: 'POST' })).rejects.toThrow('network down');
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given a non-ok response (e.g. 402 out of credits), should unmark the channel', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response('{}', { status: 402 }));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      await trackingFetch('/api/ai/chat', { method: 'POST' });
+
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given the tracked response, should preserve status and headers (the X-Stream-Id contract must survive the body re-wrap)', async () => {
+      const client = await import('../stream-abort-client');
+
+      const body = new ReadableStream<Uint8Array>({ start(c) { c.close(); } });
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(
+        new Response(body, { status: 200, headers: { 'X-Stream-Id': 'stream-9' } }),
+      );
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Stream-Id')).toBe('stream-9');
+      expect(client.getActiveStreamId({ chatId: 'chat-1' })).toBe('stream-9');
+    });
+  });
+
   describe('createStreamTrackingFetch', () => {
     it('extracts X-Stream-Id header and stores it', async () => {
       const client = await import('../stream-abort-client');
@@ -160,7 +323,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
 
-      const trackingFetch = client.createStreamTrackingFetch({ chatId: 'chat-123' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
       await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       expect(mockResponse.headers.get).toHaveBeenCalledWith('X-Stream-Id');
@@ -178,7 +341,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
 
-      const trackingFetch = client.createStreamTrackingFetch({ chatId: 'chat-123' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
       await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBeUndefined();
@@ -195,7 +358,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
 
-      const trackingFetch = client.createStreamTrackingFetch({ chatId: 'chat-123' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
       const request = new Request('https://example.com/api/ai/chat');
       await trackingFetch(request, {});
 
@@ -214,7 +377,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
 
-      const trackingFetch = client.createStreamTrackingFetch({ chatId: 'chat-123' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
       await trackingFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
