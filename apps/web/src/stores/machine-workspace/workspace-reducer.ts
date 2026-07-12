@@ -371,11 +371,10 @@ export function runningPaneCount(state: MachineWorkspacesState, scope?: MachineN
 
 /** Is this session in one of `workspace`'s panes? */
 export function paneShowing(workspace: WorkspaceState, scope: OpenTerminalScope): TerminalPaneState | undefined {
+  // A session IS its node scope plus a name, so both halves have to match: two
+  // branches of one project can each run an agent called `claude-a1b2c3`.
   return panesOf(workspace).find(
-    (pane) =>
-      pane.scope?.name === scope.name &&
-      (pane.scope?.projectName ?? '') === (scope.projectName ?? '') &&
-      (pane.scope?.branchName ?? '') === (scope.branchName ?? '')
+    (pane) => pane.scope != null && pane.scope.name === scope.name && isSameNodeScope(pane.scope, scope)
   );
 }
 

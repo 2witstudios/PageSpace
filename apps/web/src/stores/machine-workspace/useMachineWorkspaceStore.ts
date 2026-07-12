@@ -43,7 +43,6 @@ import {
   panesOf,
   childSessionIds,
   runningPaneCount,
-  sessionWorkspaceId as sessionWorkspaceIdOf,
   autoSessionName,
   MACHINE_NODE_SCOPE,
   type MachineNodeScope,
@@ -62,7 +61,7 @@ export type {
   TerminalPaneState,
   WorkspaceState,
 };
-export { autoSessionName, panesOf, MACHINE_NODE_SCOPE, sessionWorkspaceIdOf as sessionWorkspaceId };
+export { autoSessionName, panesOf, sessionWorkspaceId, MACHINE_NODE_SCOPE };
 
 /** Bump when the persisted shape changes; see the `migrate`/`merge` note below. */
 const PERSISTED_VERSION = 1;
