@@ -6,6 +6,11 @@ import { motion } from 'motion/react';
 import { Code2, GitCompare, Settings, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
+import {
+  useMachineTabStore,
+  DEFAULT_MACHINE_TAB,
+  type MachineTabValue,
+} from '@/stores/machine-workspace/useMachineTabStore';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import TerminalTab from './tabs/TerminalTab';
 import CodeTab from './tabs/CodeTab';
@@ -15,8 +20,6 @@ import SettingsTab from './tabs/SettingsTab';
 interface MachineViewProps {
   pageId: string;
 }
-
-type MachineTabValue = 'terminal' | 'code' | 'diff' | 'settings';
 
 const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.ElementType }[] = [
   { value: 'terminal', label: 'Terminal', icon: TerminalSquare },
@@ -35,10 +38,19 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
  * initializes. Terminal is the default. The export name (`MachineView`) and
  * `{ pageId }` prop shape are preserved so `CenterPanel.tsx` /
  * `MachineKeepAliveHost.tsx` need no change.
+ *
+ * The active tab is held in `useMachineTabStore` rather than by Radix, so that
+ * "show me this machine's terminal" is something another surface can ask for.
+ * The Development sidebar needs it: only the Terminal tab mounts a machine's
+ * workspace, so a session clicked on a machine parked on Code/Diff/Settings had
+ * nowhere to land. Behaviour is otherwise unchanged — a machine with no stored
+ * tab shows Terminal, as before.
  */
 const MachineView = ({ pageId }: MachineViewProps) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const activeTab = useMachineTabStore((state) => state.tabs[pageId] ?? DEFAULT_MACHINE_TAB);
+  const setTab = useMachineTabStore((state) => state.setTab);
 
   return (
     <motion.div
@@ -57,7 +69,11 @@ const MachineView = ({ pageId }: MachineViewProps) => {
       )}
 
       {isAdmin && (
-        <Tabs defaultValue="terminal" className="flex min-h-0 flex-1 flex-col gap-0">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setTab(pageId, value as MachineTabValue)}
+          className="flex min-h-0 flex-1 flex-col gap-0"
+        >
           <div className="border-b border-border px-2 py-1.5">
             <TabsList className="h-auto bg-transparent p-0">
               {TAB_TRIGGERS.map(({ value, label, icon: Icon }) => (

@@ -29,10 +29,24 @@ export function useMachineBranches(machineId: string | null, projectName: string
     revalidateOnFocus: false,
   });
 
+  /**
+   * `branchName` is free text — the SERVER normalizes it (see
+   * `normalizeBranchName`), so the returned `branchName` is the canonical one and
+   * is what callers must display, never what the user typed.
+   *
+   * `createdNew` says whether an existing upstream branch was checked out or a
+   * brand-new one was created off the default HEAD. Normalization can rewrite a
+   * name that DID exist upstream into one that doesn't (`_wip` → `wip`, since our
+   * charset rejects a leading `_`), and the user would otherwise have no way to
+   * tell an empty branch from their real one. Threaded through here so the spawn
+   * flow can SAY so; no caller renders it yet.
+   */
   const addBranch = useCallback(
     async (branchName: string) => {
       if (!machineId || !projectName) throw new Error('No active project');
-      const result = await post<{ branch: { branchName: string; resumed: boolean } }>('/api/machines/branches', {
+      const result = await post<{
+        branch: { branchName: string; resumed: boolean; createdNew?: boolean };
+      }>('/api/machines/branches', {
         machineId,
         projectName,
         branchName,

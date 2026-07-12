@@ -53,6 +53,20 @@ export type MachineTreeNode =
 
 interface MachineTreeProps {
   machineId: string;
+  /**
+   * The machine row's label. Defaults to "Machine" — right on the Machine page,
+   * where the page's own title is already in the header and there is only one
+   * machine. The Development surface stacks a tree per machine, so it passes
+   * each Machine page's title to tell them apart.
+   */
+  machineLabel?: string;
+  /**
+   * Whether the machine row starts expanded. Default `true` (the Machine page:
+   * one tree, and its projects are the point). The Development surface passes
+   * `false` — its machine rows are collapsed until asked for, so listing N
+   * machines doesn't fire N project fetches on mount.
+   */
+  defaultExpanded?: boolean;
   /** Called when a Machine/Project/Branch row is clicked. Omit if the tree itself isn't selectable (e.g. selection lives on injected leaf content instead). */
   onSelectNode?: (node: MachineTreeNode) => void;
   /**
@@ -97,11 +111,13 @@ export function isSameMachineTreeNode(a: MachineTreeNode | null | undefined, b: 
 }
 
 /** Presentation-only Machine → Project → Branch tree, reusable across any tab that needs this navigation shape (Terminal, Diff, …). Has no opinion on what a row click does — callers own that via `onSelectNode`. */
-export default function MachineTree({ machineId, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren }: MachineTreeProps) {
+export default function MachineTree({ machineId, machineLabel, defaultExpanded, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren }: MachineTreeProps) {
   return (
     <div className="p-1 text-sm">
       <MachineNode
         machineId={machineId}
+        machineLabel={machineLabel}
+        defaultExpanded={defaultExpanded}
         onSelectNode={onSelectNode}
         isNodeSelectable={isNodeSelectable}
         selectedNode={selectedNode}
@@ -197,8 +213,16 @@ interface TreeLevelProps {
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
 }
 
-function MachineNode({ machineId, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren }: TreeLevelProps & { machineId: string }) {
-  const [expanded, setExpanded] = useState(true);
+function MachineNode({
+  machineId,
+  machineLabel = 'Machine',
+  defaultExpanded = true,
+  onSelectNode,
+  isNodeSelectable,
+  selectedNode,
+  renderNodeChildren,
+}: TreeLevelProps & { machineId: string; machineLabel?: string; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const node: MachineTreeNode = { level: 'machine' };
   const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(expanded ? machineId : null);
 
@@ -210,7 +234,7 @@ function MachineNode({ machineId, onSelectNode, isNodeSelectable, selectedNode, 
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
         icon={<Cpu className="size-3.5 shrink-0" />}
-        label="Machine"
+        label={machineLabel}
         labelClassName="font-medium"
       />
       {expanded && (

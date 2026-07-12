@@ -119,6 +119,35 @@ describe('POST /api/machines/projects', () => {
     expect(mockAddProject).toHaveBeenCalledWith(expect.objectContaining({ machineId: 't1', name: 'repo' }));
   });
 
+  it('given free text, echoes the NORMALIZED name the service persisted — not the raw request text', async () => {
+    mockCanAccessMachine.mockResolvedValue(true);
+    mockAddProject.mockResolvedValue({
+      ok: true,
+      project: {
+        name: 'my-cool-feature',
+        repoUrl: 'https://github.com/o/r.git',
+        path: '/workspace/projects/my-cool-feature',
+      },
+    });
+
+    const res = await POST(req({ machineId: 't1', name: 'My Cool Feature', repoUrl: 'https://github.com/o/r.git' }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.project.name).toBe('my-cool-feature');
+    // The raw text goes to the service, which is the authority on normalization.
+    expect(mockAddProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'My Cool Feature' }));
+  });
+
+  it.each(['', '   ', '..', '.', '//'])(
+    'given the nameless name %j, returns 400 rather than cloning into a directory called "project"',
+    async (name) => {
+      const res = await POST(req({ machineId: 't1', name, repoUrl: 'https://github.com/o/r.git' }));
+      expect(res.status).toBe(400);
+      expect(mockAddProject).not.toHaveBeenCalled();
+    },
+  );
+
   it('given a duplicate name, returns 409', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockAddProject.mockResolvedValue({ ok: false, reason: 'duplicate_name' });
@@ -132,6 +161,15 @@ describe('POST /api/machines/projects', () => {
     const res = await POST(req({ machineId: 't1', name: 'repo', repoUrl: 'https://github.com/o/r.git' }));
     expect(res.status).toBe(502);
   });
+
+  it.each(['', '   '])(
+    'given the empty repoUrl %j, returns 400 — the guard must mean what its message says',
+    async (repoUrl) => {
+      const res = await POST(req({ machineId: 't1', name: 'repo', repoUrl }));
+      expect(res.status).toBe(400);
+      expect(mockAddProject).not.toHaveBeenCalled();
+    },
+  );
 
   it('given a missing name/repoUrl, returns 400 without checking access', async () => {
     const res = await POST(req({ machineId: 't1', name: 'repo' }));
@@ -172,6 +210,21 @@ describe('DELETE /api/machines/projects', () => {
     const res = await DELETE(new Request('https://x.test/api/machines/projects?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(400);
   });
+
+  it.each(['%20%20%20', '..', '.', '%2F%2F', '%09'])(
+    'given the nameless name %s, returns 400 rather than rm -rf-ing the project called "project"',
+    async (encoded) => {
+      // `removeProject` normalizes its lookup key, and EVERY nameless string —
+      // whitespace, `.`, `..`, `//` — normalizes to the FALLBACK. Without this
+      // guard the request would resolve to a real project literally named
+      // `project` and delete its checkout. "Nameless" is broader than "blank".
+      const res = await DELETE(
+        new Request(`https://x.test/api/machines/projects?machineId=t1&name=${encoded}`, { method: 'DELETE' }),
+      );
+      expect(res.status).toBe(400);
+      expect(mockRemoveProject).not.toHaveBeenCalled();
+    },
+  );
 
   it('given no machineId, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/projects?name=repo', { method: 'DELETE' }));

@@ -48,6 +48,7 @@ vi.mock('motion/react', () => ({
 }));
 
 import MachineView from './MachineView';
+import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
 
 const asAdmin = () => mockUseAuth.mockReturnValue({ user: { role: 'admin' } });
 
@@ -55,6 +56,9 @@ describe('MachineView (Machine 4-tab shell)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lifecycle.length = 0;
+    // The active tab now lives in a module-singleton store, so a test that
+    // switches tabs would otherwise leave the next one parked on that tab.
+    useMachineTabStore.setState({ tabs: {} });
   });
 
   test('mounts only the Terminal tab body on load — not all four', () => {
