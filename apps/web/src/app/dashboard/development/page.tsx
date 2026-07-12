@@ -24,20 +24,32 @@ import { resolveActiveDriveId } from '@/lib/development/resolve-active-drive';
 export default function DevelopmentRedirectPage() {
   const router = useRouter();
   const drives = useDriveStore((state) => state.drives);
-  const isLoading = useDriveStore((state) => state.isLoading);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const [lastVisitedDriveId] = useState(() => useDriveStore.getState().currentDriveId);
+  const [drivesSettled, setDrivesSettled] = useState(false);
 
+  // Gate the redirect on the fetch SETTLING, not on `isLoading` being false:
+  // with a cold store, `isLoading` is still false on the first render (the fetch
+  // hasn't started), and `drives` is still [] — so redirecting on that render
+  // would send anyone with an empty or expired cache to the drive picker even
+  // though they have drives. `fetchDrives` no-ops on a warm cache, so this costs
+  // a fresh session nothing.
   useEffect(() => {
-    fetchDrives();
+    let cancelled = false;
+    void fetchDrives().finally(() => {
+      if (!cancelled) setDrivesSettled(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [fetchDrives]);
 
   useEffect(() => {
-    if (isLoading) return;
+    if (!drivesSettled) return;
     const driveId = resolveActiveDriveId(drives, lastVisitedDriveId);
     // No drive to develop in — the drive picker is the only useful destination.
     router.replace(driveId ? `/dashboard/${driveId}/development` : '/dashboard/drives');
-  }, [drives, isLoading, lastVisitedDriveId, router]);
+  }, [drives, drivesSettled, lastVisitedDriveId, router]);
 
   return (
     <div className="flex h-full items-center justify-center">

@@ -6,13 +6,23 @@
  * GET ?driveId=<id> → { machines: [{ id, title, updatedAt }] }
  *
  * Session-only (no MCP/agent tokens) — a human/UI surface, like the rest of
- * `/api/machines/*`. The list is filtered to the machines the caller may view,
- * so a drive member who has been withheld an individual Machine page never sees
- * it in the tree.
+ * `/api/machines/*`.
+ *
+ * App-admin only, matching the rest of the Machine feature: creating a MACHINE
+ * page requires `admin` (see POST /api/pages) and `MachineView` refuses to mount
+ * its tabs for anyone else. Without this, a non-admin drive member who can VIEW a
+ * Machine page could enumerate the drive's machines from the Development surface
+ * and, through the tree, their projects/branches/terminal sessions — structure
+ * the Machine page deliberately withholds from them.
+ *
+ * Admin is necessary but not sufficient: the list is still filtered per page
+ * through `canUserViewPage`, so a Machine withheld from this admin by a
+ * page-level grant never appears.
  */
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listDriveMachines } from '@/lib/machines/machine-list-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -24,6 +34,18 @@ export async function GET(request: Request) {
   const driveId = new URL(request.url).searchParams.get('driveId');
   if (!driveId) {
     return NextResponse.json({ error: 'driveId is required' }, { status: 400 });
+  }
+
+  if (auth.role !== 'admin') {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { reason: 'app_admin_required', method: 'GET', route: 'machines' },
+      riskScore: 0.5,
+    });
+    return NextResponse.json({ error: 'Machines require administrator privileges' }, { status: 403 });
   }
 
   const machines = await listDriveMachines(auth.userId, driveId);

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Calendar, CheckSquare, Folder, Hash, Home, MessageSquare, SquareTerminal } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useSidebarBadges } from "@/hooks/useSidebarBadges";
@@ -18,6 +19,11 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
     const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
     const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
     const badges = useSidebarBadges();
+    const { user } = useAuth();
+    // Machines are an app-admin feature end to end (only an admin can create a
+    // MACHINE page, and MachineView mounts no tabs for anyone else), so a
+    // non-admin gets no nav entry rather than a destination that refuses them.
+    const isAdmin = user?.role === "admin";
 
     const navigation = [
         {
@@ -65,13 +71,15 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
         },
         // Driveless href hits a redirect, not a second implementation of the
         // surface — the drive always ends up in the path.
-        {
-            name: "Development",
-            href: driveId ? `/dashboard/${driveId}/development` : "/dashboard/development",
-            icon: SquareTerminal,
-            exact: false,
-            badge: 0,
-        },
+        ...(isAdmin
+            ? [{
+                name: "Development",
+                href: driveId ? `/dashboard/${driveId}/development` : "/dashboard/development",
+                icon: SquareTerminal,
+                exact: false,
+                badge: 0,
+            }]
+            : []),
     ];
 
     const handleLinkClick = () => {

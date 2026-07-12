@@ -10,11 +10,12 @@ import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
 import DashboardFooter from './DashboardFooter';
 import DriveFooter from './DriveFooter';
 import PrimaryNavigation from './PrimaryNavigation';
+import { useAuth } from '@/hooks/useAuth';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
-import { useDriveMachines } from '@/hooks/useDriveMachines';
+import { useDriveMachines, type DriveMachine } from '@/hooks/useDriveMachines';
 import { useMachineWorkspaceStore, type OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
 import SessionLeaves from '@/components/layout/middle-content/page-views/machine/workspace/SessionLeaves';
@@ -50,7 +51,15 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
   const drive = drives.find((d) => d.id === driveId);
   const canManage = canManageDrive(drive);
 
-  const { machines, isLoading, error } = useDriveMachines(driveId ?? null);
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
+  // The same gate MachineView applies, moved one level earlier: a non-admin who
+  // can VIEW a Machine page must not be able to enumerate the drive's machines —
+  // nor have this tree fetch their projects/branches/sessions on their behalf,
+  // which is structure the Machine page itself withholds from them. Passing a
+  // null driveId is what keeps those requests from ever being made.
+  const { machines, isLoading, error } = useDriveMachines(isAdmin ? driveId ?? null : null);
   const selectedMachineId = useSelectedMachineId(driveId);
 
   useEffect(() => {
@@ -73,42 +82,70 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
 
         <ScrollArea className="flex-1 min-h-0">
           <div className="space-y-1">
-            {/* The driveless entry redirects, so a missing driveId here means the
-                redirect hasn't landed yet — not a state the user can sit in. */}
-            {!driveId && (
-              <div className="py-8 text-center text-sm text-muted-foreground">Opening Development…</div>
-            )}
-
-            {driveId && error && (
-              <div className="py-8 text-center text-sm text-muted-foreground">Failed to load machines</div>
-            )}
-
-            {driveId && !error && isLoading && (
-              <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
-            )}
-
-            {driveId && !error && !isLoading && machines.length === 0 && (
-              <div className="py-8 text-center text-sm text-muted-foreground">
-                No machines in this drive yet
-              </div>
-            )}
-
-            {driveId &&
-              machines.map((machine) => (
-                <MachineTreeSection
-                  key={machine.id}
-                  driveId={driveId}
-                  machineId={machine.id}
-                  title={machine.title}
-                  selected={machine.id === selectedMachineId}
-                />
-              ))}
+            <MachineList
+              isAdmin={isAdmin}
+              driveId={driveId}
+              machines={machines}
+              isLoading={isLoading}
+              error={error}
+              selectedMachineId={selectedMachineId}
+            />
           </div>
         </ScrollArea>
 
         {driveId ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}
       </div>
     </aside>
+  );
+}
+
+/** A resting state of the machine list: one line of muted text, no tree. */
+function ListNotice({ children }: { children: string }) {
+  return <div className="py-8 text-center text-sm text-muted-foreground">{children}</div>;
+}
+
+/**
+ * The list body. Its states are mutually exclusive, so they're early returns
+ * rather than a stack of `&&` guards each having to re-state every earlier
+ * condition's negation.
+ */
+function MachineList({
+  isAdmin,
+  driveId,
+  machines,
+  isLoading,
+  error,
+  selectedMachineId,
+}: {
+  isAdmin: boolean;
+  driveId: string | undefined;
+  machines: DriveMachine[];
+  isLoading: boolean;
+  error: Error | undefined;
+  selectedMachineId: string | null;
+}) {
+  // Same wording MachineView uses, so the surface and the page refuse a
+  // non-admin identically.
+  if (!isAdmin) return <ListNotice>Machine access requires administrator privileges</ListNotice>;
+  // The driveless entry redirects, so a missing driveId is the redirect in
+  // flight — not a state the user can sit in.
+  if (!driveId) return <ListNotice>Opening Development…</ListNotice>;
+  if (error) return <ListNotice>Failed to load machines</ListNotice>;
+  if (isLoading) return <ListNotice>Loading…</ListNotice>;
+  if (machines.length === 0) return <ListNotice>No machines in this drive yet</ListNotice>;
+
+  return (
+    <>
+      {machines.map((machine) => (
+        <MachineTreeSection
+          key={machine.id}
+          driveId={driveId}
+          machineId={machine.id}
+          title={machine.title}
+          selected={machine.id === selectedMachineId}
+        />
+      ))}
+    </>
   );
 }
 
