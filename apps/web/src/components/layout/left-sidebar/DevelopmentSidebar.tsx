@@ -16,18 +16,11 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { useDriveMachines, type DriveMachine } from '@/hooks/useDriveMachines';
-import { useMachineWorkspaceStore, type OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { parseSelectedMachineId } from '@/lib/development/development-route';
+import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
 import SessionLeaves from '@/components/layout/middle-content/page-views/machine/workspace/SessionLeaves';
-
-/** The machine whose detail pane is open, from `/dashboard/{driveId}/development/{machineId}`. */
-function useSelectedMachineId(driveId: string | undefined): string | null {
-  const pathname = usePathname() ?? '';
-  if (!driveId) return null;
-  const prefix = `/dashboard/${driveId}/development/`;
-  if (!pathname.startsWith(prefix)) return null;
-  return pathname.slice(prefix.length).split('/')[0] || null;
-}
 
 /**
  * The Development surface's left sidebar: every Machine in the drive, each
@@ -35,9 +28,12 @@ function useSelectedMachineId(driveId: string | undefined): string | null {
  * with the SAME session leaves hanging off its nodes. The aggregation is the
  * only new part — the tree below each machine is the existing component.
  *
- * It sits above the routed detail pane in the layout, so clicking through
- * machines swaps only the pane: the tree keeps its expansion state and its open
- * terminal panes survive the navigation.
+ * It sits above the routed detail pane, so clicking through machines swaps only
+ * the pane and the tree keeps its expansion state. The terminals themselves
+ * survive because the detail region renders machines through
+ * `MachineKeepAliveHost` (see this surface's layout) rather than from the route
+ * segment — which remounts, and would otherwise tear down the xterm buffer and
+ * socket on every machine switch.
  */
 export default function DevelopmentSidebar({ className }: SidebarProps) {
   const params = useParams();
@@ -60,7 +56,8 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
   // which is structure the Machine page itself withholds from them. Passing a
   // null driveId is what keeps those requests from ever being made.
   const { machines, isLoading, error } = useDriveMachines(isAdmin ? driveId ?? null : null);
-  const selectedMachineId = useSelectedMachineId(driveId);
+  const pathname = usePathname() ?? '';
+  const selectedMachineId = parseSelectedMachineId(pathname, driveId);
 
   useEffect(() => {
     setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
@@ -175,8 +172,7 @@ function MachineTreeSection({
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
-  const ensureWorkspace = useMachineWorkspaceStore((state) => state.ensureWorkspace);
-  const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
+  const requestSession = usePendingSessionStore((state) => state.requestSession);
 
   const openMachine = useCallback(() => {
     router.push(`/dashboard/${driveId}/development/${machineId}`);
@@ -185,23 +181,21 @@ function MachineTreeSection({
 
   const onOpenTerminal = useCallback(
     (scope: OpenTerminalScope) => {
-      // Open the session into the machine's workspace BEFORE routing: the pane
-      // region hasn't mounted yet if the user is coming from another machine,
-      // and a transition against a workspace that doesn't exist is a no-op.
-      // `ensureWorkspace` is idempotent, so the pane region adopts this
-      // workspace on mount rather than replacing it.
-      ensureWorkspace(machineId);
-      openTerminal(machineId, scope);
+      // Record the intent and navigate; the surface's layout opens the session
+      // once that machine's pane region exists. Writing the pane straight into
+      // the workspace store from here would not survive — MachineWorkspace
+      // disposes its workspace on unmount and rebuilds it on mount, destroying
+      // anything authored ahead of it.
+      requestSession(machineId, scope);
       openMachine();
       // KNOWN GAP: if the user is already on THIS machine with a non-Terminal tab
-      // active, the pane is created but stays behind that tab — MachineView's tabs
-      // are uncontrolled (defaultValue="terminal"), so nothing here can focus them.
-      // Landing the session is still correct (it's there when they return to the
-      // Terminal tab); making the click also switch tabs needs MachineView's active
-      // tab to become controlled, which is deliberately left to the follow-up rather
-      // than fought over with the in-flight terminal-UX work (#2017).
+      // active, the session lands in the pane but stays behind that tab —
+      // MachineView's tabs are uncontrolled (defaultValue="terminal"), so nothing
+      // here can focus them. Focusing needs MachineView's active tab to become
+      // controlled, left to the follow-up rather than fought over with the
+      // in-flight terminal-UX work (#2017).
     },
-    [ensureWorkspace, openTerminal, machineId, openMachine],
+    [requestSession, machineId, openMachine],
   );
 
   const renderNodeChildren = useCallback(
