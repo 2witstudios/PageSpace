@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * CodeFilePane — the Code tab's main pane: fetches ONE selected file's content
+ * FilesFilePane — the Files tab's main pane: fetches ONE selected file's content
  * from the machine files route (`mode=read`) and shows it in a read-only Monaco
  * (Machine page rebuild, Phase 3).
  *
@@ -49,7 +49,7 @@ import { CHECKOUT_ABSENT_COPY, asAbsentReason, readErrorBody, type CheckoutAbsen
 // every other MonacoEditor mount in the app (CodePageView, DocumentView, …).
 const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), { ssr: false });
 
-interface CodeFilePaneProps {
+interface FilesFilePaneProps {
   machineId: string;
   projectName: string;
   branchName: string;
@@ -106,7 +106,7 @@ const looksBinary = (content: string): boolean => {
   return replacements >= MIN_REPLACEMENTS && replacements / sample.length > MAX_REPLACEMENT_RATIO;
 };
 
-export default function CodeFilePane({ machineId, projectName, branchName, path }: CodeFilePaneProps) {
+export default function FilesFilePane({ machineId, projectName, branchName, path }: FilesFilePaneProps) {
   const [state, setState] = useState<FileState>({ status: 'loading' });
   // Bumped by Retry to re-run the read without changing the selected file.
   const [attempt, setAttempt] = useState(0);

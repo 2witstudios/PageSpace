@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * CodeTab — the Machine page's Code tab (Machine page rebuild, Phase 3).
+ * FilesTab — the Machine page's Files tab: a read-only viewer over a branch
+ * checkout's working tree (Machine page rebuild, Phase 3).
  *
  * Composes the pieces the earlier phases landed: an inner page-scoped sidebar
  * (plain border-border chrome, deliberately NOT one of the app's liquid-glass
@@ -32,7 +33,7 @@ import { FileCode2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
 import MachineFileTree from '../workspace/MachineFileTree';
-import CodeFilePane from './CodeFilePane';
+import FilesFilePane from './FilesFilePane';
 import TabSidebar from './TabSidebar';
 import { PaneNotice, SidebarLoading, SidebarNotice } from './tab-states';
 import {
@@ -42,7 +43,7 @@ import {
   type CheckoutAbsentReason,
 } from './checkout-states';
 
-interface CodeTabProps {
+interface FilesTabProps {
   /** The Machine page's own id (= pageId). */
   machineId: string;
 }
@@ -62,7 +63,7 @@ interface Selection {
 const branchKey = (branch: NonNullable<Selection['branch']>): string =>
   JSON.stringify([branch.projectName, branch.branchName]);
 
-export default function CodeTab({ machineId }: CodeTabProps) {
+export default function FilesTab({ machineId }: FilesTabProps) {
   // Branch and path move as ONE value: a path only means something inside the
   // checkout it came from, so switching branches must drop the open file in the
   // same update — never as a second, separately-scheduled setState.
@@ -86,7 +87,7 @@ export default function CodeTab({ machineId }: CodeTabProps) {
 
   return (
     <TabSidebar
-      title="Code"
+      title="Files"
       pane={
         branch && path ? (
           // Deliberately UNKEYED. Keying by path would tear down and recreate
@@ -94,7 +95,7 @@ export default function CodeTab({ machineId }: CodeTabProps) {
           // refuses to render a state belonging to a different file. Keying by
           // branch would be dead code: a branch switch clears `path` in the same
           // update, so the pane unmounts anyway.
-          <CodeFilePane
+          <FilesFilePane
             machineId={machineId}
             projectName={branch.projectName}
             branchName={branch.branchName}
@@ -165,7 +166,7 @@ type CheckoutState =
  * branch was never cloned" is a state of the world and belongs in the sidebar as
  * an empty state, not as a red error row buried inside a file tree. The
  * duplicate is bounded — once per branch selection, never per directory, and
- * CodeTab keys us by branch so it cannot fire on a re-render.
+ * FilesTab keys us by branch so it cannot fire on a re-render.
  *
  * It is not free, and it is not the only design: MachineFileTree is mounted here
  * and nowhere else, so it could instead report a root-level absence back to us
@@ -193,7 +194,7 @@ function BranchFiles({
   useEffect(() => {
     // Retry makes an in-flight probe's answer stale — this flag, flipped by the
     // cleanup, keeps it from landing on the newer one. (A branch switch can't
-    // race us at all: CodeTab keys this component by branch, so a switch is a
+    // race us at all: FilesTab keys this component by branch, so a switch is a
     // remount, not a re-render.)
     let cancelled = false;
     setState({ status: 'loading' });
