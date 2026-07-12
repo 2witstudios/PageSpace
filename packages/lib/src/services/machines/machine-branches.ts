@@ -381,7 +381,15 @@ export async function attachBranch({
   return { ok: true, sandboxId: handle.machineId, branchName: normalized };
 }
 
-/** List a project's branch-terminals. Normalizes the project key like every other name-keyed lookup. */
+/**
+ * List a project's branch-terminals. Normalizes the project key like every other
+ * name-keyed lookup IN THIS MODULE. (The sibling agent-terminal / files / diff
+ * surfaces do not yet — they take these names as free-text params too, so a
+ * direct API caller can hit `project_not_found` there with text that works here.
+ * The UI is unaffected: it passes canonical names straight back from the list
+ * APIs. Closing that gap needs the realtime session-key path too, so it is a
+ * follow-up, not a drive-by.)
+ */
 export async function listBranches({
   machineId,
   projectName,

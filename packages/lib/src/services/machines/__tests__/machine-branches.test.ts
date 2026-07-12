@@ -241,7 +241,7 @@ describe('spawnBranch', () => {
     // caller must be able to SEE that, rather than be told "here's your branch".
     const { host } = makeFakeHost((_state, args) => {
       // No `origin/wip` upstream — the `origin/`-tracking checkout fails.
-      const tracksOrigin = args.args.some((a) => a.startsWith('origin/'));
+      const tracksOrigin = (args.args ?? []).some((a) => a.startsWith('origin/'));
       return tracksOrigin
         ? { exitCode: 1, stdout: '', stderr: "fatal: 'origin/wip' is not a commit" }
         : { exitCode: 0, stdout: '', stderr: '' };

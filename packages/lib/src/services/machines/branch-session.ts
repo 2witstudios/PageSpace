@@ -82,8 +82,8 @@ export const BRANCH_NAME_FALLBACK = 'branch';
  * Rewrite a `.lock` ending into `-lock`. Applied PER SEGMENT, because git
  * forbids the suffix on every slash-separated component, not merely on the ref
  * as a whole — `feature/a.lock/foo` is fatal to `git checkout -b` even though
- * the ref doesn't end in `.lock`. Length-preserving, so it can safely run after
- * the length cut too (which can itself mint one).
+ * the ref doesn't end in `.lock`. The length cut can no longer mint one, since
+ * it appends an alphanumeric digest.
  */
 function rewriteLockSuffix(segment: string): string {
   return segment.endsWith(LOCK_SUFFIX) ? `${segment.slice(0, -LOCK_SUFFIX.length)}-lock` : segment;
@@ -133,10 +133,11 @@ function normalizeBranchSegment(segment: string): string {
  * Git would accept `_wip`, `fix#123`, `v1.0+build`, `日本語`; we do not, because
  * this charset is a confinement boundary (the name lands in `git checkout -b`
  * argv, a store key, and a scope key). Such names are therefore still rewritten,
- * and if one of them names an EXISTING upstream branch the user gets a new empty
- * branch instead — so `spawnBranch` reports `createdNew`, turning that from a
- * silent wrong answer into a stated one. Widening the charset to git's full rule
- * is a separate, security-reviewable change.
+ * and if one of them names an EXISTING upstream branch, git's fallback creates a
+ * new empty branch off HEAD instead. `spawnBranch` reports that as `createdNew`
+ * so the outcome is at least KNOWABLE — though nothing renders it to the user
+ * yet; that belongs with the spawn-flow sub-task. Widening the charset to git's
+ * full rule is a separate, security-reviewable change.
  *
  * `/` is structural — it is how git namespaces refs — so it survives as a
  * segment separator and each segment is normalized independently
@@ -151,7 +152,11 @@ function normalizeBranchSegment(segment: string): string {
  * makes the invariant total rather than merely intended — a slug that somehow
  * still fails the predicate degrades to the fallback instead of reaching git.
  */
-export function normalizeBranchName(input: string): string {
+export function normalizeBranchName(rawInput: string): string {
+  // Trim FIRST: a stray trailing space would otherwise fail the predicate and
+  // send `Release-2.0 ` down the slug path, downcasing it — resurrecting the very
+  // case-regression the pass-through exists to prevent.
+  const input = rawInput.trim();
   if (isValidBranchName(input)) return input;
 
   const segments = input

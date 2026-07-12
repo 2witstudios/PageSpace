@@ -255,6 +255,14 @@ describe('normalizeBranchName', () => {
     expect(normalizeBranchName('feature/../foo')).toBe('feature/foo');
   });
 
+  it('given surrounding whitespace, should still take the pass-through and keep the case', () => {
+    // A stray trailing space used to fail the predicate and send the name down
+    // the slug path, downcasing it — resurrecting the exact case-regression the
+    // pass-through exists to prevent. The trim happens BEFORE the predicate test.
+    expect(normalizeBranchName('Release-2.0 ')).toBe('Release-2.0');
+    expect(normalizeBranchName('  feature/JIRA-123  ')).toBe('feature/JIRA-123');
+  });
+
   it('given a name git already accepts, should NOT rewrite it — case and `_` are load-bearing', () => {
     // REGRESSION GUARD. Git refs are case-sensitive. Slugifying `Release-2.0`
     // to `release-2.0` made `git checkout -b release-2.0 origin/release-2.0`

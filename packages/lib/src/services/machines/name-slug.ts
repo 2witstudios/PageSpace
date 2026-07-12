@@ -51,10 +51,17 @@ export function slugifySegment(input: string): string {
 const NOISE_ONLY_RE = /^[\s./-]*$/;
 
 /**
- * Does this text carry any actual name content, as opposed to being pure
- * structure? `..` and `   ` carry none and are safe to DROP; `日本語`, `🚀` and
- * `___` carry plenty even though the ASCII slug charset annihilates them, and
- * dropping those would be a correctness bug — see `slugDigest`.
+ * Did the user type ANYTHING here, as opposed to pure path structure? `..`, `.`,
+ * `/` and `   ` are structure. `日本語`, `🚀`, `___` and `!!!` are all *something*
+ * the user typed, even when the slug charset annihilates them entirely.
+ *
+ * Only consulted when NOTHING survived slugification, to choose between dropping
+ * the segment and keeping a `slugDigest` token — and it is deliberately more
+ * eager than `destroysNameContent`. Losing `!` from `a!b` is harmless (it still
+ * says `a-b`), but `!!!` slugifies to nothing, and dropping it lands the name in
+ * the SHARED FALLBACK — the one bucket where distinct names collide and
+ * cross-attach. Whenever the user typed something, we would rather mint an ugly
+ * token than put them in that bucket.
  */
 export function hasNameContent(input: string): boolean {
   return !NOISE_ONLY_RE.test(input);

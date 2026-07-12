@@ -59,7 +59,10 @@ export const PROJECT_NAME_FALLBACK = 'project';
  * INVARIANT: `isValidProjectName(normalizeProjectName(x)) === true` for EVERY
  * string x, and the function is idempotent.
  */
-export function normalizeProjectName(input: string): string {
+export function normalizeProjectName(rawInput: string): string {
+  // Trim FIRST — see `normalizeBranchName`: untrimmed input would skip the
+  // pass-through and needlessly rewrite a name that was already fine.
+  const input = rawInput.trim();
   if (isValidProjectName(input)) return input;
 
   // Whenever the ASCII charset destroys content that identifies WHICH name was

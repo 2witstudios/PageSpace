@@ -120,6 +120,13 @@ describe('normalizeProjectName', () => {
     expect(normalizeProjectName(input)).toBe(expected);
   });
 
+  it('given surrounding whitespace, should still take the pass-through', () => {
+    // See normalizeBranchName: the trim runs BEFORE the predicate test, so a
+    // stray space cannot force a needless rewrite of an already-fine name.
+    expect(normalizeProjectName(' MyRepo ')).toBe('MyRepo');
+    expect(normalizeProjectName('  my_repo.v2  ')).toBe('my_repo.v2');
+  });
+
   it('given names the ASCII charset annihilates, should NOT collapse them onto one directory', () => {
     // Otherwise two distinct repos fight over one clone path and the second is
     // rejected as a duplicate.

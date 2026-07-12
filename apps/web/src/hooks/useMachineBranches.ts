@@ -35,10 +35,11 @@ export function useMachineBranches(machineId: string | null, projectName: string
    * is what callers must display, never what the user typed.
    *
    * `createdNew` says whether an existing upstream branch was checked out or a
-   * brand-new one was created off the default HEAD. It is surfaced here so the
-   * caller can tell the user which happened — normalization can rewrite a name
-   * that DID exist upstream into one that doesn't (`_wip` → `wip`), and an
-   * unannounced empty branch is the one outcome this feature must never produce.
+   * brand-new one was created off the default HEAD. Normalization can rewrite a
+   * name that DID exist upstream into one that doesn't (`_wip` → `wip`, since our
+   * charset rejects a leading `_`), and the user would otherwise have no way to
+   * tell an empty branch from their real one. Threaded through here so the spawn
+   * flow can SAY so; no caller renders it yet.
    */
   const addBranch = useCallback(
     async (branchName: string) => {
