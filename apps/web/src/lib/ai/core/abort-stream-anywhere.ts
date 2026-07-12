@@ -45,28 +45,58 @@ export const abortStreamAnywhere = async ({
   conversationId?: string;
   userId: string;
 }): Promise<{ aborted: boolean; code: AbortCode; reason: string }> => {
+  const ABORTED = { aborted: true, code: 'aborted' as const, reason: 'Stream aborted by user request' };
+
   // Step 1 — the local registry. messageId is the most precise name, then streamId;
   // conversationId is the fallback that works before either exists client-side.
-  const localAborted: string[] = messageId
-    ? abortStreamByMessageId({ messageId, userId }).aborted ? [messageId] : []
-    : streamId
-      ? abortStream({ streamId, userId }).aborted ? [streamId] : []
-      : conversationId
-        ? (await abortConversationStreams({ conversationId, userId })).aborted
-        : [];
+  //
+  // A local hit on a PRECISE name is the end of the story, and must short-circuit.
+  //
+  // Aborting the controller is what stops the generation; the row's `status` is only bookkeeping,
+  // and `lifecycle.finish` writes it fire-and-forget. So if we fell through to the cross-instance
+  // path here, we would mark and then POLL for a terminal status that our own abort had already
+  // guaranteed — and a slow or failed bookkeeping write would time the poll out against a
+  // heartbeat that is still fresh (it beat seconds ago), yielding 'unconfirmed'. We would warn the
+  // user that a generation is "still running and still billing" immediately after killing it
+  // in-process. That is the exact false alarm this design exists to prevent, and it would fire on
+  // the COMMON path — the stream this instance owns.
+  //
+  // It also costs a needless DB write and poll on every same-instance Stop, which is most of them.
+  if (messageId) {
+    if (abortStreamByMessageId({ messageId, userId }).aborted) return ABORTED;
+  } else if (streamId) {
+    if (abortStream({ streamId, userId }).aborted) return ABORTED;
+  }
+
+  // The conversation path cannot short-circuit the same way: it names a SET, and stopping the
+  // rows this instance owns says nothing about a sibling stream owned by another instance. So we
+  // stop what we can, then escalate — but we never wait on the ones we ourselves just stopped.
+  const locallyAborted = conversationId && !messageId && !streamId
+    ? (await abortConversationStreams({ conversationId, userId })).aborted
+    : [];
 
   // Step 2 — anything not stopped here is either on another instance, already finished, or was
   // never ours. The mark's WHERE clause carries `userId`, so the third case updates zero rows and
   // is reported as 'not_found'. See stream-abort-mark.ts: that predicate IS the authorization.
   const marked = await markAbortRequested({ messageId, streamId, conversationId, userId });
 
-  if (marked.length === 0) {
-    return localAborted.length > 0
-      ? { aborted: true, code: 'aborted', reason: 'Stream aborted by user request' }
+  // A row we aborted in-process a moment ago may still read 'streaming' (its terminal write is
+  // fire-and-forget) and so may still be caught by the mark. Waiting on it would reintroduce the
+  // false alarm described above, so drop it: we do not need a DB row to tell us about a controller
+  // we aborted ourselves. The stray mark is harmless — the watcher only ever reads rows that are
+  // still 'streaming' AND still in its local registry, and this one has left the registry.
+  const awaiting = marked.filter((id) => !locallyAborted.includes(id));
+
+  // Nothing left to wait for: either we stopped it all ourselves, or there was nothing of the
+  // caller's in flight to stop. (Every id in `marked` that is not in `awaiting` is one we aborted,
+  // so a non-empty `marked` here implies a non-empty `locallyAborted`.)
+  if (awaiting.length === 0) {
+    return locallyAborted.length > 0
+      ? ABORTED
       : { aborted: false, code: 'not_found', reason: 'No in-flight stream on this conversation' };
   }
 
-  const outcome = await awaitAbortSettled({ messageIds: marked });
+  const outcome = await awaitAbortSettled({ messageIds: awaiting });
 
   // Rows whose owning process is provably gone (stale heartbeat). Nothing is running, but nothing
   // wrote their terminal status either — so write it, exactly as a takeover would.

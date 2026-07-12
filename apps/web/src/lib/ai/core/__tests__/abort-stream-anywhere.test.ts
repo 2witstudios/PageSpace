@@ -85,15 +85,76 @@ describe('abortStreamAnywhere — naming precedence', () => {
 describe('abortStreamAnywhere — local first, then cross-instance', () => {
   // The common case, and it must stay instant: the stream is owned by THIS instance, so the abort
   // is a synchronous registry call. No DB round trip, no waiting.
-  it('reports a locally-owned stream as aborted without waiting on anything', async () => {
+  //
+  // AND IT MUST NOT FALL THROUGH TO THE CROSS-INSTANCE PATH. Aborting the controller is what stops
+  // the generation; the row's status is only bookkeeping, written fire-and-forget by
+  // lifecycle.finish. If we marked and then polled for a terminal status our own abort had already
+  // guaranteed, a slow or failed bookkeeping write would time the poll out against a heartbeat
+  // that is still FRESH (it beat seconds ago) — reporting 'unconfirmed' and warning the user that
+  // a generation is "still running and still billing" immediately after we killed it in-process.
+  // That false alarm would fire on the most common path there is.
+  it('never marks or waits on a precisely-named stream it aborted itself', async () => {
     mockAbortStreamByMessageId.mockReturnValue(HIT);
 
     const result = await abortStreamAnywhere({ messageId: 'msg-1', userId: 'user-a' });
 
+    expect(mockMarkAbortRequested).not.toHaveBeenCalled();
     expect(mockAwaitAbortSettled).not.toHaveBeenCalled();
     assert({
-      given: 'a stream this instance owns',
+      given: 'a stream this instance owns, named by messageId',
+      should: 'abort it locally and confirm immediately — no DB round trip, no poll',
+      actual: { aborted: result.aborted, code: result.code },
+      expected: { aborted: true, code: 'aborted' },
+    });
+  });
+
+  it('never marks or waits on a stream named by streamId that it aborted itself', async () => {
+    mockAbortStream.mockReturnValue(HIT);
+
+    const result = await abortStreamAnywhere({ streamId: 'stream-1', userId: 'user-a' });
+
+    expect(mockMarkAbortRequested).not.toHaveBeenCalled();
+    expect(mockAwaitAbortSettled).not.toHaveBeenCalled();
+    assert({
+      given: 'a stream this instance owns, named by streamId',
       should: 'abort it locally and confirm immediately',
+      actual: { aborted: result.aborted, code: result.code },
+      expected: { aborted: true, code: 'aborted' },
+    });
+  });
+
+  // The conversation path names a SET, so it cannot short-circuit wholesale — a sibling stream may
+  // be running on another instance. But the rows we DID stop must be dropped from the wait, or
+  // they bring the same false alarm back through the side door.
+  it('does not wait on the conversation rows it aborted itself', async () => {
+    mockAbortConversationStreams.mockResolvedValue({ aborted: ['msg-mine'] });
+    // The mark still catches it: its terminal write is fire-and-forget, so the row can still read
+    // 'streaming' at this instant.
+    mockMarkAbortRequested.mockResolvedValue(['msg-mine', 'msg-elsewhere']);
+    mockAwaitAbortSettled.mockResolvedValue({
+      aborted: ['msg-elsewhere'], reconcile: [], stillLive: [], code: 'aborted',
+    });
+
+    await abortStreamAnywhere({ conversationId: 'conv-1', userId: 'user-a' });
+
+    assert({
+      given: 'a conversation with one stream we stopped and one owned elsewhere',
+      should: 'wait only on the one we could not stop ourselves',
+      actual: mockAwaitAbortSettled.mock.calls[0][0].messageIds,
+      expected: ['msg-elsewhere'],
+    });
+  });
+
+  it('confirms the abort when every stream on the conversation was stopped locally', async () => {
+    mockAbortConversationStreams.mockResolvedValue({ aborted: ['msg-mine'] });
+    mockMarkAbortRequested.mockResolvedValue(['msg-mine']);
+
+    const result = await abortStreamAnywhere({ conversationId: 'conv-1', userId: 'user-a' });
+
+    expect(mockAwaitAbortSettled).not.toHaveBeenCalled();
+    assert({
+      given: 'a conversation whose only stream this instance owned and stopped',
+      should: 'confirm it stopped without polling for a row it does not need',
       actual: { aborted: result.aborted, code: result.code },
       expected: { aborted: true, code: 'aborted' },
     });
