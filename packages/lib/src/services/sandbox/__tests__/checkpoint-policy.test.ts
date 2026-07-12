@@ -4,7 +4,6 @@ import {
   shouldCheckpoint,
   checkpointComment,
   resolveCheckpointFlag,
-  CHECKPOINT_MIN_INTERVAL_MS,
   getCheckpointState,
   recordCheckpoint,
   resetCheckpointState,
@@ -19,25 +18,21 @@ describe('shouldCheckpoint (pure)', () => {
       should: 'checkpoint',
       actual: shouldCheckpoint({
         flagEnabled: true,
-        lastCheckpointAt: null,
         turnId: 'turn-1',
         lastCheckpointTurnId: null,
-        now: NOW,
       }),
       expected: true,
     });
   });
 
-  it('never checkpoints when the flag is off, regardless of turn/throttle state', () => {
+  it('never checkpoints when the flag is off, regardless of turn state', () => {
     assert({
       given: 'flag off but otherwise a fresh turn',
       should: 'not checkpoint',
       actual: shouldCheckpoint({
         flagEnabled: false,
-        lastCheckpointAt: null,
         turnId: 'turn-1',
         lastCheckpointTurnId: null,
-        now: NOW,
       }),
       expected: false,
     });
@@ -49,55 +44,30 @@ describe('shouldCheckpoint (pure)', () => {
       should: 'skip a second checkpoint for a later batch in the same turn',
       actual: shouldCheckpoint({
         flagEnabled: true,
-        lastCheckpointAt: new Date(NOW.getTime() - CHECKPOINT_MIN_INTERVAL_MS * 10),
         turnId: 'turn-1',
         lastCheckpointTurnId: 'turn-1',
-        now: NOW,
       }),
       expected: false,
     });
   });
 
-  it('checkpoints again for a NEW turn once the throttle window has elapsed', () => {
+  // Regression test for a P2 finding on PR #2025 (chatgpt-codex-connector):
+  // an earlier revision suppressed a NEW turn's first checkpoint if it fell
+  // within a time-based throttle window of a PRIOR, different turn's
+  // checkpoint. That silently defeated the safety net: two legitimate turns
+  // close together would leave only the older turn's restore point on
+  // record, so a restore after the newer turn's destructive work would
+  // discard the newer turn's real work too. A different turnId must ALWAYS
+  // checkpoint, no matter how recently the previous (different) turn's
+  // checkpoint was taken.
+  it('checkpoints a NEW turn immediately, even moments after a different turn was checkpointed', () => {
     assert({
-      given: 'a new turnId and a last checkpoint well outside the throttle window',
-      should: 'checkpoint',
+      given: 'a different turnId than the last checkpoint, taken 1ms ago',
+      should: 'checkpoint anyway — a new turn is never suppressed by how recent the prior one was',
       actual: shouldCheckpoint({
         flagEnabled: true,
-        lastCheckpointAt: new Date(NOW.getTime() - CHECKPOINT_MIN_INTERVAL_MS - 1),
         turnId: 'turn-2',
         lastCheckpointTurnId: 'turn-1',
-        now: NOW,
-      }),
-      expected: true,
-    });
-  });
-
-  it('throttles across rapid batches even when the turnId changed (safety net)', () => {
-    assert({
-      given: 'a new turnId but the last checkpoint was inside the throttle window',
-      should: 'skip (throttled)',
-      actual: shouldCheckpoint({
-        flagEnabled: true,
-        lastCheckpointAt: new Date(NOW.getTime() - 1_000),
-        turnId: 'turn-2',
-        lastCheckpointTurnId: 'turn-1',
-        now: NOW,
-      }),
-      expected: false,
-    });
-  });
-
-  it('checkpoints exactly at the throttle boundary (>= throttle, not >)', () => {
-    assert({
-      given: 'a last checkpoint exactly CHECKPOINT_MIN_INTERVAL_MS ago',
-      should: 'checkpoint',
-      actual: shouldCheckpoint({
-        flagEnabled: true,
-        lastCheckpointAt: new Date(NOW.getTime() - CHECKPOINT_MIN_INTERVAL_MS),
-        turnId: 'turn-2',
-        lastCheckpointTurnId: 'turn-1',
-        now: NOW,
       }),
       expected: true,
     });

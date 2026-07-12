@@ -603,7 +603,7 @@ describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 
     expect(created).toHaveLength(1);
   });
 
-  it('given a NEW turn well after the throttle window, should checkpoint again', async () => {
+  it('given a NEW turn well after the first, should checkpoint again', async () => {
     const { checkpoint, created } = makeCheckpointDeps();
     const { deps: deps1 } = makeDeps({ checkpoint, now: () => new Date('2026-07-12T12:00:00.000Z') });
     await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps: deps1 });
@@ -613,6 +613,30 @@ describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 
 
     expect(created).toHaveLength(2);
     expect(created[1]).toEqual({ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-2' });
+  });
+
+  // Regression test for a P2 finding on PR #2025 (chatgpt-codex-connector): an
+  // earlier revision's pure policy suppressed a NEW turn's checkpoint if it
+  // fell within a time-based throttle window of a prior, DIFFERENT turn's
+  // checkpoint — so two legitimate turns close together (an ordinary rapid
+  // back-and-forth) would leave only the older turn's restore point on
+  // record, silently discarding the newer turn's real work on a later
+  // restore. Exercised here through the full runBashInSandbox path, not just
+  // the pure function, with `now` identical across both turns (the most
+  // adversarial case for a time-based throttle).
+  it('given a NEW turn moments after a different turn was checkpointed, should still checkpoint (no cross-turn interval suppression)', async () => {
+    const { checkpoint, created } = makeCheckpointDeps();
+    const sameInstant = () => new Date('2026-07-12T12:00:00.000Z');
+    const { deps: deps1 } = makeDeps({ checkpoint, now: sameInstant });
+    await runBashInSandbox({ command: 'echo one', ctx: makeCtx({ turnId: 'turn-1' }), deps: deps1 });
+
+    const { deps: deps2 } = makeDeps({ checkpoint, now: sameInstant });
+    await runBashInSandbox({ command: 'echo two', ctx: makeCtx({ turnId: 'turn-2' }), deps: deps2 });
+
+    expect(created).toEqual([
+      { sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' },
+      { sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-2' },
+    ]);
   });
 
   it('given checkpoint creation throws, should proceed with the batch (fail-open) and log', async () => {

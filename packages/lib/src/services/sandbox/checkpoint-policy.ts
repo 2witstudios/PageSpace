@@ -24,25 +24,6 @@ export function checkpointComment(turnId: string): string {
   return `${CHECKPOINT_COMMENT_PREFIX}${turnId}`;
 }
 
-/** Parse a non-negative integer env override; fall back on absence/garbage (mirrors machine-storage-measure.ts). */
-function envInt(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim();
-  if (raw === undefined || raw === '' || !/^\d+$/.test(raw)) return fallback;
-  return Number.parseInt(raw, 10);
-}
-
-/**
- * Safety-net floor between two pre-batch checkpoints on the SAME sandbox, even
- * across DIFFERENT turns. The primary gate is "at most once per turn" (the
- * `turnId` comparison below); this additionally bounds checkpoint frequency if
- * turns are somehow generated in a tight loop (a caller bug, or a future turn
- * boundary that turns out to be finer-grained than intended) — a checkpoint is
- * cheap (~300ms, COW) but not free, and this keeps a runaway loop from hammering
- * the checkpoint API. Env-tunable; default well under any real agent turn's
- * cadence.
- */
-export const CHECKPOINT_MIN_INTERVAL_MS = envInt('SANDBOX_CHECKPOINT_MIN_INTERVAL_MS', 30_000);
-
 /**
  * Pure: resolve the checkpoint-before-agent-batch flag from its raw env value
  * + NODE_ENV. Explicit 'true'/'false' always wins. Unset defaults ON outside
@@ -74,13 +55,10 @@ export function isCheckpointBeforeAgentBatchEnabled(): boolean {
 export interface ShouldCheckpointInput {
   /** The feature flag, re-checked fresh per batch. */
   flagEnabled: boolean;
-  /** When this sandbox was last checkpointed by this policy, or null if never. */
-  lastCheckpointAt: Date | null;
   /** Stable id for the CURRENT agent turn (one streamText run). */
   turnId: string;
   /** The turnId the last checkpoint was taken for, or null if never checkpointed. */
   lastCheckpointTurnId: string | null;
-  now: Date;
 }
 
 /**
@@ -89,23 +67,26 @@ export interface ShouldCheckpointInput {
  * - Flag off → never.
  * - Same turnId as the last checkpoint → never (at most once per agent turn;
  *   repeated tool batches within one turn must not pile up checkpoints).
- * - Otherwise → yes, UNLESS the last checkpoint (for a different, presumably
- *   fast-preceding turn) is still inside `CHECKPOINT_MIN_INTERVAL_MS` — the
- *   throttle safety net documented above.
+ * - A DIFFERENT turnId → always yes. There is deliberately NO additional
+ *   time-based throttle here: an earlier revision added one (a floor between
+ *   checkpoints regardless of turn, meant as a backstop against a hypothetical
+ *   caller bug that regenerates turnId too eagerly) — but since this function
+ *   only ever remembers the SINGLE most recent turnId, a turnId that differs
+ *   from it is BY DEFINITION a turn that has never been checkpointed. Skipping
+ *   it because a prior, different turn was checkpointed moments ago silently
+ *   drops the very safety net this exists for: two legitimate turns close
+ *   together (an ordinary rapid back-and-forth) would leave only the OLDER
+ *   turn's checkpoint on record, so a later restore would discard the newer
+ *   turn's real work along with whatever it was trying to undo. Do not
+ *   reintroduce a cross-turn interval gate without solving that.
  */
 export function shouldCheckpoint({
   flagEnabled,
-  lastCheckpointAt,
   turnId,
   lastCheckpointTurnId,
-  now,
 }: ShouldCheckpointInput): boolean {
   if (!flagEnabled) return false;
-  if (lastCheckpointTurnId === turnId) return false;
-  if (lastCheckpointAt !== null && now.getTime() - lastCheckpointAt.getTime() < CHECKPOINT_MIN_INTERVAL_MS) {
-    return false;
-  }
-  return true;
+  return turnId !== lastCheckpointTurnId;
 }
 
 export interface CheckpointState {

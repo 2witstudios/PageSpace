@@ -538,20 +538,17 @@ async function maybeCheckpointBeforeBatch({
 
   try {
     const state = checkpoint.getState(sandbox.sandboxId);
-    const now = deps.now();
     if (
       !shouldCheckpoint({
         flagEnabled: checkpoint.isEnabled(),
-        lastCheckpointAt: state.lastCheckpointAt,
         turnId,
         lastCheckpointTurnId: state.lastCheckpointTurnId,
-        now,
       })
     ) {
       return;
     }
     await checkpoint.createCheckpoint({ sandbox, comment: checkpointComment(turnId) });
-    checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: now, lastCheckpointTurnId: turnId });
+    checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: deps.now(), lastCheckpointTurnId: turnId });
   } catch (error) {
     safeLogWarn(deps.logger, 'Pre-agent checkpoint failed (proceeding without one)', {
       sandboxId: sandbox.sandboxId,
