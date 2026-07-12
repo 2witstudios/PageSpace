@@ -11,7 +11,7 @@
  *     would disconnect its terminal).
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 
 const mockUseAuth = vi.fn();
 const mockUseDriveMachines = vi.fn();
@@ -97,15 +97,21 @@ describe('DevelopmentLayout', () => {
     // swallowed a DB error and reported "cannot view". Stop DISPLAYING it either
     // way, but keep it in the mountable set: evicting it would unmount MachineView
     // and disconnect a terminal that might be perfectly alive.
-    render(<DevelopmentLayout>{null}</DevelopmentLayout>);
-    cleanup();
-    hostRenders.length = 0;
+    //
+    // Must be a rerender, NOT cleanup() + render: a fresh mount rebuilds the
+    // sticky set from the (now empty) fetch, which would evict the machine and
+    // make this test pass while proving the opposite of its name.
+    const { rerender } = render(<DevelopmentLayout>{null}</DevelopmentLayout>);
+    expect(hostRenders.at(-1)!.machineIds).toContain('machine-1');
 
     mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [] }));
-    render(<DevelopmentLayout>{null}</DevelopmentLayout>);
+    rerender(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
     expect(screen.getByText(/machine not found/i)).toBeDefined();
+    // Not displayed…
     expect(hostRenders.at(-1)!.activePageId).toBeNull();
+    // …but still mountable, so its terminal is not torn down.
+    expect(hostRenders.at(-1)!.machineIds).toContain('machine-1');
   });
 
   test('says nothing about admin rights until auth resolves', () => {

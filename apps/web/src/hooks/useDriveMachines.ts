@@ -26,8 +26,20 @@ const fetcher = (url: string) =>
 export function useDriveMachines(driveId: string | null) {
   const key = driveId ? `/api/machines?driveId=${encodeURIComponent(driveId)}` : null;
 
+  // This list must be able to RECOVER, which is why it revalidates at all (the
+  // sibling machine hooks don't). A machine can drop out of it without having
+  // been deleted — the per-page permission check swallows DB errors and reports
+  // "cannot view" — and the surface responds by hiding that machine. Fetched
+  // once and never again, a single blip would hide a live machine for the rest
+  // of the session, and the only ways out (reload, or leave and return) both
+  // unmount the keep-alive host and disconnect every warm terminal.
+  //
+  // It also means a machine created elsewhere shows up without a reload. Cheap:
+  // one indexed query, on an admin-only surface, and SWR keeps the previous
+  // array identity when the ids are unchanged — so a poll that changes nothing
+  // doesn't churn the keep-alive LRU.
   const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
-    revalidateOnFocus: false,
+    refreshInterval: 30_000,
   });
 
   return {
