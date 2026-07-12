@@ -413,10 +413,16 @@ export function openPtyShell({
      *   dying mid-replay reaches here too (the 'error' and 'exit' handlers close the window),
      *   and that one is a one-off, not a standing condition. `seenBytes` in the log tells them
      *   apart: at the MAX_ANCHOR_BYTES bound, suspect the ring; well below it, suspect the socket.
-     * - `pending-cap`: the replay outgrew MAX_PENDING_BYTES before the anchor arrived. The
-     *   anchor sits at a replay's END, so this means the ring is BIGGER than the cap — and
-     *   that one does not heal. It will reprint on every reconnect, forever, until the cap
-     *   is raised past the ring.
+     * - `pending-cap`: the held bytes outgrew MAX_PENDING_BYTES before the anchor arrived.
+     *   A ring BIGGER than the cap gets here and never heals — the anchor sits at a replay's
+     *   end, so the cap always trips first, and it will reprint on every reconnect until the
+     *   cap is raised past the ring. But that is not the only way in, because what is held is
+     *   not just the ring: every chunk that lands while the window is open is held, live output
+     *   included. A merely UNALIGNABLE ring plus a shell chatty enough to push past the cap
+     *   inside REPLAY_WINDOW_MS (a `cat` of something big; a verbose build) reaches the same
+     *   line with a ring orders of magnitude under it. Read this as "the terminal is reprinting
+     *   its scrollback", not as "raise the cap" — a ring over the cap is the diagnosis only if
+     *   the shell was quiet, and neither field here can tell you that.
      */
     const reportUnaligned = (cause: 'window-closed' | 'pending-cap', bytes: number) => {
       loggers.realtime.info('Agent terminal replay unaligned (scrollback may reprint)', {

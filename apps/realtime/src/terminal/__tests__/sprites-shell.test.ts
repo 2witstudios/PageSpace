@@ -1147,12 +1147,38 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput).join('')).toBe(afterRecovery); // recovered, and stayed recovered
     });
 
+    it('given an unalignable replay whose window closes, REPORTS it', async () => {
+      // The terminal is reprinting its scrollback rather than deduping, and an operator can
+      // only see that if we say so. This path had no test: deleting the report left the whole
+      // suite green.
+      const info = vi.spyOn(loggers.realtime, 'info');
+      const cmd = buildFakeCommand();
+      const attachCmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER);
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      attachCmd._stdout.emit('data', 'a ring that never carries the anchor');
+      await vi.advanceTimersByTimeAsync(2000); // settle, then the window deadline
+
+      const reported = info.mock.calls.filter(
+        ([, meta]) => (meta as { cause?: string } | undefined)?.cause === 'window-closed',
+      );
+      info.mockRestore(); // before the assertion: a failing expect must not leak the spy
+      expect(reported.length).toBeGreaterThan(0);
+    });
+
     it('given a replay that overflows the byte cap, REPORTS it (the one give-up that never reaches the window close)', async () => {
-      // The cap failure is the one that does not heal: a ring bigger than MAX_PENDING_BYTES
-      // means the anchor (which sits at a replay's END) is never reached, so the scrollback
-      // reprints on every reconnect, forever. And it is the give-up that resolves inside the
-      // pure core — `closeReplayWindow`, and its log, never run. If it did not report here,
-      // the only failure the cap exists to catch would be the only silent one.
+      // A ring bigger than MAX_PENDING_BYTES is the cause that does not heal: the anchor sits
+      // at a replay's END, so the cap trips before it ever arrives, and the scrollback reprints
+      // on every reconnect until the cap is raised past the ring. It is also the give-up that
+      // resolves inside the pure core — `closeReplayWindow`, and its log, never run. If it did
+      // not report here, the failure the cap exists to catch would be the only silent one.
       const info = vi.spyOn(loggers.realtime, 'info');
       const cmd = buildFakeCommand();
       const attachCmd = buildFakeCommand();
