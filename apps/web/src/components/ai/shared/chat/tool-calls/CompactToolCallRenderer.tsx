@@ -23,6 +23,7 @@ import {
 
 import { type TreeItem } from './PageTreeRenderer';
 import { TaskRenderer } from './TaskRenderer';
+import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
 import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
 import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
@@ -381,6 +382,8 @@ export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = m
       return <PageAgentConversationRenderer part={dispatch.part} />;
     case 'question':
       return <AskUserQuestionCard part={dispatch.part} />;
+    case 'image':
+      return <GeneratedImageRenderer part={dispatch.part} />;
     case 'generic':
       return (
         <CompactToolCallRendererInternal

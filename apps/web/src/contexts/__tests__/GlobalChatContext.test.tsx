@@ -908,6 +908,12 @@ describe('GlobalChatProvider — global channel stream socket', () => {
       mockSocket._trigger('chat:stream_complete', {
         messageId: 'msg-live',
         pageId: GLOBAL_CHANNEL_ID,
+        // The server ALWAYS sends this (broadcastAiStreamComplete passes it unconditionally); the
+        // type merely marks it optional. Omitting it modelled a payload production never emits —
+        // and it matters now: this join never delivered a part, so the hook correctly reports the
+        // stream as non-authoritative and drops it, leaving the conversationId as the only way to
+        // route the reload-from-DB.
+        conversationId: CONV_ID,
       });
     });
 

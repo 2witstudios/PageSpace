@@ -14,6 +14,16 @@ interface UseGlobalEffectiveStreamArgs {
    * path is still served by `contextStopStreaming`.
    */
   activeMessageId?: string;
+  /**
+   * A bootstrap-restored AGENT stream, from the dashboard store (keyed by (agentId,
+   * conversationId)). The global mode had this all along via the context; agent mode did not — so
+   * after a refresh mid-agent-stream, `useAgentChannelMultiplayer` claimed the store slot, the
+   * SIDEBAR read it and showed a working Stop, and the DASHBOARD — the surface that started the
+   * stream — rendered Send. The user had no way to stop their own generation, and it kept running
+   * and kept billing.
+   */
+  agentBootstrapIsStreaming?: boolean;
+  agentBootstrapStop?: (() => void | Promise<void>) | null;
 }
 
 interface GlobalEffectiveStream {
@@ -37,11 +47,15 @@ export function useGlobalEffectiveStream({
   contextIsStreaming,
   contextStopStreaming,
   activeMessageId,
+  agentBootstrapIsStreaming = false,
+  agentBootstrapStop = null,
 }: UseGlobalEffectiveStreamArgs): GlobalEffectiveStream {
   const inGlobalMode = !selectedAgent;
+  // Both modes now surface a bootstrap-restored stream, not just global. See
+  // agentBootstrapIsStreaming: agent mode used to show Send after a refresh mid-stream.
   const effectiveIsStreaming = inGlobalMode
     ? localIsStreaming || contextIsStreaming
-    : localIsStreaming;
+    : localIsStreaming || agentBootstrapIsStreaming;
 
   const effectiveStop = useCallback(() => {
     // Authoritative: abort by the stable assistant messageId when the live stream
@@ -58,12 +72,25 @@ export function useGlobalEffectiveStream({
       rawStop();
       return;
     }
-    // Idle locally but resumed via bootstrap after refresh: use the context's
-    // messageId-based stop registered at bootstrap.
+    // Idle locally but resumed via bootstrap after refresh: use the messageId-based stop the
+    // bootstrap registered. Global mode reads it from the context; agent mode from the dashboard
+    // store — and agent mode never used to, which is how the dashboard ended up with no Stop
+    // button at all for a stream it had started itself.
     if (inGlobalMode && contextStopStreaming) {
       contextStopStreaming();
+      return;
     }
-  }, [activeMessageId, localIsStreaming, rawStop, inGlobalMode, contextStopStreaming]);
+    if (!inGlobalMode && agentBootstrapStop) {
+      void agentBootstrapStop();
+    }
+  }, [
+    activeMessageId,
+    localIsStreaming,
+    rawStop,
+    inGlobalMode,
+    contextStopStreaming,
+    agentBootstrapStop,
+  ]);
 
   return { effectiveIsStreaming, effectiveStop };
 }
