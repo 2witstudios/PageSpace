@@ -6,7 +6,7 @@ import { Cpu } from 'lucide-react';
 import MachineKeepAliveHost from '@/components/layout/middle-content/MachineKeepAliveHost';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveMachines } from '@/hooks/useDriveMachines';
-import { useMachineWorkspaceStore } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useMachineWorkspaceStore, selectActiveWorkspace } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
 import { resolvePendingSession } from '@/lib/development/pending-session';
@@ -196,10 +196,9 @@ function DetailNotice({ title, description }: { title: string; description?: str
  * to actually has a workspace to open it into.
  *
  * The decision is the pure `resolvePendingSession`; this is the plumbing. It
- * re-evaluates whenever the workspace changes, so an intent applied against a
- * workspace that is then torn down and rebuilt (a remount — StrictMode's
- * double-invoke does this on first mount) re-applies to the new one instead of
- * being silently lost.
+ * re-evaluates whenever the workspace on screen changes, so an intent that has
+ * not converged yet — the pane region has not mounted, or the user is en route —
+ * is re-applied as soon as it can be, instead of being silently lost.
  *
  * Leaving the surface drops any unconverged intent: the store is a module
  * singleton, so an intent left behind here would otherwise still be sitting
@@ -209,8 +208,12 @@ function useDrainPendingSession(displayedMachineId: string | null) {
   const pending = usePendingSessionStore((state) => state.pending);
   const clearPending = usePendingSessionStore((state) => state.clearPending);
   const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
+  // The machine's ACTIVE workspace — the grid the middle view is actually
+  // showing. A machine now holds many workspaces (each sidebar item owns one),
+  // and the intent converges when the session it names is in the active pane of
+  // the workspace on screen.
   const workspace = useMachineWorkspaceStore((state) =>
-    pending ? state.workspaces[pending.machineId] : undefined,
+    pending ? selectActiveWorkspace(pending.machineId)(state) : undefined,
   );
 
   useEffect(() => {

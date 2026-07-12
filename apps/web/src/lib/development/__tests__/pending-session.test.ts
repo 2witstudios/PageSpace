@@ -7,8 +7,12 @@ const PENDING: PendingSession = { machineId: 'machine-1', scope: SCOPE };
 
 /** A workspace whose active pane holds `scope` (null = a fresh, empty pane). */
 const workspaceWith = (scope: WorkspaceState['columns'][number]['panes'][number]['scope']): WorkspaceState => ({
+  id: 'ws-1',
+  name: 'Workspace 1',
+  scope: {},
   columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope }] }],
   activePaneId: 'pane-1',
+  pendingPickerPaneId: null,
 });
 
 describe('resolvePendingSession', () => {

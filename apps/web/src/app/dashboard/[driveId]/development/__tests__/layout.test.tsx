@@ -35,7 +35,7 @@ vi.mock('@/components/layout/middle-content/MachineKeepAliveHost', () => ({
 
 import DevelopmentLayout from '../layout';
 import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
-import { useMachineWorkspaceStore } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useMachineWorkspaceStore, selectActiveWorkspace, panesOf } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 const machine = (id: string) => ({ id, title: id, updatedAt: '2026-07-12T00:00:00.000Z' });
 
@@ -50,7 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hostRenders.length = 0;
   usePendingSessionStore.setState({ pending: null });
-  useMachineWorkspaceStore.setState({ workspaces: {} });
+  useMachineWorkspaceStore.setState({ machines: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseDriveMachines.mockReturnValue(driveMachines());
 });
@@ -157,7 +157,7 @@ describe('DevelopmentLayout', () => {
 
     expect(hostRenders.at(-1)!.activePageId).toBeNull();
     // Held, not applied — it converges once the machine is displayed again.
-    expect(useMachineWorkspaceStore.getState().workspaces['machine-1']).toBeUndefined();
+    expect(useMachineWorkspaceStore.getState().machines['machine-1']).toBeUndefined();
   });
 
   test('holds a session intent while the list loads, then applies it once the machine is displayed', () => {
@@ -174,11 +174,12 @@ describe('DevelopmentLayout', () => {
 
     // The list arrives, and the machine's pane region has ensured a workspace.
     mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [machine('machine-1')] }));
-    useMachineWorkspaceStore.getState().ensureWorkspace('machine-1');
+    useMachineWorkspaceStore.getState().ensureMachine('machine-1');
     rerender(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
-    const workspace = useMachineWorkspaceStore.getState().workspaces['machine-1'];
-    const activePane = workspace.columns.flatMap((c) => c.panes).find((p) => p.id === workspace.activePaneId);
+    // The session opens in ITS OWN workspace, which becomes the one on screen.
+    const workspace = selectActiveWorkspace('machine-1')(useMachineWorkspaceStore.getState())!;
+    const activePane = panesOf(workspace).find((pane) => pane.id === workspace.activePaneId);
     expect(activePane?.scope).toMatchObject({ name: 'agent-1' });
   });
 
