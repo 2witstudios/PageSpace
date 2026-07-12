@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect } from '../agent-terminal-handler';
+import { buildAgentTerminalHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveAgentTerminalCommand, planConnect, shouldContinueReAuth } from '../agent-terminal-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { AgentTerminalCheckAuthFn, OpenShellFn, SocketLike } from '../agent-terminal-handler';
 import type { TerminalSession } from '../terminal-session-map';
@@ -187,6 +187,44 @@ describe('planConnect', () => {
       should: 'create a fresh session (cold path)',
       actual: planConnect({ accessResult: granted, existingSession: undefined }),
       expected: { kind: 'create', access: granted },
+    });
+  });
+});
+
+describe('shouldContinueReAuth', () => {
+  it('given an attached session, should continue', () => {
+    assert({
+      given: 'attached: true and no detachedSinceMs',
+      should: 'continue the periodic re-auth check',
+      actual: shouldContinueReAuth({ attached: true, detachedSinceMs: undefined }),
+      expected: true,
+    });
+  });
+
+  it('given a session detached moments ago, should pause', () => {
+    assert({
+      given: 'attached: false and a small detachedSinceMs',
+      should: 'pause the periodic re-auth check — no viewer to protect',
+      actual: shouldContinueReAuth({ attached: false, detachedSinceMs: 0 }),
+      expected: false,
+    });
+  });
+
+  it('given a session detached for nearly the whole grace window, should still pause', () => {
+    assert({
+      given: 'attached: false and detachedSinceMs close to the 30-min detached grace',
+      should: 'keep pausing for the WHOLE detached window, not just the start of it',
+      actual: shouldContinueReAuth({ attached: false, detachedSinceMs: 29 * 60 * 1000 }),
+      expected: false,
+    });
+  });
+
+  it('given inconsistent signals (attached true but a detachedSinceMs present), should pause defensively', () => {
+    assert({
+      given: 'attached: true but detachedSinceMs is also defined',
+      should: 'pause — the two signals disagreeing is treated as detached rather than trusted blindly',
+      actual: shouldContinueReAuth({ attached: true, detachedSinceMs: 5_000 }),
+      expected: false,
     });
   });
 });
@@ -683,6 +721,75 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given a 60s re-auth tick on a live ATTACHED session, should perform zero sprite SDK calls (DB-only check)', async () => {
+      const auth = makeAuthSuccess();
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(checkAuth).toHaveBeenCalledTimes(2); // connect + one tick
+      expect(auth.resolveSandbox).toHaveBeenCalledTimes(1); // only the connect's cold-path create
+      expect(auth.sprite.listSessions).not.toHaveBeenCalled();
+      expect(auth.sprite.spawn).not.toHaveBeenCalled();
+      expect(auth.sprite.createSession).not.toHaveBeenCalled();
+      expect(auth.sprite.attachSession).not.toHaveBeenCalled();
+      expect(auth.sprite.updateNetworkPolicy).not.toHaveBeenCalled();
+    });
+
+    it('given a session detached (viewer gone), should pause the re-auth interval — zero checkAuth calls for the whole detached grace', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+      checkAuth.mockClear();
+
+      // Advance through several would-be ticks across the whole detached grace.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS - 1_000);
+
+      expect(checkAuth).not.toHaveBeenCalled();
+    });
+
+    it('given access is revoked while detached, should NOT be caught by the paused interval — only the next reattach re-checks it', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      // Would tear the session down within one tick if the interval were still live.
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+
+      // The next reattach attempt runs `checkAuth` itself (see onConnect) and is denied.
+      const reconnectSocket = makeSocket('sock2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: reconnectSocket, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+
+      expect(reconnectSocket.emit).toHaveBeenCalledWith('agent-terminal:error', expect.objectContaining({ message: expect.any(String) }));
+      expect(sessionMap.getBySocket('sock2')).toBeUndefined();
+    });
+
+    it('given a session reattaches after being detached, should resume the re-auth interval for the new viewer', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+      await vi.advanceTimersByTimeAsync(60_000); // paused tick while detached
+
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload); // reattaches, clearing detachedAt
+
+      checkAuth.mockClear();
+      checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
+      expect(shell.kill).toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
 
     it('given re-auth resolves AFTER the session was already torn down, should not double-teardown (no second kill/releaseSlot)', async () => {
@@ -1404,20 +1511,29 @@ describe('buildAgentTerminalHandlers', () => {
       expect(billing.releaseHold).not.toHaveBeenCalled();
     });
 
-    it('given a re-auth failure WHILE disconnected (idle reap still pending), should clear the pending idle timer too, settling only once', async () => {
+    it('given a would-be re-auth failure WHILE disconnected, the paused tick never fires it — the idle reap is the only teardown path', async () => {
       const billing = makeBilling();
       const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
       await onConnect(validPayload);
       onDisconnect();
+      checkAuth.mockClear();
 
+      // Would tear the session down within one tick if the interval were still
+      // checking while detached.
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      // Advance past when the (now-cancelled) idle timer would have reaped it again.
+      expect(checkAuth).not.toHaveBeenCalled(); // paused — no DB round trip for an absent viewer
+      expect(shell.kill).not.toHaveBeenCalled();
+
+      // The idle timer (never touched by the paused tick) fires on its own
+      // schedule and is the ONLY thing that ever kills the shell here — the
+      // (unrelated, untouched) settle heartbeat may still fire its own
+      // trackUsage calls across the 30-min grace, but never a kill.
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
 
       expect(shell.kill).toHaveBeenCalledTimes(1);
-      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      expect(billing.trackUsage).toHaveBeenCalled();
     });
 
     it('given two CONCURRENT cold connects, places exactly ONE hold — the joiner never gates', async () => {
