@@ -589,15 +589,15 @@ export function openPtyShell({
     currentSessionId = undefined;
     const binding: SessionBinding = { id: undefined };
     wiredBinding = binding;
-    // A brand-new shell shares no history with the one the client was watching, so
-    // there is nothing of ITS output on the client's screen: clear the history, or
-    // the replacement's opening banner would be mistaken for a replay of the dead
-    // session's and suppressed.
+    // A brand-new shell shares no history with the one the client was watching, so there is
+    // nothing of ITS output on the client's screen: clear the history, or the replacement's
+    // opening banner would be mistaken for a replay of the dead session's and suppressed.
     //
-    // Cleared BEFORE the drain below is handed over, deliberately: doing it after would
-    // erase any mistake that flush made, which is exactly what let a bug hide here. With
-    // this order, recording those bytes into `seen` poisons it visibly — and a test says
-    // so.
+    // Anything the dead socket drains AFTER this point lands on a cleared history, and the
+    // `sameSession` check in the stdout handler is what keeps it from being recorded into it:
+    // those bytes belong to a session this one's scrollback has never held, so no replay can
+    // ever contain them, and splicing them in would leave the anchor unmatchable for the life
+    // of the terminal. They are still delivered — just never recorded.
     seenTail = EMPTY_SEEN;
     const gen = (sessionGeneration += 1);
     // The cwd is NOT passed as a createSession option: the server chdirs into it
