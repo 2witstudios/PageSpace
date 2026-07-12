@@ -95,6 +95,21 @@ describe('GET /api/machines/branches', () => {
     expect(res.status).toBe(400);
   });
 
+  it.each(['   ', '..', '//'])(
+    'given the nameless projectName %j, returns 400 rather than listing the branches of the project called "project"',
+    async (projectName) => {
+      // `listBranches` normalizes its project key, so a nameless value would
+      // resolve to the FALLBACK and leak a real project's branch-terminals.
+      const res = await GET(
+        new Request(
+          `https://x.test/api/machines/branches?machineId=t1&projectName=${encodeURIComponent(projectName)}`,
+        ),
+      );
+      expect(res.status).toBe(400);
+      expect(mockListBranches).not.toHaveBeenCalled();
+    },
+  );
+
   it('given no projectName, returns 400', async () => {
     const res = await GET(new Request('https://x.test/api/machines/branches?machineId=term-1'));
     expect(res.status).toBe(400);
@@ -227,6 +242,37 @@ describe('DELETE /api/machines/branches', () => {
       expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main' }),
     );
   });
+
+  it.each(['   ', '..', '.', '//'])(
+    'given the nameless branchName %j, returns 400 rather than killing the branch called "branch"',
+    async (branchName) => {
+      // DELETE is the destructive path: `killBranch` normalizes BOTH keys, so an
+      // unguarded nameless name would resolve to the FALLBACK and delete a real
+      // branch-terminal's Sprite.
+      const res = await DELETE(
+        new Request(
+          `https://x.test/api/machines/branches?machineId=t1&projectName=repo&branchName=${encodeURIComponent(branchName)}`,
+          { method: 'DELETE' },
+        ),
+      );
+      expect(res.status).toBe(400);
+      expect(mockKillBranch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['   ', '..', '//'])(
+    'given the nameless projectName %j, returns 400 rather than killing a branch of the project called "project"',
+    async (projectName) => {
+      const res = await DELETE(
+        new Request(
+          `https://x.test/api/machines/branches?machineId=t1&projectName=${encodeURIComponent(projectName)}&branchName=main`,
+          { method: 'DELETE' },
+        ),
+      );
+      expect(res.status).toBe(400);
+      expect(mockKillBranch).not.toHaveBeenCalled();
+    },
+  );
 
   it('given no branchName, returns 400', async () => {
     const res = await DELETE(new Request('https://x.test/api/machines/branches?machineId=t1&projectName=repo', { method: 'DELETE' }));

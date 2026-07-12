@@ -87,7 +87,7 @@ export async function POST(request: Request) {
   // "nameless" is broader than "blank": `"   "`, `"."`, `".."` and `"//"` all
   // normalize to that same fallback, so the guard uses the normalizer's own
   // `hasNameContent` rather than a `.trim()` that only catches whitespace. The
-  // branches route draws the same line (`requireString`).
+  // branches route draws the same line (`requireName`).
   if (typeof body.name !== 'string' || !hasNameContent(body.name) || typeof body.repoUrl !== 'string') {
     return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
   }
