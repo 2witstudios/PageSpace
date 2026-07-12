@@ -814,8 +814,12 @@ const GlobalAssistantView: React.FC = () => {
           if (messageId) {
             await abortActiveStreamByMessageId({ messageId });
           } else if (convId) {
-            // Pre-first-chunk: no assistant id yet.
-            await abortActiveStream({ chatId: convId });
+            // Pre-first-chunk: no assistant id yet — and the chatId map is EMPTY here, not stale
+            // (setActiveStreamId only runs once the response headers land, 0.5-3s into a real
+            // send). Name the conversation too, or this abort is a guaranteed no-op while the
+            // server keeps generating and keeps billing. The agent-mode stop above already did
+            // this; this one was missed.
+            await abortActiveStream({ chatId: convId, conversationId: convId });
           }
         } finally {
           // Call useChat's stop to abort client-side fetch
