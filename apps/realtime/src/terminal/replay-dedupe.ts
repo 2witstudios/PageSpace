@@ -53,28 +53,28 @@
  * every byte passes through unsearched.
  *
  * What that leaves, honestly: the proof is a byte comparison, so it cannot tell a replay
- * from an EXACT reproduction of one. Loss remains possible where the server's ring has
- * evicted the true anchor (leaving nothing genuine to match) and the stream then contains a
- * contiguous replica of `seen`'s tail. How big that replica must be is the real measure of
- * the risk, and it is smaller than it first looks:
+ * from an EXACT reproduction of one. Two numbers describe the risk, and they are not the
+ * same number — a fact three earlier drafts of this comment got wrong, so here it is derived
+ * from the arithmetic rather than remembered.
  *
- * A match at offset `at` suppresses `at + anchor` bytes, and `corroborated` proves them by
- * comparing `depth = min(at, history)` bytes. It accepts either a COMPLETE proof
- * (`depth === at` — every suppressed byte in front of the anchor matched) or a deep enough
- * partial one (>= MIN_CORROBORATION_BYTES). So the replica the stream must contain is:
+ * A match at offset `at` SUPPRESSES `at + anchorLen` bytes. `corroborated` PROVES only
+ * `depth = min(at, history)` of them. So:
  *
- *     min(seen.length, MAX_ANCHOR_BYTES)  +  at
+ *   - What the stream must contain for a false match to be accepted (the precondition):
+ *         anchorLen + depth,  which is at most `seen.length` — 64 KiB.
+ *     At `at = 0` nothing precedes the match, `corroborated` compares zero bytes (it cannot
+ *     compare what is not there), and a replica of the anchor ALONE — 8 KiB — is accepted at
+ *     a replay's head. That is the weakest point: a full-screen TUI repaint landing exactly on
+ *     the ring's boundary can produce one. And when `seen` is shorter than the anchor bound
+ *     the anchor IS the whole history, so it collapses to `seen.length` (512 B demonstrated).
  *
- * — and the 4 KiB floor binds ONLY when `at` runs past the history we still hold. Which
- * means the weakest point is `at = 0`: nothing is in front of the match, `corroborated`
- * compares zero bytes (it cannot compare what is not there), and a replica of the anchor
- * ALONE — 8 KiB — is accepted at a replay's head. A full-screen TUI repaint landing exactly
- * on the ring's boundary can produce one. And when `seen` is shorter than the anchor bound,
- * the anchor IS the whole history, so the bound collapses to `seen.length` (512 B has been
- * demonstrated).
- *
- * The exposure is bounded in SIZE too: a search over ~366k configurations put the worst case
- * at roughly one anchor's worth (~8 KiB) per occurrence.
+ *   - What such a match can COST (the magnitude): everything in front of it that was never
+ *     proven — `at - depth` bytes — goes with it. That is bounded by the replay window, not by
+ *     the anchor: up to MAX_PENDING_BYTES. A single false match can therefore swallow far more
+ *     than it reproduced. The suppression exceeds the proof, deliberately: in a GENUINE replay
+ *     everything before the anchor is older stream content the client has already watched, and
+ *     refusing to suppress it would mean refusing to dedupe any ring that reaches back further
+ *     than our 64 KiB of history — i.e. giving up the feature to guard a corner case.
  *
  * Realistically it takes violently periodic output — a `while true` loop printing the same
  * kilobytes, a repainting TUI — where the dropped bytes are indistinguishable from their
