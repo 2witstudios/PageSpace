@@ -23,8 +23,13 @@ export interface StreamLifecycleParams {
    * stream — the registry that mints it is in-process, so without this the name is meaningless
    * anywhere but here. It is also the epoch the abort watcher checks, so a Stop aimed at a
    * previous attempt on this messageId can never kill the current one.
+   *
+   * REQUIRED, deliberately. It was optional, and both call sites happened to pass it — but nothing
+   * enforced that, and an omission would not fail: the column would simply be NULL. Cross-instance
+   * Stop for that stream would then degrade silently, with no error at build time and none at run
+   * time either. The type is the only thing that can catch this, so let it.
    */
-  streamId?: string;
+  streamId: string;
   /**
    * Whether the conversation is explicitly shared. Rides the stream_start broadcast so
    * page members can tell, without asking, whether a stream is theirs to watch — see

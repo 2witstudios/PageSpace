@@ -189,7 +189,13 @@ export const abortActiveStream = async ({
     const response = await fetchWithAuth('/api/ai/abort', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ streamId }),
+      // Send the conversation ALONGSIDE the streamId, not instead of it. The server prefers the
+      // precise name, but a streamId can fail to resolve — a stream started by a worker running the
+      // previous image has no `stream_id` on its row at all. Without a second name to fall back to,
+      // that Stop is reported as "nothing in flight" and the client stays silent by design, while
+      // the generation runs on and bills. Exactly the rolling-deploy window this design claims to
+      // turn into a loud, honest warning.
+      body: JSON.stringify({ streamId, conversationId: conversationId ?? undefined }),
     });
 
     const result = await parseAbortResult(response);

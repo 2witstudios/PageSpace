@@ -100,6 +100,7 @@ const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> 
   userId: 'user-1',
   displayName: 'Alice',
   browserSessionId: 'session-1',
+  streamId: 'stream-1',
   ...overrides,
 });
 
@@ -142,6 +143,7 @@ describe('createStreamLifecycle', () => {
         userId: 'user-1',
         displayName: 'Alice',
         browserSessionId: 'session-1',
+        streamId: 'stream-1',
         status: 'streaming',
         startedAt: expect.any(Date),
         lastHeartbeatAt: expect.any(Date),

@@ -125,6 +125,49 @@ describe('stream-abort-client', () => {
       expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBeUndefined();
     });
 
+    // The rolling-deploy hole. A stream started by a worker running the previous image has no
+    // `stream_id` on its row, so the X-Stream-Id the client holds resolves to nothing. If the
+    // conversation is not sent alongside it, the server has no second name to fall back to, reports
+    // `not_found`, and the client stays SILENT by design — while the generation runs on and bills.
+    it('sends the conversation alongside the streamId, so a streamId that resolves to nothing can still be stopped', async () => {
+      const client = await import('../stream-abort-client');
+
+      client.setActiveStreamId({ chatId: 'chat-123', streamId: 'stream-456' });
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValueOnce({ aborted: true, code: 'aborted', reason: '' }),
+      } as unknown as Response);
+
+      await client.abortActiveStream({ chatId: 'chat-123', conversationId: 'conv-1' });
+
+      assert({
+        given: 'a Stop naming a streamId, on a conversation the client also knows',
+        should: 'send BOTH names, so the server can fall back when the precise one resolves to nothing',
+        actual: JSON.parse(vi.mocked(fetchWithAuth).mock.calls[0][1]?.body as string),
+        expected: { streamId: 'stream-456', conversationId: 'conv-1' },
+      });
+    });
+
+    // The other half of the same guarantee: with no streamId in the map at all (the 0.5-3s TTFB
+    // window, where the map is EMPTY because the response headers have not landed), Stop must still
+    // reach the server by naming the conversation. Without this it was a guaranteed no-op.
+    it('falls back to the conversation when the client holds no streamId yet', async () => {
+      const client = await import('../stream-abort-client');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        json: vi.fn().mockResolvedValueOnce({ aborted: true, code: 'aborted', reason: '' }),
+      } as unknown as Response);
+
+      const result = await client.abortActiveStream({ chatId: 'chat-none', conversationId: 'conv-1' });
+
+      expect(JSON.parse(vi.mocked(fetchWithAuth).mock.calls[0][1]?.body as string)).toEqual({ conversationId: 'conv-1' });
+      assert({
+        given: 'Stop pressed before the response headers land, so no streamId exists client-side',
+        should: 'still reach the server by naming the conversation',
+        actual: result.code,
+        expected: 'aborted',
+      });
+    });
+
     it('returns failure when no active stream exists', async () => {
       const client = await import('../stream-abort-client');
 
