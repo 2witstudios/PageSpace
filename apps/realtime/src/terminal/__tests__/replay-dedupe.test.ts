@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   EMPTY_SEEN,
   MAX_ANCHOR_BYTES,
@@ -330,6 +330,24 @@ describe('planReplayEmission incremental scan (pure)', () => {
 
     expect(state.resolved).toBe(false);
     expect(state.scanned).toBe(first.length - MAX_ANCHOR_BYTES + 1);
+  });
+
+  it('given a later chunk, should START the search at `scanned` rather than rescanning from zero', () => {
+    // The test above pins the value `scanned` is SET to. This one pins that the search
+    // actually USES it — which is the half that carries the cost. Rescanning from zero on
+    // every chunk is quadratic in bytes the sandbox picks: an unalignable 4 MiB replay in
+    // 256-byte frames goes from ~5ms to ~1650ms of solid event loop, on the process every
+    // terminal shares. Asserting the offset the search is handed pins that without timing.
+    const first = Buffer.alloc(20 * 1024, 0x2e);
+    const held = planReplayEmission({ seen, chunk: first, state: freshReplayState() }).state;
+
+    const indexOf = vi.spyOn(Buffer.prototype, 'indexOf');
+    planReplayEmission({ seen, chunk: Buffer.alloc(512, 0x2e), state: held });
+    const offsets = indexOf.mock.calls.map(([, from]) => from);
+    indexOf.mockRestore(); // before the assertion: a failing expect must not leak the spy
+
+    expect(offsets[0]).toBe(held.scanned); // not 0
+    expect(held.scanned).toBeGreaterThan(0);
   });
 });
 

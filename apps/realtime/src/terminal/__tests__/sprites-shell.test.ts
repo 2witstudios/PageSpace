@@ -963,6 +963,35 @@ describe('openPtyShell', () => {
       expect(outputs(onOutput)).toEqual([BANNER]);
     });
 
+    it('given a reconnect attach that dies BEFORE it opens, keeps the history (an empty flush must not wipe it)', async () => {
+      // A pre-open drop (cold Sprite wake, flapping WS) reaches closeReplayWindow on a command
+      // that never received a byte. `replay` is still fresh, so flushReplay hands back
+      // { emit: EMPTY, aligned: false } and deliver() runs in RESTART mode with zero bytes.
+      // Restart wipes the history — so if the empty flush were allowed through, one pre-open
+      // drop would erase the anchor and the NEXT attach would reprint the whole scrollback:
+      // the very bug this module exists to remove, fired by a socket that said nothing at all.
+      const cmd = buildFakeCommand();
+      const dies = buildFakeCommand();
+      const replays = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+      sprite.attachSession.mockReturnValueOnce(dies).mockReturnValueOnce(replays);
+      const onOutput = vi.fn();
+
+      openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      cmd._emitter.emit('spawn');
+      cmd._stdout.emit('data', BANNER); // the client has the banner
+
+      cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+      await vi.advanceTimersByTimeAsync(500);
+      dies._emitter.emit('error', new Error('WebSocket error: closed before open')); // not one byte
+      await vi.advanceTimersByTimeAsync(2000);
+      replays._emitter.emit('spawn');
+      replays._stdout.emit('data', BANNER); // the server replays it again
+
+      expect(outputs(onOutput)).toEqual([BANNER]); // still exactly one banner
+    });
+
     it('given kill() while a replay window is still open, leaves no timer armed against a shell nobody is watching', async () => {
       const cmd = buildFakeCommand();
       const attach = buildFakeCommand();
