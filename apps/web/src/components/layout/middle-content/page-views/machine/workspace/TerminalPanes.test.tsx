@@ -430,4 +430,23 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
       expected: 'fix the build',
     });
   });
+
+  test('a session the API says ALREADY EXISTED is never handed a starting prompt', async () => {
+    // `spawnAgentTerminal` is an upsert: `resumed` means it gave back a session that
+    // was already there (and whose agent may have been running for hours), rather
+    // than creating one. Typing a prompt into that is the hazard the whole flow
+    // guards against — and the API tells us right here.
+    addAgentTerminal.mockResolvedValueOnce({ name: 'claude-a1', agentType: 'claude', resumed: true });
+
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await userEvent.type(screen.getByLabelText('Starting prompt'), 'fix the build');
+    await userEvent.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    assert({
+      given: 'a spawn the API served by handing back an EXISTING session',
+      should: 'bind it to the pane but carry NO prompt — the invariant must not rest on the auto-name never colliding',
+      actual: { bound: bindPaneTerminal.mock.calls.length, prompt: bindPaneTerminal.mock.calls[0]?.[4] },
+      expected: { bound: 1, prompt: undefined },
+    });
+  });
 });

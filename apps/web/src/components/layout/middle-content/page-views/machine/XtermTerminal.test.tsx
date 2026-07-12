@@ -49,6 +49,7 @@ function fakeSocket() {
   const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
   return {
     socket: {
+      connected: true,
       on: (event: string, handler: (payload: unknown) => void) => {
         const set = handlers.get(event) ?? new Set();
         set.add(handler);
@@ -425,6 +426,35 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     assert({
       given: 'a pane receiving output but never a ready',
       should: 'type nothing — with no ready there is no `resumed`, so there is no way to know what it would be typing into',
+      actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length },
+      expected: { typed: [], promptSpent: 0 },
+    });
+  });
+
+  test('a prompt is NOT spent on an emit the socket cannot deliver', async () => {
+    const fake = fakeSocket();
+    const onSent = vi.fn();
+    // The socket dropped (a realtime deploy) while the agent was booting.
+    (fake.socket as unknown as { connected: boolean }).connected = false;
+    render(
+      <XtermTerminal
+        socket={fake.socket}
+        sessionId="s1"
+        connectPayload={CONNECT}
+        initialInput="fix the build"
+        onInitialInputSent={onSent}
+      />
+    );
+    await waitFor(() => expect(fake.hasHandlers()).toBe(true));
+
+    fake.server('agent-terminal:ready', { connectionId: fake.connectionId() });
+    fake.server('agent-terminal:output', { data: 'claude> ', connectionId: fake.connectionId() });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    assert({
+      given: 'a socket that is disconnected when the prompt would go out',
+      should:
+        'keep the prompt unspent — socket.io buffers the emit and flushes it on reconnect carrying a connectionId the server no longer knows, so it is dropped there while the prompt would already have been thrown away here',
       actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length },
       expected: { typed: [], promptSpent: 0 },
     });

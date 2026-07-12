@@ -96,7 +96,12 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         workspaceId,
         paneId,
         { projectName: scope.projectName, branchName: scope.branchName, name: created.name },
-        prompt,
+        // `spawnAgentTerminal` is an upsert: `resumed` means it handed back a session
+        // that ALREADY EXISTED rather than creating one. An agent that was already
+        // running must never be typed at, and the API says so right here — relying on
+        // the auto-name's entropy to make this unreachable would leave the invariant
+        // resting on luck instead of on the answer we were given.
+        created.resumed ? undefined : prompt,
       );
       if (!bound) {
         // The pane went away while the Sprite booted (closed, or the page

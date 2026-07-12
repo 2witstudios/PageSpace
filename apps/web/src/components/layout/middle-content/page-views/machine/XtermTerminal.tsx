@@ -161,6 +161,12 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const sendInitialInput = () => {
           const { input, onSent } = initialInputRef.current;
           if (!input || initialInputSent || !readySeen) return;
+          // A disconnected socket BUFFERS this emit and flushes it on reconnect,
+          // carrying a connectionId the server no longer knows — so it is dropped
+          // there, while `onSent` here would already have spent the prompt. Keep it
+          // unspent instead: whether a later connect may deliver it is decided by
+          // that connect's own `resumed`, which is the only safe judge.
+          if (socket.connected === false) return;
           initialInputSent = true;
           clearTimeout(promptTimer);
           for (const chunk of toPtyInput(input)) {

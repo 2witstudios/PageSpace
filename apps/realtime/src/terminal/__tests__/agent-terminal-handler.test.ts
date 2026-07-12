@@ -357,8 +357,17 @@ describe('buildAgentTerminalHandlers', () => {
       expect(auth.releaseSlot).toHaveBeenCalled();
     });
 
-    it('given a known streamSessionId, should reattach to it instead of creating a fresh session', async () => {
-      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ streamSessionId: 'sess-existing' })) as unknown as ReturnType<typeof vi.fn> &
+    it('given a known streamSessionId the Sprite STILL HAS, should reattach to it instead of creating a fresh session', async () => {
+      // The Sprite is asked, and it still has the session — so continuity across a
+      // realtime restart is preserved. (A stored id the Sprite does NOT have is
+      // dangling: attaching to it optimistically is what the shell used to do and
+      // what the liveness verdict now prevents — see the dangling-id test below.)
+      checkAuth = vi.fn().mockResolvedValue(
+        makeAuthSuccess({
+          streamSessionId: 'sess-existing',
+          sessions: [{ id: 'sess-existing', command: 'pagespace-cli', isActive: true, tty: true }],
+        }),
+      ) as unknown as ReturnType<typeof vi.fn> &
         AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
@@ -652,10 +661,11 @@ describe('buildAgentTerminalHandlers', () => {
       // openPtyShell would attachSession() to one shared server-side exec session.
       // A "discard the duplicate" strategy would SIGKILL the very process the
       // survivor is attached to. Serializing means the second never opens one.
+      const shared = { id: 'sess-shared', command: 'pagespace-cli', isActive: true, tty: true };
       checkAuth = vi
         .fn()
-        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared' }))
-        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared' })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared', sessions: [shared] }))
+        .mockResolvedValueOnce(makeAuthSuccess({ streamSessionId: 'sess-shared', sessions: [shared] })) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
 
       await Promise.all([
@@ -1759,6 +1769,79 @@ describe('buildAgentTerminalHandlers', () => {
         'agent-terminal:ready',
         expect.objectContaining({ connectionId: 'pane-b', resumed: true }),
       );
+    });
+  });
+
+  describe('a verdict must constrain what happens, not merely predict it', () => {
+    it('given a session the Sprite says is GONE, should NOT hand that id to the shell', async () => {
+      // `openPtyShell` attaches to a sessionId optimistically — it never consults
+      // the verdict. Handing it the stored id while telling the client `resumed:
+      // false` bets that the listing was right; lose that bet (a listing that omits
+      // a session `attachSession` then binds to) and the bridge is attached to a
+      // LIVE agent having just told the client it was safe to type into it. So
+      // `gone` makes itself true: no id, a genuinely fresh session.
+      checkAuth = vi.fn().mockResolvedValue(
+        makeAuthSuccess({ streamSessionId: 'sess-long-dead', sessions: [] }),
+      ) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: undefined }));
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:ready', { connectionId: 'sock1', resumed: false });
+    });
+
+    it('given a liveness it could not settle, should still attach — abandoning a running agent is the worse error', async () => {
+      const auth = makeAuthSuccess({ streamSessionId: 'sess-existing' });
+      auth.sprite.listSessions = vi.fn(async () => {
+        throw new Error('429');
+      }) as unknown as typeof auth.sprite.listSessions;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      expect(openShell).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-existing' }));
+    });
+  });
+
+  describe('a pane that leaves DURING a cold create', () => {
+    it('should not leave a live PTY behind with nobody watching it', async () => {
+      // The disconnect arrives before the connect has registered anything to
+      // disconnect: the create is still resolving the Sprite and asking which
+      // sessions it has. Dropped, the create finishes into the void — a session with
+      // no viewer, never detached, so the idle reap that releases its concurrency
+      // slot and settles its billing never arms. An agent CLI sits at its prompt
+      // forever, so nothing else collects it: it runs for the life of the process.
+      const auth = makeAuthSuccess();
+      const resolveSandbox = auth.resolveSandbox;
+      let releaseSandbox!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseSandbox = resolve;
+      });
+      // Hold the create open in the window this bug lives in: the Sprite is being
+      // resolved and woken, and nothing has been registered to disconnect yet.
+      auth.resolveSandbox = vi.fn(async () => {
+        await gate;
+        return resolveSandbox();
+      }) as unknown as typeof auth.resolveSandbox;
+      checkAuth = vi.fn().mockResolvedValue(auth) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const connecting = handlers.onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The pane goes away mid-boot (tab closed, workspace switched, StrictMode).
+      handlers.onDisconnect({ connectionId: 'sock1' });
+      releaseSandbox();
+      await connecting;
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The session exists, but it is DETACHED: the idle reap is armed, so the slot
+      // and the billing window are released rather than held for the process's life.
+      const session = sessionMap.getByKey('branch1:agent:cli');
+      expect(session?.idleTimer).toBeDefined();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
+      expect(auth.releaseSlot).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalled();
     });
   });
 });

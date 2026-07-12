@@ -467,6 +467,23 @@ export function buildAgentTerminalHandlers({
    */
   const activeConnectionIds = new Set<string>();
 
+  /**
+   * Connections whose PTY is still being CREATED — resolving a Sprite, waking it,
+   * asking which sessions it has, exec'ing the agent. Seconds, on a cold boot.
+   *
+   * A pane that goes away inside that window (the tab closed, the user switched
+   * workspace, StrictMode's double-mount) sends its `agent-terminal:disconnect`
+   * BEFORE the connect has registered anything to disconnect — so without this the
+   * message lands on nothing, the create finishes into the void, and the session it
+   * installs has no viewer, is never detached, and so never arms the idle reap that
+   * would release its concurrency slot and stop its billing heartbeat. It would run
+   * for the life of the process: an agent CLI sits at its prompt forever, so nothing
+   * else collects it. On the free tier (one terminal) that locks the user out.
+   */
+  const creatingConnectionIds = new Set<string>();
+  /** Creates whose pane went away before the PTY existed — torn down on arrival. */
+  const abandonedDuringCreate = new Set<string>();
+
   function disconnectConnection(connectionId: string) {
     const session = sessionMap.getBySocket(connectionId);
     activeConnectionIds.delete(connectionId);
@@ -602,6 +619,7 @@ export function buildAgentTerminalHandlers({
       // path — success, denial, or throw.
       let finishCreate!: () => void;
       sessionMap.trackCreate(sessionKey, new Promise<void>((resolve) => { finishCreate = resolve; }));
+      creatingConnectionIds.add(connectionId);
       try {
         // ONLY now is a concurrency slot reserved and the Sprite resolved: a
         // reattach above returned without ever calling this.
@@ -665,12 +683,28 @@ export function buildAgentTerminalHandlers({
         const liveness = await sessionLiveness(sprite, sandbox.streamSessionId);
         const resumed = resumedFor(liveness);
 
+        // The verdict has to CONSTRAIN the attach, not merely predict it.
+        //
+        // `openPtyShell` attaches to a `sessionId` optimistically — it does not
+        // consult this verdict — so handing it the stored id while telling the
+        // client `resumed: false` would be a bet that the listing was right. Lose
+        // that bet (the listing omits a session `attachSession` then binds to) and
+        // the bridge is attached to a LIVE agent having just told the client it was
+        // safe to type into. `resumed` is the only defence on this path.
+        //
+        // So a `gone` verdict makes ITSELF true: no id, a genuinely fresh session,
+        // and the prompt is correct by construction. Anything else (`live`, or an
+        // `unknown` we could not settle) keeps the id — abandoning a running agent
+        // to start a second one is the worse error, and it is the same policy
+        // `planReconnect` already applies on every reconnect.
+        const attachSessionId = liveness === 'gone' ? undefined : (sandbox.streamSessionId ?? undefined);
+
         const session: TerminalSession = {
           command: null as unknown as PtyShell,
           sandboxId,
           sessionKey,
           viewerUserId: userId,
-          sessionId: sandbox.streamSessionId ?? undefined,
+          sessionId: attachSessionId,
           releaseSlot,
           payerId: plan.access.payerId,
           holdId,
@@ -713,7 +747,7 @@ export function buildAgentTerminalHandlers({
             sprite,
             cols: clampedCols,
             rows: clampedRows,
-            sessionId: sandbox.streamSessionId ?? undefined,
+            sessionId: attachSessionId,
             command: launch.command,
             args: launch.args,
             cwd: sandbox.cwd,
@@ -764,6 +798,13 @@ export function buildAgentTerminalHandlers({
         session.command = shell;
         sessionMap.setNew(sessionKey, connectionId, session);
         activeConnectionIds.add(connectionId);
+
+        // The pane went away while this was being built. It is a live PTY now, with
+        // nobody watching it — detach it exactly as a normal disconnect would, so it
+        // arms the idle reap that releases the slot and settles the billing window.
+        if (abandonedDuringCreate.has(connectionId)) {
+          disconnectConnection(connectionId);
+        }
 
         // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
         // re-hold on an interval so a realtime restart loses at most one interval
@@ -834,6 +875,8 @@ export function buildAgentTerminalHandlers({
         // actually has.
         socket.emit('agent-terminal:ready', { connectionId, resumed });
       } finally {
+        creatingConnectionIds.delete(connectionId);
+        abandonedDuringCreate.delete(connectionId);
         // Release the key claim on EVERY exit from the cold path — success, denial
         // or throw — so a failed create never wedges the key against future connects.
         finishCreate();
@@ -876,6 +919,9 @@ export function buildAgentTerminalHandlers({
         // established) must never be trusted to reach another socket's PTY.
         if (activeConnectionIds.has(explicitConnectionId)) {
           disconnectConnection(explicitConnectionId);
+        } else if (creatingConnectionIds.has(explicitConnectionId)) {
+          // Its PTY does not exist yet. Remember, and tear it down the moment it does.
+          abandonedDuringCreate.add(explicitConnectionId);
         }
         return;
       }
@@ -883,6 +929,11 @@ export function buildAgentTerminalHandlers({
       // every connection this socket had open loses its viewer at once.
       for (const connectionId of [...activeConnectionIds]) {
         disconnectConnection(connectionId);
+      }
+      // Including the ones whose PTY is still being built: the tab is gone, and
+      // whatever the create installs must not be left running with no viewer.
+      for (const connectionId of creatingConnectionIds) {
+        abandonedDuringCreate.add(connectionId);
       }
     },
   };
