@@ -332,19 +332,29 @@ export async function propagateClaudeCredential({
           // wrong-permission or briefly absent in between. If anything
           // fails before the rename, the live file at `path` is completely
           // untouched.
-          const tempPath = `${path}.tmp`;
-          // Clear the temp path FIRST — a fixed name isn't guaranteed to be
-          // fresh (a prior attempt could have crashed between writing it
-          // and renaming it, or its own cleanup could have failed), and
-          // writing to an ALREADY-EXISTING temp path would be an overwrite,
-          // not a creation — silently keeping whatever (possibly
-          // permissive) mode that stale file already had, which the `mv`
-          // below would then promote onto the real credential, reintroducing
-          // the exact problem this temp-file flow exists to avoid (caught
-          // in review). Checked, not fire-and-forget: if the clear itself
-          // fails, abort BEFORE writing rather than assume the temp path is
-          // now clear (caught in review, again) — still safe either way,
-          // since nothing has touched the live file yet.
+          // Suffixed with THIS call's own generation number — never shared
+          // with an overlapping call for the same branch Sprite. A fixed
+          // temp name was tried and reverted: when an older call's stale
+          // cleanup (below) ran after a newer, overlapping call had already
+          // written ITS OWN content to that same shared path, the older
+          // cleanup deleted the newer call's temp file out from under it,
+          // making the newer (correct) refresh fail its own `mv` (caught in
+          // review). A per-generation path means no two overlapping calls
+          // ever touch the same temp file, so one's cleanup can never
+          // disturb another's in-progress write.
+          const tempPath = `${path}.tmp.${generation}`;
+          // Still clear it first — a per-generation name is effectively
+          // never reused WITHIN one process lifetime, but this process
+          // could have restarted since a prior crash: `generation` resets
+          // to 1 on every restart (it's in-memory, not persisted), so a
+          // stale temp file from a pre-restart run could coincidentally
+          // share this exact generation number. Writing to an
+          // ALREADY-EXISTING temp path would be an overwrite, not a
+          // creation, silently keeping whatever (possibly permissive) mode
+          // that stale file already had. Checked, not fire-and-forget: if
+          // the clear itself fails, abort BEFORE writing rather than assume
+          // the temp path is now clear — still safe either way, since
+          // nothing has touched the live file yet.
           const clearTemp = await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
           if (clearTemp.exitCode !== 0) {
             throw new Error(`rm -f ${tempPath} failed: exit ${clearTemp.exitCode}`);

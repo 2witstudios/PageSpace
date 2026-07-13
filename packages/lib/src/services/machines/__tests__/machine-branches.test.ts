@@ -887,25 +887,28 @@ describe('Claude Code credential propagation', () => {
     if (!result.ok) throw new Error('expected ok');
 
     const state = byId.get(result.sandboxId);
-    // The temp path is cleared BEFORE each write too — a fixed temp name
-    // isn't guaranteed fresh (a prior attempt could have left it behind),
-    // and writing to an already-existing temp path would silently keep
-    // whatever mode it already had.
+    // The temp path is generation-suffixed (not a fixed name — see doc
+    // comment on why) and cleared BEFORE each write too — writing to an
+    // already-existing temp path would silently keep whatever mode it
+    // already had.
+    const tempPathPattern = /^\/home\/sprite\/\.claude(\/\.credentials\.json|\.json)\.tmp\.\d+$/;
     const rmCalls = state?.execLog.filter((c) => c.cmd === 'rm') ?? [];
-    expect(rmCalls).toEqual([
-      { cmd: 'rm', args: ['-f', '/home/sprite/.claude/.credentials.json.tmp'] },
-      { cmd: 'rm', args: ['-f', '/home/sprite/.claude.json.tmp'] },
-    ]);
+    expect(rmCalls).toHaveLength(2);
+    for (const call of rmCalls) {
+      expect(call.args?.[0]).toBe('-f');
+      expect(call.args?.[1]).toMatch(tempPathPattern);
+    }
     const mvCalls = state?.execLog.filter((c) => c.cmd === 'mv') ?? [];
-    expect(mvCalls).toEqual([
-      { cmd: 'mv', args: ['/home/sprite/.claude/.credentials.json.tmp', '/home/sprite/.claude/.credentials.json'] },
-      { cmd: 'mv', args: ['/home/sprite/.claude.json.tmp', '/home/sprite/.claude.json'] },
-    ]);
+    expect(mvCalls).toHaveLength(2);
+    expect(mvCalls[0]?.args?.[0]).toMatch(tempPathPattern);
+    expect(mvCalls[0]?.args?.[1]).toBe('/home/sprite/.claude/.credentials.json');
+    expect(mvCalls[1]?.args?.[0]).toMatch(tempPathPattern);
+    expect(mvCalls[1]?.args?.[1]).toBe('/home/sprite/.claude.json');
     // The fake host's `mv` moves the in-memory entry — the final content and
     // mode must land at the REAL path, with no lingering temp-path entry.
     expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('secret-token');
     expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
-    expect(state?.files.has('/home/sprite/.claude/.credentials.json.tmp')).toBe(false);
+    expect([...(state?.files.keys() ?? [])].some((k) => tempPathPattern.test(k))).toBe(false);
   });
 
   it('given an overlapping call reads an OLDER credential and then stalls, should skip its own mv once a NEWER call has already landed — never clobbering the newer credential', async () => {
@@ -980,8 +983,10 @@ describe('Claude Code credential propagation', () => {
     // The refresh's mv failed — the credential at the real path must be the
     // one that was there before the failed refresh, not gone.
     expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('still-valid-token');
-    // The orphaned temp file must have been cleaned up (best-effort).
-    expect(state?.files.has('/home/sprite/.claude/.credentials.json.tmp')).toBe(false);
+    // The orphaned (generation-suffixed) temp file must have been cleaned
+    // up (best-effort).
+    const tempPathPattern = /^\/home\/sprite\/\.claude\/\.credentials\.json\.tmp\.\d+$/;
+    expect([...(state?.files.keys() ?? [])].some((k) => tempPathPattern.test(k))).toBe(false);
   });
 
   it('given the temp-clearing rm exec fails (non-zero exit), should abort BEFORE writing rather than assume the temp path is clear, and should leave any existing valid credential untouched', async () => {
