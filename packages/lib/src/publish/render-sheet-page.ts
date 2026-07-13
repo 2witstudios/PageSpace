@@ -1,13 +1,23 @@
+import { renderCanvasDocument } from '../canvas/render-document';
+import { buildDocumentCsp } from '../canvas/csp';
 import { escapeHtml } from '../utils/html';
 import { evaluateSheet, parseSheetContent } from '../sheets/sheet';
-import { renderDocumentShell, wrapDocumentBody } from './document-shell';
+import { wrapDocumentBody, DOCUMENT_TYPOGRAPHY_CSS } from './document-shell';
 
 export interface RenderSheetPageInput {
   serializedContent: unknown;
   title: string;
-  lang?: string;
   /** Render the first row as `<th>` column headers instead of data. */
   hasHeaders?: boolean;
+  pageUrl?: string;
+  ogImageUrl?: string;
+  ogDescription?: string;
+  description?: string;
+  robots?: string;
+  faviconHref?: string;
+  faviconBaseUrl?: string;
+  lang?: string;
+  allowedAssetHosts?: string[];
 }
 
 const EMPTY_STATE_HTML = '<p>This sheet is empty.</p>';
@@ -45,15 +55,37 @@ function buildSheetTableHtml(serializedContent: unknown, hasHeaders?: boolean): 
 }
 
 /**
- * Render a SHEET page as a static, standalone HTML document: a plain
+ * Render a SHEET page as a complete, standalone HTML document: a plain
  * `<table>` snapshot of the sheet's evaluated cell values. No client-side
- * grid, no editing — head assembly and CSP (`script-src 'none'`) are
- * delegated to `document-shell.ts`, the same shell path DOCUMENT pages use.
+ * grid, no editing.
+ *
+ * Mirrors `render-document-page.ts`: reuses the canvas renderer's whole head
+ * assembly (SEO/OG/Twitter/JSON-LD, favicon, CSP `<meta>`) via
+ * `cspOverride`/`injectThemeBridge: false` rather than duplicating it — SHEET
+ * pages never run author scripts, so they get `buildDocumentCsp()`
+ * (`script-src 'none'`) and no theme-bridge script.
  */
-export function renderSheetPage({ serializedContent, title, lang, hasHeaders }: RenderSheetPageInput): string {
-  const bodyHtml = wrapDocumentBody({
+export function renderSheetPage(input: RenderSheetPageInput): string {
+  const { serializedContent, title, hasHeaders, pageUrl, ogImageUrl, ogDescription, description, robots, faviconHref, faviconBaseUrl, lang, allowedAssetHosts } = input;
+
+  const wrappedBody = wrapDocumentBody({
     bodyHtml: buildSheetTableHtml(serializedContent, hasHeaders),
     title,
   });
-  return renderDocumentShell({ title, bodyHtml, lang });
+
+  return renderCanvasDocument({
+    html: `<style>${DOCUMENT_TYPOGRAPHY_CSS}</style>${wrappedBody}`,
+    title,
+    pageUrl,
+    ogImageUrl,
+    ogDescription,
+    description,
+    robots,
+    faviconHref,
+    faviconBaseUrl,
+    lang,
+    allowedAssetHosts,
+    cspOverride: buildDocumentCsp(),
+    injectThemeBridge: false,
+  });
 }

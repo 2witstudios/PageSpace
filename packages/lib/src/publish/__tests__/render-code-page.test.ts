@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { renderCodePage } from '../render-code-page';
-import { buildDocumentCsp } from '../document-shell';
+import { buildDocumentCsp } from '../../canvas/csp';
 
 interface AssertParams {
   given: string;
@@ -47,38 +47,49 @@ describe('renderCodePage', () => {
     });
   });
 
-  it('should delegate head assembly to the document shell', () => {
+  it('should wrap the code inside the shared .ps-document shell with a title header', () => {
     const html = renderCodePage({ code: 'x', title: 'My Snippet' });
     assert({
       given: 'a code page render',
-      should: 'produce a full standalone document with the title, the document typography shell, and the escaped code inside .ps-document',
-      actual:
-        html.startsWith('<!doctype html>') &&
-        html.includes('<title>My Snippet</title>') &&
-        html.includes('<article class="ps-document">') &&
-        /<article class="ps-document">.*<pre><code>x<\/code><\/pre>.*<\/article>/.test(html),
-      expected: true,
-    });
-  });
-
-  it('should wrap the title as an <h1> header', () => {
-    assert({
-      given: 'a title',
-      should: 'emit it as the document <h1> header',
-      actual: renderCodePage({ code: 'x', title: 'My Snippet' }).includes(
-        '<header><h1>My Snippet</h1></header>',
+      should: 'emit <article class="ps-document"> with a <header><h1> title around the code block',
+      actual: html.includes(
+        '<article class="ps-document"><header><h1>My Snippet</h1></header><pre><code>x</code></pre></article>',
       ),
       expected: true,
     });
   });
 
-  it('should carry the document CSP with script-src none', () => {
+  it('should delegate head assembly to renderCanvasDocument (doctype, title, typography CSS)', () => {
+    const html = renderCodePage({ code: 'x', title: 'My Snippet' });
+    assert({
+      given: 'a code page render',
+      should: 'produce a full standalone document with the title and inlined document typography CSS',
+      actual:
+        html.startsWith('<!doctype html>') &&
+        html.includes('</html>') &&
+        html.includes('<title>My Snippet</title>') &&
+        html.includes('.ps-document {') &&
+        html.includes('max-width: 42rem'),
+      expected: true,
+    });
+  });
+
+  it('should carry buildDocumentCsp() (script-src none) as the CSP override', () => {
     const html = renderCodePage({ code: 'x', title: 'T' });
     assert({
       given: 'a rendered code page',
-      should: "carry buildDocumentCsp()'s content in a CSP meta tag",
-      actual: html.includes(`<meta http-equiv="Content-Security-Policy" content="${buildDocumentCsp()}">`),
+      should: "carry buildDocumentCsp()'s content verbatim in the CSP meta tag",
+      actual: html.includes(`content="${buildDocumentCsp()}"`) && html.includes("script-src 'none'"),
       expected: true,
+    });
+  });
+
+  it('should omit the theme-bridge script', () => {
+    assert({
+      given: 'a rendered code page (standalone, not an in-app iframe)',
+      should: 'not inject the theme-bridge <script>',
+      actual: renderCodePage({ code: 'x', title: 'T' }).includes('pagespace-theme'),
+      expected: false,
     });
   });
 
@@ -101,6 +112,35 @@ describe('renderCodePage', () => {
       should: 'set <html lang>',
       actual: renderCodePage({ code: 'x', title: 'T', lang: 'fr' }).includes('<html lang="fr">'),
       expected: true,
+    });
+  });
+
+  it('should emit the canonical link and OG tags when pageUrl is provided', () => {
+    const html = renderCodePage({
+      code: 'x',
+      title: 'My Snippet',
+      pageUrl: 'https://acme.pagespace.site/snippet',
+      ogImageUrl: 'https://acme.pagespace.site/og.png',
+      ogDescription: 'A great snippet',
+    });
+    assert({
+      given: 'pageUrl, ogImageUrl and ogDescription',
+      should: 'emit a canonical link and OG meta tags (passed through to renderCanvasDocument)',
+      actual:
+        html.includes('<link rel="canonical" href="https://acme.pagespace.site/snippet">') &&
+        html.includes('<meta property="og:image" content="https://acme.pagespace.site/og.png">') &&
+        html.includes('<meta property="og:description" content="A great snippet">'),
+      expected: true,
+    });
+  });
+
+  it('should omit the canonical link and OG tags when pageUrl is absent', () => {
+    const html = renderCodePage({ code: 'x', title: 'T' });
+    assert({
+      given: 'no pageUrl',
+      should: 'omit canonical/OG tags entirely',
+      actual: html.includes('rel="canonical"') || html.includes('property="og:'),
+      expected: false,
     });
   });
 });

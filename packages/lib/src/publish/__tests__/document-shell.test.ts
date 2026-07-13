@@ -4,8 +4,6 @@ import {
   DOCUMENT_TYPOGRAPHY_CSS,
   documentStartsWithH1,
   wrapDocumentBody,
-  buildDocumentCsp,
-  renderDocumentShell,
 } from '../document-shell';
 
 interface AssertParams {
@@ -291,125 +289,6 @@ describe('wrapDocumentBody', () => {
       given: 'an arbitrary rich-text body',
       should: 'pass it through unmodified inside the article',
       actual: wrapDocumentBody({ bodyHtml, title: 'T' }).includes(bodyHtml),
-      expected: true,
-    });
-  });
-});
-
-describe('buildDocumentCsp', () => {
-  it('should block all scripts', () => {
-    assert({
-      given: 'the published-document CSP',
-      should: "declare script-src 'none'",
-      actual: buildDocumentCsp().includes("script-src 'none'"),
-      expected: true,
-    });
-  });
-
-  it('should deny everything by default', () => {
-    assert({
-      given: 'the published-document CSP',
-      should: "declare default-src 'none'",
-      actual: buildDocumentCsp().includes("default-src 'none'"),
-      expected: true,
-    });
-  });
-
-  it('should block form submission and framing/base injection', () => {
-    assert({
-      given: 'the published-document CSP',
-      should: "declare form-action 'none', object-src 'none', and base-uri 'none'",
-      actual:
-        buildDocumentCsp().includes("form-action 'none'") &&
-        buildDocumentCsp().includes("object-src 'none'") &&
-        buildDocumentCsp().includes("base-uri 'none'"),
-      expected: true,
-    });
-  });
-});
-
-describe('renderDocumentShell', () => {
-  it('should assemble a complete standalone HTML document', () => {
-    const html = renderDocumentShell({ title: 'My Page', bodyHtml: '<p>hi</p>' });
-    assert({
-      given: 'a title and body',
-      should: 'emit doctype, html, head, and body wrapping the given bodyHtml',
-      actual:
-        html.startsWith('<!doctype html>') &&
-        html.includes('<html lang="en">') &&
-        html.includes('<title>My Page</title>') &&
-        html.includes('<body><p>hi</p></body></html>'),
-      expected: true,
-    });
-  });
-
-  it('should stamp the CSP as a meta tag', () => {
-    const html = renderDocumentShell({ title: 'T', bodyHtml: '<p>x</p>' });
-    assert({
-      given: 'the rendered shell',
-      should: 'carry buildDocumentCsp() in a Content-Security-Policy meta tag',
-      actual: html.includes(`<meta http-equiv="Content-Security-Policy" content="${buildDocumentCsp()}">`),
-      expected: true,
-    });
-  });
-
-  it('should inline the document typography CSS', () => {
-    const html = renderDocumentShell({ title: 'T', bodyHtml: '<p>x</p>' });
-    assert({
-      given: 'the rendered shell',
-      should: 'inline DOCUMENT_TYPOGRAPHY_CSS inside a <style> tag',
-      actual: html.includes(`<style>${DOCUMENT_TYPOGRAPHY_CSS}</style>`),
-      expected: true,
-    });
-  });
-
-  it('should emit no <script> tags', () => {
-    assert({
-      given: 'the rendered shell',
-      should: 'contain no <script> tag anywhere',
-      actual: /<script/i.test(renderDocumentShell({ title: 'T', bodyHtml: '<p>x</p>' })),
-      expected: false,
-    });
-  });
-
-  it('should HTML-escape the title', () => {
-    const html = renderDocumentShell({ title: 'Fish & <Chips>', bodyHtml: '<p>x</p>' });
-    assert({
-      given: 'a title with HTML-special characters',
-      should: 'escape it in <title>',
-      actual: html.includes('<title>Fish &amp; &lt;Chips&gt;</title>'),
-      expected: true,
-    });
-  });
-
-  it('should default to Untitled for a blank title', () => {
-    const html = renderDocumentShell({ title: '   ', bodyHtml: '<p>x</p>' });
-    assert({
-      given: 'a blank/whitespace-only title',
-      should: 'fall back to "Untitled"',
-      actual: html.includes('<title>Untitled</title>'),
-      expected: true,
-    });
-  });
-
-  it('should default lang to "en" and allow overriding it', () => {
-    assert({
-      given: 'no lang and an explicit lang',
-      should: 'default to en and honor the override',
-      actual: [
-        renderDocumentShell({ title: 'T', bodyHtml: '<p>x</p>' }).includes('<html lang="en">'),
-        renderDocumentShell({ title: 'T', bodyHtml: '<p>x</p>', lang: 'fr' }).includes('<html lang="fr">'),
-      ],
-      expected: [true, true],
-    });
-  });
-
-  it('should pass the body through verbatim (no re-escaping)', () => {
-    const bodyHtml = '<article class="ps-document"><p>a &amp; b</p></article>';
-    assert({
-      given: 'pre-assembled bodyHtml',
-      should: 'embed it unmodified between <body> tags',
-      actual: renderDocumentShell({ title: 'T', bodyHtml }).includes(`<body>${bodyHtml}</body>`),
       expected: true,
     });
   });

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { renderSheetPage } from '../render-sheet-page';
-import { buildDocumentCsp } from '../document-shell';
+import { buildDocumentCsp } from '../../canvas/csp';
 
 interface AssertParams {
   given: string;
@@ -104,26 +104,49 @@ describe('renderSheetPage', () => {
     });
   });
 
-  it('should delegate head assembly to the document shell', () => {
+  it('should wrap the table inside the shared .ps-document shell with a title header', () => {
     const html = renderSheetPage({ serializedContent: GRID, title: 'My Sheet' });
     assert({
       given: 'a sheet page render',
-      should: 'produce a full standalone document with the title, document shell, and table inside .ps-document',
-      actual:
-        html.startsWith('<!doctype html>') &&
-        html.includes('<title>My Sheet</title>') &&
-        /<article class="ps-document">.*<table>.*<\/table>.*<\/article>/.test(html),
+      should: 'emit <article class="ps-document"> with a <header><h1> title around the table',
+      actual: /<article class="ps-document"><header><h1>My Sheet<\/h1><\/header><table>.*<\/table><\/article>/.test(
+        html,
+      ),
       expected: true,
     });
   });
 
-  it('should carry the document CSP with script-src none', () => {
+  it('should delegate head assembly to renderCanvasDocument (doctype, title, typography CSS)', () => {
+    const html = renderSheetPage({ serializedContent: GRID, title: 'My Sheet' });
+    assert({
+      given: 'a sheet page render',
+      should: 'produce a full standalone document with the title and inlined document typography CSS',
+      actual:
+        html.startsWith('<!doctype html>') &&
+        html.includes('</html>') &&
+        html.includes('<title>My Sheet</title>') &&
+        html.includes('.ps-document {') &&
+        html.includes('max-width: 42rem'),
+      expected: true,
+    });
+  });
+
+  it('should carry buildDocumentCsp() (script-src none) as the CSP override', () => {
     const html = renderSheetPage({ serializedContent: GRID, title: 'T' });
     assert({
       given: 'a rendered sheet page',
-      should: "carry buildDocumentCsp()'s content in a CSP meta tag",
-      actual: html.includes(`<meta http-equiv="Content-Security-Policy" content="${buildDocumentCsp()}">`),
+      should: "carry buildDocumentCsp()'s content verbatim in the CSP meta tag",
+      actual: html.includes(`content="${buildDocumentCsp()}"`) && html.includes("script-src 'none'"),
       expected: true,
+    });
+  });
+
+  it('should omit the theme-bridge script', () => {
+    assert({
+      given: 'a rendered sheet page (standalone, not an in-app iframe)',
+      should: 'not inject the theme-bridge <script>',
+      actual: renderSheetPage({ serializedContent: GRID, title: 'T' }).includes('pagespace-theme'),
+      expected: false,
     });
   });
 
@@ -136,6 +159,35 @@ describe('renderSheetPage', () => {
       given: 'a cell attempting to break out of the table and inject a script tag',
       should: 'contain no literal <script tag anywhere in the output',
       actual: /<script/i.test(html),
+      expected: false,
+    });
+  });
+
+  it('should emit the canonical link and OG tags when pageUrl is provided', () => {
+    const html = renderSheetPage({
+      serializedContent: GRID,
+      title: 'My Sheet',
+      pageUrl: 'https://acme.pagespace.site/sheet',
+      ogImageUrl: 'https://acme.pagespace.site/og.png',
+      ogDescription: 'A great sheet',
+    });
+    assert({
+      given: 'pageUrl, ogImageUrl and ogDescription',
+      should: 'emit a canonical link and OG meta tags (passed through to renderCanvasDocument)',
+      actual:
+        html.includes('<link rel="canonical" href="https://acme.pagespace.site/sheet">') &&
+        html.includes('<meta property="og:image" content="https://acme.pagespace.site/og.png">') &&
+        html.includes('<meta property="og:description" content="A great sheet">'),
+      expected: true,
+    });
+  });
+
+  it('should omit the canonical link and OG tags when pageUrl is absent', () => {
+    const html = renderSheetPage({ serializedContent: GRID, title: 'T' });
+    assert({
+      given: 'no pageUrl',
+      should: 'omit canonical/OG tags entirely',
+      actual: html.includes('rel="canonical"') || html.includes('property="og:'),
       expected: false,
     });
   });
