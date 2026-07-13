@@ -23,7 +23,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { replaceLines } from '@/lib/editor/line-edit';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
-import { resolveDefaultPageId } from './page-context-defaults';
+import { resolveOrThrowPageId } from './page-context-defaults';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -420,10 +420,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
-      if (!pageId) {
-        throw new Error('pageId is required: no page is currently in view and none was provided.');
-      }
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         // Get the page via repository seam
@@ -755,10 +752,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
-      if (!pageId) {
-        throw new Error('pageId is required: no page is currently in view and none was provided.');
-      }
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         // Get the page via repository seam
@@ -791,6 +785,14 @@ export const pageWriteTools = {
             parentId: page.parentId
           })
         );
+
+        // Keep the cached working-page title in sync if this IS the agent's
+        // current focus — otherwise a later omitted-pageId call in the same
+        // turn would resolve correctly by id but report the pre-rename title.
+        const rawContext = context as ToolExecutionContext | undefined;
+        if (rawContext?.currentWorkingPage?.id === page.id) {
+          rawContext.currentWorkingPage = { ...rawContext.currentWorkingPage, title };
+        }
 
         return {
           success: true,
@@ -1019,10 +1021,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
-      if (!pageId) {
-        throw new Error('pageId is required: no page is currently in view and none was provided.');
-      }
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         // Get the page to move via repository seam
@@ -1111,10 +1110,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
-      if (!pageId) {
-        throw new Error('pageId is required: no page is currently in view and none was provided.');
-      }
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         const page = await pageRepository.findById(pageId);
@@ -1221,10 +1217,7 @@ export const pageWriteTools = {
         throw new Error('User authentication required');
       }
 
-      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
-      if (!pageId) {
-        throw new Error('pageId is required: no page is currently in view and none was provided.');
-      }
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         // Get the page via repository seam

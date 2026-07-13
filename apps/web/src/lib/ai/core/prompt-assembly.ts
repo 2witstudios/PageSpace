@@ -2,9 +2,9 @@
  * Prompt assembly helpers for prefix-stable, cache-friendly AI requests.
  *
  * Key invariants enforced here:
- * - Volatile per-turn data (timestamp, mention, command) lives on the last
- *   user message, NOT in the system prompt, so the system prefix stays
- *   byte-identical across turns and provider prefix caches survive.
+ * - Volatile per-turn data (timestamp, location, mention, command) lives on
+ *   the last user message, NOT in the system prompt, so the system prefix
+ *   stays byte-identical across turns and provider prefix caches survive.
  * - Cache breakpoints are placed at message-level via providerOptions so
  *   OpenRouter's Anthropic prefix cache can be activated per turn/step.
  * - Nothing in this module reads the clock or mutates its inputs.
@@ -31,7 +31,7 @@ export interface VolatileTurnContextInput {
 // ─── Volatile context assembly ────────────────────────────────────────────────
 
 /**
- * Build the volatile per-turn context block from the three prompt fragments.
+ * Build the volatile per-turn context block from the prompt fragments.
  * Empty/whitespace-only fragments are omitted. The result is suitable for
  * appending to the last user message (not the system prompt).
  *

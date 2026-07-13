@@ -17,7 +17,7 @@ import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { resolveDefaultPageId } from './page-context-defaults';
+import { resolveOrThrowPageId } from './page-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
@@ -254,10 +254,7 @@ export const pageReadTools = {
         throw new Error('User authentication required');
       }
 
-      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
-      if (!pageId) {
-        throw new Error('pageId is required: no page is currently in view and none was provided.');
-      }
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         // Get the page directly by ID

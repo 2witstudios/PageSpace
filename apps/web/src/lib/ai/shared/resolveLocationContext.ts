@@ -24,7 +24,14 @@ async function fetchPageContext(
   currentDrive: { id: string; slug: string; name: string } | null,
 ) {
   try {
-    const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
+    // Breadcrumbs only need pageId, which is already known — fetch both
+    // requests concurrently instead of serially (breadcrumbs used to only
+    // start after the page fetch resolved, roughly doubling latency for no
+    // reason since neither depends on the other's result).
+    const [pageResponse, breadcrumbsResponse] = await Promise.all([
+      fetchWithAuth(`/api/pages/${pageId}`),
+      fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`).catch(() => null),
+    ]);
     if (!pageResponse.ok) return null;
     const pageData = (await pageResponse.json()) as { id: string; title: string; type: string };
 
@@ -33,15 +40,14 @@ async function fetchPageContext(
     // the path that gets sent to the AI.
     const slugPrefix = currentDrive?.slug ? `/${currentDrive.slug}` : '';
     let path = `${slugPrefix}/${pageData.title}`;
-    try {
-      const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
-      if (breadcrumbsResponse.ok) {
+    if (breadcrumbsResponse?.ok) {
+      try {
         const breadcrumbsData = (await breadcrumbsResponse.json()) as Array<{ title: string }>;
         const pathSegments = breadcrumbsData.map((crumb) => crumb.title);
         path = `${slugPrefix}/${pathSegments.join('/')}`;
+      } catch {
+        // Keep the simple path fallback.
       }
-    } catch {
-      // Keep the simple path fallback.
     }
 
     return {
@@ -61,6 +67,13 @@ async function fetchPageContext(
  * navigation should still run it from an effect (for UI display); callers
  * sending a message to the AI should call this directly at send time instead
  * of reading a possibly-stale effect-derived state value.
+ *
+ * Deliberately uncached: this runs on every send, including several sends in
+ * a row on the same page, which does cost extra requests — but caching by
+ * pathname would resurrect exactly the staleness this function exists to
+ * eliminate (see feedback that led here) unless it also tracks drive-list
+ * updates, page renames, etc. A few extra fast page/breadcrumb fetches is a
+ * safer failure mode than a subtly stale cache.
  */
 export async function resolveLocationContext(
   pathname: string,

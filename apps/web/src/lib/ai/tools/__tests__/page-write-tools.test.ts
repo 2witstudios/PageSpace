@@ -617,6 +617,134 @@ describe('page-write-tools', () => {
         })
       );
     });
+
+    it('defaults pageId to the page currently in view when omitted', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'in-view-page',
+        title: 'Old Title',
+        type: 'DOCUMENT',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.update.mockResolvedValue({
+        id: 'in-view-page',
+        title: 'New Title',
+        type: 'DOCUMENT',
+        parentId: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: {
+          userId: 'user-123',
+          locationContext: { currentPage: { id: 'in-view-page', title: 'Old Title', type: 'DOCUMENT', path: '/p' } },
+        } as ToolExecutionContext,
+      };
+
+      const result = await pageWriteTools.rename_page.execute!(
+        { currentTitle: 'Old Title', title: 'New Title' },
+        context
+      );
+
+      if ('error' in result) throw new Error('Expected success');
+      expect(mockPageRepo.findById).toHaveBeenCalledWith('in-view-page');
+    });
+
+    it('throws a clear error when pageId is omitted and no page is in view', async () => {
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.rename_page.execute!(
+          { currentTitle: 'Old Title', title: 'New Title' },
+          context
+        )
+      ).rejects.toThrow('pageId is required');
+    });
+
+    it('syncs currentWorkingPage.title when renaming the agent\'s current working page', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Old Title',
+        type: 'DOCUMENT',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.update.mockResolvedValue({
+        id: 'page-1',
+        title: 'New Title',
+        type: 'DOCUMENT',
+        parentId: null,
+      });
+
+      const executionContext: ToolExecutionContext = {
+        userId: 'user-123',
+        currentWorkingPage: { id: 'page-1', title: 'Old Title', type: 'DOCUMENT' },
+      } as ToolExecutionContext;
+      const context = { toolCallId: '1', messages: [], experimental_context: executionContext };
+
+      await pageWriteTools.rename_page.execute!(
+        { currentTitle: 'Old Title', pageId: 'page-1', title: 'New Title' },
+        context
+      );
+
+      expect(executionContext.currentWorkingPage).toEqual({ id: 'page-1', title: 'New Title', type: 'DOCUMENT' });
+    });
+
+    it('does not touch currentWorkingPage when renaming a different page', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'other-page',
+        title: 'Old Title',
+        type: 'DOCUMENT',
+        content: '',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+      mockPageRepo.update.mockResolvedValue({
+        id: 'other-page',
+        title: 'New Title',
+        type: 'DOCUMENT',
+        parentId: null,
+      });
+
+      const executionContext: ToolExecutionContext = {
+        userId: 'user-123',
+        currentWorkingPage: { id: 'page-1', title: 'Focused Page', type: 'DOCUMENT' },
+      } as ToolExecutionContext;
+      const context = { toolCallId: '1', messages: [], experimental_context: executionContext };
+
+      await pageWriteTools.rename_page.execute!(
+        { currentTitle: 'Old Title', pageId: 'other-page', title: 'New Title' },
+        context
+      );
+
+      expect(executionContext.currentWorkingPage).toEqual({ id: 'page-1', title: 'Focused Page', type: 'DOCUMENT' });
+    });
   });
 
   describe('trash_page', () => {

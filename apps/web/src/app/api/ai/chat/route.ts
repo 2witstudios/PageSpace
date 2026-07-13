@@ -1529,7 +1529,10 @@ export async function POST(request: Request) {
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
               pageId: chatId,
-              driveId: pageContext?.driveId,
+              // Empty string (no drive in view) must read as "no drive", not a
+              // literal '' driveId — matches the truthy-guards used elsewhere
+              // in this file for the same pageContext.driveId field.
+              driveId: pageContext?.driveId || undefined,
               // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
               // completion. Cost still settles regardless (the provider charged us).
               success: agentRun?.finalOutcome !== 'exhausted',

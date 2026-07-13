@@ -675,122 +675,14 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
 
-  const handleSendMessage = useCallback(async () => {
-    const files = getFilesForSend();
-    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
-
-    // Derive isReadOnly from writeMode (inverted)
-    const isReadOnly = !writeMode;
-
-    // Start context fetch eagerly — runs in parallel with input clear so the
-    // async wait doesn't delay sendMessage (and the optimistic bubble).
-    const contextPromise = buildFreshLocationContext();
-    const text = input;
-    const sendFiles = files.length > 0 ? files : undefined;
-
-    setInput('');
-    clearFiles();
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(async () => {
-      const freshLocation = await contextPromise;
-      const body = selectedAgent
-        ? {
-            chatId: selectedAgent.id,
-            conversationId: agentConversationId,
-            isReadOnly,
-            webSearchEnabled,
-            imageGenEnabled,
-            provider: selectedAgent.aiProvider,
-            model: selectedAgent.aiModel,
-            systemPrompt: selectedAgent.systemPrompt,
-            pageContext: locationContextToPageContext(freshLocation),
-            enabledTools: selectedAgent.enabledTools,
-          }
-        : buildGlobalChatRequestBody({
-            conversationId: currentConversationId,
-            isReadOnly,
-            webSearchEnabled,
-            imageGenEnabled,
-            showPageTree,
-            locationContext: freshLocation,
-            selectedProvider: currentProvider,
-            selectedModel: currentModel,
-          });
-      return sendMessage({ text, files: sendFiles }, { body });
-    });
-    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
-  }, [
-    input,
-    currentConversationId,
-    selectedAgent,
-    agentConversationId,
-    writeMode,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    buildFreshLocationContext,
-    currentProvider,
-    currentModel,
-    sendMessage,
-    getFilesForSend,
-    clearFiles,
-    wrapSend,
-  ]);
-
-  // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback((text: string) => {
-    if (!text.trim() || !currentConversationId) return;
-
-    const isReadOnly = !writeMode;
-    const contextPromise = buildFreshLocationContext();
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(async () => {
-      const freshLocation = await contextPromise;
-      const body = selectedAgent
-        ? {
-            chatId: selectedAgent.id,
-            conversationId: agentConversationId,
-            isReadOnly,
-            webSearchEnabled,
-            imageGenEnabled,
-            provider: selectedAgent.aiProvider,
-            model: selectedAgent.aiModel,
-            systemPrompt: selectedAgent.systemPrompt,
-            pageContext: locationContextToPageContext(freshLocation),
-            enabledTools: selectedAgent.enabledTools,
-          }
-        : buildGlobalChatRequestBody({
-            conversationId: currentConversationId,
-            isReadOnly,
-            webSearchEnabled,
-            imageGenEnabled,
-            showPageTree,
-            locationContext: freshLocation,
-            selectedProvider: currentProvider,
-            selectedModel: currentModel,
-          });
-      return sendMessage({ text }, { body });
-    });
-  }, [
-    currentConversationId,
-    selectedAgent,
-    agentConversationId,
-    writeMode,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    buildFreshLocationContext,
-    currentProvider,
-    currentModel,
-    sendMessage,
-    wrapSend,
-  ]);
-
-  const buildAskUserAnswerBody = useCallback(async () => {
-    const isReadOnly = !writeMode;
-    const freshLocation = await buildFreshLocationContext();
+  // Shared shape for every sidebar send path (text, voice, ask-user-answer) —
+  // all three need "the request body for wherever we're sending right now,
+  // given a freshly-resolved location." Centralized so the agent-mode vs
+  // global-mode branch and field list can't drift between call sites.
+  const buildSidebarChatRequestBody = useCallback((
+    freshLocation: LocationContext | null,
+    isReadOnly: boolean,
+  ) => {
     return selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -817,14 +709,79 @@ const SidebarChatTab: React.FC = () => {
   }, [
     selectedAgent,
     agentConversationId,
-    writeMode,
     webSearchEnabled,
     imageGenEnabled,
     showPageTree,
-    buildFreshLocationContext,
+    currentConversationId,
     currentProvider,
     currentModel,
+  ]);
+
+  const handleSendMessage = useCallback(async () => {
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
+
+    // Derive isReadOnly from writeMode (inverted)
+    const isReadOnly = !writeMode;
+
+    // Start context fetch eagerly — runs in parallel with input clear so the
+    // async wait doesn't delay sendMessage (and the optimistic bubble).
+    const contextPromise = buildFreshLocationContext();
+    const text = input;
+    const sendFiles = files.length > 0 ? files : undefined;
+
+    setInput('');
+    clearFiles();
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(async () => {
+      const freshLocation = await contextPromise;
+      const body = buildSidebarChatRequestBody(freshLocation, isReadOnly);
+      return sendMessage({ text, files: sendFiles }, { body });
+    });
+    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
+  }, [
+    input,
     currentConversationId,
+    writeMode,
+    buildFreshLocationContext,
+    buildSidebarChatRequestBody,
+    sendMessage,
+    getFilesForSend,
+    clearFiles,
+    wrapSend,
+  ]);
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    const isReadOnly = !writeMode;
+    const contextPromise = buildFreshLocationContext();
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(async () => {
+      const freshLocation = await contextPromise;
+      const body = buildSidebarChatRequestBody(freshLocation, isReadOnly);
+      return sendMessage({ text }, { body });
+    });
+  }, [
+    currentConversationId,
+    writeMode,
+    buildFreshLocationContext,
+    buildSidebarChatRequestBody,
+    sendMessage,
+    wrapSend,
+  ]);
+
+  const buildAskUserAnswerBody = useCallback(async () => {
+    const isReadOnly = !writeMode;
+    const freshLocation = await buildFreshLocationContext();
+    return buildSidebarChatRequestBody(freshLocation, isReadOnly);
+  }, [
+    writeMode,
+    buildFreshLocationContext,
+    buildSidebarChatRequestBody,
   ]);
 
   const askUserAnswering = useAskUserAnswering({
