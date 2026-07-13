@@ -977,6 +977,11 @@
       "import": "./dist/canvas/primary-host.js",
       "require": "./dist/canvas/primary-host.js"
     },
+    "./publish/neutralize-dashboard-links": {
+      "types": "./dist/publish/neutralize-dashboard-links.d.ts",
+      "import": "./dist/publish/neutralize-dashboard-links.js",
+      "require": "./dist/publish/neutralize-dashboard-links.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
