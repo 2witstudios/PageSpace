@@ -17,6 +17,7 @@
  * a machine past the same active-runtime backstop agent tool calls respect.
  */
 
+import { createId } from '@paralleldrive/cuid2';
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
@@ -139,10 +140,12 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
       list: async (machineId) => (await getMachineProjectStore()).list(machineId),
       findByName: async (machineId, name) => (await getMachineProjectStore()).findByName(machineId, name),
       create: async (input) => (await getMachineProjectStore()).create(input),
-      remove: async (machineId, name) => (await getMachineProjectStore()).remove(machineId, name),
+      remove: async (machineId, id) => (await getMachineProjectStore()).remove(machineId, id),
     },
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),
+    // See MachineProjectsDeps.newProjectId for why this is generated up front.
+    newProjectId: createId,
     acquireMachineSandbox: async (machineId): Promise<MachineAcquireResult> => {
       const page = await db.query.pages.findFirst({
         where: eq(pages.id, machineId),

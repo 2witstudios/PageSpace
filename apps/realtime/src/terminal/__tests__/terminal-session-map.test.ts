@@ -12,6 +12,7 @@ function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
     scrollback: [],
     scrollbackBytes: 0,
     hasOutput: false,
+    viewerAttached: true,
     resumedAtCreate: false,
     reAuthInterval: undefined,
     idleTimer: undefined,

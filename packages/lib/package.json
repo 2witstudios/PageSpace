@@ -542,6 +542,11 @@
       "import": "./dist/services/sandbox/sandbox-client/sprites.js",
       "require": "./dist/services/sandbox/sandbox-client/sprites.js"
     },
+    "./services/sandbox/sandbox-client/sprite-tasks": {
+      "types": "./dist/services/sandbox/sandbox-client/sprite-tasks.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprite-tasks.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprite-tasks.js"
+    },
     "./services/sandbox/sandbox-client/sprite-machine-host": {
       "types": "./dist/services/sandbox/sandbox-client/sprite-machine-host.d.ts",
       "import": "./dist/services/sandbox/sandbox-client/sprite-machine-host.js",

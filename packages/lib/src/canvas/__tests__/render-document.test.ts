@@ -188,6 +188,16 @@ describe('renderCanvasDocument — theme bridge', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
     expect(out).toContain("'dark'");
   });
+
+  // Regression: the in-app iframe inherits the dashboard's outer nonce-based CSP
+  // (see the `nonce` doc comment on RenderCanvasDocumentInput). Without a matching
+  // nonce on the theme-bridge script itself, the browser blocks it even though
+  // author <script> tags are correctly stamped — "Refused to execute inline
+  // script" for the theme bridge specifically.
+  it('given injectThemeBridge: true AND a nonce, should stamp the nonce onto the theme-bridge script too', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true, nonce: 'app-nonce==' });
+    expect(out).toContain('<script nonce="app-nonce==">(function(){');
+  });
 });
 
 describe('renderCanvasDocument — favicon', () => {

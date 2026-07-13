@@ -3,9 +3,38 @@ import {
   isValidProjectName,
   normalizeProjectName,
   resolveProjectPath,
+  resolveProjectClonePath,
   isValidRepoUrl,
   PROJECTS_ROOT,
 } from '../project-paths';
+
+/** The gnarly-input corpus swept by the invariant + idempotency properties below. */
+const GNARLY_INPUTS = [
+  '',
+  '   ',
+  '\t\n',
+  '...',
+  '.',
+  '..',
+  '/',
+  '-',
+  '_',
+  '../escape',
+  '../../etc/passwd',
+  'a\\b',
+  '🚀',
+  '中文',
+  'My Cool Feature',
+  'feat/JIRA-123 Fix!!',
+  'émoji 🚀 project',
+  '.git',
+  'a'.repeat(150),
+  '日本語',
+  '한국어',
+  'my-repo',
+  'PageSpace',
+  'my_repo.v2',
+];
 
 describe('isValidProjectName', () => {
   it('given a plain slug, should accept it', () => {
@@ -48,6 +77,66 @@ describe('resolveProjectPath', () => {
   });
 });
 
+describe('resolveProjectClonePath', () => {
+  // A realistic cuid2 — 24 lowercase alphanumerics.
+  const ID = 'tz4a98xxat96iws9zmbrgj3a';
+
+  it('given a valid name and id, should resolve to the per-row directory inside PROJECTS_ROOT', () => {
+    expect(resolveProjectClonePath('my-repo', ID)).toBe(`${PROJECTS_ROOT}/my-repo-${ID}`);
+  });
+
+  it('given the SAME name with two different ids, should resolve two DIFFERENT paths', () => {
+    // The whole point: two concurrent adds of one name can never share (and
+    // therefore never rm -rf) each other's directory.
+    const a = resolveProjectClonePath('my-repo', 'aaaaaaaaaaaaaaaaaaaaaaaa');
+    const b = resolveProjectClonePath('my-repo', 'bbbbbbbbbbbbbbbbbbbbbbbb');
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a).not.toBe(b);
+  });
+
+  it('given an invalid name, should return null', () => {
+    expect(resolveProjectClonePath('../escape', ID)).toBeNull();
+    expect(resolveProjectClonePath('', ID)).toBeNull();
+    expect(resolveProjectClonePath('.git', ID)).toBeNull();
+  });
+
+  it('given a malformed id, should fail closed — the id feeds an rm -rf argument', () => {
+    expect(resolveProjectClonePath('my-repo', '')).toBeNull();
+    expect(resolveProjectClonePath('my-repo', '../escape')).toBeNull();
+    expect(resolveProjectClonePath('my-repo', 'a/b')).toBeNull();
+    expect(resolveProjectClonePath('my-repo', 'a b')).toBeNull();
+    // The shared cuid2 predicate is stricter than "path-safe": ids the
+    // generator can never emit (uppercase, UUIDs) fail closed too.
+    expect(resolveProjectClonePath('my-repo', 'NOTACUID')).toBeNull();
+    expect(resolveProjectClonePath('my-repo', '123e4567-e89b-42d3-a456-426614174000')).toBeNull();
+  });
+
+  it('given a max-length name, should truncate the NAME (never the id) to fit the directory cap', () => {
+    const longName = 'a'.repeat(100);
+    const path = resolveProjectClonePath(longName, ID);
+    expect(path).not.toBeNull();
+    const dirName = (path as string).slice(`${PROJECTS_ROOT}/`.length);
+    expect(dirName.length).toBeLessThanOrEqual(100);
+    expect(dirName.endsWith(`-${ID}`)).toBe(true);
+    expect(isValidProjectName(dirName)).toBe(true);
+  });
+
+  it('given a truncation cut that lands on a separator, should trim it rather than emit "x.-id"', () => {
+    // 75 chars fit beside a 24-char id; make char 75 a dot so the cut exposes it.
+    const name = `${'a'.repeat(74)}.${'b'.repeat(10)}`;
+    const path = resolveProjectClonePath(name, ID);
+    expect(path).toBe(`${PROJECTS_ROOT}/${'a'.repeat(74)}-${ID}`);
+  });
+
+  it.each(GNARLY_INPUTS)('given normalized %j, should resolve to a confined per-row path', (input) => {
+    const path = resolveProjectClonePath(normalizeProjectName(input), ID);
+    expect(path).not.toBeNull();
+    expect((path as string).startsWith(`${PROJECTS_ROOT}/`)).toBe(true);
+    expect((path as string).endsWith(`-${ID}`)).toBe(true);
+  });
+});
+
 describe('isValidRepoUrl', () => {
   it('given an https url, should accept it', () => {
     expect(isValidRepoUrl('https://github.com/owner/repo.git')).toBe(true);
@@ -59,34 +148,6 @@ describe('isValidRepoUrl', () => {
     expect(isValidRepoUrl('file:///etc/passwd')).toBe(false);
   });
 });
-
-/** The gnarly-input corpus swept by the invariant + idempotency properties below. */
-const GNARLY_INPUTS = [
-  '',
-  '   ',
-  '\t\n',
-  '...',
-  '.',
-  '..',
-  '/',
-  '-',
-  '_',
-  '../escape',
-  '../../etc/passwd',
-  'a\\b',
-  '🚀',
-  '中文',
-  'My Cool Feature',
-  'feat/JIRA-123 Fix!!',
-  'émoji 🚀 project',
-  '.git',
-  'a'.repeat(150),
-  '日本語',
-  '한국어',
-  'my-repo',
-  'PageSpace',
-  'my_repo.v2',
-];
 
 describe('normalizeProjectName', () => {
   it.each([

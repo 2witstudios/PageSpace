@@ -350,8 +350,14 @@ function toBuffer(chunk: Buffer | string): Buffer {
  * not a failure, so it resolves with its code; only a transport error, an output
  * overflow, or a timeout rejects. The first settle wins and always clears the
  * timer.
+ *
+ * Exported for the sprite-tasks hold client (`./sprite-tasks.ts`), which runs
+ * one-shot curl execs against the in-sprite management socket and needs
+ * exactly this collect-bounded-output-or-kill contract — WITHOUT
+ * `withWakeRetry` (a hold call must never wake a paused sprite; the pre-open
+ * marking below is inert unless that wrapper is applied).
  */
-function runSpawned(
+export function runSpawned(
   command: SpriteCommandLike,
   maxBytes: number,
   timeoutMs: number | undefined,

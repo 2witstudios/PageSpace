@@ -9,7 +9,8 @@
 
 import { slugifySegment, disambiguateSlug, truncateWithDigest } from './name-slug';
 
-const MAX_PROJECT_NAME_LENGTH = 100;
+/** Exported so `project-paths.ts` can share it for the per-row id-suffix truncation math. */
+export const MAX_PROJECT_NAME_LENGTH = 100;
 
 // Alphanumerics, dash, underscore, dot — but never a leading dot (rules out
 // both a literal `.`/`..` and a hidden directory).

@@ -7,19 +7,18 @@
  * dedicated Machine columns, and `visibleToGlobalAssistant` reuses the existing
  * page column.
  *
- * NOTE ON THE TWO ACCESS TOGGLES: this route only PERSISTS `visibleToGlobalAssistant`
- * and `allowPageAgents` for a Machine. Their ENFORCEMENT is a separate consumer,
- * not wired yet (and not this node's scope) — for MACHINE pages nothing reads
- * either flag today: `visibleToGlobalAssistant` is consulted only for `AI_CHAT`
- * agents (agent-awareness.ts), and `allowPageAgents` has no reader at all. The
- * follow-up nodes wire `visibleToGlobalAssistant` into the global-assistant
- * machine picker/resolution and `allowPageAgents` into the page-agent machine gate
- * (`isMachineAccessible`, sandbox-tools-runtime.ts). The whole surface is behind
- * `CODE_EXECUTION_ENABLED` (OFF), so no unenforced toggle is user-visible yet.
+ * NOTE ON THE TWO ACCESS TOGGLES: this route PERSISTS `visibleToGlobalAssistant`
+ * and `allowPageAgents` for a Machine; their POLICY lives in
+ * `decideMachineToggleAccess` (machine-access.ts) and is ENFORCED per tool call
+ * by the AI sandbox machine gate (`isMachineAccessible`,
+ * apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts): `allowPageAgents` denies
+ * page-scoped agents the machine's terminal tools, `visibleToGlobalAssistant`
+ * hides the machine from (and denies) the global assistant. For `AI_CHAT`
+ * pages `visibleToGlobalAssistant` is separately consulted by agent-awareness.ts.
  * This module is pure orchestration + DI — every DB / Sprite
- * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`),
- * so the delete-ordering invariant below is unit-testable without a database or
- * a live Sprite. Route wiring lives in
+ * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`,
+ * `MachineRefScrub`), so the delete-ordering invariant below is unit-testable
+ * without a database or a live Sprite. Route wiring lives in
  * `apps/web/src/lib/machines/machine-settings-runtime.ts`.
  */
 
@@ -63,14 +62,27 @@ export interface MachineSpriteTeardown {
   teardown(machineId: string): Promise<void>;
 }
 
+/**
+ * Removes every reference to a deleted Machine from agent configurations
+ * (AI_CHAT agents' `machines` MachineRef arrays, plus the per-user global
+ * assistant config). Best-effort like the Sprite teardown: a throw is reported
+ * (`agentRefsScrubbed: false`), never a failure of the delete — the page is
+ * already trashed by then, and a dangling ref only degrades to today's
+ * behavior (agents pointing at a trashed Machine).
+ */
+export interface MachineRefScrub {
+  scrub(machineId: string): Promise<void>;
+}
+
 export interface DeleteMachineDeps {
   machineId: string;
   store: MachineSettingsStore;
   sprite: MachineSpriteTeardown;
+  refs: MachineRefScrub;
 }
 
 export type DeleteMachineResult =
-  | { ok: true; spriteTornDown: boolean }
+  | { ok: true; spriteTornDown: boolean; agentRefsScrubbed: boolean }
   | { ok: false; reason: 'not_found' };
 
 export async function getMachineSettings(input: {
@@ -89,7 +101,8 @@ export async function updateMachineSettings(input: {
 }
 
 /**
- * Destroy a Machine: trash its page, then tear down its Sprite.
+ * Destroy a Machine: trash its page, scrub agent references to it, then tear
+ * down its Sprite.
  *
  * The ORDER is a hard requirement, not an implementation detail. We trash the
  * page FIRST because that step is reversible (restore) and immediately hides the
@@ -100,6 +113,13 @@ export async function updateMachineSettings(input: {
  * tearing the Sprite down first and then failing to trash the page leaves a live
  * page pointing at a dead Sprite, with no easy recovery path.
  *
+ * The ref scrub sits between the two: it runs after the trash (so the refs it
+ * removes point at an already-hidden page, and a scrub failure still leaves the
+ * delete done) and before the remote host calls (all DB writes settle before we
+ * talk to the Sprite provider). Both post-trash steps are independently
+ * best-effort — a scrub failure never skips the Sprite teardown and vice versa,
+ * and each is reported in its own result flag.
+ *
  * The `sprite.teardown` seam frees ALL the compute the Machine spawned — the
  * Machine's own Sprite AND each branch's own Sprite (branch Sprites have no idle
  * reaper, so skipping them would leak microVMs). The dependent metadata ROWS
@@ -108,16 +128,28 @@ export async function updateMachineSettings(input: {
  * soft (reversible) delete never permanently destroys the user's configured-repo
  * metadata — restoring the page brings that config back (the Sprites re-provision
  * on next use). An earlier revision hard-deleted these rows and was reverted:
- * destroying config during a reversible delete is data loss.
+ * destroying config during a reversible delete is data loss. The ref scrub is
+ * the deliberate exception: a MachineRef in another agent's config is that
+ * AGENT's setting, not the Machine's own metadata — restoring the Machine does
+ * not re-add it (the agent's owner re-links if they want it back).
  */
-export async function deleteMachine({ machineId, store, sprite }: DeleteMachineDeps): Promise<DeleteMachineResult> {
+export async function deleteMachine({ machineId, store, sprite, refs }: DeleteMachineDeps): Promise<DeleteMachineResult> {
   const settings = await store.getSettings(machineId);
   if (!settings) return { ok: false, reason: 'not_found' };
 
   // 1. Trash the page first — reversible, and hides the Machine immediately.
   await store.trashPage(machineId);
 
-  // 2. Then tear down the Machine's own Sprite. A failure here is recoverable
+  // 2. Scrub agent configs that reference the now-trashed Machine. Best-effort:
+  //    a failure is reported, and must not block the Sprite teardown below.
+  let agentRefsScrubbed = true;
+  try {
+    await refs.scrub(machineId);
+  } catch {
+    agentRefsScrubbed = false;
+  }
+
+  // 3. Then tear down the Machine's own Sprite. A failure here is recoverable
   //    (orphaned Sprite), so it never fails the delete — we just report it.
   let spriteTornDown = true;
   try {
@@ -126,5 +158,5 @@ export async function deleteMachine({ machineId, store, sprite }: DeleteMachineD
     spriteTornDown = false;
   }
 
-  return { ok: true, spriteTornDown };
+  return { ok: true, spriteTornDown, agentRefsScrubbed };
 }

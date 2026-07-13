@@ -2,6 +2,7 @@ import type { TerminalSessionMap, TerminalSession } from './terminal-session-map
 import { DETACHED_IDLE_MS, appendScrollback } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import {
   validateAgentTerminalConnectPayload,
@@ -170,6 +171,16 @@ export type AgentTerminalHandlerDeps = {
   persistStreamSessionId: (args: { agentTerminalId: string; sessionId: string }) => Promise<void>;
   /** Terminal Epic 3 metering seam — see module doc. Omitted -> unmetered. */
   billing?: SandboxBillingDeps;
+  /**
+   * Sprites Tasks API hold seam (leaf 5-1). Called once per COLD create with
+   * the resolved Sprite; the controller it returns keeps a self-expiring
+   * platform task hold alive while work is in progress (viewer attached OR
+   * agent output flowing) and releases it when idle, so a sprite that leaves
+   * 3-1/3-2's now-real idle pause can't cold-pause an agent mid-run — and CAN
+   * pause the moment the agent goes quiet. Omitted -> no holds (the sprite
+   * pauses on the platform's own idle clock, mid-run or not).
+   */
+  createTaskHold?: (args: { sprite: SpriteInstanceLike; sessionKey: string }) => TaskHoldController;
 };
 
 export type AgentTerminalHandlers = {
@@ -259,6 +270,17 @@ function endAgentTerminalSession(
   if (session.idleTimer !== undefined) {
     clearTimeout(session.idleTimer);
     session.idleTimer = undefined;
+  }
+  if (session.holdInterval !== undefined) {
+    clearInterval(session.holdInterval);
+    session.holdInterval = undefined;
+  }
+  // Session over: delete the platform task hold so the sprite can pause.
+  // Best-effort (end() never throws) — and even a lost delete self-expires,
+  // because every hold this seam creates carries a short expiry.
+  if (session.taskHold !== undefined) {
+    session.taskHold.end();
+    session.taskHold = undefined;
   }
   if (billing && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
@@ -395,6 +417,58 @@ function startSettleHeartbeat(
   return interval;
 }
 
+/**
+ * Pure: when this session was last ACTIVE — output produced, input typed, or
+ * the PTY launched (creation seeds `lastInputAt`). This is what the task hold
+ * feeds on rather than output alone: a typed prompt that kicks off a long
+ * silent run is work in progress from the moment it is typed, not from the
+ * agent's first byte.
+ */
+export function latestActivityAt(
+  session: Pick<TerminalSession, 'lastOutputAt' | 'lastInputAt'>,
+): number | undefined {
+  const { lastOutputAt, lastInputAt } = session;
+  if (lastOutputAt === undefined) return lastInputAt;
+  if (lastInputAt === undefined) return lastOutputAt;
+  return Math.max(lastOutputAt, lastInputAt);
+}
+
+/**
+ * Arms the platform-task-hold heartbeat (leaf 5-1): one immediate tick — the
+ * viewer is attached, so the hold must exist NOW, not a cadence from now —
+ * then one tick per controller cadence (the documented 60s refresh against a
+ * 5m expiry) for as long as the session is live. Each tick re-reads the
+ * session's CURRENT attached/output state, so the same beat that refreshes a
+ * busy session's hold deletes an idle one's. A module-level factory for the
+ * same reason as `startSettleHeartbeat`: the long-lived callback captures
+ * only what it needs, not the whole connect scope.
+ */
+function startTaskHoldHeartbeat(
+  taskHold: TaskHoldController,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+): ReturnType<typeof setInterval> {
+  const tick = () =>
+    taskHold.tick({
+      attached: session.viewerAttached,
+      lastActivityAt: latestActivityAt(session),
+      // While DETACHED the exec socket may be dead (the shell deliberately
+      // never reconnects it — leaf 3-2), so a frozen activity clock is not
+      // evidence of idleness; the controller then keeps an existing hold
+      // rather than deleting it under an agent it can no longer see. And a
+      // detached agent that FINISHES while the socket survived still releases
+      // promptly: its PTY exit reaches onExit, whose teardown ends the hold.
+      activityObservable: session.viewerAttached,
+    });
+  tick();
+  const interval = setInterval(() => {
+    if (sessionMap.getByKey(sessionKey) !== session) { clearInterval(interval); return; }
+    tick();
+  }, taskHold.tickIntervalMs);
+  return interval;
+}
+
 /** How long the connect will wait to hear which sessions a Sprite has. */
 const LIST_SESSIONS_TIMEOUT_MS = 5_000;
 
@@ -460,6 +534,7 @@ export function buildAgentTerminalHandlers({
   socket,
   persistStreamSessionId,
   billing,
+  createTaskHold,
 }: AgentTerminalHandlerDeps): AgentTerminalHandlers {
   /**
    * Every connectionId this SOCKET currently has a live agent-terminal
@@ -554,6 +629,22 @@ export function buildAgentTerminalHandlers({
     // OUR exec connection — an agent still running inside the shell keeps
     // running, exactly as it already does across the 30-min idle reap below.
     session.command.setViewerAttached(false);
+    session.viewerAttached = false;
+    // Re-evaluate the platform task hold now that the viewer is gone: with no
+    // recent activity this DELETES the hold, so the sprite can pause long
+    // before the 30-min reap — an agent mid-run (recent output OR a
+    // just-typed prompt still awaiting its first byte) keeps it. Staleness is
+    // trustworthy AT this instant (the viewer was attached until now, so the
+    // socket was live and silence was real silence) — with one exception: a
+    // RESUMED agent that has never emitted a byte since we picked it up. Our
+    // silence says nothing about a run that was verified live at connect
+    // (`resumedAtCreate`), so that one keeps its hold rather than being
+    // paused on ignorance.
+    session.taskHold?.tick({
+      attached: false,
+      lastActivityAt: latestActivityAt(session),
+      activityObservable: session.hasOutput || !session.resumedAtCreate,
+    });
     session.idleTimer = setTimeout(() => {
       session.releaseSlot();
       session.command.kill();
@@ -586,6 +677,11 @@ export function buildAgentTerminalHandlers({
     // while detached (sprites-shell.ts's `setViewerAttached`) — a no-op when the
     // connection never actually dropped, since output is already flowing.
     session.command.setViewerAttached(true);
+    session.viewerAttached = true;
+    // A viewer is attached again — that alone is "work in progress", so the
+    // hold (deleted while detached-and-idle) is re-created immediately rather
+    // than waiting out a heartbeat interval.
+    session.taskHold?.tick({ attached: true, lastActivityAt: latestActivityAt(session), activityObservable: true });
     sessionMap.reattach(sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
@@ -789,6 +885,11 @@ export function buildAgentTerminalHandlers({
         closedFn: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
         scrollback: [],
         hasOutput: false,
+        viewerAttached: true,
+        // The launch itself is the session's first activity: an agent booted
+        // with a command that works silently must hold its sprite up through
+        // that silence, not wait for its first byte of output.
+        lastInputAt: Date.now(),
         // Fails safe, EXACTLY as the wire does. The reattach path has no way to
         // say "unknown" — it re-derives `resumed` from this field — so recording
         // `false` for an unknown liveness would put a live agent straight back
@@ -827,6 +928,9 @@ export function buildAgentTerminalHandlers({
           args: launch.args,
           cwd: sandbox.cwd,
           onOutput: (data) => {
+            // The hold's "agent output is flowing" signal — kept fresh here so
+            // a DETACHED session with an agent mid-run keeps its sprite up.
+            session.lastOutputAt = Date.now();
             appendScrollback(session, data);
             session.outputFn(data);
           },
@@ -873,6 +977,17 @@ export function buildAgentTerminalHandlers({
       session.command = shell;
       sessionMap.setNew(sessionKey, socketKey(connectionId), session);
       activeConnectionIds.add(connectionId);
+
+      // Sprites Tasks API hold (leaf 5-1): tell the platform work is in
+      // progress so the sprite can't cold-pause an agent mid-run — and stop
+      // telling it the moment nothing is (see startTaskHoldHeartbeat). Armed
+      // only on the cold path: a reattach joins a session whose controller
+      // and heartbeat already live for exactly as long as the session does
+      // (cleared in endAgentTerminalSession).
+      if (createTaskHold) {
+        session.taskHold = createTaskHold({ sprite, sessionKey });
+        session.holdInterval = startTaskHoldHeartbeat(session.taskHold, sessionMap, session, sessionKey);
+      }
 
       // Heartbeat settle (see SETTLE_HEARTBEAT_MS): bill the accrued window and
       // re-hold on an interval so a realtime restart loses at most one interval
@@ -1008,6 +1123,9 @@ export function buildAgentTerminalHandlers({
       if (!session) return;
       const p = payload as { data?: string };
       if (typeof p?.data === 'string' && p.data.length <= MAX_INPUT_BYTES) {
+        // Input is activity for the task hold: a typed prompt is work in
+        // progress even before the agent's first byte of output.
+        session.lastInputAt = Date.now();
         session.command.write(p.data);
       }
     },

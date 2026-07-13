@@ -10,6 +10,10 @@ import { toPtyInput } from './pty-input';
 
 const FALLBACK_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Monaco, 'Courier New', monospace";
 
+/** Printed into a bound pane when its socket's transport drops — cleared by the
+ * repaint when the re-bind's `ready` replays the session's scrollback. */
+export const RECONNECTING_NOTICE = '\r\n\x1b[90mConnection lost — reconnecting…\x1b[0m';
+
 /** How long to wait for a cold agent to print something before writing the
  * starting prompt anyway. Some agents boot silently; the prompt still has to
  * go in, and a wait this short is invisible next to a Sprite cold boot. */
@@ -96,7 +100,16 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         terminal.open(containerRef.current);
         fitAddon.fit();
 
-        const onData = terminal.onData((data) => socket.emit('agent-terminal:input', { data, connectionId }));
+        const onData = terminal.onData((data) => {
+          // Disconnected: this would only sit in socket.io's send buffer and
+          // flush on the NEW server socket ahead of our re-bind (a client's
+          // 'connect' event fires only after its buffered emits are flushed),
+          // where the server drops it — its connectionId isn't active there
+          // yet (see `onInput`'s `activeConnectionIds.has` guard). It is lost
+          // either way; not emitting it avoids pinning it in that buffer.
+          if (!socket.connected) return;
+          socket.emit('agent-terminal:input', { data, connectionId });
+        });
 
         // Every mounted XtermTerminal shares this one socket, so every one of
         // its listeners sees every pane's events — drop anything tagged with
@@ -148,6 +161,14 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         let readySeen = false;
         /** Has the agent drawn anything? Proof it is up and reading its stdin. */
         let outputSeen = false;
+        /** A re-bind's `ready` (see `handleSocketConnect` below) replays the
+         * session's scrollback, and this terminal already displays everything
+         * from before the drop — writing the replay on top would duplicate it.
+         * Repaint instead: reset the buffer (the Terminal instance and its DOM
+         * stay) and let the replay redraw, which also delivers output produced
+         * while the socket was down. Consumed by the first `ready` after a
+         * re-bind, so a later duplicate `ready` cannot wipe live output. */
+        let repaintOnReady = false;
 
         /** Spends the prompt without writing it — for a session that is past
          * taking one. The caller drops it either way, so it can never come back. */
@@ -161,6 +182,11 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const sendInitialInput = () => {
           const { input, onSent } = initialInputRef.current;
           if (!input || initialInputSent || !readySeen) return;
+          // Either branch below settles the pending backstop, so disarm it here —
+          // leaving it merely "fired" would make handleReady's
+          // `promptTimer === undefined` re-arm check refuse a re-bind's fresh arm.
+          clearTimeout(promptTimer);
+          promptTimer = undefined;
           // A disconnected socket BUFFERS this emit and flushes it on reconnect,
           // carrying a connectionId the server no longer knows — so it is dropped
           // there, while `onSent` here would already have spent the prompt. Keep it
@@ -168,7 +194,6 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
           // that connect's own `resumed`, which is the only safe judge.
           if (socket.connected === false) return;
           initialInputSent = true;
-          clearTimeout(promptTimer);
           for (const chunk of toPtyInput(input)) {
             socket.emit('agent-terminal:input', { data: chunk, connectionId });
           }
@@ -188,6 +213,16 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const handleReady = (payload: { scrollback?: string; resumed?: boolean; connectionId?: string } = {}) => {
           if (!isMine(payload)) return;
           readySeen = true;
+          if (repaintOnReady) {
+            repaintOnReady = false;
+            // Only a ready that CARRIES a replay repaints. One without (the
+            // session died while disconnected and the server cold-created a
+            // fresh PTY, or a resumed session whose over-cap ring trimmed to
+            // empty) has nothing to redraw from — resetting would blank a pane
+            // full of history; keeping the buffer and letting new output append
+            // under the reconnect notice preserves it.
+            if (payload.scrollback) terminal.reset();
+          }
           if (payload.scrollback) terminal.write(payload.scrollback);
           useEditingStore.getState().startEditing(sessionId, 'other', { componentName: 'agent-terminal' });
 
@@ -206,12 +241,76 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         };
         const handleClosed = (payload: { exitCode: number; connectionId?: string }) => {
           if (!isMine(payload)) return;
+          dead = true;
+          // Nothing left to edit: a dead pane must not go on blocking auth
+          // refresh / SWR updates for this sessionId until whenever it happens
+          // to unmount (teardown's own endEditing is now redundant, and stays
+          // as a no-op safety net — the store deletes-if-present).
+          useEditingStore.getState().endEditing(sessionId);
           terminal.writeln(`\r\n\x1b[90mProcess exited with code ${payload.exitCode}\x1b[0m`);
         };
         const handleError = (payload: { message: string; connectionId?: string }) => {
           if (!isMine(payload)) return;
+          dead = true;
+          useEditingStore.getState().endEditing(sessionId);
           terminal.writeln(`\r\n\x1b[31mError: ${payload.message}\x1b[0m`);
           onError?.(payload.message);
+        };
+
+        /**
+         * The PTY binding is per TRANSPORT CONNECTION, not per socket object:
+         * socket.io reuses this same Socket across a transport reconnect, so this
+         * effect (keyed [socket, sessionId]) never re-runs for one — but the
+         * server side of the binding died with the transport (each server socket
+         * holds its own connection registry and tears every pane down on
+         * disconnect), leaving a pane that looks alive while its PTY drifts
+         * toward the server's detached-idle reap. So the bind is re-emitted on
+         * every `connect`. The server treats a connect for a scope whose session
+         * is still live as a reattach (`attachToLiveSession` in
+         * agent-terminal-handler.ts), so re-binding is idempotent: same
+         * connectionId (the new server socket has a fresh registry, so it cannot
+         * collide), same client listeners, no new PTY.
+         */
+        let bound = false;
+        /** The PTY this pane was showing is finished — the process exited
+         * (`closed`) or the binding was refused (`error`). A re-bind after that
+         * would not reattach anything: the server has no session under the key
+         * anymore, so the connect would take its cold CREATE path and silently
+         * launch (and bill) a brand-new agent nobody asked for, in a pane whose
+         * screen says the old one ended. Dead panes stay dead; only an explicit
+         * user action (re-opening the session) may connect again, via a fresh
+         * mount. */
+        let dead = false;
+        const handleSocketConnect = () => {
+          if (dead) return;
+          if (bound) {
+            // A re-bind targets a NEW server-side binding. What the old one told
+            // us no longer holds: its `ready` must repaint (the reattach replays
+            // the scrollback), and the prompt gates must be re-proven — the new
+            // binding's own `ready` carries the only trustworthy `resumed`, and
+            // only ITS output shows the agent is up. Stale latches here would
+            // type the starting prompt on the old binding's evidence, and the
+            // old binding's armed backstop would fire against the new one — the
+            // new `ready` arms its own if the prompt is still deliverable.
+            repaintOnReady = true;
+            readySeen = false;
+            outputSeen = false;
+            clearTimeout(promptTimer);
+            promptTimer = undefined;
+          }
+          // `connect` also fires for the INITIAL connection when this pane
+          // mounted while the socket was still down — that first bind is not a
+          // re-bind, so none of the above applies to it.
+          bound = true;
+          socket.emit('agent-terminal:connect', { ...connectPayload, connectionId, cols: terminal.cols, rows: terminal.rows });
+        };
+        const handleSocketDisconnect = () => {
+          // Nothing is torn down here — the terminal, its buffer and every
+          // listener stay, waiting for the re-bind. Just tell the user their
+          // pane went quiet for a reason. A dead pane stays quiet: it will not
+          // re-bind, so promising "reconnecting" would be a lie.
+          if (!bound || dead) return;
+          terminal.writeln(RECONNECTING_NOTICE);
         };
 
         // Register listeners BEFORE emitting agent-terminal:connect so we don't
@@ -220,6 +319,8 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         socket.on('agent-terminal:ready', handleReady);
         socket.on('agent-terminal:closed', handleClosed);
         socket.on('agent-terminal:error', handleError);
+        socket.on('connect', handleSocketConnect);
+        socket.on('disconnect', handleSocketDisconnect);
 
         // A kept-alive terminal is CSS-hidden (display:none) when its page is
         // not the active tab. While hidden the container has zero size, so any
@@ -247,6 +348,8 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
           socket.off('agent-terminal:ready', handleReady);
           socket.off('agent-terminal:closed', handleClosed);
           socket.off('agent-terminal:error', handleError);
+          socket.off('connect', handleSocketConnect);
+          socket.off('disconnect', handleSocketDisconnect);
           // Tell the server THIS pane is gone (not the whole socket) — with
           // several panes multiplexed over one socket, only an explicit
           // per-connection signal (not the socket's own disconnect/idle
@@ -263,7 +366,11 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         // picker (or the tab's add-terminal dialog) reserves it via
         // spawnAgentTerminal before the pane is ever bound to it, so connecting
         // here only ever attaches to (or resumes) an already-known session.
-        socket.emit('agent-terminal:connect', { ...connectPayload, connectionId, cols: terminal.cols, rows: terminal.rows });
+        //
+        // Bind now if the socket is up; otherwise the `connect` handler does the
+        // first bind when it comes up. (Emitting while down would only sit in
+        // socket.io's send buffer and flush as a DUPLICATE of that bind.)
+        if (socket.connected) handleSocketConnect();
 
         resize.observer = new ResizeObserver(() => {
           // Skip while hidden (0×0) — avoids garbage fits and 0-wide resizes.
