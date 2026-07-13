@@ -908,6 +908,48 @@ describe('Claude Code credential propagation', () => {
     expect(state?.files.has('/home/sprite/.claude/.credentials.json.tmp')).toBe(false);
   });
 
+  it('given an overlapping call reads an OLDER credential and then stalls, should skip its own mv once a NEWER call has already landed — never clobbering the newer credential', async () => {
+    // `withTimeout` deliberately does not cancel a slow call's underlying
+    // work — it keeps running in the background. Without the generation
+    // check, that stalled call finishing LATER with stale data would
+    // overwrite a newer, already-landed credential from a faster call that
+    // started after it.
+    const { host, byId } = makeFakeHost();
+    const handle = await host.provision({ name: 'branch-sprite-race', substrate: { kind: 'sprite' }, options: {} });
+
+    // Call A: reads an OLD token, but its root resolution stays pending
+    // until manually released — simulating a stall on a flaky root Sprite.
+    let releaseA!: () => void;
+    const aRootReady = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const callA = propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => {
+        await aRootReady;
+        return makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'old-token' });
+      },
+    });
+
+    // Call B starts after A and finishes normally with a NEWER (rotated)
+    // token, while A is still stalled.
+    const rootHandleB = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'rotated-token' });
+    await propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => rootHandleB,
+    });
+    expect(byId.get(handle.machineId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('rotated-token');
+
+    // Now let A's stalled resolution proceed — it should detect a newer
+    // generation already landed and skip its own mv rather than clobber it.
+    releaseA();
+    await callA;
+
+    expect(byId.get(handle.machineId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('rotated-token');
+  });
+
   it('given the mv exec fails, should leave the EXISTING valid credential at the real path untouched (no window of total absence) and clean up the orphaned temp file', async () => {
     // The core property this design exists for: a failed rename must never
     // regress a branch from "has a valid, working credential" to "has

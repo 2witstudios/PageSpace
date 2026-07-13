@@ -240,6 +240,12 @@ function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
 }
 
 /**
+ * Latest `propagateClaudeCredential` call number issued per branch Sprite
+ * machineId — see the staleness check before each `mv` below for why.
+ */
+const latestCredentialCopyGeneration = new Map<string, number>();
+
+/**
  * Copy Claude Code's OAuth credential (and config, if present) from the root
  * Machine's Sprite into a branch-terminal's freshly provisioned/attached one.
  * Each file is copied independently and skipped when the root read comes
@@ -281,6 +287,22 @@ export async function propagateClaudeCredential({
   branchHandle: MachineHandle;
   resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
 }): Promise<void> {
+  // This call's own generation number for this branch Sprite. `withTimeout`
+  // deliberately does NOT cancel the underlying work when its bound elapses
+  // — it keeps running in the background so a slow copy still lands rather
+  // than being aborted. But that means an OVERLAPPING call that read an
+  // OLDER root credential and then stalled could otherwise finish LATER and
+  // `mv` its stale temp file over a destination a faster, more recent call
+  // already updated with a NEWER (rotated) credential — clobbering it
+  // (caught in review). Checking, right before each `mv`, whether a NEWER
+  // call has since started for this same branch Sprite — and skipping the
+  // rename if so — is what prevents that: a self-contained per-file check
+  // rather than a lock that would need its own release/backstop logic (and
+  // the "what if the thing holding it never finishes" risk that comes with
+  // one).
+  const generation = (latestCredentialCopyGeneration.get(branchHandle.machineId) ?? 0) + 1;
+  latestCredentialCopyGeneration.set(branchHandle.machineId, generation);
+
   await withTimeout(
     (async () => {
       try {
@@ -328,6 +350,16 @@ export async function propagateClaudeCredential({
             throw new Error(`rm -f ${tempPath} failed: exit ${clearTemp.exitCode}`);
           }
           await branchHandle.writeFiles([{ path: tempPath, content, mode: 0o600 }]);
+
+          // A NEWER call already started for this branch Sprite while this
+          // one was working — it will (or already did) land more current
+          // data, so abandon this stale attempt rather than risk this one's
+          // `mv` clobbering it once it finally gets here.
+          if (latestCredentialCopyGeneration.get(branchHandle.machineId) !== generation) {
+            await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+            return;
+          }
+
           const move = await branchHandle.exec({ cmd: 'mv', args: [tempPath, path] });
           if (move.exitCode !== 0) {
             // Best-effort cleanup of the orphaned temp file (itself already
