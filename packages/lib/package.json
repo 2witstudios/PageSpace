@@ -997,6 +997,16 @@
       "import": "./dist/publish/render-document-page.js",
       "require": "./dist/publish/render-document-page.js"
     },
+    "./publish/render-code-page": {
+      "types": "./dist/publish/render-code-page.d.ts",
+      "import": "./dist/publish/render-code-page.js",
+      "require": "./dist/publish/render-code-page.js"
+    },
+    "./publish/render-sheet-page": {
+      "types": "./dist/publish/render-sheet-page.d.ts",
+      "import": "./dist/publish/render-sheet-page.js",
+      "require": "./dist/publish/render-sheet-page.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -2011,6 +2021,12 @@
       ],
       "publish/render-document-page": [
         "./dist/publish/render-document-page.d.ts"
+      ],
+      "publish/render-code-page": [
+        "./dist/publish/render-code-page.d.ts"
+      ],
+      "publish/render-sheet-page": [
+        "./dist/publish/render-sheet-page.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
