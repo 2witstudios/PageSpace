@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, index, primaryKey } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { pages } from './core';
@@ -46,6 +46,15 @@ export interface WorkspaceLayoutDTO {
  * "does this session already have a workspace" shortcut needs no separate
  * id-reconciliation layer between client and server.
  *
+ * The primary key is the COMPOUND `(machineId, id)`, not `id` alone:
+ * `sessionWorkspaceId` derives purely from a session's project/branch/name —
+ * it has no machineId in it — so two DIFFERENT Machines can legitimately
+ * compute the identical id for their own, unrelated sessions (the same
+ * project/branch/session-name text reused across Machines is ordinary, not
+ * exceptional). A lone-`id` primary key would treat the second Machine's
+ * insert as a duplicate of the first's row, silently misdirecting a create or
+ * a lookup to the wrong Machine's workspace.
+ *
  * `scope` is an explicit discriminant (`'machine' | 'project' | 'branch'`),
  * mirroring `machine_agent_terminals`, set once at creation and never
  * changed — a workspace's node scope is fixed for its lifetime.
@@ -62,7 +71,7 @@ export interface WorkspaceLayoutDTO {
  * DB doesn't invent an invariant the client doesn't enforce either.
  */
 export const machineWorkspaces = pgTable('machine_workspaces', {
-  id: text('id').primaryKey(),
+  id: text('id').notNull(),
 
   ownerId: text('ownerId')
     .notNull()
@@ -82,6 +91,7 @@ export const machineWorkspaces = pgTable('machine_workspaces', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
+  pk: primaryKey({ columns: [table.machineId, table.id] }),
   machineIdIdx: index('machine_workspaces_machine_id_idx').on(table.machineId),
 }));
 

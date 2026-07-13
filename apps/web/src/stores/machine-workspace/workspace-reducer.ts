@@ -588,6 +588,24 @@ function isPane(value: unknown): value is TerminalPaneState {
   return typeof pane.id === 'string' && (pane.scope === null || typeof pane.scope === 'object');
 }
 
+/**
+ * Migrates a workspace id persisted by a version of this app that predates
+ * the U+001F delimiter switch (see `sessionWorkspaceId`'s doc): those ids used
+ * U+0000 (NUL) instead, which the server's `machine_workspaces.id` column
+ * (Postgres `text`) rejects outright. Without this, a returning user's
+ * session-derived workspaces would fail every bootstrap attempt forever —
+ * `useMachineWorkspaceSync` posts whatever this browser holds locally
+ * verbatim, and the same doomed id would keep coming back on every retry.
+ *
+ * A plain 1:1 character substitution preserves the "same session, same id"
+ * property (two different sessions that produced different pre-migration ids
+ * still produce different post-migration ids), and is a no-op for every other
+ * id shape (`crypto.randomUUID()` never contains either character).
+ */
+function migrateLegacyWorkspaceId(id: string): string {
+  return id.includes('\u0000') ? id.replaceAll('\u0000', '\u001f') : id;
+}
+
 function isWorkspace(value: unknown): value is WorkspaceState {
   if (typeof value !== 'object' || value === null) return false;
   const workspace = value as Partial<WorkspaceState>;
@@ -624,6 +642,11 @@ function isWorkspace(value: unknown): value is WorkspaceState {
  * (a picker that auto-focused days ago must not steal the caret on load) and
  * `pendingPrompt` (see `assignPane` — a prompt that was never delivered must
  * never be typed at an agent that has been running ever since).
+ *
+ * Every workspace/order/activeWorkspaceId id also passes through
+ * `migrateLegacyWorkspaceId` (#2048) — a returning user may have session-
+ * derived ids minted before the NUL-to-U+001F delimiter switch, and those
+ * would otherwise fail every server-sync bootstrap attempt forever.
  */
 export function sanitizeMachines(value: unknown): Record<string, MachineWorkspacesState> {
   if (typeof value !== 'object' || value === null) return {};
@@ -645,8 +668,13 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
       }));
       const paneIds = columns.flatMap((column) => column.panes.map((pane) => pane.id));
 
-      workspaces[workspaceId] = {
+      // Migrate a legacy NUL-delimited id (see `migrateLegacyWorkspaceId`'s
+      // doc) — the record key and the object's own `id` field must agree,
+      // since `order`/`activeWorkspaceId` below reference the record key.
+      const migratedId = migrateLegacyWorkspaceId(workspaceId);
+      workspaces[migratedId] = {
         ...workspace,
+        id: migratedId,
         columns,
         // An activePaneId naming no pane is not merely cosmetic: every grid
         // transition no-ops on a pane it cannot resolve, so a split anchored on
@@ -656,13 +684,15 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
       };
     }
 
-    const order = (Array.isArray(candidate.order) ? candidate.order : []).filter((id) => workspaces[id]);
+    const order = (Array.isArray(candidate.order) ? candidate.order : [])
+      .map((id) => (typeof id === 'string' ? migrateLegacyWorkspaceId(id) : id))
+      .filter((id) => workspaces[id]);
     if (order.length === 0) continue;
 
+    const migratedActiveWorkspaceId =
+      typeof candidate.activeWorkspaceId === 'string' ? migrateLegacyWorkspaceId(candidate.activeWorkspaceId) : undefined;
     const activeWorkspaceId =
-      typeof candidate.activeWorkspaceId === 'string' && workspaces[candidate.activeWorkspaceId]
-        ? candidate.activeWorkspaceId
-        : order[0];
+      migratedActiveWorkspaceId && workspaces[migratedActiveWorkspaceId] ? migratedActiveWorkspaceId : order[0];
 
     machines[machineId] = { workspaces, order, activeWorkspaceId };
   }

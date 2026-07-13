@@ -765,6 +765,32 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
     });
   });
 
+  it('given a workspace id persisted with the legacy NUL delimiter, should migrate it to the current one', () => {
+    const legacyId = 'session repo main claude-a1';
+    const currentId = 'sessionrepomainclaude-a1';
+    const persisted = {
+      m1: {
+        workspaces: { [legacyId]: aWorkspace(legacyId, 'p1') },
+        order: [legacyId],
+        activeWorkspaceId: legacyId,
+      },
+    };
+
+    const actual = sanitizeMachines(persisted);
+
+    assert({
+      given: "a session-derived workspace id persisted by a version of this app that predates the U+001F delimiter switch (it used NUL, which Postgres text columns reject outright)",
+      should: 'migrate the id everywhere it appears — the record key, the workspace\'s own id field, order, and activeWorkspaceId — so a bootstrap POST of this browser\'s local history never sends a doomed id to the server',
+      actual: {
+        keys: Object.keys(actual.m1.workspaces),
+        ownId: actual.m1.workspaces[currentId]?.id,
+        order: actual.m1.order,
+        active: actual.m1.activeWorkspaceId,
+      },
+      expected: { keys: [currentId], ownId: currentId, order: [currentId], active: currentId },
+    });
+  });
+
   it('given transient UI state in storage, should strip it', () => {
     const withTransient = {
       m1: {

@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS "machine_workspaces" (
-	"id" text PRIMARY KEY NOT NULL,
+	"id" text NOT NULL,
 	"ownerId" text NOT NULL,
 	"machineId" text NOT NULL,
 	"scope" text NOT NULL,
@@ -8,7 +8,8 @@ CREATE TABLE IF NOT EXISTS "machine_workspaces" (
 	"name" text NOT NULL,
 	"layout" jsonb NOT NULL,
 	"createdAt" timestamp DEFAULT now() NOT NULL,
-	"updatedAt" timestamp NOT NULL
+	"updatedAt" timestamp NOT NULL,
+	CONSTRAINT "machine_workspaces_machineId_id_pk" PRIMARY KEY("machineId","id")
 );
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "machine_workspace_bootstraps" (

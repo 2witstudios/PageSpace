@@ -23,9 +23,9 @@ describe('Machine Workspaces Schema', () => {
       }
     });
 
-    it('has id as a primary key, client-supplied (no default generator)', () => {
+    it('has id as not null, client-supplied (no default generator)', () => {
       expect(columns.id.dataType).toBe('string');
-      expect(columns.id.primary).toBe(true);
+      expect(columns.id.notNull).toBe(true);
       expect(columns.id.hasDefault).toBe(false);
     });
 
@@ -66,6 +66,19 @@ describe('Machine Workspaces Schema', () => {
       const { indexes } = getTableConfig(machineWorkspaces);
       expect(indexes.some((index) => index.config.name === 'machine_workspaces_machine_id_idx')).toBe(true);
       expect(indexes.every((index) => !index.config.unique)).toBe(true);
+    });
+  });
+
+  describe('primary key', () => {
+    // `sessionWorkspaceId` has no machineId in it, so two different Machines
+    // can legitimately mint the identical `id` for their own, unrelated
+    // sessions — the primary key must be the COMPOUND (machineId, id), not
+    // `id` alone, or one Machine's insert collides with another's row.
+    it('is the compound (machineId, id), not id alone', () => {
+      const { primaryKeys } = getTableConfig(machineWorkspaces);
+      expect(primaryKeys).toHaveLength(1);
+      const pkColumnNames = primaryKeys[0].columns.map((c) => c.name).sort();
+      expect(pkColumnNames).toEqual(['id', 'machineId'].sort());
     });
   });
 

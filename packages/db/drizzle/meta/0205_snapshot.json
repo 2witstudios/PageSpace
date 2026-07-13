@@ -1,5 +1,5 @@
 {
-  "id": "c4aac92b-312b-43d4-a1dd-f58f1d6d048a",
+  "id": "5ded24a8-7956-4de5-b833-f79d399bf2f4",
   "prevId": "fdd777fb-d869-420e-970b-43c8d7ae9ab3",
   "version": "7",
   "dialect": "postgresql",
@@ -19276,7 +19276,7 @@
         "id": {
           "name": "id",
           "type": "text",
-          "primaryKey": true,
+          "primaryKey": false,
           "notNull": true
         },
         "ownerId": {
@@ -19380,7 +19380,15 @@
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {},
+      "compositePrimaryKeys": {
+        "machine_workspaces_machineId_id_pk": {
+          "name": "machine_workspaces_machineId_id_pk",
+          "columns": [
+            "machineId",
+            "id"
+          ]
+        }
+      },
       "uniqueConstraints": {}
     },
     "public.machine_workspace_bootstraps": {

@@ -138,15 +138,24 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
           createdAt: input.now,
           updatedAt: input.now,
         })
-        .onConflictDoNothing({ target: machineWorkspaces.id })
+        // Conflict target is the COMPOUND primary key, not `id` alone —
+        // `sessionWorkspaceId` has no machineId in it, so two different
+        // Machines can legitimately mint the identical id for their own,
+        // unrelated sessions (see schema doc). Scoping by machineId here too
+        // is what keeps that a non-collision.
+        .onConflictDoNothing({ target: [machineWorkspaces.machineId, machineWorkspaces.id] })
         .returning();
       if (inserted) return { created: true, row: toRecord(inserted) };
 
-      const [existing] = await db.select().from(machineWorkspaces).where(eq(machineWorkspaces.id, input.id)).limit(1);
+      const [existing] = await db
+        .select()
+        .from(machineWorkspaces)
+        .where(and(eq(machineWorkspaces.machineId, input.machineId), eq(machineWorkspaces.id, input.id)))
+        .limit(1);
       if (!existing) {
         // The conflicting row was deleted between our failed insert and this
         // read — vanishingly rare, and there is no sane row to hand back.
-        throw new Error(`machine-workspaces: insertIfAbsent lost its conflict target ${input.id}`);
+        throw new Error(`machine-workspaces: insertIfAbsent lost its conflict target ${input.machineId}/${input.id}`);
       }
       return { created: false, row: toRecord(existing) };
     },
@@ -215,7 +224,7 @@ export async function createDbMachineWorkspaceStore(): Promise<MachineWorkspaceS
               createdAt: workspace.now,
               updatedAt: workspace.now,
             })
-            .onConflictDoNothing({ target: machineWorkspaces.id });
+            .onConflictDoNothing({ target: [machineWorkspaces.machineId, machineWorkspaces.id] });
         }
 
         const seeded = await tx

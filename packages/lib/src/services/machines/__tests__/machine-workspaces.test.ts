@@ -18,24 +18,33 @@ const MACHINE_ID = 'machine-1';
 
 const VALID_COLUMNS = { columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] };
 
+// Keyed by the COMPOUND (machineId, id) — never `id` alone. `sessionWorkspaceId`
+// has no machineId in it, so two different machines legitimately mint the
+// identical `id` for their own, unrelated sessions; a fake keyed by `id` alone
+// would mask exactly the cross-machine collision bug the real store's
+// compound primary key exists to prevent.
+function rowKey(machineId: string, id: string): string {
+  return `${machineId}::${id}`;
+}
+
 function makeStore(seed: MachineWorkspaceRecord[] = []) {
   const rows = new Map<string, MachineWorkspaceRecord>();
-  for (const row of seed) rows.set(row.id, row);
+  for (const row of seed) rows.set(rowKey(row.machineId, row.id), row);
   const bootstrapped = new Set<string>();
 
-  const store: MachineWorkspaceStore = {
-    list: async (machineId) =>
-      [...rows.values()]
-        .filter((row) => row.machineId === machineId)
-        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+  const rowsForMachine = (machineId: string) =>
+    [...rows.values()]
+      .filter((row) => row.machineId === machineId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
 
-    findById: async (machineId, id) => {
-      const row = rows.get(id);
-      return row && row.machineId === machineId ? row : null;
-    },
+  const store: MachineWorkspaceStore = {
+    list: async (machineId) => rowsForMachine(machineId),
+
+    findById: async (machineId, id) => rows.get(rowKey(machineId, id)) ?? null,
 
     insertIfAbsent: async (input: NewMachineWorkspaceInput) => {
-      const existing = rows.get(input.id);
+      const key = rowKey(input.machineId, input.id);
+      const existing = rows.get(key);
       if (existing) return { created: false, row: existing };
       const row: MachineWorkspaceRecord = {
         id: input.id,
@@ -49,28 +58,26 @@ function makeStore(seed: MachineWorkspaceRecord[] = []) {
         createdAt: input.now,
         updatedAt: input.now,
       };
-      rows.set(input.id, row);
+      rows.set(key, row);
       return { created: true, row };
     },
 
     update: async (machineId, id, patch, now) => {
-      const row = rows.get(id);
-      if (!row || row.machineId !== machineId) return null;
+      const key = rowKey(machineId, id);
+      const row = rows.get(key);
+      if (!row) return null;
       const next: MachineWorkspaceRecord = {
         ...row,
         ...(patch.name !== undefined ? { name: patch.name } : {}),
         ...(patch.layout !== undefined ? { layout: patch.layout } : {}),
         updatedAt: now,
       };
-      rows.set(id, next);
+      rows.set(key, next);
       return next;
     },
 
     remove: async (machineId, id) => {
-      const row = rows.get(id);
-      if (!row || row.machineId !== machineId) return false;
-      rows.delete(id);
-      return true;
+      return rows.delete(rowKey(machineId, id));
     },
 
     isBootstrapped: async (machineId) => bootstrapped.has(machineId),
@@ -79,17 +86,13 @@ function makeStore(seed: MachineWorkspaceRecord[] = []) {
       // Mirrors the real store's transaction: claim first, and only seed rows
       // if THIS call actually won the claim.
       if (bootstrapped.has(machineId)) {
-        return {
-          claimed: false,
-          workspaces: [...rows.values()]
-            .filter((row) => row.machineId === machineId)
-            .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
-        };
+        return { claimed: false, workspaces: rowsForMachine(machineId) };
       }
       bootstrapped.add(machineId);
       for (const workspace of workspaces) {
-        if (!rows.has(workspace.id)) {
-          rows.set(workspace.id, {
+        const key = rowKey(workspace.machineId, workspace.id);
+        if (!rows.has(key)) {
+          rows.set(key, {
             id: workspace.id,
             ownerId: workspace.ownerId,
             machineId: workspace.machineId,
@@ -103,12 +106,7 @@ function makeStore(seed: MachineWorkspaceRecord[] = []) {
           });
         }
       }
-      return {
-        claimed: true,
-        workspaces: [...rows.values()]
-          .filter((row) => row.machineId === machineId)
-          .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
-      };
+      return { claimed: true, workspaces: rowsForMachine(machineId) };
     },
   };
 
@@ -215,6 +213,41 @@ describe('createWorkspace', () => {
       expect(second.workspace.name).toBe('claude-a1');
     }
   });
+
+  it('two DIFFERENT machines minting the identical id (sessionWorkspaceId has no machineId in it) both succeed independently', async () => {
+    const { deps, rows } = makeDeps();
+    const sameId = 'sessionrepomainclaude-a1';
+
+    const onMachineA = await createWorkspace({
+      machineId: 'machine-a',
+      ownerId: 'user-1',
+      id: sameId,
+      name: 'claude-a1 (machine A)',
+      scope: { projectName: 'repo', branchName: 'main' },
+      layout: VALID_COLUMNS,
+      deps,
+    });
+    const onMachineB = await createWorkspace({
+      machineId: 'machine-b',
+      ownerId: 'user-1',
+      id: sameId,
+      name: 'claude-a1 (machine B)',
+      scope: { projectName: 'repo', branchName: 'main' },
+      layout: VALID_COLUMNS,
+      deps,
+    });
+
+    // NEITHER is treated as a duplicate of the other — the primary key is
+    // scoped by machineId, so the same client-minted id on two machines are
+    // two distinct rows, not a collision.
+    expect(onMachineA).toMatchObject({ ok: true, created: true });
+    expect(onMachineB).toMatchObject({ ok: true, created: true });
+    if (onMachineA.ok && onMachineB.ok) {
+      expect(onMachineA.workspace.name).toBe('claude-a1 (machine A)');
+      expect(onMachineB.workspace.name).toBe('claude-a1 (machine B)');
+    }
+    expect(rows.size).toBe(2);
+  });
 });
 
 describe('updateWorkspace', () => {
@@ -248,7 +281,7 @@ describe('updateWorkspace', () => {
     const { deps, rows } = makeDeps([seedRow]);
     const result = await updateWorkspace({ machineId: MACHINE_ID, workspaceId: 'ws-1', name: '   ', deps });
     expect(result).toEqual({ ok: false, reason: 'invalid_name' });
-    expect(rows.get('ws-1')?.name).toBe('Workspace 1');
+    expect(rows.get(rowKey(MACHINE_ID, 'ws-1'))?.name).toBe('Workspace 1');
   });
 
   it('returns not_found for an unknown workspace', async () => {
@@ -275,7 +308,7 @@ describe('removeWorkspace', () => {
     const { deps, rows } = makeDeps([seedRow]);
     const result = await removeWorkspace({ machineId: MACHINE_ID, workspaceId: 'ws-1', store: deps.store });
     expect(result).toEqual({ ok: true });
-    expect(rows.has('ws-1')).toBe(false);
+    expect(rows.has(rowKey(MACHINE_ID, 'ws-1'))).toBe(false);
   });
 
   it('returns not_found for an unknown workspace', async () => {
