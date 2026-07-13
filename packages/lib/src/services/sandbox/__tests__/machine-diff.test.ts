@@ -82,6 +82,7 @@ function makeHandle(files: Record<string, string>): { handle: MachineHandle; rea
       throw new Error('not used');
     },
     listStreams: async () => [],
+    killSession: async () => {},
   };
   return { handle, reads };
 }

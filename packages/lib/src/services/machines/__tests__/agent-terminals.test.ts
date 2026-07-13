@@ -15,7 +15,7 @@ import {
   type AgentTerminalMachineSandbox,
 } from '../agent-terminals';
 import type { MachineAgentTerminalStore, MachineAgentTerminalRecord, AgentTerminalScopeKey } from '../agent-terminals-store';
-import { MachineStreamOpenTimeoutError, type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
+import { type MachineHost, type MachineHandle } from '../../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from '../machine-branches';
 
@@ -144,6 +144,7 @@ function makeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
       kill: () => {},
     }),
     listStreams: async () => [],
+    killSession: async () => {},
     ...over,
   };
 }
@@ -841,7 +842,7 @@ describe('killAgentTerminal', () => {
     expect(rows.size).toBe(0);
   });
 
-  it('given a branch-scoped agent terminal whose PTY IS running, should attach the ISOLATED branch Sprite, kill that specific session, and drop the row', async () => {
+  it('given a branch-scoped agent terminal whose PTY IS running, should attach the ISOLATED branch Sprite, kill that specific session by id via the REST endpoint, and drop the row', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -860,26 +861,13 @@ describe('killAgentTerminal', () => {
     ]);
     const killed: string[] = [];
     let attachedMachineId: string | undefined;
-    let attachedSessionId: string | undefined;
     const deps = makeDeps({
       store,
       host: makeHost({
         attach: async ({ machineId }) => {
           attachedMachineId = machineId;
           return machineId === BRANCH_SANDBOX_ID
-            ? makeHandle({
-                stream: async ({ sessionId }) => {
-                  attachedSessionId = sessionId;
-                  return {
-                    write: () => {},
-                    resize: () => {},
-                    onData: () => {},
-                    onExit: () => {},
-                    onError: () => {},
-                    kill: (signal) => killed.push(signal ?? 'SIGTERM'),
-                  };
-                },
-              })
+            ? makeHandle({ killSession: async (sessionId) => { killed.push(sessionId); } })
             : null;
         },
       }),
@@ -889,12 +877,11 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: true });
     expect(attachedMachineId).toBe(BRANCH_SANDBOX_ID);
-    expect(attachedSessionId).toBe('sess-abc');
-    expect(killed).toEqual(['SIGKILL']);
+    expect(killed).toEqual(['sess-abc']);
     expect(rows.size).toBe(0);
   });
 
-  it('given a project-scoped agent terminal whose PTY IS running, should attach the SAME machine Sprite, kill that session, and drop the row', async () => {
+  it('given a project-scoped agent terminal whose PTY IS running, should attach the SAME machine Sprite, kill that session by id, and drop the row', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -918,17 +905,7 @@ describe('killAgentTerminal', () => {
       host: makeHost({
         attach: async ({ machineId }) => {
           attachedMachineId = machineId;
-          return makeHandle({
-            machineId,
-            stream: async () => ({
-              write: () => {},
-              resize: () => {},
-              onData: () => {},
-              onExit: () => {},
-              onError: () => {},
-              kill: (signal) => killed.push(signal ?? 'SIGTERM'),
-            }),
-          });
+          return makeHandle({ machineId, killSession: async (sessionId) => { killed.push(sessionId); } });
         },
       }),
     });
@@ -937,11 +914,11 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: true });
     expect(attachedMachineId).toBe(MACHINE_SANDBOX_ID);
-    expect(killed).toEqual(['SIGKILL']);
+    expect(killed).toEqual(['sess-proj']);
     expect(rows.size).toBe(0);
   });
 
-  it('given a machine-scoped agent terminal whose PTY IS running, should attach the machine Sprite, kill that session, and drop the row', async () => {
+  it('given a machine-scoped agent terminal whose PTY IS running, should attach the machine Sprite, kill that session by id, and drop the row', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -966,17 +943,7 @@ describe('killAgentTerminal', () => {
       host: makeHost({
         attach: async ({ machineId }) => {
           attachedMachineId = machineId;
-          return makeHandle({
-            machineId,
-            stream: async () => ({
-              write: () => {},
-              resize: () => {},
-              onData: () => {},
-              onExit: () => {},
-              onError: () => {},
-              kill: (signal) => killed.push(signal ?? 'SIGTERM'),
-            }),
-          });
+          return makeHandle({ machineId, killSession: async (sessionId) => { killed.push(sessionId); } });
         },
       }),
     });
@@ -985,7 +952,7 @@ describe('killAgentTerminal', () => {
 
     expect(result).toEqual({ ok: true });
     expect(attachedMachineId).toBe(MACHINE_SANDBOX_ID);
-    expect(killed).toEqual(['SIGKILL']);
+    expect(killed).toEqual(['sess-machine']);
     expect(rows.size).toBe(0);
   });
 
@@ -1014,12 +981,12 @@ describe('killAgentTerminal', () => {
     expect(rows.size).toBe(0);
   });
 
-  // sprites 1-4: a stream that FAILS to open and a stream that never REPORTS are
-  // opposite situations, and conflating them breaks the kill in one direction or
-  // the other. `stream()` retries a cold-start drop internally (and that first
-  // attempt wakes the Sprite), so a failure that survives the retry is a woken
-  // Sprite saying "no such session".
-  it('given the machine does not LIST the session (positive evidence it is gone), should drop the row — there is nothing left to kill', async () => {
+  // sprites 2-3: the REST kill-by-id endpoint (`MachineHandle.killSession`) is
+  // idempotent against a session the Sprite no longer recognizes — it resolves
+  // rather than rejecting (see sprites.ts's `killSpriteSession`) — so a dangling
+  // streamSessionId (the exec session died with a Sprite pause, or was already
+  // killed) drops the row cleanly with no separate listing/corroboration step.
+  it('given a dangling streamSessionId the Sprite no longer recognizes, should still drop the row — killSession is idempotent', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -1039,29 +1006,17 @@ describe('killAgentTerminal', () => {
     const deps = makeDeps({
       store,
       host: makeHost({
-        attach: async () =>
-          makeHandle({
-            stream: async () => {
-              throw new Error('WebSocket error: TypeError (url: wss://…/exec/sess-dangling)');
-            },
-            // The machine ANSWERS, and this session is not among its live ones.
-            // That listing — a REST call with a real status — is the only positive
-            // evidence available; the WebSocket cannot surface an HTTP status.
-            listStreams: async () => [],
-          }),
+        attach: async () => makeHandle({ killSession: async () => {} }), // already-gone session: resolves, does not throw
       }),
     });
 
     const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
 
-    // Exec sessions do not survive a Sprite pause, so a session id that will not
-    // attach names a process that is already gone. Keeping the row here would
-    // strand the terminal permanently unkillable.
     expect(result).toEqual({ ok: true });
     expect(rows.size).toBe(0);
   });
 
-  it('given a TRANSIENT stream failure (429 / 5xx / hang-up — NOT positive evidence), should KEEP the row rather than orphan a live PTY', async () => {
+  it('given the session-kill call fails (control-plane outage, auth), should KEEP the row rather than orphan a possibly-live PTY', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -1083,52 +1038,8 @@ describe('killAgentTerminal', () => {
       host: makeHost({
         attach: async () =>
           makeHandle({
-            stream: async () => {
-              // A control-plane blip resolving the machine, mid-kill. Says NOTHING
-              // about whether the PTY is alive.
-              throw Object.assign(new Error('rate limited'), { status: 429 });
-            },
-            // ...and the machine still lists the session as live.
-            listStreams: async () => [{ id: 'sess-abc', command: 'bash', isActive: true }],
-          }),
-      }),
-    });
-
-    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
-
-    // Dropping the row here would leave a running, billable agent process with
-    // nothing pointing at it. An unknown is not a licence to delete.
-    expect(result).toEqual({ ok: false, reason: 'error' });
-    expect(rows.size).toBe(1);
-  });
-
-  it('given the session LISTING itself fails, should KEEP the row — we never obtained evidence either way', async () => {
-    const { store, rows } = makeStore([
-      {
-        id: 'agent-terminal-1',
-        ownerId: 'user-1',
-        machineId: TERMINAL_ID,
-        scope: 'branch',
-        projectName: PROJECT_NAME,
-        machineBranchId: BRANCH_ID,
-        name: 'cli',
-        agentType: 'claude',
-        command: null,
-        streamSessionId: 'sess-abc',
-        createdAt: NOW,
-        updatedAt: NOW,
-      },
-    ]);
-    const deps = makeDeps({
-      store,
-      host: makeHost({
-        attach: async () =>
-          makeHandle({
-            stream: async () => {
-              throw new Error('WebSocket error: TypeError (url: wss://…/exec/sess-abc)');
-            },
-            listStreams: async () => {
-              throw new Error('sprite api down');
+            killSession: async () => {
+              throw Object.assign(new Error('sprite control plane unavailable'), { status: 500 });
             },
           }),
       }),
@@ -1136,55 +1047,13 @@ describe('killAgentTerminal', () => {
 
     const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
 
-    // Absence of evidence is not evidence of absence.
+    // Dropping the row here would leave a possibly still-running, billable agent
+    // process with nothing pointing at it. A failed kill is not a licence to delete.
     expect(result).toEqual({ ok: false, reason: 'error' });
     expect(rows.size).toBe(1);
   });
 
-  it('given the stream never reports whether it opened (timeout), should KEEP the row EVEN IF the listing claims the session is gone — a silent machine has not earned trust in its own listing', async () => {
-    const { store, rows } = makeStore([
-      {
-        id: 'agent-terminal-1',
-        ownerId: 'user-1',
-        machineId: TERMINAL_ID,
-        scope: 'branch',
-        projectName: PROJECT_NAME,
-        machineBranchId: BRANCH_ID,
-        name: 'cli',
-        agentType: 'claude',
-        command: null,
-        streamSessionId: 'sess-abc',
-        createdAt: NOW,
-        updatedAt: NOW,
-      },
-    ]);
-    const deps = makeDeps({
-      store,
-      host: makeHost({
-        attach: async () =>
-          makeHandle({
-            stream: async () => {
-              throw new MachineStreamOpenTimeoutError(20_000);
-            },
-            // Deliberately reports the session as GONE. For any OTHER failure this
-            // listing would be positive evidence and the row would be dropped — so
-            // this test only passes if the timeout genuinely short-circuits ahead
-            // of the listing, rather than passing for the same reason the
-            // transient-failure test above does.
-            listStreams: async () => [],
-          }),
-      }),
-    });
-
-    const result = await killAgentTerminal({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: BRANCH_NAME, name: 'cli', deps });
-
-    // We learned NOTHING: the PTY may be alive and merely unreachable. Dropping
-    // the row would leave a running, billable process with no bookkeeping.
-    expect(result).toEqual({ ok: false, reason: 'error' });
-    expect(rows.size).toBe(1);
-  });
-
-  it('given the Sprite kill throws, should keep the row so a retry can find it again', async () => {
+  it('given the Sprite attach itself throws, should keep the row so a retry can find it again', async () => {
     const { store, rows } = makeStore([
       {
         id: 'agent-terminal-1',
@@ -1237,7 +1106,7 @@ describe('killAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} p
       host: makeHost({
         attach: async ({ machineId }) =>
           machineId === BRANCH_SANDBOX_ID
-            ? makeHandle({ stream: async () => ({ write: () => {}, resize: () => {}, onData: () => {}, onExit: () => {}, onError: () => {}, kill: (s) => killed.push(s ?? 'SIGTERM') }) })
+            ? makeHandle({ killSession: async (sessionId) => { killed.push(sessionId); } })
             : null,
       }),
     };
@@ -1245,7 +1114,7 @@ describe('killAgentTerminalById — level-agnostic (PurePoint Attach{agent_id} p
     const result = await killAgentTerminalById({ agentTerminalId: id, deps: killDeps });
 
     expect(result).toEqual({ ok: true });
-    expect(killed).toEqual(['SIGKILL']);
+    expect(killed).toEqual(['sess-abc']);
     expect(rows.size).toBe(0);
   });
 

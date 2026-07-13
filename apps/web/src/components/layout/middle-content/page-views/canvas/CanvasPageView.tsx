@@ -11,7 +11,6 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
 import { PageEventPayload } from '@/lib/websocket';
 import { useFindStore } from '@/stores/useFindStore';
-import CanvasPublishControls from './CanvasPublishControls';
 import CanvasFormsSettingsTab from './CanvasFormsSettingsTab';
 
 interface CanvasPageViewProps {
@@ -187,9 +186,6 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
         >
           Forms
         </button>
-        <div className="ml-auto min-w-0 max-w-full">
-          <CanvasPublishControls pageId={pageId} contentDirty={documentState?.isDirty} />
-        </div>
       </div>
       {activeTab === 'code' && (
         <div className="flex-1 min-h-0">

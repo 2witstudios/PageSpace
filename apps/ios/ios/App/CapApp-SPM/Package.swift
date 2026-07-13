@@ -12,6 +12,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "7.6.5"),
+        .package(name: "CapawesomeCapacitorBadge", path: "../../../../../node_modules/.bun/@capawesome+capacitor-badge@7.0.1+abcf0b523ff3394e/node_modules/@capawesome/capacitor-badge"),
         .package(name: "CapacitorApp", path: "../../../../../node_modules/.bun/@capacitor+app@7.1.2+abcf0b523ff3394e/node_modules/@capacitor/app"),
         .package(name: "CapacitorBrowser", path: "../../../../../node_modules/.bun/@capacitor+browser@7.0.5+abcf0b523ff3394e/node_modules/@capacitor/browser"),
         .package(name: "CapacitorKeyboard", path: "../../../../../node_modules/.bun/@capacitor+keyboard@7.0.6+abcf0b523ff3394e/node_modules/@capacitor/keyboard"),
@@ -27,6 +28,7 @@ let package = Package(
             dependencies: [
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
+                .product(name: "CapawesomeCapacitorBadge", package: "CapawesomeCapacitorBadge"),
                 .product(name: "CapacitorApp", package: "CapacitorApp"),
                 .product(name: "CapacitorBrowser", package: "CapacitorBrowser"),
                 .product(name: "CapacitorKeyboard", package: "CapacitorKeyboard"),

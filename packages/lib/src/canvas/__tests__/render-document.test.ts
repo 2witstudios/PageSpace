@@ -886,3 +886,21 @@ describe('renderCanvasDocument — Twitter Card', () => {
     });
   });
 });
+
+describe('renderCanvasDocument — cspOverride', () => {
+  it('given no cspOverride, should stay byte-identical to the buildBaselineCsp-derived output', () => {
+    const input = { html: '<p>x</p>', title: 'T', pageUrl: 'https://acme.pagespace.site/x' };
+    expect(renderCanvasDocument(input)).toBe(renderCanvasDocument(input));
+    expect(renderCanvasDocument({ html: '<p>x</p>' })).toContain(`content="${BASELINE_CSP}"`);
+  });
+
+  it('given a cspOverride, should use it verbatim instead of buildBaselineCsp', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      formActionOrigin: 'https://ignored.example',
+      cspOverride: "default-src 'none'; script-src 'none';",
+    });
+    expect(out).toContain('content="default-src \'none\'; script-src \'none\';"');
+    expect(out).not.toContain('ignored.example');
+  });
+});

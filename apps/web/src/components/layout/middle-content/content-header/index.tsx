@@ -13,8 +13,9 @@ import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage, isCodePage } from '@pagespace/lib/content/page-types.config';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage, isPublishablePageType } from '@pagespace/lib/content/page-types.config';
 import { ExportDropdown } from './ExportDropdown';
+import PublishControls from './PublishControls';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
@@ -52,6 +53,21 @@ const DocumentSaveStatus = memo(function DocumentSaveStatus({
   }
 
   return <SaveStatusIndicator isDirty={isDirty} isSaving={isSaving} />;
+});
+
+const HeaderPublishControls = memo(function HeaderPublishControls({
+  pageId,
+}: {
+  pageId: string;
+}) {
+  const selectIsDirty = useCallback(
+    (state: ReturnType<typeof useDocumentManagerStore.getState>) =>
+      state.documents.get(pageId)?.isDirty ?? false,
+    [pageId]
+  );
+  const contentDirty = useDocumentManagerStore(selectIsDirty);
+
+  return <PublishControls pageId={pageId} contentDirty={contentDirty} />;
 });
 
 export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps = {}) {
@@ -141,6 +157,12 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
               <Download className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
               {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
             </Button>
+          )}
+          {page && isPublishablePageType(page.type) && (
+            // Keyed on pageId so navigating to a different page remounts the
+            // control instead of reusing local UI state (e.g. an open Publish
+            // Settings dialog) across pages.
+            <HeaderPublishControls key={page.id} pageId={page.id} />
           )}
           <PageViewers pageId={pageId} />
           <ShareDialog pageId={pageId} />

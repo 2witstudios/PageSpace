@@ -21,6 +21,7 @@ import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStor
 import { parseSelectedMachineId, buildMachineHref } from '@/lib/development/development-route';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
 import WorkspaceLeaves, { WorkspaceNodeExtras } from '@/components/layout/middle-content/page-views/machine/workspace/WorkspaceLeaves';
+import { SidebarLoading, SidebarNotice } from '@/components/layout/middle-content/page-views/machine/tabs/tab-states';
 
 /**
  * The Development surface's left sidebar. Two modes, one component (mirroring
@@ -68,12 +69,18 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
   // which is structure the Machine page itself withholds from them. Passing a
   // disabled key is what keeps those requests from ever being made. Both hooks
   // are called unconditionally (Rules of Hooks); only one is ever enabled.
-  const { machines, isLoading: driveMachinesLoading, error: driveMachinesError } = useDriveMachines(
-    isAdmin && driveId ? driveId : null,
-  );
-  const { drives: machineDrives, isLoading: allMachinesLoading, error: allMachinesError } = useAllMachines(
-    isAdmin && !driveId,
-  );
+  const {
+    machines,
+    isLoading: driveMachinesLoading,
+    error: driveMachinesError,
+    mutate: retryDriveMachines,
+  } = useDriveMachines(isAdmin && driveId ? driveId : null);
+  const {
+    drives: machineDrives,
+    isLoading: allMachinesLoading,
+    error: allMachinesError,
+    mutate: retryAllMachines,
+  } = useAllMachines(isAdmin && !driveId);
 
   const pathname = usePathname() ?? '';
   const selectedMachineId = parseSelectedMachineId(pathname, driveId);
@@ -106,6 +113,7 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
                 machines={machines}
                 isLoading={driveMachinesLoading}
                 error={driveMachinesError}
+                onRetry={retryDriveMachines}
                 selectedMachineId={selectedMachineId}
                 isSheetBreakpoint={isSheetBreakpoint}
               />
@@ -116,6 +124,7 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
                 drives={machineDrives}
                 isLoading={allMachinesLoading}
                 error={allMachinesError}
+                onRetry={retryAllMachines}
                 selectedMachineId={selectedMachineId}
                 isSheetBreakpoint={isSheetBreakpoint}
               />
@@ -129,23 +138,30 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
   );
 }
 
-/** A resting state of the machine list: one line of muted text, no tree. */
-function ListNotice({ children }: { children: string }) {
-  return <div className="py-8 text-center text-sm text-muted-foreground">{children}</div>;
-}
-
 /**
  * The one ordering-sensitive guard chain both list bodies need, shared so a
- * future fix to the ordering (e.g. why error is checked ahead of loading, or
- * loading ahead of empty) only has to be made once. Returns the notice to
+ * future fix to the ordering (e.g. why loading is checked ahead of error, or
+ * error ahead of empty) only has to be made once. Returns the notice to
  * show, or `null` when the caller should render its actual list.
  *
  * Order matters: auth-pending and non-admin come first so a cold load or a
- * refused user never sees "Failed"/"empty" wording instead. Error is checked
- * ahead of loading and empty because SWR reports `isLoading: false` with no
- * data on its error path — indistinguishable from "genuinely empty" unless
- * error is checked first — but only when there's nothing to show yet: a
- * background poll's error must not tear down a list the caller already has.
+ * refused user never sees "Failed"/"empty" wording instead. Loading is
+ * checked ahead of error so that a Retry click — which sets `isLoading` back
+ * to `true` (SWR does this whenever cached `data` is still `undefined`,
+ * exactly the "nothing loaded yet" state a failed fetch leaves behind) while
+ * `error` stays at its stale, pre-retry value until the new attempt settles —
+ * shows the loading state and not a rerun of the same "Failed" text with no
+ * visible reaction to the click. Error is then checked ahead of empty because
+ * SWR reports `isLoading: false` with no data on its error path —
+ * indistinguishable from "genuinely empty" unless error is checked first —
+ * but only when there's nothing to show yet: a background poll's error must
+ * not tear down a list the caller already has.
+ *
+ * Built on the Machine page's shared `SidebarLoading`/`SidebarNotice`
+ * vocabulary (see `tab-states.tsx`) rather than a bespoke notice, so this
+ * list reads like every other compact sidebar state in the app: a spinner row
+ * while loading, and a muted/destructive row — with a retry action on the
+ * failure branch — otherwise.
  */
 function resolveListNotice({
   authLoading,
@@ -153,22 +169,34 @@ function resolveListNotice({
   hasError,
   isLoading,
   isEmpty,
-  emptyMessage,
+  emptyTitle,
+  onRetry,
 }: {
   authLoading: boolean;
   isAdmin: boolean;
   hasError: boolean;
   isLoading: boolean;
   isEmpty: boolean;
-  emptyMessage: string;
-}): string | null {
-  if (authLoading) return 'Loading…';
+  emptyTitle: string;
+  onRetry: () => void;
+}): React.ReactNode {
+  if (authLoading) return <SidebarLoading message="Loading…" />;
   // Same wording MachineView uses, so the surface and the page refuse a
   // non-admin identically.
-  if (!isAdmin) return 'Machine access requires administrator privileges';
-  if (hasError && isEmpty) return 'Failed to load machines';
-  if (isLoading) return 'Loading…';
-  if (isEmpty) return emptyMessage;
+  if (!isAdmin) return <SidebarNotice title="Machine access requires administrator privileges" />;
+  if (isLoading) return <SidebarLoading message="Loading machines…" />;
+  if (hasError && isEmpty) {
+    return (
+      <SidebarNotice
+        title="Failed to load machines"
+        description="Check your connection and try again."
+        tone="destructive"
+        actionLabel="Retry"
+        onAction={onRetry}
+      />
+    );
+  }
+  if (isEmpty) return <SidebarNotice title={emptyTitle} />;
   return null;
 }
 
@@ -180,6 +208,7 @@ function DriveMachineList({
   machines,
   isLoading,
   error,
+  onRetry,
   selectedMachineId,
   isSheetBreakpoint,
 }: {
@@ -189,6 +218,7 @@ function DriveMachineList({
   machines: DriveMachine[];
   isLoading: boolean;
   error: Error | undefined;
+  onRetry: () => void;
   selectedMachineId: string | null;
   isSheetBreakpoint: boolean;
 }) {
@@ -198,9 +228,10 @@ function DriveMachineList({
     hasError: !!error,
     isLoading,
     isEmpty: machines.length === 0,
-    emptyMessage: 'No machines in this drive yet',
+    emptyTitle: 'No machines in this drive yet',
+    onRetry,
   });
-  if (notice) return <ListNotice>{notice}</ListNotice>;
+  if (notice) return notice;
 
   return (
     <>
@@ -225,6 +256,7 @@ function GlobalMachineList({
   drives,
   isLoading,
   error,
+  onRetry,
   selectedMachineId,
   isSheetBreakpoint,
 }: {
@@ -233,6 +265,7 @@ function GlobalMachineList({
   drives: DriveMachineGroup[];
   isLoading: boolean;
   error: Error | undefined;
+  onRetry: () => void;
   selectedMachineId: string | null;
   isSheetBreakpoint: boolean;
 }) {
@@ -242,9 +275,14 @@ function GlobalMachineList({
     hasError: !!error,
     isLoading,
     isEmpty: drives.length === 0,
-    emptyMessage: 'No machines across your drives yet',
+    // Backend note (`listMachinesAcrossDrives`): a drive with zero VISIBLE
+    // machines is dropped from the payload entirely rather than served as an
+    // empty group, so there is no reachable "drive with no machines" state to
+    // render here — only the whole-list empty case above.
+    emptyTitle: 'No machines across your drives yet',
+    onRetry,
   });
-  if (notice) return <ListNotice>{notice}</ListNotice>;
+  if (notice) return notice;
 
   return (
     <>

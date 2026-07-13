@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { openPtyShell, planReconnect, planWatchdogResponse, sessionIds } from '../sprites-shell';
+import { openPtyShell, planReconnect, planWatchdogResponse, planTeardown, sessionIds } from '../sprites-shell';
 import { appendScrollback } from '../terminal-session-map';
 import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -57,6 +57,7 @@ type FakeSprite = SpriteInstanceLike & {
   createSession: ReturnType<typeof vi.fn>;
   attachSession: ReturnType<typeof vi.fn>;
   listSessions: ReturnType<typeof vi.fn>;
+  killSession: ReturnType<typeof vi.fn>;
 };
 
 function buildFakeSprite(
@@ -75,6 +76,7 @@ function buildFakeSprite(
     filesystem: vi.fn(),
     updateNetworkPolicy: vi.fn(),
     destroy: vi.fn(),
+    killSession: vi.fn(async () => {}),
   } as unknown as FakeSprite;
 }
 
@@ -771,14 +773,123 @@ describe('openPtyShell', () => {
     expect(cmd.resize).toHaveBeenCalledWith(100, 40);
   });
 
-  it('given shell.kill(), should call command.kill with SIGKILL', () => {
-    const cmd = buildFakeCommand();
-    const sprite = buildFakeSprite(cmd);
+  describe('planTeardown (pure)', () => {
+    assert({
+      given: 'an explicit user-initiated kill',
+      should: 'kill the session by id AND close the local socket',
+      actual: planTeardown({ trigger: 'forced-teardown' }),
+      expected: { killSession: true, closeSocket: true },
+    });
 
-    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
-    shell.kill();
+    assert({
+      given: 'the 30-min detached-idle reap',
+      should: 'kill the session by id AND close the local socket — that is the reap\'s whole point',
+      actual: planTeardown({ trigger: 'idle-reap' }),
+      expected: { killSession: true, closeSocket: true },
+    });
 
-    expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
+    assert({
+      given: 'a viewer detach (navigate away)',
+      should: 'neither kill the session nor signal the local command — detachable means it survives this',
+      actual: planTeardown({ trigger: 'detach' }),
+      expected: { killSession: false, closeSocket: false },
+    });
+
+    assert({
+      given: 'the remote shell already exited on its own',
+      should: 'do nothing — there is no session left to kill and no live socket to signal',
+      actual: planTeardown({ trigger: 'shell-exit' }),
+      expected: { killSession: false, closeSocket: false },
+    });
+  });
+
+  describe('shell.kill(trigger)', () => {
+    it('given a user-initiated kill, should call command.kill(SIGKILL) AND the sprite session-kill endpoint by id', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      shell.kill('forced-teardown');
+
+      expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(sprite.killSession).toHaveBeenCalledWith('sess-1');
+    });
+
+    it('given the 30-min idle reap, should call command.kill(SIGKILL) AND the sprite session-kill endpoint by id', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      shell.kill('idle-reap');
+
+      expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(sprite.killSession).toHaveBeenCalledWith('sess-1');
+    });
+
+    it('given a viewer detach, should NOT signal the command or kill the session — detach must never terminate', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      shell.kill('detach');
+
+      expect(cmd.kill).not.toHaveBeenCalled();
+      expect(sprite.killSession).not.toHaveBeenCalled();
+    });
+
+    it('given a shell-exit teardown, should NOT signal the command or kill the session — the process already ended', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      shell.kill('shell-exit');
+
+      expect(cmd.kill).not.toHaveBeenCalled();
+      expect(sprite.killSession).not.toHaveBeenCalled();
+    });
+
+    it('given no session id was ever learned, should still close the socket but has nothing to kill by id', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+
+      // No 'message'/session_info frame ever arrives — currentSessionId stays undefined.
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      shell.kill('forced-teardown');
+
+      expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
+      expect(sprite.killSession).not.toHaveBeenCalled();
+    });
+
+    it('given kill() called twice, should call the session-kill endpoint only once — idempotent against double-teardown', () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+      shell.kill('forced-teardown');
+      shell.kill('idle-reap');
+
+      expect(sprite.killSession).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the session-kill endpoint rejects (already dead, or a transport error), should not throw and should log rather than surface it', async () => {
+      const cmd = buildFakeCommand();
+      const sprite = buildFakeSprite(cmd);
+      sprite.killSession.mockRejectedValue(new Error('sprite unreachable'));
+      const errorSpy = vi.spyOn(loggers.realtime, 'error').mockImplementation(() => {});
+
+      const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+      cmd._emitter.emit('message', announces('sess-1'));
+
+      expect(() => shell.kill('forced-teardown')).not.toThrow();
+      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+
+      errorSpy.mockRestore();
+    });
   });
 
   it('given stdin is null, shell.write should be a no-op', () => {
@@ -1075,7 +1186,7 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
-      shell.kill();
+      shell.kill('forced-teardown');
       cmd._emitter.emit('exit', 0);
 
       expect(onExit).not.toHaveBeenCalled();
@@ -1116,7 +1227,7 @@ describe('openPtyShell', () => {
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
       cmd._emitter.emit('error', new Error('keepalive'));
-      shell.kill();
+      shell.kill('forced-teardown');
       await vi.advanceTimersByTimeAsync(500);
 
       expect(sprite.attachSession).not.toHaveBeenCalled();
@@ -1226,7 +1337,7 @@ describe('openPtyShell', () => {
       attachCmd._emitter.emit('error', new Error('keepalive'));
       await vi.advanceTimersByTimeAsync(300); // past backoff; now suspended at await listSessions
 
-      shell.kill();               // closed = true mid-await
+      shell.kill('forced-teardown');               // closed = true mid-await
       d.resolve([]);              // sess-dead gone → would otherwise take the create branch
       await vi.advanceTimersByTimeAsync(0);
 
@@ -1416,7 +1527,7 @@ describe('openPtyShell', () => {
       attach._stdout.emit('data', 'nothing here matches the anchor'); // held: window opens
       expect(vi.getTimerCount()).toBeGreaterThan(0); // settle + deadline are armed
 
-      shell.kill();
+      shell.kill('forced-teardown');
 
       expect(vi.getTimerCount()).toBe(0);
     });
@@ -1680,6 +1791,9 @@ describe('openPtyShell', () => {
     });
 
     it('given a replay that overflows the byte cap on a transparent reconnect, STILL shows it (too large to be a mere redraw) and leaves a usable history', async () => {
+      // Builds two ~5.3MB floods (220k lines each via Array.from + join) — the array
+      // construction and join alone routinely exceed vitest's 5000ms default, independent
+      // of the fake timers below. An explicit timeout, not a logic change.
       // The other give-up path: the replay never aligns and grows past MAX_PENDING_BYTES, so
       // the pure core resolves inside `planReplayEmission` rather than the window timer.
       // Unlike a SMALL give-up, this one is NOT discarded even on a transparent reconnect: a
@@ -1723,9 +1837,12 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(outputs(onOutput).join('')).toBe(afterOverflow); // nothing reprinted a SECOND time
-    });
+    }, 15_000);
 
     it('given a pending-cap give-up on a transparent reconnect, still shows it (too large to discard) and keeps forwarding what arrives right after', async () => {
+      // Builds a ~5.3MB flood (220k lines via Array.from + join) — the array construction
+      // and join alone can approach vitest's 5000ms default. An explicit timeout, not a
+      // logic change.
       // The pending-cap give-up resolves SYNCHRONOUSLY inside the chunk that pushed it over —
       // unlike the window-closed give-up, there is no timer in between. A burst this size is
       // always past `MAX_DISCARDABLE_GIVEUP_BYTES`, so it is shown (see the test above); what
@@ -1750,7 +1867,7 @@ describe('openPtyShell', () => {
 
       attachCmd._stdout.emit('data', 'genuinely live output\r\n'); // same command, after resolution
       expect(outputs(onOutput).join('')).toBe(`${BANNER}${flood}genuinely live output\r\n`);
-    });
+    }, 15_000);
 
     it('given a CHATTY shell across the reconnect, discards the held burst on its deadline but keeps forwarding afterward', async () => {
       // The quiet-gap timer alone is not a bound: a build or a repainting TUI
@@ -2650,7 +2767,7 @@ describe('openPtyShell', () => {
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
       cmd._emitter.emit('spawn');
-      shell.kill();
+      shell.kill('forced-teardown');
       cmd._stderr.emit('data', 'too late\r\n');
 
       expect(onOutput).not.toHaveBeenCalled();
@@ -2711,7 +2828,7 @@ describe('openPtyShell', () => {
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
       attachCmd._stdout.emit('data', 'unalignable\r\n'); // buffered, settle armed
-      shell.kill();
+      shell.kill('forced-teardown');
       // Nothing may reach a client that is no longer there. Two things stand in the way and
       // either would do: kill() cancels the window timers, and every path out of the shell
       // re-checks `closed`. The redundancy is deliberate — a teardown is not the place to
@@ -2739,7 +2856,7 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
       attachCmd._stdout.emit('data', BANNER); // the replay resolves; nothing emitted
 
-      shell.kill();
+      shell.kill('forced-teardown');
       attachCmd._stdout.emit('data', 'in flight after the kill\r\n');
       await vi.advanceTimersByTimeAsync(2000);
 
