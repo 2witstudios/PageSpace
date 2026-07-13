@@ -13,8 +13,9 @@
  * permission, matching the canonical page-trash), mirroring
  * machine-projects/machine-branches/agent-terminals.
  *
- * DELETE has two side effects with a REQUIRED fail-safe order — trash the page
- * first (reversible), then tear down the Sprite — enforced in `deleteMachine`.
+ * DELETE has three side effects with a REQUIRED fail-safe order — trash the page
+ * first (reversible, via the canonical page-trash), then scrub agent configs that
+ * reference the Machine, then tear down the Sprite — enforced in `deleteMachine`.
  */
 
 import { NextResponse } from 'next/server';
@@ -30,6 +31,7 @@ import {
   canAccessMachine,
   canDeleteMachine,
   canViewMachine,
+  createDbMachineRefScrub,
   createDbMachineSettingsStore,
   createMachineSpriteTeardown,
 } from '@/lib/machines/machine-settings-runtime';
@@ -72,7 +74,7 @@ export async function GET(request: Request) {
 
   if (!(await canViewMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
 
-  const settings = await getMachineSettings({ machineId: machineId.value, store: createDbMachineSettingsStore() });
+  const settings = await getMachineSettings({ machineId: machineId.value, store: createDbMachineSettingsStore(auth.userId) });
   if (!settings) return notFound();
   return NextResponse.json({ settings });
 }
@@ -160,7 +162,7 @@ export async function PATCH(request: Request) {
   const settings = await updateMachineSettings({
     machineId: machineId.value,
     patch: parsed.patch,
-    store: createDbMachineSettingsStore(),
+    store: createDbMachineSettingsStore(auth.userId),
   });
   if (!settings) return notFound();
 
@@ -190,8 +192,9 @@ export async function DELETE(request: Request) {
 
   const result = await deleteMachine({
     machineId: machineId.value,
-    store: createDbMachineSettingsStore(),
+    store: createDbMachineSettingsStore(auth.userId),
     sprite: createMachineSpriteTeardown(),
+    refs: createDbMachineRefScrub(auth.userId),
   });
   if (!result.ok) return notFound();
 
@@ -200,8 +203,12 @@ export async function DELETE(request: Request) {
     userId: auth.userId,
     resourceType: RESOURCE_TYPE,
     resourceId: machineId.value,
-    details: { spriteTornDown: result.spriteTornDown },
+    details: { spriteTornDown: result.spriteTornDown, agentRefsScrubbed: result.agentRefsScrubbed },
     riskScore: 0.5,
   });
-  return NextResponse.json({ success: true, spriteTornDown: result.spriteTornDown });
+  return NextResponse.json({
+    success: true,
+    spriteTornDown: result.spriteTornDown,
+    agentRefsScrubbed: result.agentRefsScrubbed,
+  });
 }
