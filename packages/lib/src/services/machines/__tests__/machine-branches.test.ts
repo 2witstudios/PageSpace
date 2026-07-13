@@ -911,6 +911,23 @@ describe('Claude Code credential propagation', () => {
     expect([...(state?.files.keys() ?? [])].some((k) => tempPathPattern.test(k))).toBe(false);
   });
 
+  it('should pass a bounded timeoutMs on every housekeeping rm/mv exec — the Sprite runner only installs its SIGKILL timer when one is supplied, so a call with none is unbounded at the transport level', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    const housekeepingCalls = state?.execLog.filter((c) => c.cmd === 'rm' || c.cmd === 'mv') ?? [];
+    expect(housekeepingCalls.length).toBeGreaterThan(0);
+    for (const call of housekeepingCalls) {
+      expect(call.timeoutMs).toBeGreaterThan(0);
+      expect(call.maxBytes).toBeGreaterThan(0);
+    }
+  });
+
   it('given an overlapping call reads an OLDER credential and then stalls, should skip its own mv once a NEWER call has already landed — never clobbering the newer credential', async () => {
     // `withTimeout` deliberately does not cancel a slow call's underlying
     // work — it keeps running in the background. Without the generation

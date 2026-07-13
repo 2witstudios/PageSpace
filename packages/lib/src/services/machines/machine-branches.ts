@@ -28,6 +28,7 @@ import type { SubscriptionTier } from '../subscription-utils';
 import { runGitInSandbox, type GitSandboxRunDeps } from '../sandbox/git-tool-runners';
 import type { SandboxActorContext, SandboxQuotaDeps } from '../sandbox/tool-runners';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
+import { SANDBOX_MAX_OUTPUT_BYTES } from '../sandbox/execution-policy';
 import type { MachineHost, MachineHandle, MachineSubstrateSpec } from '../sandbox/machine-host';
 import { adaptMachineHandleToExecutableSandbox } from '../sandbox/sandbox-client/machine-host-adapter';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
@@ -224,6 +225,21 @@ async function cloneAndCheckoutBranch({
  */
 const CREDENTIAL_COPY_TIMEOUT_MS = 5_000;
 
+/**
+ * `MachineHandle.exec`'s underlying Sprite runner only installs its SIGKILL
+ * wall-clock timer when `timeoutMs` is explicitly supplied (`sprites.ts`:
+ * the kill timer is conditional on `timeoutMs && timeoutMs > 0`) — an exec
+ * call with none is genuinely unbounded at the transport level, regardless
+ * of `CREDENTIAL_COPY_TIMEOUT_MS` above (that only stops THIS function's
+ * caller from waiting; it does not touch the exec itself). Without an
+ * explicit bound, a wedged `rm`/`mv` on a cold/unreachable Sprite would
+ * never be killed, leaking its process/socket on every such attach (caught
+ * in review). Every housekeeping exec in this file passes this.
+ */
+function housekeepingExecArgs(cmd: string, args: string[]): { cmd: string; args: string[]; timeoutMs: number; maxBytes: number } {
+  return { cmd, args, timeoutMs: CREDENTIAL_COPY_TIMEOUT_MS, maxBytes: SANDBOX_MAX_OUTPUT_BYTES };
+}
+
 function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, timeoutMs);
@@ -378,7 +394,7 @@ export async function propagateClaudeCredential({
           // the clear itself fails, abort BEFORE writing rather than assume
           // the temp path is now clear — still safe either way, since
           // nothing has touched the live file yet.
-          const clearTemp = await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+          const clearTemp = await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
           if (clearTemp.exitCode !== 0) {
             throw new Error(`rm -f ${tempPath} failed: exit ${clearTemp.exitCode}`);
           }
@@ -389,17 +405,17 @@ export async function propagateClaudeCredential({
           // data, so abandon this stale attempt rather than risk this one's
           // `mv` clobbering it once it finally gets here.
           if (latestCredentialCopyGeneration.get(branchHandle.machineId) !== generation) {
-            await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+            await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
             return;
           }
 
-          const move = await branchHandle.exec({ cmd: 'mv', args: [tempPath, path] });
+          const move = await branchHandle.exec(housekeepingExecArgs('mv', [tempPath, path]));
           if (move.exitCode !== 0) {
             // Best-effort cleanup of the orphaned temp file (itself already
             // 0o600, so leaving it behind on a rare failure is a harmless
             // leftover, not an exposure) — the live file at `path` was never
             // touched by this attempt either way.
-            await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+            await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
             throw new Error(`mv ${tempPath} -> ${path} failed: exit ${move.exitCode}`);
           }
         }
