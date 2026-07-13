@@ -10,7 +10,8 @@
  * FAILURES are `{ error, reason }` — `reason` is the machine-readable token
  * clients switch on; `error` is a sentence fit to show a human, NEVER git's
  * stderr (which names absolute paths inside the Sprite). The stderr goes to
- * the server log. Same contract as the Files route.
+ * the server log. Same `error`/`reason` split as the Files route, but stricter
+ * on the stderr: `detail` is only ever logged here, never returned.
  *
  * `ref` is a resolved commit-ish (a branch, tag, SHA, or a merge-base the
  * caller already computed — see `sandbox-git-tools.ts`'s `gitDiff` three-dot
@@ -57,8 +58,7 @@ const DENIAL_STATUS: Record<string, number> = {
 
 // `error` is user-facing (clients render it straight into the UI), so it is a
 // sentence per reason token — never the token itself and never git's stderr,
-// which names absolute paths inside the Sprite. Same contract as the Files
-// route; the stderr goes to the server log instead.
+// which names absolute paths inside the Sprite (that goes to the server log).
 const DENIAL_MESSAGE: Record<string, string> = {
   invalid_ref: 'That git reference is not valid',
   not_found: 'File not found at this ref',
@@ -113,10 +113,13 @@ export async function GET(request: Request) {
     deps,
   });
   if (!result.ok) {
-    if (result.detail !== undefined) {
-      // Level follows severity: only exec_failed (502) is an operational error.
-      // A not_found miss is an expected 404 (a file absent at this ref) — its
-      // stderr detail is still kept, but at warn so it never pages anyone.
+    const status = DENIAL_STATUS[result.reason] ?? 500;
+    // A 5xx is an operational failure and is ALWAYS logged — even when git died
+    // with empty stderr, the meta is what makes the 502 diagnosable. An expected
+    // miss (400/404) is logged only when it carries stderr detail, at warn so it
+    // never pages anyone. Level follows the response status, the same >=500
+    // convention as logger-config's logResponse.
+    if (status >= 500 || result.detail !== undefined) {
       const meta = {
         machineId: machineId.value,
         projectName: projectName.value,
@@ -126,7 +129,7 @@ export async function GET(request: Request) {
         reason: result.reason,
         detail: result.detail,
       };
-      if (result.reason === 'exec_failed') {
+      if (status >= 500) {
         loggers.api.error('Machine git-blob read failed', undefined, meta);
       } else {
         loggers.api.warn('Machine git-blob read failed', meta);
@@ -134,7 +137,7 @@ export async function GET(request: Request) {
     }
     return NextResponse.json(
       { error: DENIAL_MESSAGE[result.reason] ?? 'Failed to read the file at this ref', reason: result.reason },
-      { status: DENIAL_STATUS[result.reason] ?? 500 },
+      { status },
     );
   }
   return NextResponse.json({ content: result.content, truncated: result.truncated });

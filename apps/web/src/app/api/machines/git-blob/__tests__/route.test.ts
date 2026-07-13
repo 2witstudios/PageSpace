@@ -137,11 +137,13 @@ describe('/api/machines/git-blob request contract', () => {
     expect(body).toEqual({ content: 'file body', truncated: false });
   });
 
-  it('maps invalid_ref to 400', async () => {
+  it('maps invalid_ref to 400 without logging (an expected miss with nothing to diagnose)', async () => {
     readMachineGitBlob.mockResolvedValue({ ok: false, reason: 'invalid_ref' });
     const res = await GET(get({ ref: '--output=/tmp/x' }));
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'That git reference is not valid', reason: 'invalid_ref' });
+    expect(logApiError).not.toHaveBeenCalled();
+    expect(logApiWarn).not.toHaveBeenCalled();
   });
 
   it('maps not_found to 404 without echoing the git detail, logging at warn (an expected miss, not an error)', async () => {
@@ -173,11 +175,15 @@ describe('/api/machines/git-blob request contract', () => {
     );
   });
 
-  it('does not log when a failure carries no detail', async () => {
+  it('still error-logs a detail-less exec failure — the 502 must stay diagnosable', async () => {
     readMachineGitBlob.mockResolvedValue({ ok: false, reason: 'exec_failed' });
     const res = await GET(get({}));
     expect(res.status).toBe(502);
-    expect(logApiError).not.toHaveBeenCalled();
+    expect(logApiError).toHaveBeenCalledWith(
+      'Machine git-blob read failed',
+      undefined,
+      expect.objectContaining({ reason: 'exec_failed', machineId: 't1', ref: 'origin/master', path: 'src/index.ts' }),
+    );
     expect(logApiWarn).not.toHaveBeenCalled();
   });
 });

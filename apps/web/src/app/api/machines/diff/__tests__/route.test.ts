@@ -243,12 +243,16 @@ describe('GET /api/machines/diff — list form', () => {
     );
   });
 
-  it('does not log when a service failure carries no detail', async () => {
+  it('still error-logs a detail-less service failure — the 502 must stay diagnosable', async () => {
     listMachineDiffFiles.mockResolvedValue({ ok: false, reason: 'exec_failed' });
     const res = await GET(get({}));
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ error: 'Failed to compute the changed-file list', reason: 'exec_failed' });
-    expect(logApiError).not.toHaveBeenCalled();
+    expect(logApiError).toHaveBeenCalledWith(
+      'Machine diff list failed',
+      undefined,
+      expect.objectContaining({ reason: 'exec_failed', machineId: 't1', branchName: 'feature/x', scope: 'uncommitted' }),
+    );
   });
 });
 
