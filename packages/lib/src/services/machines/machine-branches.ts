@@ -404,6 +404,24 @@ export async function propagateClaudeCredential({
           // one was working — it will (or already did) land more current
           // data, so abandon this stale attempt rather than risk this one's
           // `mv` clobbering it once it finally gets here.
+          //
+          // KNOWN, ACCEPTED RESIDUAL WINDOW (raised in review, twice): this
+          // check happens BEFORE the `mv` below, not atomically with it. A
+          // newer call could still start, read a rotated credential, and
+          // complete its OWN `mv` entirely within the time this call's own
+          // `mv` (checked as still-current a moment ago) takes to actually
+          // land — landing this stale `mv` last and overwriting the fresher
+          // one anyway. Closing that fully would need either an atomic
+          // compare-and-swap primitive this filesystem abstraction doesn't
+          // expose, or a synchronous per-branch mutex serializing every
+          // `mv` (which would then queue an unrelated caller's response
+          // behind however long a DIFFERENT in-flight refresh's Sprite I/O
+          // takes — reintroducing the unbounded-latency problem this
+          // design exists to avoid). The impact is staleness, not exposure:
+          // worst case, the branch keeps using an old-but-still-valid
+          // token a little longer, and self-heals on the next reattach in
+          // either process — consistent with every other best-effort
+          // guarantee in this function. Deliberately not chased further.
           if (latestCredentialCopyGeneration.get(branchHandle.machineId) !== generation) {
             await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
             return;
