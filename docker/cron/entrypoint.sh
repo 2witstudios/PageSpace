@@ -34,16 +34,21 @@ TIMESTAMP=$(date +%s)
 NONCE=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 MESSAGE="${TIMESTAMP}:${NONCE}:${METHOD}:${PATH_PART}"
 
+# -sS: no progress noise, but transport errors DO print (they land in each
+# entry's log via 2>&1 instead of vanishing). --max-time bounds every request
+# below the hourly tick so a wedged connection can never wedge a job forever —
+# critical for flock-serialized entries, where a hung holder would otherwise
+# silently starve all future ticks.
 if [ -n "$CRON_SECRET_VAL" ]; then
   SIGNATURE=$(printf '%s' "$MESSAGE" | openssl dgst -sha256 -hmac "$CRON_SECRET_VAL" -hex 2>/dev/null | sed 's/^.* //')
-  curl -s -X "$METHOD" \
+  curl -sS --connect-timeout 10 --max-time 3300 -X "$METHOD" \
     -H "X-Cron-Timestamp: ${TIMESTAMP}" \
     -H "X-Cron-Nonce: ${NONCE}" \
     -H "X-Cron-Signature: ${SIGNATURE}" \
     "$URL"
 else
   # No secret configured — send without HMAC headers (dev/fallback)
-  curl -s -X "$METHOD" "$URL"
+  curl -sS --connect-timeout 10 --max-time 3300 -X "$METHOD" "$URL"
 fi
 SCRIPT
 
