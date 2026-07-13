@@ -319,9 +319,14 @@ export async function propagateClaudeCredential({
           // permissive) mode that stale file already had, which the `mv`
           // below would then promote onto the real credential, reintroducing
           // the exact problem this temp-file flow exists to avoid (caught
-          // in review). Safe to do unconditionally: any failure here only
-          // ever touches the disposable temp path, never the live file.
-          await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+          // in review). Checked, not fire-and-forget: if the clear itself
+          // fails, abort BEFORE writing rather than assume the temp path is
+          // now clear (caught in review, again) — still safe either way,
+          // since nothing has touched the live file yet.
+          const clearTemp = await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+          if (clearTemp.exitCode !== 0) {
+            throw new Error(`rm -f ${tempPath} failed: exit ${clearTemp.exitCode}`);
+          }
           await branchHandle.writeFiles([{ path: tempPath, content, mode: 0o600 }]);
           const move = await branchHandle.exec({ cmd: 'mv', args: [tempPath, path] });
           if (move.exitCode !== 0) {

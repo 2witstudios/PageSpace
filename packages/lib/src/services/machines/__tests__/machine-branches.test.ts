@@ -942,6 +942,34 @@ describe('Claude Code credential propagation', () => {
     expect(state?.files.has('/home/sprite/.claude/.credentials.json.tmp')).toBe(false);
   });
 
+  it('given the temp-clearing rm exec fails (non-zero exit), should abort BEFORE writing rather than assume the temp path is clear, and should leave any existing valid credential untouched', async () => {
+    // If the clear itself fails, the temp path might still hold a stale
+    // file — writing to it anyway would risk an OVERWRITE (not a creation),
+    // silently keeping the stale file's permissions, which the subsequent
+    // mv would then promote onto the real credential. Aborting before the
+    // write is what prevents that (caught in review).
+    const { host, byId } = makeFakeHost((_state, args) => {
+      if (args.cmd === 'rm') return { exitCode: 1, stdout: '', stderr: 'rm: permission denied' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    const handle = await host.provision({ name: 'branch-sprite', substrate: { kind: 'sprite' }, options: {} });
+    await handle.writeFiles([{ path: '/home/sprite/.claude/.credentials.json', content: 'still-valid-token', mode: 0o600 }]);
+
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'refreshed-token' });
+    await propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => rootHandle,
+    });
+
+    const state = byId.get(handle.machineId);
+    // Never reached writeFiles/mv for the temp path — the existing valid
+    // credential at the real path must be untouched.
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('still-valid-token');
+    expect(state?.execLog.some((c) => c.cmd === 'mv')).toBe(false);
+  });
+
   it('given the mv exec throws (e.g. a transport failure), should not fail the spawn (best-effort)', async () => {
     const { host } = makeFakeHost((_state, args) => {
       if (args.cmd === 'mv') throw new Error('exec transport failure');
