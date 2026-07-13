@@ -46,23 +46,34 @@ const isForbiddenElement = (name: string): boolean =>
 
 /**
  * Minimal entity decoding for the scheme CHECK only (never for output):
- * numeric references plus the handful of named ones attackers use to split a
- * scheme (`&colon;`, `&tab;`, `&newline;`). Decoding more would risk changing
- * benign values; here a decode error only means we inspect a stricter string.
+ * numeric references plus every named entity that yields a character the two
+ * denied scheme prefixes are built from — `:` (`&colon;`), `/` (`&sol;`) and
+ * the whitespace browsers strip (`&Tab;`, `&NewLine;`). ASCII letters have no
+ * named entities, so this set is complete for `javascript:`/`data:text/html`.
+ * Decoding more would risk changing benign values; matching is deliberately
+ * case-insensitive (broader than HTML) — a false decode only means we inspect
+ * a stricter string.
  */
+const NAMED_ENTITIES_FOR_CHECK: ReadonlyArray<[RegExp, string]> = [
+  [/&colon;/gi, ':'],
+  [/&sol;/gi, '/'],
+  [/&tab;/gi, '\t'],
+  [/&newline;/gi, '\n'],
+];
+
 const decodeEntitiesForCheck = (value: string): string =>
-  value
-    .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => {
-      const code = parseInt(hex, 16);
-      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
-    })
-    .replace(/&#(\d+);?/g, (_, dec: string) => {
-      const code = parseInt(dec, 10);
-      return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
-    })
-    .replace(/&colon;/gi, ':')
-    .replace(/&tab;/gi, '\t')
-    .replace(/&newline;/gi, '\n');
+  NAMED_ENTITIES_FOR_CHECK.reduce(
+    (decoded, [entity, char]) => decoded.replace(entity, char),
+    value
+      .replace(/&#x([0-9a-f]+);?/gi, (_, hex: string) => {
+        const code = parseInt(hex, 16);
+        return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+      })
+      .replace(/&#(\d+);?/g, (_, dec: string) => {
+        const code = parseInt(dec, 10);
+        return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : '';
+      })
+  );
 
 /**
  * True when a URL attribute value resolves to an executable scheme. Browsers

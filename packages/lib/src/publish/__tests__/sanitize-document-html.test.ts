@@ -224,6 +224,24 @@ describe('sanitizeDocumentHtml', () => {
       });
     });
 
+    it('removes data:text/html hidden behind &sol; entities', () => {
+      assert({
+        given: 'a href spelling data:text/html with the slash as &sol;',
+        should: 'decode for the check and remove it',
+        actual: sanitizeDocumentHtml('<a href="data:text&sol;html,<script>alert(1)</script>">x</a>'),
+        expected: '<a>x</a>',
+      });
+    });
+
+    it('removes data:text/html hidden behind numeric slash entities', () => {
+      assert({
+        given: 'a href spelling data:text/html with the slash as &#47; / &#x2F;',
+        should: 'decode for the check and remove it',
+        actual: sanitizeDocumentHtml('<a href="data:text&#47;html,x">a</a><a href="data:text&#x2F;html,x">b</a>'),
+        expected: '<a>a</a><a>b</a>',
+      });
+    });
+
     it('removes data:text/html srcs and hrefs', () => {
       assert({
         given: 'a href with a data:text/html payload (any casing)',
