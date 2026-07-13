@@ -61,6 +61,7 @@ import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/sys
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
+import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -1010,14 +1011,14 @@ export async function POST(request: Request) {
     }
 
     // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
+    // Note: "current page/drive" is turn-volatile — it's built separately as
+    // `locationPrompt` below and injected via buildVolatileTurnContext, NOT
+    // baked in here, so this string stays byte-identical across turns.
     let systemPrompt: string;
     if (customSystemPrompt) {
       // Use custom system prompt with page context injected
       // Prepend drive prompt if enabled and available
       systemPrompt = drivePromptPrefix + customSystemPrompt;
-      if (pageContext) {
-        systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
-      }
       // Add user personalization if enabled
       const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
       if (personalizationPrompt) {
@@ -1030,33 +1031,28 @@ export async function POST(request: Request) {
     } else {
       // Fallback to default PageSpace system prompt with read-only mode and personalization
       systemPrompt = buildSystemPrompt(
-        'page',
-        pageContext ? {
-          driveName: pageContext.driveName,
-          driveSlug: pageContext.driveSlug,
-          driveId: pageContext.driveId,
-          pagePath: pageContext.pagePath,
-          pageType: pageContext.pageType,
-          breadcrumbs: pageContext.breadcrumbs,
-        } : undefined,
         readOnlyMode,
         personalization ?? undefined,
         isCodeExecutionEnabled()
       );
 
       // Append workspace knowledge (tool-aware). Custom systemPrompt = opt-out (blank slate).
-      systemPrompt += buildInlineInstructions(
-        {
-          pageTitle: pageContext?.pageTitle,
-          pageType: pageContext?.pageType,
-          driveName: pageContext?.driveName,
-          pagePath: pageContext?.pagePath,
-          driveSlug: pageContext?.driveSlug,
-          driveId: pageContext?.driveId,
-        },
-        allowedToolNames
-      );
+      systemPrompt += buildInlineInstructions(allowedToolNames);
     }
+
+    const locationPrompt = buildLocationTurnPrompt(pageContext ? {
+      currentPage: {
+        title: pageContext.pageTitle,
+        type: pageContext.pageType,
+        path: pageContext.pagePath,
+      },
+      currentDrive: pageContext.driveId ? {
+        id: pageContext.driveId,
+        name: pageContext.driveName,
+        slug: pageContext.driveSlug,
+      } : undefined,
+      breadcrumbs: pageContext.breadcrumbs,
+    } : undefined);
 
     // Cross-drive membership context applies uniformly regardless of whether
     // a custom system prompt is set (unlike drivePromptPrefix above, which is
@@ -1271,12 +1267,14 @@ export async function POST(request: Request) {
             startTimeMs: startTime,
             logger: loggers.ai,
             buildStreamText: (messages) => {
-              // Volatile per-turn data (timestamp/mention/command) is appended
-              // to the last user message so the system prefix stays byte-stable
-              // and provider prefix caches (Anthropic/OpenAI/Gemini) are not
-              // invalidated on every turn.
+              // Volatile per-turn data (timestamp/location/mention/command) is
+              // appended to the last user message so the system prefix stays
+              // byte-stable and provider prefix caches (Anthropic/OpenAI/Gemini)
+              // are not invalidated on every turn — including turns where only
+              // the user's current page/drive changed.
               const turnContext = buildVolatileTurnContext({
                 timestampPrompt: timestampSystemPrompt,
+                locationPrompt,
                 mentionPrompt: mentionSystemPrompt,
                 commandPrompt: commandSystemPrompt,
               });
@@ -1324,6 +1322,15 @@ export async function POST(request: Request) {
                     slug: pageContext.driveSlug,
                   } : undefined,
                   breadcrumbs: pageContext.breadcrumbs,
+                } : undefined,
+                // Turn-start snapshot of the agent's working page — tools that
+                // shift focus (e.g. create_page) mutate this in place so later
+                // tool calls in the same turn track the agent's own actions
+                // rather than staying pinned to the turn-start snapshot.
+                currentWorkingPage: pageContext ? {
+                  id: pageContext.pageId,
+                  title: pageContext.pageTitle,
+                  type: pageContext.pageType,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
@@ -1522,7 +1529,10 @@ export async function POST(request: Request) {
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
               pageId: chatId,
-              driveId: pageContext?.driveId,
+              // Empty string (no drive in view) must read as "no drive", not a
+              // literal '' driveId — matches the truthy-guards used elsewhere
+              // in this file for the same pageContext.driveId field.
+              driveId: pageContext?.driveId || undefined,
               // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
               // completion. Cost still settles regardless (the provider charged us).
               success: agentRun?.finalOutcome !== 'exhausted',
