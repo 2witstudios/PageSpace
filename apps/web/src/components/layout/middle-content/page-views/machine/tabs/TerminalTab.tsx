@@ -42,7 +42,7 @@ export default function TerminalTab({ machineId, embedded = false }: TerminalTab
   if (embedded) return workspacePane;
 
   return (
-    <TabSidebar title="Sessions" pane={workspacePane}>
+    <TabSidebar title="Workspaces" pane={workspacePane}>
       {({ close }) => <WorkspaceTree machineId={machineId} onSelected={close} />}
     </TabSidebar>
   );
