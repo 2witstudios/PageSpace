@@ -48,6 +48,7 @@ import {
   type MachineNodeScope,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton, { AddButton } from './RemoveButton';
@@ -82,10 +83,12 @@ export default function WorkspaceLeaves({
   }, [machineId, ensureMachine]);
 
   const machine = useMachineWorkspaceStore(selectMachine(machineId));
-  const removeWorkspace = useMachineWorkspaceStore((state) => state.removeWorkspace);
-  const closePane = useMachineWorkspaceStore((state) => state.closePane);
-  const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
+  // Identity/layout-affecting actions push to the server (#2048); local-only
+  // UI state (which row is being renamed, which is pending removal) stays here.
+  const { removeWorkspace, closePane, openTerminal, renameWorkspace } = useSyncedWorkspaceActions(machineId);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
 
   const scope = nodeScopeOf(node);
   // Every pane in a workspace runs in the WORKSPACE's own node scope (see
@@ -116,8 +119,19 @@ export default function WorkspaceLeaves({
   const unclaimedSessions = agentTerminals.filter((terminal) => !localNames.has(terminal.name));
 
   const adopt = (name: string) => {
-    openTerminal(machineId, { ...scope, name });
+    openTerminal({ ...scope, name });
     onSelectWorkspace(sessionWorkspaceId({ ...scope, name }));
+  };
+
+  const startRename = (workspace: { id: string; name: string }) => {
+    setRenamingId(workspace.id);
+    setDraftName(workspace.name);
+  };
+
+  const commitRename = (workspaceId: string, currentName: string) => {
+    const trimmed = draftName.trim();
+    if (trimmed && trimmed !== currentName) renameWorkspace(workspaceId, trimmed);
+    setRenamingId(null);
   };
 
   return (
@@ -130,15 +144,39 @@ export default function WorkspaceLeaves({
             workspace.id === machine.activeWorkspaceId ? 'bg-accent' : 'hover:bg-accent/50',
           )}
         >
-          <button
-            type="button"
-            onClick={() => onSelectWorkspace(workspace.id)}
-            aria-current={workspace.id === machine.activeWorkspaceId ? 'true' : undefined}
-            className="flex flex-1 items-center gap-1 text-left"
-          >
-            <TerminalSquare className="size-3 shrink-0" />
-            <span className="truncate font-normal text-sm leading-none">{workspace.name}</span>
-          </button>
+          {renamingId === workspace.id ? (
+            <div className="flex flex-1 items-center gap-1">
+              <TerminalSquare className="size-3 shrink-0" />
+              <input
+                autoFocus
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onBlur={() => commitRename(workspace.id, workspace.name)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitRename(workspace.id, workspace.name);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setRenamingId(null);
+                  }
+                }}
+                aria-label={`Rename workspace ${workspace.name}`}
+                className="w-full truncate rounded-sm border border-border bg-background px-1 text-sm font-normal leading-none outline-none"
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onSelectWorkspace(workspace.id)}
+              onDoubleClick={() => startRename(workspace)}
+              aria-current={workspace.id === machine.activeWorkspaceId ? 'true' : undefined}
+              className="flex flex-1 items-center gap-1 text-left"
+            >
+              <TerminalSquare className="size-3 shrink-0" />
+              <span className="truncate font-normal text-sm leading-none">{workspace.name}</span>
+            </button>
+          )}
           <RemoveButton onClick={() => setPendingRemove(workspace.id)} label={`Remove workspace ${workspace.name}`} />
         </div>
       ))}
@@ -180,9 +218,9 @@ export default function WorkspaceLeaves({
           // instead of dropping the (unchanged) workspace, or it would linger
           // bound to the agent names just killed above.
           if (workspacesOf(machine).length <= 1) {
-            pendingRunningPaneIds.forEach((paneId) => closePane(machineId, pendingRemove, paneId));
+            pendingRunningPaneIds.forEach((paneId) => closePane(pendingRemove, paneId));
           } else {
-            removeWorkspace(machineId, pendingRemove);
+            removeWorkspace(pendingRemove);
           }
         }}
       />
@@ -209,7 +247,7 @@ export function WorkspaceNodeExtras({
 }) {
   const scope = nodeScopeOf(node);
   const runningCount = useMachineWorkspaceStore(selectRunningPaneCount(machineId, scope));
-  const createWorkspace = useMachineWorkspaceStore((state) => state.createWorkspace);
+  const { createWorkspace } = useSyncedWorkspaceActions(machineId);
 
   return (
     <span className="flex shrink-0 items-center gap-0.5">
@@ -219,7 +257,7 @@ export function WorkspaceNodeExtras({
         </span>
       )}
       <AddButton
-        onClick={() => onWorkspaceCreated(createWorkspace(machineId, scope))}
+        onClick={() => onWorkspaceCreated(createWorkspace(scope))}
         label="New workspace"
         icon={<Plus className="mx-auto size-3" />}
       />

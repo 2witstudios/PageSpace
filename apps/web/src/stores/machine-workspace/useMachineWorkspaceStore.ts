@@ -25,10 +25,14 @@ import {
   addWorkspace,
   updateWorkspace,
   removeWorkspace as removeWorkspaceTransition,
+  renameWorkspace as renameWorkspaceTransition,
   showSessionIn,
   workspaceShowing,
   paneShowing,
   sanitizeMachines,
+  mergeServerWorkspaces,
+  applyServerWorkspaceUpsert,
+  applyServerWorkspaceDeleted,
   sessionWorkspaceId,
   nextWorkspaceName,
   setActiveWorkspace as setActiveWorkspaceTransition,
@@ -50,6 +54,7 @@ import {
   type MachineNodeScope,
   type MachineWorkspacesState,
   type OpenTerminalScope,
+  type ServerWorkspaceDTO,
   type TerminalColumnState,
   type TerminalPaneState,
   type WorkspaceState,
@@ -59,11 +64,20 @@ export type {
   MachineNodeScope,
   MachineWorkspacesState,
   OpenTerminalScope,
+  ServerWorkspaceDTO,
   TerminalColumnState,
   TerminalPaneState,
   WorkspaceState,
 };
-export { autoSessionName, panesOf, workspacesOf, isSameNodeScope, sessionWorkspaceId, MACHINE_NODE_SCOPE };
+export {
+  autoSessionName,
+  panesOf,
+  workspacesOf,
+  isSameNodeScope,
+  sessionWorkspaceId,
+  MACHINE_NODE_SCOPE,
+  workspaceShowing,
+};
 
 /** Bump when the persisted shape changes; see the `migrate`/`merge` note below. */
 const PERSISTED_VERSION = 1;
@@ -79,6 +93,16 @@ interface MachineWorkspaceStoreState {
   setActiveWorkspace: (machineId: string, workspaceId: string) => void;
   /** Drops a workspace and shows a neighbour. A machine keeps at least one. */
   removeWorkspace: (machineId: string, workspaceId: string) => void;
+  /** Local rename — the server-synced wrapper (`useMachineWorkspaceSync`) pushes this to the server too. */
+  renameWorkspace: (machineId: string, workspaceId: string, name: string) => void;
+  /** Reconciles a machine's FULL server workspace list into local state — the
+   * sync hook's initial hydrate step. Local-only fields (`activePaneId`,
+   * `pendingPickerPaneId`, pane `pendingPrompt`) are preserved, never overwritten. */
+  hydrateFromServer: (machineId: string, workspaces: ServerWorkspaceDTO[]) => void;
+  /** Reconciles one incoming `machine-workspace:created`/`:updated` broadcast. */
+  applyServerUpsert: (machineId: string, workspace: ServerWorkspaceDTO) => void;
+  /** Reconciles an incoming `machine-workspace:deleted` broadcast. */
+  applyServerDelete: (machineId: string, workspaceId: string) => void;
   /** Opens an existing session: its own workspace, restored if it already has
    * one, and shown. */
   openTerminal: (machineId: string, scope: OpenTerminalScope) => void;
@@ -176,6 +200,30 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
 
       removeWorkspace: (machineId, workspaceId) => {
         set((state) => applyToMachine(state, machineId, (machine) => removeWorkspaceTransition(machine, workspaceId)));
+      },
+
+      renameWorkspace: (machineId, workspaceId, name) => {
+        set((state) => applyToMachine(state, machineId, (machine) => renameWorkspaceTransition(machine, workspaceId, name)));
+      },
+
+      hydrateFromServer: (machineId, workspaces) => {
+        set((state) => ({
+          machines: { ...state.machines, [machineId]: mergeServerWorkspaces(state.machines[machineId], workspaces) },
+        }));
+      },
+
+      applyServerUpsert: (machineId, workspace) => {
+        set((state) => {
+          const machine = state.machines[machineId];
+          const next = machine
+            ? applyServerWorkspaceUpsert(machine, workspace)
+            : mergeServerWorkspaces(undefined, [workspace]);
+          return { machines: { ...state.machines, [machineId]: next } };
+        });
+      },
+
+      applyServerDelete: (machineId, workspaceId) => {
+        set((state) => applyToMachine(state, machineId, (machine) => applyServerWorkspaceDeleted(machine, workspaceId)));
       },
 
       openTerminal: (machineId, scope) => {

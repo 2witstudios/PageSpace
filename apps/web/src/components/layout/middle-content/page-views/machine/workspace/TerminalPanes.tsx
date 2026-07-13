@@ -18,6 +18,7 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   useMachineWorkspaceStore,
@@ -61,11 +62,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // The middle view IS the active workspace's grid — selecting another workspace
   // swaps this whole component's contents for that item's combination of panes.
   const workspace = useMachineWorkspaceStore(selectActiveWorkspace(machineId));
-  const splitRight = useMachineWorkspaceStore((state) => state.splitRight);
-  const splitDown = useMachineWorkspaceStore((state) => state.splitDown);
-  const closePane = useMachineWorkspaceStore((state) => state.closePane);
+  // Layout-affecting actions push the resulting workspace state to the server
+  // (#2048); selectPane/clearPanePrompt/dismissPicker stay local-only (focus
+  // and one-shot UI intent, never synced — see useMachineWorkspaceSync's doc).
+  const { splitRight, splitDown, closePane, bindPaneTerminal } = useSyncedWorkspaceActions(machineId);
   const selectPane = useMachineWorkspaceStore((state) => state.selectPane);
-  const bindPaneTerminal = useMachineWorkspaceStore((state) => state.bindPaneTerminal);
   const clearPanePrompt = useMachineWorkspaceStore((state) => state.clearPanePrompt);
   const dismissPicker = useMachineWorkspaceStore((state) => state.dismissPicker);
   const isMobile = useMobile();
@@ -92,7 +93,6 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     async (paneId: string, agentType: AgentRuntimeType, prompt?: string) => {
       const created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
       const bound = bindPaneTerminal(
-        machineId,
         workspaceId,
         paneId,
         { projectName: scope.projectName, branchName: scope.branchName, name: created.name },
@@ -116,7 +116,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
         await removeAgentTerminal(created.name).catch(() => {});
       }
     },
-    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, machineId, workspaceId, scope.projectName, scope.branchName],
+    [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, workspaceId, scope.projectName, scope.branchName],
   );
 
   // Briefly undefined between this component's first render and the mounting
@@ -150,9 +150,9 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     // has switched workspaces (a `ready` event, a spawn resolving from a cold
     // boot) — so the target is captured here, not looked up when the write lands.
     onSelect: () => selectPane(machineId, workspaceId, pane.id),
-    onSplitRight: () => splitRight(machineId, workspaceId, pane.id),
-    onSplitDown: () => splitDown(machineId, workspaceId, pane.id),
-    onClose: () => closePane(machineId, workspaceId, pane.id),
+    onSplitRight: () => splitRight(workspaceId, pane.id),
+    onSplitDown: () => splitDown(workspaceId, pane.id),
+    onClose: () => closePane(workspaceId, pane.id),
     onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
     onPickerFocused: () => dismissPicker(machineId, workspaceId, pane.id),
     onPromptSent: () => clearPanePrompt(machineId, workspaceId, pane.id),

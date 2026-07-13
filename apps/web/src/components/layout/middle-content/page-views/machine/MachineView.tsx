@@ -6,6 +6,7 @@ import { motion } from 'motion/react';
 import { FolderTree, GitCompare, Settings, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
+import { useMachineWorkspaceSync } from '@/hooks/useMachineWorkspaceSync';
 import {
   useMachineTabStore,
   DEFAULT_MACHINE_TAB,
@@ -52,12 +53,19 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
  * workspace, so a session clicked on a machine parked on Files/Diff/Settings had
  * nowhere to land. Behaviour is otherwise unchanged — a machine with no stored
  * tab shows Terminal, as before.
+ *
+ * `useMachineWorkspaceSync` is mounted HERE, not inside `TerminalTab` — this is
+ * the one true per-machine root that survives Terminal-tab unmount/remount
+ * (Radix `TabsContent` unmounts inactive tabs; this component doesn't), so the
+ * socket room join / server hydration / bootstrap race only happen once per
+ * machine, not once per Terminal-tab activation (#2048).
  */
 const MachineView = ({ pageId, embedded = false }: MachineViewProps) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const activeTab = useMachineTabStore((state) => state.tabs[pageId] ?? DEFAULT_MACHINE_TAB);
   const setTab = useMachineTabStore((state) => state.setTab);
+  useMachineWorkspaceSync(pageId);
 
   return (
     <motion.div

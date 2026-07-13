@@ -642,6 +642,16 @@
       "import": "./dist/services/machines/machine-branches.js",
       "require": "./dist/services/machines/machine-branches.js"
     },
+    "./services/machines/machine-workspaces-store": {
+      "types": "./dist/services/machines/machine-workspaces-store.d.ts",
+      "import": "./dist/services/machines/machine-workspaces-store.js",
+      "require": "./dist/services/machines/machine-workspaces-store.js"
+    },
+    "./services/machines/machine-workspaces": {
+      "types": "./dist/services/machines/machine-workspaces.d.ts",
+      "import": "./dist/services/machines/machine-workspaces.js",
+      "require": "./dist/services/machines/machine-workspaces.js"
+    },
     "./services/machines/machine-settings": {
       "types": "./dist/services/machines/machine-settings.d.ts",
       "import": "./dist/services/machines/machine-settings.js",
@@ -1775,6 +1785,12 @@
       ],
       "services/machines/machine-branches": [
         "./dist/services/machines/machine-branches.d.ts"
+      ],
+      "services/machines/machine-workspaces-store": [
+        "./dist/services/machines/machine-workspaces-store.d.ts"
+      ],
+      "services/machines/machine-workspaces": [
+        "./dist/services/machines/machine-workspaces.d.ts"
       ],
       "services/machines/machine-settings": [
         "./dist/services/machines/machine-settings.d.ts"

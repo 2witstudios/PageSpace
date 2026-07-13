@@ -12,7 +12,11 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
-  post: vi.fn(),
+  // These three back `useSyncedWorkspaceActions`' server pushes (#2048) — the
+  // sidebar's own actions (create/rename/remove/adopt) all fire one of these
+  // fire-and-forget, so each must resolve rather than return undefined.
+  post: vi.fn(async () => ({})),
+  patch: vi.fn(async () => ({})),
   del: vi.fn(async () => new Response(null, { status: 204 })),
 }));
 
