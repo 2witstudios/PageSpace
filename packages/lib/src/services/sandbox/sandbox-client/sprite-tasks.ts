@@ -33,7 +33,7 @@
  * Nothing here ever throws into the terminal handler.
  */
 
-import type { SpriteCommandLike } from './sprites';
+import { runSpawned, type SpriteCommandLike } from './sprites';
 
 /** Hold expiry — the platform frees the task this long after its last refresh. */
 export const TASK_HOLD_EXPIRE_SECONDS = 300;
@@ -100,18 +100,24 @@ export function planHold({
   return 'noop';
 }
 
-/** Pure: does output this recent count as a running agent? Never-output -> idle. */
-export function isAgentOutputFlowing({
-  lastOutputAt,
+/**
+ * Pure: does activity this recent count as a running agent? Never-active ->
+ * idle. "Activity" is deliberately wider than output: typed input (a prompt
+ * that kicks off a long silent run) and the PTY launch itself both count, so
+ * a viewer who types and detaches before the agent's first byte doesn't get
+ * their agent's hold deleted out from under a run that has already started.
+ */
+export function isAgentActive({
+  lastActivityAt,
   now,
   idleMs = TASK_HOLD_AGENT_IDLE_MS,
 }: {
-  lastOutputAt: number | undefined;
+  lastActivityAt: number | undefined;
   now: number;
   idleMs?: number;
 }): boolean {
-  if (lastOutputAt === undefined) return false;
-  return now - lastOutputAt < idleMs;
+  if (lastActivityAt === undefined) return false;
+  return now - lastActivityAt < idleMs;
 }
 
 /** Task names are a URL path segment AND an exec argument — allow nothing else. */
@@ -138,11 +144,20 @@ function fnv1aHex(input: string): string {
  * bounded to 63 chars (the platform's DNS-label-sized name budget).
  */
 export function taskHoldName(sessionKey: string): string {
-  const sanitized = sessionKey
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  const prefix = `ps-hold-${sanitized}`.slice(0, 54).replace(/-+$/, '');
+  // Single-pass character map — no backtracking-capable regex over the
+  // caller-controlled key (CodeQL: polynomial regex on uncontrolled data).
+  const lower = sessionKey.toLowerCase();
+  let sanitized = '';
+  for (let i = 0; i < lower.length && sanitized.length < 45; i += 1) {
+    const ch = lower[i];
+    if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      sanitized += ch;
+    } else if (sanitized.length > 0 && !sanitized.endsWith('-')) {
+      sanitized += '-';
+    }
+  }
+  while (sanitized.endsWith('-')) sanitized = sanitized.slice(0, -1);
+  const prefix = sanitized.length > 0 ? `ps-hold-${sanitized}` : 'ps-hold';
   return `${prefix}-${fnv1aHex(sessionKey)}`;
 }
 
@@ -241,35 +256,50 @@ export function isHoldCallOk({
 }
 
 /**
+ * Pure: an env var as a positive integer, or undefined. Digits-only by
+ * construction — `Number.parseInt('5m')` is 5, so a lenient parse would turn
+ * `SPRITE_TASK_HOLD_EXPIRE_SECONDS=5m` into five SECONDS instead of falling
+ * back; the same convention the repo's other `envInt` helpers use.
+ */
+function envPositiveInt(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\d{1,15}$/.test(value)) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  return parsed > 0 ? parsed : undefined;
+}
+
+/**
  * Pure: the hold cadence from the environment, defaulting to the documented
  * 5m expiry / 60s refresh. Invalid or out-of-range values fall back rather
  * than throw (a bad env var must not take terminals down), and the refresh is
- * always kept a genuine heartbeat — strictly inside the expiry window — so a
- * misconfiguration can never produce a hold that expires between beats.
+ * always kept a genuine heartbeat — at most HALF the expiry window, so timer
+ * jitter on a beat can never coincide with the hold's own expiry (a refresh
+ * of expiry−ε would otherwise leave a recurring no-hold gap every interval).
  */
 export function resolveTaskHoldConfig(
   env: Record<string, string | undefined>,
 ): { expireSeconds: number; refreshMs: number } {
-  const rawExpire = Number.parseInt(env.SPRITE_TASK_HOLD_EXPIRE_SECONDS ?? '', 10);
+  const rawExpire = envPositiveInt(env.SPRITE_TASK_HOLD_EXPIRE_SECONDS);
   const expireSeconds =
-    Number.isInteger(rawExpire) && rawExpire > 0 && rawExpire * 1000 <= TASK_HOLD_MAX_LIFETIME_MS
+    rawExpire !== undefined && rawExpire * 1000 <= TASK_HOLD_MAX_LIFETIME_MS
       ? rawExpire
       : TASK_HOLD_EXPIRE_SECONDS;
+  const maxRefreshMs = Math.max(1000, Math.floor((expireSeconds * 1000) / 2));
   const fallbackRefreshMs = Math.min(
     TASK_HOLD_REFRESH_MS,
     Math.max(1000, Math.floor((expireSeconds * 1000) / 5)),
   );
-  const rawRefresh = Number.parseInt(env.SPRITE_TASK_HOLD_REFRESH_MS ?? '', 10);
+  const rawRefresh = envPositiveInt(env.SPRITE_TASK_HOLD_REFRESH_MS);
   const refreshMs =
-    Number.isInteger(rawRefresh) && rawRefresh > 0 && rawRefresh < expireSeconds * 1000
-      ? rawRefresh
-      : fallbackRefreshMs;
+    rawRefresh !== undefined && rawRefresh <= maxRefreshMs ? rawRefresh : fallbackRefreshMs;
   return { expireSeconds, refreshMs };
 }
 
 export interface SpriteTaskCallResult {
   ok: boolean;
+  /** The parsed HTTP status, when the exec produced one. */
   status?: number;
+  /** The exec's exit code, when it ran — 127 pinpoints a missing curl binary. */
+  exitCode?: number;
 }
 
 export interface SpriteTasksClient {
@@ -285,51 +315,11 @@ export type SpriteTaskSpawnLike = {
 };
 
 /**
- * Run one curl exec and collect its exit code + stdout, bounded by `timeoutMs`
- * (kill on expiry). Deliberately NOT `withWakeRetry`: holds only matter while
- * the sprite is already awake, and a failed best-effort call is degraded, not
- * retried inline — the controller's next tick is the retry.
+ * Output cap for one hold exec — the whole expected payload is a 3-digit
+ * `%{http_code}` write-out, so anything past a few KB is a misbehaving exec
+ * that `runSpawned` should kill rather than buffer.
  */
-function runTaskExec(
-  sprite: SpriteTaskSpawnLike,
-  file: string,
-  args: string[],
-  timeoutMs: number,
-): Promise<{ exitCode: number; stdout: string }> {
-  return new Promise((resolve, reject) => {
-    const command = sprite.spawn(file, args);
-    const chunks: string[] = [];
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      try {
-        command.kill('SIGKILL');
-      } catch {
-        // Best-effort; the sprite reaps its own orphans.
-      }
-      reject(new Error(`Sprite tasks exec timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    command.stdout.on('data', (chunk) => {
-      chunks.push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'));
-    });
-    command.stderr.on('data', () => {
-      // Silenced (`-s`); listener kept so an SDK that buffers stderr never stalls.
-    });
-    command.on('exit', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ exitCode: code, stdout: chunks.join('') });
-    });
-    command.on('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
-}
+const TASK_EXEC_MAX_OUTPUT_BYTES = 4096;
 
 /**
  * The tasks "REST client": the documented `/v1/tasks` calls, issued over the
@@ -350,9 +340,19 @@ export function createSpriteTasksClient({
   ): Promise<SpriteTaskCallResult> => {
     try {
       const [file, args] = build();
-      const { exitCode, stdout } = await runTaskExec(sprite, file, args, timeoutMs);
+      // runSpawned (sprites.ts) is the driver's own collect-bounded-output-or-
+      // kill executor: hard timeout with SIGKILL, output cap, exit-code-as-
+      // result. Deliberately NOT wrapped in `withWakeRetry` — holds only
+      // matter while the sprite is already awake, and a failed best-effort
+      // call is degraded, not retried inline (the controller's next tick is
+      // the retry).
+      const { exitCode, stdout } = await runSpawned(
+        sprite.spawn(file, args),
+        TASK_EXEC_MAX_OUTPUT_BYTES,
+        timeoutMs,
+      );
       const status = parseCurlStatus(stdout);
-      return { ok: isHoldCallOk({ action, exitCode, status }), status };
+      return { ok: isHoldCallOk({ action, exitCode, status }), status, exitCode };
     } catch {
       return { ok: false };
     }
@@ -366,8 +366,21 @@ export function createSpriteTasksClient({
 export interface TaskHoldState {
   /** Is a viewer currently attached to this terminal? */
   attached: boolean;
-  /** When the PTY last produced output, if ever. */
-  lastOutputAt: number | undefined;
+  /** When the PTY was last ACTIVE — launch, typed input, or produced output — if ever (see {@link isAgentActive}). */
+  lastActivityAt: number | undefined;
+  /**
+   * Can the caller still OBSERVE activity? While a viewer is attached the
+   * exec WebSocket is kept alive (the shell's watchdog reconnects), so "no
+   * output for N minutes" is real data. While DETACHED the shell deliberately
+   * never reconnects a dropped socket (leaf 3-2), so the activity clock can
+   * freeze under an agent that is still working. FRESH activity is always
+   * trustworthy evidence of work (we saw the bytes); STALE activity is only
+   * trustworthy evidence of idleness when this is true. When false, an
+   * existing hold is kept refreshed (until the session ends or is reaped —
+   * a bounded ~30min) rather than deleted on a clock that may be blind.
+   * Defaults to true.
+   */
+  activityObservable?: boolean;
 }
 
 export interface TaskHoldController {
@@ -386,18 +399,38 @@ export interface TaskHoldController {
  *
  * Bookkeeping is updated optimistically at decision time and RESET on a failed
  * upsert, so the very next tick retries as a fresh create instead of waiting
- * out a refresh interval it may no longer have. Failures are reported via
- * `onError` and otherwise swallowed — a hold is protection, never a
- * precondition (requirement: degrade gracefully; a lost hold means a possible
- * pause, which the checkpoint work already survives).
+ * out a refresh interval it may no longer have. `mayHoldRemotely` is the one
+ * flag that survives that reset: a PUT that REPORTED failure may still have
+ * landed (curl killed after the request was applied), so `end()` keys its
+ * final delete on "was an upsert ever attempted since the last delete", never
+ * on the retry bookkeeping — otherwise a failed-then-closed session would
+ * leak its hold for the full expiry.
+ *
+ * Blind-staleness policy (see {@link TaskHoldState.activityObservable}):
+ * fresh activity always counts as work; STALE activity only counts as
+ * idleness when the caller can still observe activity. When it can't
+ * (detached, exec socket dropped and deliberately not reconnected — leaf
+ * 3-2), an existing hold is kept refreshed instead of deleted on a frozen
+ * clock; the session's own end/reap (bounded, ~30min) is what releases it.
+ *
+ * A re-create over a possibly-live task (the 1h max-lifetime boundary)
+ * DELETEs before PUTting: the platform's max task lifetime is per CREATION,
+ * so a plain upsert would refresh a task the platform still retires at the
+ * original creation+1h — bookkeeping would then claim an hour the platform
+ * never granted.
+ *
+ * Failures are reported via `onError` (with the exec exit code / HTTP status,
+ * so a missing-curl 127 is distinguishable from an API error) and otherwise
+ * swallowed — a hold is protection, never a precondition (requirement:
+ * degrade gracefully; a lost hold means a possible pause, which the
+ * checkpoint work already survives).
  */
 export function createTaskHoldController({
   client,
   taskName,
   expireSeconds = TASK_HOLD_EXPIRE_SECONDS,
   refreshMs = TASK_HOLD_REFRESH_MS,
-  maxLifetimeMs = TASK_HOLD_MAX_LIFETIME_MS,
-  agentIdleMs = TASK_HOLD_AGENT_IDLE_MS,
+  agentIdleMs,
   now = Date.now,
   onError,
 }: {
@@ -405,13 +438,15 @@ export function createTaskHoldController({
   taskName: string;
   expireSeconds?: number;
   refreshMs?: number;
-  maxLifetimeMs?: number;
+  /** How stale activity may be before a DETACHED-but-observable agent counts as idle. Defaults to two refresh intervals, whatever the refresh cadence is configured to. */
   agentIdleMs?: number;
   now?: () => number;
   onError?: (stage: 'upsert' | 'delete', result: SpriteTaskCallResult) => void;
 }): TaskHoldController {
+  const idleMs = agentIdleMs ?? 2 * refreshMs;
   let createdAt: number | undefined;
   let lastRefreshAt: number | undefined;
+  let mayHoldRemotely = false;
   let ended = false;
   let queue: Promise<void> = Promise.resolve();
 
@@ -428,6 +463,7 @@ export function createTaskHoldController({
   };
 
   const enqueueRemove = (): void => {
+    mayHoldRemotely = false;
     enqueue(async () => {
       let result: SpriteTaskCallResult;
       try {
@@ -444,17 +480,24 @@ export function createTaskHoldController({
   return {
     tickIntervalMs: refreshMs,
 
-    tick({ attached, lastOutputAt }) {
+    tick({ attached, lastActivityAt, activityObservable = true }) {
       if (ended) return;
       const t = now();
+      // Fresh activity is always evidence of work (we saw the bytes). Stale
+      // activity is only evidence of IDLENESS while activity is observable;
+      // blind (detached, socket gone), an existing hold outweighs the frozen
+      // clock — see the blind-staleness policy in the function doc.
+      const agentRunning =
+        isAgentActive({ lastActivityAt, now: t, idleMs }) ||
+        (!activityObservable && createdAt !== undefined);
+      const hadBookkeeping = createdAt !== undefined;
       const action = planHold({
         attached,
-        agentRunning: isAgentOutputFlowing({ lastOutputAt, now: t, idleMs: agentIdleMs }),
+        agentRunning,
         createdAt,
         lastRefreshAt,
         expireSeconds,
         refreshMs,
-        maxLifetimeMs,
         now: t,
       });
       if (action === 'noop') return;
@@ -466,19 +509,29 @@ export function createTaskHoldController({
         return;
       }
 
-      // create | refresh — the same idempotent PUT upsert on the wire; only
-      // the bookkeeping differs (create restarts the 1h-lifetime clock).
+      // create | refresh — the same idempotent PUT upsert on the wire, EXCEPT
+      // a re-create over a task the platform may still be tracking (the 1h
+      // max-lifetime boundary): its lifetime is per CREATION, so that one is
+      // DELETE-then-PUT to genuinely restart the platform's clock.
+      const recreateOverLiveTask = action === 'create' && hadBookkeeping;
       if (action === 'create') createdAt = t;
       lastRefreshAt = t;
+      mayHoldRemotely = true;
       enqueue(async () => {
         let result: SpriteTaskCallResult;
         try {
+          if (recreateOverLiveTask) {
+            // Best-effort delete first; 404 (already expired) is success.
+            await client.remove({ name: taskName });
+          }
           result = await client.upsert({ name: taskName, expireSeconds });
         } catch {
           result = { ok: false };
         }
         if (!result.ok) {
           // Reset so the next tick plans a fresh create (an immediate retry).
+          // `mayHoldRemotely` deliberately stays true: the PUT may have
+          // landed even though we could not read its answer.
           createdAt = undefined;
           lastRefreshAt = undefined;
           report('upsert', result);
@@ -489,10 +542,9 @@ export function createTaskHoldController({
     end() {
       if (ended) return;
       ended = true;
-      const hadHold = createdAt !== undefined;
       createdAt = undefined;
       lastRefreshAt = undefined;
-      if (hadHold) enqueueRemove();
+      if (mayHoldRemotely) enqueueRemove();
     },
   };
 }

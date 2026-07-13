@@ -418,6 +418,22 @@ function startSettleHeartbeat(
 }
 
 /**
+ * Pure: when this session was last ACTIVE — output produced, input typed, or
+ * the PTY launched (creation seeds `lastInputAt`). This is what the task hold
+ * feeds on rather than output alone: a typed prompt that kicks off a long
+ * silent run is work in progress from the moment it is typed, not from the
+ * agent's first byte.
+ */
+export function latestActivityAt(
+  session: Pick<TerminalSession, 'lastOutputAt' | 'lastInputAt'>,
+): number | undefined {
+  const { lastOutputAt, lastInputAt } = session;
+  if (lastOutputAt === undefined) return lastInputAt;
+  if (lastInputAt === undefined) return lastOutputAt;
+  return Math.max(lastOutputAt, lastInputAt);
+}
+
+/**
  * Arms the platform-task-hold heartbeat (leaf 5-1): one immediate tick — the
  * viewer is attached, so the hold must exist NOW, not a cadence from now —
  * then one tick per controller cadence (the documented 60s refresh against a
@@ -433,7 +449,18 @@ function startTaskHoldHeartbeat(
   session: TerminalSession,
   sessionKey: string,
 ): ReturnType<typeof setInterval> {
-  const tick = () => taskHold.tick({ attached: session.viewerAttached, lastOutputAt: session.lastOutputAt });
+  const tick = () =>
+    taskHold.tick({
+      attached: session.viewerAttached,
+      lastActivityAt: latestActivityAt(session),
+      // While DETACHED the exec socket may be dead (the shell deliberately
+      // never reconnects it — leaf 3-2), so a frozen activity clock is not
+      // evidence of idleness; the controller then keeps an existing hold
+      // rather than deleting it under an agent it can no longer see. And a
+      // detached agent that FINISHES while the socket survived still releases
+      // promptly: its PTY exit reaches onExit, whose teardown ends the hold.
+      activityObservable: session.viewerAttached,
+    });
   tick();
   const interval = setInterval(() => {
     if (sessionMap.getByKey(sessionKey) !== session) { clearInterval(interval); return; }
@@ -604,9 +631,20 @@ export function buildAgentTerminalHandlers({
     session.command.setViewerAttached(false);
     session.viewerAttached = false;
     // Re-evaluate the platform task hold now that the viewer is gone: with no
-    // agent output flowing this DELETES the hold, so the sprite can pause
-    // long before the 30-min reap — an agent mid-run (recent output) keeps it.
-    session.taskHold?.tick({ attached: false, lastOutputAt: session.lastOutputAt });
+    // recent activity this DELETES the hold, so the sprite can pause long
+    // before the 30-min reap — an agent mid-run (recent output OR a
+    // just-typed prompt still awaiting its first byte) keeps it. Staleness is
+    // trustworthy AT this instant (the viewer was attached until now, so the
+    // socket was live and silence was real silence) — with one exception: a
+    // RESUMED agent that has never emitted a byte since we picked it up. Our
+    // silence says nothing about a run that was verified live at connect
+    // (`resumedAtCreate`), so that one keeps its hold rather than being
+    // paused on ignorance.
+    session.taskHold?.tick({
+      attached: false,
+      lastActivityAt: latestActivityAt(session),
+      activityObservable: session.hasOutput || !session.resumedAtCreate,
+    });
     session.idleTimer = setTimeout(() => {
       session.releaseSlot();
       session.command.kill();
@@ -643,7 +681,7 @@ export function buildAgentTerminalHandlers({
     // A viewer is attached again — that alone is "work in progress", so the
     // hold (deleted while detached-and-idle) is re-created immediately rather
     // than waiting out a heartbeat interval.
-    session.taskHold?.tick({ attached: true, lastOutputAt: session.lastOutputAt });
+    session.taskHold?.tick({ attached: true, lastActivityAt: latestActivityAt(session), activityObservable: true });
     sessionMap.reattach(sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
@@ -848,6 +886,10 @@ export function buildAgentTerminalHandlers({
         scrollback: [],
         hasOutput: false,
         viewerAttached: true,
+        // The launch itself is the session's first activity: an agent booted
+        // with a command that works silently must hold its sprite up through
+        // that silence, not wait for its first byte of output.
+        lastInputAt: Date.now(),
         // Fails safe, EXACTLY as the wire does. The reattach path has no way to
         // say "unknown" — it re-derives `resumed` from this field — so recording
         // `false` for an unknown liveness would put a live agent straight back
@@ -1081,6 +1123,9 @@ export function buildAgentTerminalHandlers({
       if (!session) return;
       const p = payload as { data?: string };
       if (typeof p?.data === 'string' && p.data.length <= MAX_INPUT_BYTES) {
+        // Input is activity for the task hold: a typed prompt is work in
+        // progress even before the agent's first byte of output.
+        session.lastInputAt = Date.now();
         session.command.write(p.data);
       }
     },

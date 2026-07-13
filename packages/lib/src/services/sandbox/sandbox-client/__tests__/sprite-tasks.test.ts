@@ -2,7 +2,7 @@ import { describe, it } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 import {
   planHold,
-  isAgentOutputFlowing,
+  isAgentActive,
   taskHoldName,
   taskUpsertExecArgs,
   taskDeleteExecArgs,
@@ -178,20 +178,20 @@ describe('planHold', () => {
   });
 });
 
-describe('isAgentOutputFlowing', () => {
-  it('treats recent output as a running agent', () => {
+describe('isAgentActive', () => {
+  it('treats recent activity as a running agent', () => {
     assert({
-      given: 'output produced inside the idle window',
-      should: 'be flowing',
-      actual: isAgentOutputFlowing({ lastOutputAt: T0 - 1_000, now: T0, idleMs: TASK_HOLD_AGENT_IDLE_MS }),
+      given: 'activity inside the idle window',
+      should: 'be active',
+      actual: isAgentActive({ lastActivityAt: T0 - 1_000, now: T0, idleMs: TASK_HOLD_AGENT_IDLE_MS }),
       expected: true,
     });
 
     assert({
-      given: 'output exactly one idle window old',
+      given: 'activity exactly one idle window old',
       should: 'be idle',
-      actual: isAgentOutputFlowing({
-        lastOutputAt: T0 - TASK_HOLD_AGENT_IDLE_MS,
+      actual: isAgentActive({
+        lastActivityAt: T0 - TASK_HOLD_AGENT_IDLE_MS,
         now: T0,
         idleMs: TASK_HOLD_AGENT_IDLE_MS,
       }),
@@ -199,9 +199,9 @@ describe('isAgentOutputFlowing', () => {
     });
 
     assert({
-      given: 'no output ever produced',
+      given: 'no activity ever recorded',
       should: 'be idle',
-      actual: isAgentOutputFlowing({ lastOutputAt: undefined, now: T0, idleMs: TASK_HOLD_AGENT_IDLE_MS }),
+      actual: isAgentActive({ lastActivityAt: undefined, now: T0, idleMs: TASK_HOLD_AGENT_IDLE_MS }),
       expected: false,
     });
   });
@@ -455,6 +455,28 @@ describe('resolveTaskHoldConfig', () => {
       expected: true,
     });
   });
+
+  it('rejects duration-suffixed values instead of silently truncating them', () => {
+    assert({
+      given: "an expiry of '5m' (parseInt would read it as five SECONDS)",
+      should: 'fall back to the default rather than mis-parse',
+      actual: resolveTaskHoldConfig({ SPRITE_TASK_HOLD_EXPIRE_SECONDS: '5m' }).expireSeconds,
+      expected: TASK_HOLD_EXPIRE_SECONDS,
+    });
+  });
+
+  it('caps the refresh at half the expiry so jitter can never straddle it', () => {
+    const config = resolveTaskHoldConfig({
+      SPRITE_TASK_HOLD_EXPIRE_SECONDS: '300',
+      SPRITE_TASK_HOLD_REFRESH_MS: '299999',
+    });
+    assert({
+      given: 'a refresh one millisecond under the expiry',
+      should: 'fall back — a beat must land well inside the window it extends',
+      actual: config.refreshMs <= (config.expireSeconds * 1000) / 2,
+      expected: true,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -514,9 +536,9 @@ describe('createSpriteTasksClient', () => {
 
     assert({
       given: 'a curl exec that exits 0 with a 200 status',
-      should: 'be ok with the parsed status',
+      should: 'be ok with the parsed status and exit code',
       actual: result,
-      expected: { ok: true, status: 200 },
+      expected: { ok: true, status: 200, exitCode: 0 },
     });
 
     assert({
@@ -619,7 +641,7 @@ describe('createTaskHoldController', () => {
       now: () => now,
     });
 
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -630,7 +652,7 @@ describe('createTaskHoldController', () => {
     });
 
     now += 10_000;
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -641,7 +663,7 @@ describe('createTaskHoldController', () => {
     });
 
     now += TASK_HOLD_REFRESH_MS;
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -657,10 +679,10 @@ describe('createTaskHoldController', () => {
     const { client, calls } = fakeClient();
     const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => now });
 
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
     now += 1_000;
-    controller.tick({ attached: false, lastOutputAt: undefined });
+    controller.tick({ attached: false, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -671,7 +693,7 @@ describe('createTaskHoldController', () => {
     });
 
     now += 1_000;
-    controller.tick({ attached: false, lastOutputAt: undefined });
+    controller.tick({ attached: false, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -687,12 +709,12 @@ describe('createTaskHoldController', () => {
     const { client, calls } = fakeClient();
     const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => now });
 
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
 
     // Viewer leaves; agent is mid-run (output seconds ago).
     now += TASK_HOLD_REFRESH_MS;
-    controller.tick({ attached: false, lastOutputAt: now - 1_000 });
+    controller.tick({ attached: false, lastActivityAt: now - 1_000 });
     await settle();
 
     assert({
@@ -704,7 +726,7 @@ describe('createTaskHoldController', () => {
 
     // Output stops; the agent goes idle past the idle window.
     now += TASK_HOLD_AGENT_IDLE_MS + 1;
-    controller.tick({ attached: false, lastOutputAt: now - TASK_HOLD_AGENT_IDLE_MS - 1 });
+    controller.tick({ attached: false, lastActivityAt: now - TASK_HOLD_AGENT_IDLE_MS - 1 });
     await settle();
 
     assert({
@@ -741,7 +763,7 @@ describe('createTaskHoldController', () => {
       onError: (stage) => errors.push(stage),
     });
 
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -752,7 +774,7 @@ describe('createTaskHoldController', () => {
     });
 
     now += 1_000; // well inside the refresh interval — only the failure forces a retry
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
 
     assert({
@@ -777,7 +799,7 @@ describe('createTaskHoldController', () => {
       now: () => T0,
     });
 
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
     controller.end();
     await settle();
@@ -795,7 +817,7 @@ describe('createTaskHoldController', () => {
     const { client, calls } = fakeClient();
     const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => now });
 
-    controller.tick({ attached: true, lastOutputAt: undefined });
+    controller.tick({ attached: true, lastActivityAt: undefined });
     await settle();
     controller.end();
     await settle();
@@ -808,7 +830,7 @@ describe('createTaskHoldController', () => {
     });
 
     now += TASK_HOLD_REFRESH_MS * 2;
-    controller.tick({ attached: true, lastOutputAt: now });
+    controller.tick({ attached: true, lastActivityAt: now });
     await settle();
 
     assert({
@@ -831,6 +853,124 @@ describe('createTaskHoldController', () => {
       should: 'not exec anything',
       actual: calls.length,
       expected: 0,
+    });
+  });
+
+  it('still deletes on end() after a reported-failed upsert (the PUT may have landed)', async () => {
+    const { client, calls } = fakeClient({ upsert: { ok: false, exitCode: 28 } });
+    const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => T0 });
+
+    controller.tick({ attached: true, lastActivityAt: undefined });
+    await settle();
+    controller.end();
+    await settle();
+
+    assert({
+      given: 'an upsert whose exec timed out AFTER the request may have applied',
+      should: 'delete on end() anyway — bookkeeping resets must not skip the cleanup',
+      actual: calls.map((c) => c.op),
+      expected: ['upsert', 'remove'],
+    });
+  });
+
+  it('keeps a blind detached hold instead of trusting a frozen activity clock', async () => {
+    let now = T0;
+    const { client, calls } = fakeClient();
+    const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => now });
+
+    controller.tick({ attached: true, lastActivityAt: now });
+    await settle();
+
+    // Viewer detaches; the exec socket then dies (leaf 3-2 never reconnects
+    // it), so activity can no longer be observed. The clock is now well past
+    // the idle window (2×refresh) but inside the hold's expiry:
+    now += TASK_HOLD_REFRESH_MS * 3;
+    controller.tick({ attached: false, lastActivityAt: T0, activityObservable: false });
+    await settle();
+
+    assert({
+      given: 'a detached, unobservable session with a live hold and a stale clock',
+      should: 'keep refreshing the hold rather than deleting under a possibly-working agent',
+      actual: calls.map((c) => c.op),
+      expected: ['upsert', 'upsert'],
+    });
+
+    assert({
+      given: 'a blind refresh',
+      should: 'never issue a remove',
+      actual: calls.some((c) => c.op === 'remove'),
+      expected: false,
+    });
+  });
+
+  it('stays quiet while blind when no hold exists (blindness must not CREATE work)', async () => {
+    const { client, calls } = fakeClient();
+    const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => T0 });
+
+    controller.tick({ attached: false, lastActivityAt: undefined, activityObservable: false });
+    await settle();
+
+    assert({
+      given: 'a blind tick with no live hold and no fresh activity',
+      should: 'do nothing',
+      actual: calls.length,
+      expected: 0,
+    });
+  });
+
+  it('re-creates over a possibly-live task with DELETE-then-PUT at the 1h lifetime boundary', async () => {
+    let now = T0;
+    const { client, calls } = fakeClient();
+    const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', now: () => now });
+
+    controller.tick({ attached: true, lastActivityAt: now });
+    await settle();
+
+    // Refreshed along the way; the platform still retires the task at the
+    // ORIGINAL creation + 1h, so the re-create must genuinely re-create.
+    now += TASK_HOLD_MAX_LIFETIME_MS;
+    controller.tick({ attached: true, lastActivityAt: now });
+    await settle();
+
+    assert({
+      given: 'a hold reaching the platform max-task-lifetime boundary',
+      should: 'DELETE the old task before PUTting the new one (a bare upsert would not restart the platform clock)',
+      actual: calls.map((c) => c.op),
+      expected: ['upsert', 'remove', 'upsert'],
+    });
+  });
+
+  it('derives the idle window from the configured refresh cadence', async () => {
+    let now = T0;
+    const { client, calls } = fakeClient();
+    const refreshMs = 10_000;
+    const controller = createTaskHoldController({ client, taskName: 'ps-hold-x', refreshMs, now: () => now });
+
+    controller.tick({ attached: true, lastActivityAt: now });
+    await settle();
+
+    // Detached, observable, activity 1.5 refresh intervals old: inside the
+    // derived 2×refresh idle window, so still running.
+    now += refreshMs * 1.5;
+    controller.tick({ attached: false, lastActivityAt: T0 });
+    await settle();
+
+    assert({
+      given: 'activity 1.5 refresh intervals old under a custom cadence',
+      should: 'still count as running (idle window scales with the cadence)',
+      actual: calls.map((c) => c.op),
+      expected: ['upsert', 'upsert'],
+    });
+
+    now += refreshMs;
+    controller.tick({ attached: false, lastActivityAt: T0 });
+    await settle();
+
+    assert({
+      given: 'activity 2.5 refresh intervals old',
+      should: 'now be idle and delete',
+      actual: calls.map((c) => c.op),
+      expected: ['upsert', 'upsert', 'remove'],
     });
   });
 });

@@ -1287,12 +1287,23 @@ io.on('connection', (socket: AuthSocket) => {
     createTaskHold: ({ sprite, sessionKey }) =>
       createTaskHoldController({
         client: createSpriteTasksClient({ sprite }),
-        taskName: taskHoldName(sessionKey),
+        // Per-INCARNATION name (session key + creation time), not per key: a
+        // torn-down session's queued final DELETE runs on its own serialized
+        // queue, so under a shared name it could land AFTER a quickly
+        // reopened session's CREATE and destroy the live hold. Distinct names
+        // make that race unrepresentable; an orphaned old task self-expires.
+        taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
         ...resolveTaskHoldConfig(process.env),
         onError: (stage, result) => {
           // Degrade gracefully: a lost hold means a possible pause, which the
           // checkpoint work (5-2) already survives — log and carry on.
-          loggers.realtime.warn(`Sprite task hold ${stage} failed`, { sessionKey, status: result.status });
+          // exitCode 127 = curl missing from the sprite image (feature inert
+          // for this sprite); an HTTP status = the tasks API answered.
+          loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
+            sessionKey,
+            status: result.status,
+            exitCode: result.exitCode,
+          });
         },
       }),
   });

@@ -136,9 +136,9 @@ describe('agent terminal task holds (wiring)', () => {
 
     assert({
       given: 'a successful cold connect',
-      should: 'tick once immediately with the viewer attached',
-      actual: hold.ticks,
-      expected: [{ attached: true, lastOutputAt: undefined }],
+      should: 'tick once immediately with the viewer attached and observation live',
+      actual: { count: hold.ticks.length, attached: hold.ticks[0].attached, observable: hold.ticks[0].activityObservable },
+      expected: { count: 1, attached: true, observable: true },
     });
   });
 
@@ -170,8 +170,40 @@ describe('agent terminal task holds (wiring)', () => {
     assert({
       given: 'agent output followed by a heartbeat tick',
       should: 'report when output last flowed',
-      actual: lastTick.lastOutputAt !== undefined && lastTick.lastOutputAt >= before,
+      actual: lastTick.lastActivityAt !== undefined && lastTick.lastActivityAt >= before,
       expected: true,
+    });
+  });
+
+  it('counts the PTY launch itself as activity (a silent boot must not drop the hold)', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    assert({
+      given: 'a fresh connect whose agent has not yet produced output',
+      should: 'already carry an activity timestamp (the launch)',
+      actual: hold.ticks[0].lastActivityAt !== undefined,
+      expected: true,
+    });
+  });
+
+  it('counts typed input as activity so detach-before-first-output keeps the hold', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    // The user types a prompt that kicks off a long silent run…
+    vi.advanceTimersByTime(1_000);
+    const typedAt = Date.now();
+    handlers.onInput({ data: 'build the thing\r' });
+    // …and disconnects before the agent has emitted a single byte.
+    handlers.onDisconnect();
+
+    const lastTick = hold.ticks[hold.ticks.length - 1];
+    assert({
+      given: 'input typed, then detach before any output',
+      should: 'tick detached but with the input counted as fresh activity',
+      actual: { attached: lastTick.attached, activityFresh: (lastTick.lastActivityAt ?? 0) >= typedAt },
+      expected: { attached: false, activityFresh: true },
     });
   });
 
@@ -183,10 +215,26 @@ describe('agent terminal task holds (wiring)', () => {
 
     const lastTick = hold.ticks[hold.ticks.length - 1];
     assert({
-      given: 'the viewer disconnecting',
-      should: 'tick with attached: false (delete when the agent is idle)',
-      actual: lastTick.attached,
-      expected: false,
+      given: 'the viewer disconnecting from a fresh (non-resumed) session',
+      should: 'tick with attached: false and staleness trusted (silence was real until now)',
+      actual: { attached: lastTick.attached, observable: lastTick.activityObservable },
+      expected: { attached: false, observable: true },
+    });
+  });
+
+  it('heartbeats while detached are marked unobservable (the socket may be dead)', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+    handlers.onDisconnect();
+
+    vi.advanceTimersByTime(TICK_INTERVAL_MS);
+
+    const lastTick = hold.ticks[hold.ticks.length - 1];
+    assert({
+      given: 'a heartbeat tick after the viewer detached',
+      should: 'report activity as unobservable so the controller never deletes on a frozen clock',
+      actual: { attached: lastTick.attached, observable: lastTick.activityObservable },
+      expected: { attached: false, observable: false },
     });
   });
 

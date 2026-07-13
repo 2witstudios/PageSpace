@@ -25,8 +25,16 @@ export type TerminalSession = {
    * a coincidence of the reap machinery.
    */
   viewerAttached: boolean;
-  /** When the PTY last produced output — the hold's "agent output is flowing" signal. */
+  /** When the PTY last produced output — half of the hold's activity signal. */
   lastOutputAt?: number;
+  /**
+   * When the viewer last typed into the PTY (or the PTY was launched — the
+   * launch counts as the first input). The other half of the hold's activity
+   * signal: a prompt that kicks off a long SILENT run has produced no output
+   * yet, and a detach in that window must not read as "agent idle" and delete
+   * the hold out from under work that has already started.
+   */
+  lastInputAt?: number;
   /** The session's platform task hold (Sprites Tasks API), when the seam is wired. */
   taskHold?: TaskHoldController;
   /** Heartbeat driving `taskHold` ticks on the refresh cadence. */
