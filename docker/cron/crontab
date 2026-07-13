@@ -65,9 +65,13 @@
 # Machine storage reconcile - Hourly
 # Bills Terminal Machines' persistent-storage cost from each machine's last
 # persisted measured footprint (active or hibernating; never wakes a sprite).
-# Idempotent via per-machine last-billed watermarks, so hourly runs never
-# double-bill and a missed run is caught up exactly on the next one.
-0 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1
+# Idempotent via per-machine last-billed watermarks for sequential runs, but
+# the charge and the watermark advance are two un-transactioned writes — two
+# CONCURRENT reconciles could bill the same elapsed window twice. flock -n
+# serializes them at the sole caller: if a run is still going at the next tick
+# the new tick is skipped (not queued), and the skipped window is simply
+# caught up by the watermark on the following hour.
+0 * * * * flock -n /tmp/reconcile-machine-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1
 
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
