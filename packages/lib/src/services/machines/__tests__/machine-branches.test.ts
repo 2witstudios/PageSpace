@@ -891,7 +891,7 @@ describe('Claude Code credential propagation', () => {
     // comment on why) and cleared BEFORE each write too — writing to an
     // already-existing temp path would silently keep whatever mode it
     // already had.
-    const tempPathPattern = /^\/home\/sprite\/\.claude(\/\.credentials\.json|\.json)\.tmp\.\d+$/;
+    const tempPathPattern = /^\/home\/sprite\/\.claude(\/\.credentials\.json|\.json)\.tmp\.[a-z0-9]+$/;
     const rmCalls = state?.execLog.filter((c) => c.cmd === 'rm') ?? [];
     expect(rmCalls).toHaveLength(2);
     for (const call of rmCalls) {
@@ -985,7 +985,7 @@ describe('Claude Code credential propagation', () => {
     expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('still-valid-token');
     // The orphaned (generation-suffixed) temp file must have been cleaned
     // up (best-effort).
-    const tempPathPattern = /^\/home\/sprite\/\.claude\/\.credentials\.json\.tmp\.\d+$/;
+    const tempPathPattern = /^\/home\/sprite\/\.claude\/\.credentials\.json\.tmp\.[a-z0-9]+$/;
     expect([...(state?.files.keys() ?? [])].some((k) => tempPathPattern.test(k))).toBe(false);
   });
 

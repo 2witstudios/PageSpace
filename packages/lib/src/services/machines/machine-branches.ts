@@ -23,6 +23,7 @@
  * directly to that handle, never to a page-keyed Machine lookup.
  */
 
+import { createId } from '@paralleldrive/cuid2';
 import type { SubscriptionTier } from '../subscription-utils';
 import { runGitInSandbox, type GitSandboxRunDeps } from '../sandbox/git-tool-runners';
 import type { SandboxActorContext, SandboxQuotaDeps } from '../sandbox/tool-runners';
@@ -242,6 +243,22 @@ function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
 /**
  * Latest `propagateClaudeCredential` call number issued per branch Sprite
  * machineId — see the staleness check before each `mv` below for why.
+ *
+ * PROCESS-LOCAL ONLY: `spawnBranch`/`attachBranch` (this file, called from
+ * `apps/web`) and the realtime PTY bridge's `refreshBranchCredential`
+ * (`apps/realtime/src/index.ts`) are TWO SEPARATE PROCESSES, each with its
+ * own copy of this in-memory Map — a call in one process cannot see, or
+ * detect staleness against, an overlapping call in the other (caught in
+ * review). This still closes the WITHIN-process race (e.g. two nearly
+ * simultaneous requests on the same server), and the temp-file path below
+ * is made globally unique regardless of process, so an inter-process race
+ * can never corrupt the OTHER process's in-flight temp file — but an
+ * inter-process race CAN still end with an older credential's `mv` landing
+ * last. Accepted: full cross-process mutual exclusion would need a
+ * database-backed lock or a version marker persisted on the Sprite's own
+ * filesystem, which is disproportionate for a background sync where every
+ * single refresh is already best-effort and self-heals on the next
+ * reattach in either process.
  */
 const latestCredentialCopyGeneration = new Map<string, number>();
 
@@ -332,24 +349,30 @@ export async function propagateClaudeCredential({
           // wrong-permission or briefly absent in between. If anything
           // fails before the rename, the live file at `path` is completely
           // untouched.
-          // Suffixed with THIS call's own generation number — never shared
-          // with an overlapping call for the same branch Sprite. A fixed
-          // temp name was tried and reverted: when an older call's stale
-          // cleanup (below) ran after a newer, overlapping call had already
-          // written ITS OWN content to that same shared path, the older
-          // cleanup deleted the newer call's temp file out from under it,
-          // making the newer (correct) refresh fail its own `mv` (caught in
-          // review). A per-generation path means no two overlapping calls
-          // ever touch the same temp file, so one's cleanup can never
-          // disturb another's in-progress write.
-          const tempPath = `${path}.tmp.${generation}`;
-          // Still clear it first — a per-generation name is effectively
-          // never reused WITHIN one process lifetime, but this process
-          // could have restarted since a prior crash: `generation` resets
-          // to 1 on every restart (it's in-memory, not persisted), so a
-          // stale temp file from a pre-restart run could coincidentally
-          // share this exact generation number. Writing to an
-          // ALREADY-EXISTING temp path would be an overwrite, not a
+          // Suffixed with a globally unique id — never shared with an
+          // overlapping call for the same branch Sprite, WITHIN this
+          // process or across the OTHER process that also calls this
+          // function (`apps/web`'s spawnBranch/attachBranch vs.
+          // `apps/realtime`'s refreshBranchCredential — see the doc comment
+          // on `latestCredentialCopyGeneration`, which is process-local and
+          // therefore cannot be used to key the temp path). A fixed temp
+          // name was tried and reverted: when an older call's stale cleanup
+          // (below) ran after a newer, overlapping call had already written
+          // ITS OWN content to that same shared path, the older cleanup
+          // deleted the newer call's temp file out from under it, making
+          // the newer (correct) refresh fail its own `mv` (caught in
+          // review, twice — once for the intra-process case, once for the
+          // inter-process one this id fixes). A globally unique path means
+          // no two overlapping calls, from either process, ever touch the
+          // same temp file, so one's cleanup can never disturb another's
+          // in-progress write.
+          const tempPath = `${path}.tmp.${createId()}`;
+          // Still clear it first — vanishingly unlikely to collide with a
+          // stale leftover (a cuid2 id, not a small counter), but a
+          // crashed-and-restarted process could in principle still hand out
+          // the same id twice given a broken/predictable random source, and
+          // clearing costs nothing extra. Writing to an ALREADY-EXISTING
+          // temp path would be an overwrite, not a
           // creation, silently keeping whatever (possibly permissive) mode
           // that stale file already had. Checked, not fire-and-forget: if
           // the clear itself fails, abort BEFORE writing rather than assume
