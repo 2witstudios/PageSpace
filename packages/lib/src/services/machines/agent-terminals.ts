@@ -441,6 +441,17 @@ export async function listAgentTerminals({
 }): Promise<{ ok: true; terminals: MachineAgentTerminalRecord[] } | { ok: false; reason: 'invalid_target' | 'project_not_found' | 'branch_not_found' | 'scope_unsupported' }> {
   const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
+  // Deliberately UNFILTERED — a row whose agentType predates a since-retired
+  // AGENT_LAUNCH_SPECS entry (e.g. the removed 'pagespace-cli') is still listed.
+  // Dropping it here would make it undiscoverable: DELETE kills by name, and the
+  // navigator's "unclaimed session" adopt flow is the only way a name the local
+  // workspace store doesn't already know about ever resurfaces (see
+  // `WorkspaceLeaves.tsx`). Hiding it would strand the row (and any live PTY/
+  // billing session under it) with no path to clean it up. Callers distinguish
+  // "listed" from "launchable" via `isAgentRuntimeType(row.agentType)` themselves
+  // (the API route does this — see `agent-terminals/route.ts`); the actual launch
+  // path (`resolveAgentTerminal`/`resolveAgentTerminalRow`, below) still refuses
+  // to hand an invalid agentType to `resolveAgentLaunchSpec`.
   const terminals = await deps.store.list(scope.scopeKey);
   return { ok: true, terminals };
 }
