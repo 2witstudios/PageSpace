@@ -100,7 +100,16 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         terminal.open(containerRef.current);
         fitAddon.fit();
 
-        const onData = terminal.onData((data) => socket.emit('agent-terminal:input', { data, connectionId }));
+        const onData = terminal.onData((data) => {
+          // Disconnected: this would only sit in socket.io's send buffer and
+          // flush on the NEW server socket ahead of our re-bind (a client's
+          // 'connect' event fires only after its buffered emits are flushed),
+          // where the server drops it — its connectionId isn't active there
+          // yet (see `onInput`'s `activeConnectionIds.has` guard). It is lost
+          // either way; not emitting it avoids pinning it in that buffer.
+          if (!socket.connected) return;
+          socket.emit('agent-terminal:input', { data, connectionId });
+        });
 
         // Every mounted XtermTerminal shares this one socket, so every one of
         // its listeners sees every pane's events — drop anything tagged with
@@ -233,11 +242,17 @@ export default function XtermTerminal({ socket, sessionId, connectPayload, initi
         const handleClosed = (payload: { exitCode: number; connectionId?: string }) => {
           if (!isMine(payload)) return;
           dead = true;
+          // Nothing left to edit: a dead pane must not go on blocking auth
+          // refresh / SWR updates for this sessionId until whenever it happens
+          // to unmount (teardown's own endEditing is now redundant, and stays
+          // as a no-op safety net — the store deletes-if-present).
+          useEditingStore.getState().endEditing(sessionId);
           terminal.writeln(`\r\n\x1b[90mProcess exited with code ${payload.exitCode}\x1b[0m`);
         };
         const handleError = (payload: { message: string; connectionId?: string }) => {
           if (!isMine(payload)) return;
           dead = true;
+          useEditingStore.getState().endEditing(sessionId);
           terminal.writeln(`\r\n\x1b[31mError: ${payload.message}\x1b[0m`);
           onError?.(payload.message);
         };

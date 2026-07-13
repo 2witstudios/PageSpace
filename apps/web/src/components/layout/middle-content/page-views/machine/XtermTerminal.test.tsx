@@ -10,12 +10,16 @@ const written: string[] = [];
  * must RESET-then-replay, never append the replay under what's already shown. */
 const RESET_MARK = '⟪reset⟫';
 let disposals = 0;
+/** The pane's `terminal.onData` callback, captured so a test can simulate the
+ * user typing — reset per mount by the mock Terminal's own constructor. */
+let onDataHandler: ((data: string) => void) | undefined;
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     cols = 80;
     rows = 24;
     options = {};
-    onData() {
+    onData(handler: (data: string) => void) {
+      onDataHandler = handler;
       return { dispose: () => {} };
     }
     loadAddon() {}
@@ -42,8 +46,11 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }));
 vi.mock('@/hooks/useXtermTheme', () => ({ useXtermTheme: () => ({}) }));
+/** Stable across calls (unlike a fresh `vi.fn()` per `getState()`) so tests can
+ * assert on endEditing — the dead-pane leak fix needs it to see across events. */
+const editingStore = { startEditing: vi.fn(), endEditing: vi.fn() };
 vi.mock('@/stores/useEditingStore', () => ({
-  useEditingStore: { getState: () => ({ startEditing: vi.fn(), endEditing: vi.fn() }) },
+  useEditingStore: { getState: () => editingStore },
 }));
 
 import XtermTerminal, { RECONNECTING_NOTICE } from './XtermTerminal';
@@ -489,6 +496,8 @@ describe('XtermTerminal — PTY binding across socket reconnects', () => {
   beforeEach(() => {
     written.length = 0;
     disposals = 0;
+    editingStore.startEditing.mockClear();
+    editingStore.endEditing.mockClear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
 
@@ -690,6 +699,47 @@ describe('XtermTerminal — PTY binding across socket reconnects', () => {
         promptDropped: onSent.mock.calls.length,
       },
       expected: { typedBeforeNewReady: [], typed: [], promptDropped: 1 },
+    });
+  });
+
+  test('a pane that goes dead (exited, or refused) releases its editing-store registration immediately', async () => {
+    const fake = fakeSocket();
+    render(<XtermTerminal socket={fake.socket} sessionId="exited-pane" connectPayload={CONNECT} />);
+    await waitFor(() => expect(fake.connectionIds().length).toBe(1));
+    const connectionId = fake.connectionId();
+    fake.server('agent-terminal:ready', { connectionId });
+    expect(editingStore.startEditing).toHaveBeenCalledWith('exited-pane', 'other', { componentName: 'agent-terminal' });
+
+    fake.server('agent-terminal:closed', { exitCode: 0, connectionId });
+
+    assert({
+      given: 'a pane whose agent process exits while the pane stays mounted (dead panes never unmount on their own)',
+      should:
+        'release the editing-store registration right away — a finished pane must not go on blocking auth refresh/SWR updates for its sessionId until some later, unrelated unmount',
+      actual: editingStore.endEditing.mock.calls,
+      expected: [['exited-pane']],
+    });
+  });
+
+  test('typed input is never emitted while the transport is down — it would only sit in socket.io’s buffer and be dropped on the other side anyway', async () => {
+    const fake = fakeSocket();
+    render(<XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} />);
+    await waitFor(() => expect(fake.connectionIds().length).toBe(1));
+
+    fake.setConnected(false);
+    fake.server('disconnect', {});
+    onDataHandler?.('y');
+    const emittedWhileDown = inputs(fake.emitted);
+
+    fake.setConnected(true);
+    fake.server('connect', {});
+    onDataHandler?.('y');
+
+    assert({
+      given: 'a keystroke typed while the socket is disconnected, then one typed after it reconnects',
+      should: 'emit nothing for the disconnected keystroke, and emit normally once reconnected',
+      actual: { emittedWhileDown, emittedAfterReconnect: inputs(fake.emitted) },
+      expected: { emittedWhileDown: [], emittedAfterReconnect: ['y'] },
     });
   });
 });
