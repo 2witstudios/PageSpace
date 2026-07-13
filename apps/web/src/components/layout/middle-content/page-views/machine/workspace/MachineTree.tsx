@@ -243,7 +243,11 @@ function MachineNode({
 }: TreeLevelProps & { machineId: string; machineLabel?: string; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const node: MachineTreeNode = { level: 'machine' };
-  const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(expanded ? machineId : null);
+  // The row's "Add project" trigger is always mounted (hover-revealed on the
+  // row itself, not gated by expansion — see MachineTree's header-ectomy), so
+  // `addProject` must work before the row is ever expanded. Only the list
+  // FETCH is gated on `expanded`.
+  const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(machineId, { enabled: expanded });
 
   return (
     <div>
@@ -302,7 +306,10 @@ function ProjectNode({
   const [expanded, setExpanded] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const node: MachineTreeNode = { level: 'project', projectName };
-  const { branches, isLoading: branchesLoading, addBranch, removeBranch } = useMachineBranches(expanded ? machineId : null, projectName);
+  // Same reasoning as the machine row's "Add project" trigger above: "Add
+  // branch" is always mounted, so `addBranch` must work before the row is
+  // ever expanded. Only the list FETCH is gated on `expanded`.
+  const { branches, isLoading: branchesLoading, addBranch, removeBranch } = useMachineBranches(machineId, projectName, { enabled: expanded });
 
   return (
     <div>

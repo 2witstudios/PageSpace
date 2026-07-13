@@ -18,10 +18,16 @@ const fetcher = (url: string) =>
     return res.json() as Promise<{ branches: MachineBranch[] }>;
   });
 
-/** Branches tier of the Terminal workspace navigator — one isolated Sprite per branch-terminal. */
-export function useMachineBranches(machineId: string | null, projectName: string | null) {
+/**
+ * Branches tier of the Terminal workspace navigator — one isolated Sprite per branch-terminal.
+ *
+ * `enabled` gates ONLY the list fetch (default `true`) — see `useMachineProjects`'s
+ * doc comment for why it must not also gate `addBranch`/`removeBranch`.
+ */
+export function useMachineBranches(machineId: string | null, projectName: string | null, options?: { enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
   const key =
-    machineId && projectName
+    machineId && projectName && enabled
       ? `/api/machines/branches?machineId=${encodeURIComponent(machineId)}&projectName=${encodeURIComponent(projectName)}`
       : null;
 

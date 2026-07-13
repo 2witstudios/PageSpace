@@ -20,9 +20,20 @@ const fetcher = (url: string) =>
     return res.json() as Promise<{ projects: MachineProject[] }>;
   });
 
-/** Projects tier of the Terminal workspace navigator — git repos tracked on a Machine. */
-export function useMachineProjects(machineId: string | null) {
-  const key = machineId ? `/api/machines/projects?machineId=${encodeURIComponent(machineId)}` : null;
+/**
+ * Projects tier of the Terminal workspace navigator — git repos tracked on a Machine.
+ *
+ * `enabled` gates ONLY the list fetch (default `true`) — a caller collapsed by
+ * default (e.g. the Development sidebar's per-machine rows) passes `false` to
+ * skip firing N requests for N collapsed rows on mount. It must NOT also gate
+ * `addProject`/`removeProject`: those mutate via `machineId` directly, which is
+ * always known from the caller's own props, never from whether the list
+ * happens to be loaded — a row's hover-revealed "Add project" trigger lives in
+ * the row itself and must work before the row is ever expanded.
+ */
+export function useMachineProjects(machineId: string | null, options?: { enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
+  const key = machineId && enabled ? `/api/machines/projects?machineId=${encodeURIComponent(machineId)}` : null;
 
   const { data, error, isLoading, mutate } = useSWR(key, fetcher, {
     revalidateOnFocus: false,

@@ -22,7 +22,7 @@ vi.mock('@/hooks/useIntegrations', () => ({
   useProviders: () => ({ providers: [] }),
 }));
 
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import MachineTree, { type MachineTreeNode } from './MachineTree';
 
 const TERMINAL_ID = 'machine-1';
@@ -330,6 +330,66 @@ describe('MachineTree', () => {
       should: 'offer an "Add project" trigger inside the row itself',
       actual: within(machineRow).getByTitle('Add project') !== null,
       expected: true,
+    });
+  });
+
+  // Regression: the row-level "Add project"/"Add branch" triggers are always
+  // mounted (hover-revealed on the row, not gated by expansion), but the
+  // underlying useMachineProjects/useMachineBranches list fetch is still
+  // gated on `expanded` for perf (N collapsed machine rows in the Development
+  // sidebar must not fire N fetches on mount). Before the `enabled` split,
+  // addProject/addBranch shared that same gated key and threw "No active
+  // machine"/"No active project" until the row was expanded once.
+  test('"Add project" submits successfully from a COLLAPSED machine row', async () => {
+    const user = userEvent.setup();
+    vi.mocked(post).mockResolvedValueOnce({
+      project: { name: 'new-repo', repoUrl: 'https://github.com/org/new-repo.git', path: '/workspace/projects/new-repo' },
+    });
+    renderTree({ defaultExpanded: false });
+
+    // Never expanded — the machine row's chevron is never clicked.
+    await user.click(screen.getByTitle('Add project'));
+    await user.click(await screen.findByRole('button', { name: 'Enter a repo URL manually' }));
+    await user.type(screen.getByPlaceholderText('Project name'), 'new-repo');
+    await user.type(screen.getByPlaceholderText(/Repo URL/), 'https://github.com/org/new-repo.git');
+    const dialog = screen.getByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Add project' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'the collapsed machine row\'s hover-revealed "Add project" trigger, used without expanding first',
+        should: 'POST the new project — not throw "No active machine"',
+        actual: vi.mocked(post).mock.calls[0]?.[0],
+        expected: '/api/machines/projects',
+      });
+    });
+  });
+
+  test('"Add branch" submits successfully from a COLLAPSED project row', async () => {
+    const user = userEvent.setup();
+    vi.mocked(post).mockResolvedValueOnce({
+      branch: { branchName: 'feat-y', resumed: false },
+    });
+    renderTree();
+
+    // The machine row is expanded by default (renderTree's default), so the
+    // project row is already visible — but its OWN chevron is never clicked,
+    // so the project itself stays collapsed. expandRowFor would defeat the
+    // regression: clicking my-repo's chevron is what sets `expanded=true` on
+    // THAT ProjectNode, which is the exact state this test must avoid.
+    const projectRow = (await screen.findByText('my-repo')).closest('.group') as HTMLElement;
+    await user.click(within(projectRow).getByTitle('Add branch-terminal'));
+    await user.type(screen.getByPlaceholderText('Branch name'), 'feat-y');
+    const dialog = screen.getByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Add branch' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'the collapsed project row\'s hover-revealed "Add branch" trigger, used without expanding first',
+        should: 'POST the new branch — not throw "No active project"',
+        actual: vi.mocked(post).mock.calls[0]?.[0],
+        expected: '/api/machines/branches',
+      });
     });
   });
 });
