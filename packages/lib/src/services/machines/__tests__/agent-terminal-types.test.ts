@@ -47,7 +47,7 @@ describe('resolveAgentLaunchSpec', () => {
   });
 
   it('should expose a registry entry for every AgentRuntimeType', () => {
-    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['claude', 'codex', 'shell']);
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['shell', 'claude', 'codex']);
   });
 
   it('should not expose a registry entry for the retired pagespace-cli agent type', () => {
@@ -56,12 +56,12 @@ describe('resolveAgentLaunchSpec', () => {
 });
 
 describe('PICKABLE_AGENT_TYPES', () => {
-  it('should include every AI-agent AgentRuntimeType a user can pick from the empty-pane picker', () => {
-    expect(PICKABLE_AGENT_TYPES).toEqual(['claude', 'codex']);
+  it('should include shell (primary) plus claude and codex (secondary) — only the retired pagespace-cli is excluded', () => {
+    expect(PICKABLE_AGENT_TYPES).toEqual(['shell', 'claude', 'codex']);
   });
 
-  it('should exclude the shell sentinel — a bare shell is not an AI agent identity to pick', () => {
-    expect(PICKABLE_AGENT_TYPES).not.toContain('shell');
+  it('should list shell FIRST — a plain interactive shell is the default, primary way to work on a Machine', () => {
+    expect(PICKABLE_AGENT_TYPES[0]).toBe('shell');
   });
 });
 

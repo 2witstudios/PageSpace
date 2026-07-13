@@ -23,19 +23,18 @@
  * PTY (the realtime bridge), not this pure module.
  *
  * `pickable` gates the empty-pane "spawn an agent" picker (`TerminalPanes.tsx`
- * — see `PICKABLE_AGENT_TYPES` below): `shell` is a real, fully-launchable
- * `AgentRuntimeType`, but picking one from that flow means choosing an AI
- * agent identity, not a bare interactive shell — spawning a default/bare
- * shell terminal is a distinct UX (a separate follow-up wires that up) this
- * picker doesn't own. Keeping the marker on the registry entry itself (rather
- * than a hardcoded exclusion list living in the UI file) is what keeps the
- * picker in sync when a new entry is added here: forgetting to set `pickable`
- * fails safe (excluded, not silently spawnable) instead of failing open.
+ * — see `PICKABLE_AGENT_TYPES` below). `shell` is PRIMARY here — a plain
+ * interactive shell is the default, first-class way to work on a Machine —
+ * with `claude`/`codex` as secondary, opt-in AI agents. Only the retired
+ * `pagespace-cli` is excluded. Keeping the marker on the registry entry
+ * itself (rather than a hardcoded list living in the UI file) is what keeps
+ * the picker in sync when a new entry is added here: forgetting to set
+ * `pickable: true` fails safe (excluded, not silently spawnable).
  */
 export const AGENT_LAUNCH_SPECS = {
+  shell: { command: 'shell', args: [], pickable: true },
   claude: { command: 'claude', args: [], pickable: true },
   codex: { command: 'codex', args: [], pickable: true },
-  shell: { command: 'shell', args: [], pickable: false },
 } as const satisfies Record<string, { command: string; args: readonly string[]; pickable: boolean }>;
 
 export type AgentRuntimeType = keyof typeof AGENT_LAUNCH_SPECS;
