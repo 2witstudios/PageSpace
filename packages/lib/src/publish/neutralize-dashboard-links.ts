@@ -6,13 +6,17 @@
 // HTML and the mention data attributes so mention-chip CSS still applies.
 //
 // Pure string transform: no DOM, no I/O. The matcher is deliberately
-// conservative — an anchor tag whose attribute region contains `<` or `>`
-// (i.e. is malformed or unclosed) never matches and is left unchanged.
+// conservative — an anchor tag whose attribute region contains a bare `<`
+// or `>` outside a quoted value (i.e. is malformed or unclosed) never
+// matches and is left unchanged.
 
-// A well-formed opening tag (no `<`/`>` inside the attribute region), its
-// inner HTML (lazy, up to the nearest close tag — anchors cannot nest in
-// valid HTML), and the closing tag.
-const ANCHOR_RE = /<a\b([^<>]*)>([\s\S]*?)<\/a\s*>/gi;
+// A well-formed opening tag, its inner HTML (lazy, up to the nearest close
+// tag — anchors cannot nest in valid HTML), and the closing tag. The
+// attribute region is a run of quoted values and non-`<`/`>` characters, so
+// a quoted value may legally contain `>` (title="2 > 1") without ending the
+// tag. The three alternatives start with disjoint characters, so the
+// quantifier backtracks linearly.
+const ANCHOR_RE = /<a\b((?:"[^"]*"|'[^']*'|[^<>"'])*)>([\s\S]*?)<\/a\s*>/gi;
 
 const HREF_RE = /(?:^|\s)href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/i;
 
