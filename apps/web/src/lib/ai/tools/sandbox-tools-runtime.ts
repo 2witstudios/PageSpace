@@ -57,7 +57,7 @@ import type { MachineSettings } from '@pagespace/lib/services/machines/machine-s
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
-import { canActorViewPage } from './actor-permissions';
+import { canActorViewPage, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
 import { globalMachineConfigRepository } from '@/lib/repositories/global-machine-config-repository';
 import type { ToolExecutionContext } from '../core/types';
@@ -344,10 +344,6 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
 /**
- * IO dependencies for the machine directory. Injected so it can be unit-tested
- * without a real database connection.
- */
-/**
  * The page row the machine directory needs: identity/routing fields plus the
  * two Machine Settings access toggles (their canonical shape/docs live on
  * `MachineSettings` in @pagespace/lib machines/machine-settings.ts).
@@ -359,6 +355,10 @@ export type MachineDirectoryPage = {
   isTrashed: boolean;
 } & Pick<MachineSettings, 'allowPageAgents' | 'visibleToGlobalAssistant'>;
 
+/**
+ * IO dependencies for the machine directory. Injected so it can be unit-tested
+ * without a real database connection.
+ */
 export interface MachineDirectoryRuntimeDeps {
   findPage: (pageId: string) => Promise<MachineDirectoryPage | undefined>;
   canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
@@ -370,6 +370,17 @@ export interface MachineDirectoryRuntimeDeps {
   getOrCreateOwnMachinePageId: (userId: string) => Promise<string>;
   /** A page's owning drive's `ownerId` — the same lookup `resolveMachinePayerId` uses for billing attribution. */
   lookupPageOwnerId: (pageId: string) => Promise<string | null>;
+  /**
+   * Whether the page agent identified by `ownAgentPageId` (its OWN chatSource
+   * agent id — NOT a sub-agent's `parentAgentId`) has opted into user-scoped
+   * reach (`pages.userScopedAccess`). Mirrors the exact seam `canActorViewPage`
+   * already uses (`resolveActingAgentId`/`hasAgentUserScopedAccess` in
+   * actor-permissions.ts): such an agent acts with the INVOKING USER's own
+   * reach for view permissions, so it is exempt from the `allowPageAgents`
+   * toggle too — that toggle targets narrower, embedded page agents, not a
+   * personal/global-style assistant a user already has full page access to.
+   */
+  isUserScopedAgent: (ownAgentPageId: string) => Promise<boolean>;
 }
 
 const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
@@ -390,6 +401,7 @@ const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
   getGlobalConfig: (userId) => globalMachineConfigRepository.getConfig(userId),
   getOrCreateOwnMachinePageId: (userId) => globalMachineConfigRepository.getOrCreateOwnMachinePageId(userId),
   lookupPageOwnerId,
+  isUserScopedAgent: hasAgentUserScopedAccess,
 };
 
 /**
@@ -480,8 +492,19 @@ export function createMachineDirectory(
       // the parent's for a sub-agent — marks the actor page-scoped; without
       // one the actor is the global assistant (the SAME discriminator
       // resolveConfiguredMachines uses to pick whose machine list applies).
+      // EXCEPT: a page agent with userScopedAccess=true acts with the
+      // INVOKING USER's own reach for view permissions (canActorViewPage,
+      // just checked above, already resolved through that fallthrough) — such
+      // an agent is exempt from BOTH toggles. It isn't literally the global
+      // assistant (visibleToGlobalAssistant would apply an unrelated gate:
+      // its machine list comes from its own agent config, not
+      // globalMachineConfigRepository), so it bypasses the toggle decision
+      // entirely rather than being reclassified as 'global-assistant'.
       // Checked AFTER canViewPage so a toggle reason (which names the
       // machine) is never surfaced to an actor who can't view the page.
+      const ownAgentPageId = rawContext ? getAgentPageId(rawContext) : undefined;
+      const isUserScoped = ownAgentPageId ? await deps.isUserScopedAgent(ownAgentPageId) : false;
+      if (isUserScoped) return { allowed: true };
       const actor = activeMachineAgentPageId(rawContext) ? ('page-agent' as const) : ('global-assistant' as const);
       const decision = decideMachineToggleAccess({ actor, settings: page });
       if (!decision.allowed) {

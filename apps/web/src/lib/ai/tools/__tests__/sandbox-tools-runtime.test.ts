@@ -213,6 +213,7 @@ function makeMachineDirectoryDeps(
     getGlobalConfig: async () => ({ machineAccess: false, machines: [] }),
     getOrCreateOwnMachinePageId: async () => 'own-machine-page-1',
     lookupPageOwnerId: async () => 'drive-owner-1',
+    isUserScopedAgent: async () => false,
     ...overrides,
   };
 }
@@ -449,6 +450,21 @@ describe('createMachineDirectory', () => {
         expect(decision.allowed).toBe(false);
       });
 
+      it('given a sub-agent (parentAgentId only, no chatSource), the user-scoped exemption should NOT apply — it keys off chatSource.agentPageId, not parentAgentId', async () => {
+        // isUserScopedAgent would allow ANY id through, proving the exemption
+        // check never even fires: getAgentPageId(context) is undefined here
+        // (no chatSource.type==='page'), so deps.isUserScopedAgent is never called.
+        const isUserScopedAgent = async () => true;
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, isUserScopedAgent }),
+        );
+        const decision = await directory.isMachineAccessible(
+          { userId: 'u1', parentAgentId: 'parent-agent-1' },
+          { kind: 'existing', machineId: 't1' },
+        );
+        expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
+      });
+
       it('given a page-scoped agent and allowPageAgents=true, should allow', async () => {
         const directory = createMachineDirectory(makeMachineDirectoryDeps());
         await expect(
@@ -472,6 +488,35 @@ describe('createMachineDirectory', () => {
         await expect(
           directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
         ).resolves.toEqual({ allowed: false });
+      });
+
+      it('given a USER-SCOPED page agent and allowPageAgents=false, should allow — it acts with the invoking user\'s own reach (mirroring canActorViewPage\'s resolveActingAgentId fallthrough), not the narrower page-agent class the toggle targets', async () => {
+        const isUserScopedAgent = async (agentPageId: string) => agentPageId === 'agent-1';
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, isUserScopedAgent }),
+        );
+        await expect(
+          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
+        ).resolves.toEqual({ allowed: true });
+      });
+
+      it('given a user-scoped page agent, should still be denied when the actor cannot VIEW the page (the exemption only bypasses the toggle, not view permissions)', async () => {
+        const isUserScopedAgent = async () => true;
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ canViewPage: async () => false, isUserScopedAgent }),
+        );
+        await expect(
+          directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' }),
+        ).resolves.toEqual({ allowed: false });
+      });
+
+      it('given a NON-user-scoped page agent (isUserScopedAgent returns false for it), should still be denied by allowPageAgents=false', async () => {
+        const isUserScopedAgent = async (agentPageId: string) => agentPageId === 'some-other-agent';
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, isUserScopedAgent }),
+        );
+        const decision = await directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' });
+        expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
       });
     });
 
