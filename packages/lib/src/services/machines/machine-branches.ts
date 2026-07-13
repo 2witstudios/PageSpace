@@ -305,12 +305,23 @@ export async function propagateClaudeCredential({
           // best-effort path exists to tolerate (caught in review, twice).
           //
           // `writeFiles`' `mode` reliably applies to a genuine CREATION —
-          // the temp path never existed before — and `mv` on the same
-          // filesystem is atomic: the destination is either the OLD valid
-          // credential or the NEW one, NEVER wrong-permission or briefly
-          // absent in between. If anything fails before the rename, the
-          // live file at `path` is completely untouched.
+          // and `mv` on the same filesystem is atomic: the destination is
+          // either the OLD valid credential or the NEW one, NEVER
+          // wrong-permission or briefly absent in between. If anything
+          // fails before the rename, the live file at `path` is completely
+          // untouched.
           const tempPath = `${path}.tmp`;
+          // Clear the temp path FIRST — a fixed name isn't guaranteed to be
+          // fresh (a prior attempt could have crashed between writing it
+          // and renaming it, or its own cleanup could have failed), and
+          // writing to an ALREADY-EXISTING temp path would be an overwrite,
+          // not a creation — silently keeping whatever (possibly
+          // permissive) mode that stale file already had, which the `mv`
+          // below would then promote onto the real credential, reintroducing
+          // the exact problem this temp-file flow exists to avoid (caught
+          // in review). Safe to do unconditionally: any failure here only
+          // ever touches the disposable temp path, never the live file.
+          await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
           await branchHandle.writeFiles([{ path: tempPath, content, mode: 0o600 }]);
           const move = await branchHandle.exec({ cmd: 'mv', args: [tempPath, path] });
           if (move.exitCode !== 0) {

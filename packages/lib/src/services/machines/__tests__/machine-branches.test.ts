@@ -887,6 +887,15 @@ describe('Claude Code credential propagation', () => {
     if (!result.ok) throw new Error('expected ok');
 
     const state = byId.get(result.sandboxId);
+    // The temp path is cleared BEFORE each write too — a fixed temp name
+    // isn't guaranteed fresh (a prior attempt could have left it behind),
+    // and writing to an already-existing temp path would silently keep
+    // whatever mode it already had.
+    const rmCalls = state?.execLog.filter((c) => c.cmd === 'rm') ?? [];
+    expect(rmCalls).toEqual([
+      { cmd: 'rm', args: ['-f', '/home/sprite/.claude/.credentials.json.tmp'] },
+      { cmd: 'rm', args: ['-f', '/home/sprite/.claude.json.tmp'] },
+    ]);
     const mvCalls = state?.execLog.filter((c) => c.cmd === 'mv') ?? [];
     expect(mvCalls).toEqual([
       { cmd: 'mv', args: ['/home/sprite/.claude/.credentials.json.tmp', '/home/sprite/.claude/.credentials.json'] },
