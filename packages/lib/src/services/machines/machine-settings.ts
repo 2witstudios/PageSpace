@@ -7,15 +7,14 @@
  * dedicated Machine columns, and `visibleToGlobalAssistant` reuses the existing
  * page column.
  *
- * NOTE ON THE TWO ACCESS TOGGLES: this route only PERSISTS `visibleToGlobalAssistant`
- * and `allowPageAgents` for a Machine. Their ENFORCEMENT is a separate consumer,
- * not wired yet (and not this node's scope) — for MACHINE pages nothing reads
- * either flag today: `visibleToGlobalAssistant` is consulted only for `AI_CHAT`
- * agents (agent-awareness.ts), and `allowPageAgents` has no reader at all. The
- * follow-up nodes wire `visibleToGlobalAssistant` into the global-assistant
- * machine picker/resolution and `allowPageAgents` into the page-agent machine gate
- * (`isMachineAccessible`, sandbox-tools-runtime.ts). The whole surface is behind
- * `CODE_EXECUTION_ENABLED` (OFF), so no unenforced toggle is user-visible yet.
+ * NOTE ON THE TWO ACCESS TOGGLES: this route PERSISTS `visibleToGlobalAssistant`
+ * and `allowPageAgents` for a Machine; their POLICY lives in
+ * `decideMachineToggleAccess` (machine-access.ts) and is ENFORCED per tool call
+ * by the AI sandbox machine gate (`isMachineAccessible`,
+ * apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts): `allowPageAgents` denies
+ * page-scoped agents the machine's terminal tools, `visibleToGlobalAssistant`
+ * hides the machine from (and denies) the global assistant. For `AI_CHAT`
+ * pages `visibleToGlobalAssistant` is separately consulted by agent-awareness.ts.
  * This module is pure orchestration + DI — every DB / Sprite
  * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`),
  * so the delete-ordering invariant below is unit-testable without a database or

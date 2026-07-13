@@ -34,8 +34,10 @@ import { PaneLoading, PaneNotice, Spinner } from './tab-states';
  * rendering. This component is the form and the delete action.
  *
  * The two access toggles (`visibleToGlobalAssistant` / `allowPageAgents`) are
- * persisted here but not yet enforced anywhere — the whole surface sits behind
- * `CODE_EXECUTION_ENABLED`.
+ * ENFORCED per tool call by the AI sandbox machine gate (isMachineAccessible,
+ * sandbox-tools-runtime.ts; policy in @pagespace/lib machines/machine-access.ts)
+ * — flipping one takes effect on the agent's next terminal tool call. The whole
+ * surface sits behind `CODE_EXECUTION_ENABLED`.
  */
 export default function SettingsTab({ machineId }: { machineId: string }) {
   const router = useRouter();

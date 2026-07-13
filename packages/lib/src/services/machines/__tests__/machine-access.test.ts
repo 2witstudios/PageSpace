@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { canViewMachine, canEditMachine, type MachineAccessDeps } from '../machine-access';
+import {
+  canViewMachine,
+  canEditMachine,
+  decideMachineToggleAccess,
+  type MachineAccessDeps,
+} from '../machine-access';
 import { PageType } from '../../../utils/enums';
 
 const MACHINE_ID = 'machine-1';
@@ -68,5 +73,50 @@ describe('canEditMachine', () => {
   it('denies when the page exists but is not a Terminal page', async () => {
     const deps = makeDeps({ findPageType: async () => PageType.FOLDER });
     expect(await canEditMachine(deps, ACTOR_USER_ID, MACHINE_ID)).toBe(false);
+  });
+});
+
+describe('decideMachineToggleAccess', () => {
+  const bothOn = { allowPageAgents: true, visibleToGlobalAssistant: true };
+
+  it('allows a page agent when allowPageAgents is on', () => {
+    expect(decideMachineToggleAccess({ actor: 'page-agent', settings: bothOn })).toEqual({ allowed: true });
+  });
+
+  it('denies a page agent with page_agents_disabled when allowPageAgents is off', () => {
+    expect(
+      decideMachineToggleAccess({
+        actor: 'page-agent',
+        settings: { allowPageAgents: false, visibleToGlobalAssistant: true },
+      }),
+    ).toEqual({ allowed: false, code: 'page_agents_disabled' });
+  });
+
+  it('allows the global assistant when visibleToGlobalAssistant is on', () => {
+    expect(decideMachineToggleAccess({ actor: 'global-assistant', settings: bothOn })).toEqual({ allowed: true });
+  });
+
+  it('denies the global assistant with hidden_from_global when visibleToGlobalAssistant is off', () => {
+    expect(
+      decideMachineToggleAccess({
+        actor: 'global-assistant',
+        settings: { allowPageAgents: true, visibleToGlobalAssistant: false },
+      }),
+    ).toEqual({ allowed: false, code: 'hidden_from_global' });
+  });
+
+  it('each toggle gates ONLY its own actor kind', () => {
+    expect(
+      decideMachineToggleAccess({
+        actor: 'global-assistant',
+        settings: { allowPageAgents: false, visibleToGlobalAssistant: true },
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      decideMachineToggleAccess({
+        actor: 'page-agent',
+        settings: { allowPageAgents: true, visibleToGlobalAssistant: false },
+      }),
+    ).toEqual({ allowed: true });
   });
 });

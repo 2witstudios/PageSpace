@@ -37,7 +37,7 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
     machines: {
       listMachines: vi.fn().mockResolvedValue([{ kind: 'own' }]),
       describeMachine: vi.fn().mockResolvedValue({ name: 'My Machine' }),
-      isMachineAccessible: vi.fn().mockResolvedValue(true),
+      isMachineAccessible: vi.fn().mockResolvedValue({ allowed: true }),
     },
     _runCommandCalls: runCommandCalls,
   } as unknown as GitSandboxToolsDeps & { _runCommandCalls: typeof runCommandCalls };
@@ -1471,7 +1471,7 @@ describe('active machine access', () => {
   it('git_status: given the resolved active machine is no longer accessible, should deny without acquiring a sandbox', async () => {
     const deps = makeDeps();
     deps.machines.listMachines = vi.fn().mockResolvedValue([{ kind: 'existing', machineId: 't1' }]);
-    deps.machines.isMachineAccessible = vi.fn().mockResolvedValue(false);
+    deps.machines.isMachineAccessible = vi.fn().mockResolvedValue({ allowed: false });
     const { git_status } = createSandboxGitTools(deps);
     const result = await git_status.execute!({}, {} as never);
     expect(result).toMatchObject({ success: false });
