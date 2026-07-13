@@ -19,11 +19,11 @@
  * SDK's spawn — the same authenticated exec channel every other operation
  * uses (same auth/config as the SDK, no second credential path). That is
  * semantically sound: a hold is only ever created/refreshed while work is in
- * progress (viewer attached or agent output flowing), i.e. while the sprite
- * is already awake — the exec never wakes a deliberately-paused sprite.
+ * progress (viewer attached or the agent recently active), i.e. while the
+ * sprite is already awake — the exec never wakes a deliberately-paused sprite.
  *
  * Pure core / imperative shell: `planHold` (every lifecycle decision),
- * `isAgentOutputFlowing`, the argv builders and the response classifiers are
+ * `isAgentActive`, the argv builders and the response classifiers are
  * pure and unit-tested without mocks; `createSpriteTasksClient` (exec) and
  * `createTaskHoldController` (bookkeeping + serialized queue) are thin shells.
  *
