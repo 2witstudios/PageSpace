@@ -22,7 +22,7 @@ import { runGitInSandbox } from '@pagespace/lib/services/sandbox/git-tool-runner
 import { resolveSandboxPath, SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import {
   MAX_PATH_LENGTH,
-  machineRefId,
+  machineAccessDeniedError,
   resolveActiveMachine,
   type MachineDirectoryDeps,
   type ResolveSandboxContext,
@@ -148,8 +148,12 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: { success: false, error: decision.error } };
-    const activeMachine = await resolveActiveMachine(rawContext, machines);
-    if (!activeMachine) {
+    // resolveActiveMachine re-verifies access on EVERY call, mirroring
+    // sandbox-tools.ts — the actual execution boundary must not trust a
+    // machine reference that was accessible only at a past switch_machine
+    // call (OWASP A01).
+    const resolution = await resolveActiveMachine(rawContext, machines);
+    if (!resolution) {
       return {
         ok: false,
         error: {
@@ -158,21 +162,10 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         },
       };
     }
-    // Re-verify page-view access on EVERY call, mirroring sandbox-tools.ts —
-    // the actual execution boundary must not trust a machine reference that
-    // was accessible only at a past switch_machine call (OWASP A01).
-    const access = await machines.isMachineAccessible(rawContext, activeMachine);
-    if (!access.allowed) {
-      return {
-        ok: false,
-        error: {
-          success: false,
-          error:
-            access.reason ??
-            `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
-        },
-      };
+    if (!resolution.access.allowed) {
+      return { ok: false, error: machineAccessDeniedError(resolution.access, resolution.machine) };
     }
+    const activeMachine = resolution.machine;
     // Mirror sandbox-tools.ts's driveId/tenantId resolution: an 'existing'
     // machine can reference a Terminal page outside the ambient drive/tenant
     // (global assistant, or a switched active machine in a shared drive).

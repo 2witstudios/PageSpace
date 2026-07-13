@@ -8,11 +8,12 @@
  * page column.
  *
  * NOTE ON THE TWO ACCESS TOGGLES: this route PERSISTS `visibleToGlobalAssistant`
- * and `allowPageAgents` for a Machine; their ENFORCEMENT lives in the machine
- * access gate (`isMachineAccessible` / `resolveGlobalConfiguredMachines`,
+ * and `allowPageAgents` for a Machine; their POLICY lives in
+ * `decideMachineToggleAccess` (machine-access.ts) and is ENFORCED per tool call
+ * by the AI sandbox machine gate (`isMachineAccessible`,
  * apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts): `allowPageAgents` denies
- * page-scoped agents the machine's terminal tools, and `visibleToGlobalAssistant`
- * excludes the machine from the global assistant's resolution. For `AI_CHAT`
+ * page-scoped agents the machine's terminal tools, `visibleToGlobalAssistant`
+ * hides the machine from (and denies) the global assistant. For `AI_CHAT`
  * pages `visibleToGlobalAssistant` is separately consulted by agent-awareness.ts.
  * This module is pure orchestration + DI — every DB / Sprite
  * touch is an injected seam (`MachineSettingsStore`, `MachineSpriteTeardown`),

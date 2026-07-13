@@ -30,6 +30,7 @@ import {
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
+import type { MachineToggleDenialCode } from '@pagespace/lib/services/machines/machine-access';
 import type { ToolExecutionContext } from '../core/types';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 
@@ -99,12 +100,15 @@ export interface MachineDescriptor {
 }
 
 /**
- * Outcome of a machine access check. A denial MAY carry an LLM-facing `reason`
- * explaining the specific policy that blocked access (e.g. the machine's
- * "Allow page agents" toggle is off); without one, callers fall back to their
- * generic revoked-access message.
+ * Outcome of a machine access check. A denial MAY carry a machine-readable
+ * `code` (the Machine Settings toggle that blocked access — see
+ * `decideMachineToggleAccess` in @pagespace/lib machines/machine-access) and
+ * an LLM-facing `reason` explaining it; without them, callers fall back to
+ * their generic revoked-access message.
  */
-export type MachineAccessDecision = { allowed: true } | { allowed: false; reason?: string };
+export type MachineAccessDecision =
+  | { allowed: true }
+  | { allowed: false; code?: MachineToggleDenialCode; reason?: string };
 
 /**
  * Resolves an actor's configured machines and their metadata/accessibility.
@@ -168,15 +172,33 @@ export interface MachineDirectoryDeps {
   ) => Promise<string>;
 }
 
+/** The active machine for a run, paired with its (already-performed) access check. */
+export interface ActiveMachineResolution {
+  machine: MachineRef;
+  access: MachineAccessDecision;
+}
+
 /**
  * Resolves the ACTIVE machine for a run: the switched machine if one is set
- * and still configured, otherwise the configured default (machines[0]).
- * Terminal tools (bash/file/git) call this to determine which machine's
- * session to operate on — `resolveMachinePageId` (packages/lib/services/
- * sandbox/machine-session.ts) then keys the persistent session by it.
+ * and still configured, otherwise the first configured machine the actor can
+ * actually ACCESS (falling back past machines a Settings toggle or revoked
+ * page permission blocks, so a blocked machines[0] doesn't dead-end the whole
+ * tool group while a usable machine sits one slot over). Terminal tools
+ * (bash/file/git) call this to determine which machine's session to operate
+ * on — `resolveMachinePageId` (packages/lib/services/sandbox/
+ * machine-session.ts) then keys the persistent session by it.
  *
- * Returns `undefined` when the actor has no configured machines at all —
- * `listMachines` (createMachineDirectory) already returns `[]` exactly when
+ * The access check happens HERE, on every call, and is returned alongside the
+ * machine so callers enforce it without a second lookup:
+ * - An explicitly switched machine is honored even when access has since been
+ *   revoked — the caller denies it with the specific reason rather than
+ *   silently rerouting the agent's commands to a different machine.
+ * - When NO configured machine is accessible, the first one is returned with
+ *   its denial so the caller surfaces the actual cause (e.g. a toggle reason)
+ *   instead of pretending nothing is configured.
+ *
+ * Returns `undefined` only when the actor has no configured machines at all —
+ * `listMachines` (createMachineDirectory) returns `[]` exactly when
  * `machineAccess` is off, so an empty list here is never "no preference,
  * default to 'own'"; it is "not entitled." Callers MUST treat `undefined` as
  * a denial, not silently fall back to `{ kind: 'own' }` — that fallback used
@@ -186,12 +208,39 @@ export interface MachineDirectoryDeps {
 export async function resolveActiveMachine(
   rawContext: ToolExecutionContext | undefined,
   machines: MachineDirectoryDeps,
-): Promise<MachineRef | undefined> {
+): Promise<ActiveMachineResolution | undefined> {
   const configured = await machines.listMachines(rawContext);
   if (configured.length === 0) return undefined;
   const active = rawContext?.activeMachine;
-  if (active && configured.some((m) => machineRefEquals(m, active))) return active;
-  return configured[0];
+  if (active && configured.some((m) => machineRefEquals(m, active))) {
+    return { machine: active, access: await machines.isMachineAccessible(rawContext, active) };
+  }
+  let firstDenied: ActiveMachineResolution | undefined;
+  for (const machine of configured) {
+    const access = await machines.isMachineAccessible(rawContext, machine);
+    if (access.allowed) return { machine, access };
+    firstDenied ??= { machine, access };
+  }
+  return firstDenied;
+}
+
+/**
+ * Renders a machine access denial as the tool-facing error object, preferring
+ * the decision's specific LLM-facing reason (e.g. which Settings toggle blocked
+ * it) over the generic revoked-access message. Shared by the bash/file tools
+ * here and the git tools (sandbox-git-tools.ts) so both execution boundaries
+ * report identical denials for the same machine.
+ */
+export function machineAccessDeniedError(
+  access: Extract<MachineAccessDecision, { allowed: false }>,
+  machine: MachineRef,
+): { success: false; error: string } {
+  return {
+    success: false,
+    error:
+      access.reason ??
+      `You no longer have access to the active machine ("${machineRefId(machine)}"). Call list_machines to see the available options.`,
+  };
 }
 
 /** Resolves the actor context for a turn, or an error to surface to the model. */
@@ -250,8 +299,13 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
     const decision = await gate(ctx);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
-    const activeMachine = await resolveActiveMachine(rawContext, machines);
-    if (!activeMachine) {
+    // resolveActiveMachine re-verifies access to the resolved machine on
+    // EVERY call — not just at switch_machine time. A machine's page
+    // permissions or Settings toggles can change between calls, and this is
+    // the actual execution boundary: routing a command to a machine the actor
+    // can no longer use would be a silent access-control bypass (OWASP A01).
+    const resolution = await resolveActiveMachine(rawContext, machines);
+    if (!resolution) {
       return {
         ok: false,
         error: {
@@ -260,23 +314,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
         },
       };
     }
-    // Re-verify page-view access to the resolved machine on EVERY call — not
-    // just at switch_machine time. A machine's page permissions (or the
-    // Terminal page itself) can change between calls, and this is the actual
-    // execution boundary: routing a command to a machine the actor can no
-    // longer view would be a silent access-control bypass (OWASP A01).
-    const access = await machines.isMachineAccessible(rawContext, activeMachine);
-    if (!access.allowed) {
-      return {
-        ok: false,
-        error: {
-          success: false,
-          error:
-            access.reason ??
-            `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
-        },
-      };
+    if (!resolution.access.allowed) {
+      return { ok: false, error: machineAccessDeniedError(resolution.access, resolution.machine) };
     }
+    const activeMachine = resolution.machine;
     const driveId = machines.resolveDriveId
       ? await machines.resolveDriveId(rawContext, activeMachine, ctx.driveId)
       : ctx.driveId;
@@ -355,10 +396,12 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
 
         const access = await machines.isMachineAccessible(rawContext, target);
         if (!access.allowed) {
+          // A toggle denial carries its own code so callers can distinguish
+          // "reconfigure the machine's Settings toggles" from revoked access.
           return {
             success: false,
             error: access.reason ?? `You no longer have access to "${requestedId}".`,
-            reason: 'inaccessible' as const,
+            reason: access.code ?? ('inaccessible' as const),
           };
         }
 
@@ -390,11 +433,13 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
         if ('error' in ctx) return { success: false, error: ctx.error };
 
         const configured = await machines.listMachines(rawContext);
-        const active = await resolveActiveMachine(rawContext, machines);
+        const active = (await resolveActiveMachine(rawContext, machines))?.machine;
         // Mirror list_pages: only surface machines the actor can currently
         // access — a machine's page permissions can be revoked after it was
         // configured, and describeMachine's title lookup does not itself
-        // check accessibility.
+        // check accessibility. (When every machine is denied, `active` is the
+        // first configured machine, which is filtered out below with the rest
+        // — the model correctly sees an empty list.)
         const accessibleEntries = await Promise.all(
           configured.map(async (m) => ({
             machine: m,

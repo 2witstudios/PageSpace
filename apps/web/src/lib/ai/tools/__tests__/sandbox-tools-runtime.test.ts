@@ -204,6 +204,7 @@ function makeMachineDirectoryDeps(
       title: 'Shared Terminal',
       type: 'MACHINE',
       driveId: 'drive-1',
+      isTrashed: false,
       allowPageAgents: true,
       visibleToGlobalAssistant: true,
     }),
@@ -263,62 +264,27 @@ describe('createMachineDirectory', () => {
       ]);
     });
 
-    it('given a global assistant context, should EXCLUDE machines with visibleToGlobalAssistant=false so the default-active fallback skips them', async () => {
+    it('given a global assistant context, should NOT filter hidden machines at resolution — isMachineAccessible is the single policy site (it denies them with the toggle reason)', async () => {
+      const machines: MachineRef[] = [
+        { kind: 'existing', machineId: 'hidden-1' },
+        { kind: 'existing', machineId: 'visible-1' },
+      ];
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({
-          getGlobalConfig: async () => ({
-            machineAccess: true,
-            machines: [
-              { kind: 'existing', machineId: 'hidden-1' },
-              { kind: 'existing', machineId: 'visible-1' },
-            ],
-          }),
+          getGlobalConfig: async () => ({ machineAccess: true, machines }),
           findPage: async (pageId) => ({
             title: pageId === 'hidden-1' ? 'Hidden Machine' : 'Visible Machine',
             type: 'MACHINE',
             driveId: 'drive-1',
+            isTrashed: false,
             allowPageAgents: true,
             visibleToGlobalAssistant: pageId !== 'hidden-1',
           }),
         }),
       );
-      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([
-        { kind: 'existing', machineId: 'visible-1' },
-      ]);
-    });
-
-    it('given a global assistant context whose resolved OWN machine page is hidden from the global assistant, should exclude it too', async () => {
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          getGlobalConfig: async () => ({ machineAccess: true, machines: [] }),
-          getOrCreateOwnMachinePageId: async () => 'personal-page-1',
-          findPage: async () => ({
-            title: 'My Machine',
-            type: 'MACHINE',
-            driveId: 'home-drive-1',
-            allowPageAgents: true,
-            visibleToGlobalAssistant: false,
-          }),
-        }),
+      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual(
+        machines,
       );
-      await expect(directory.listMachines({ userId: 'u1', chatSource: { type: 'global' } })).resolves.toEqual([]);
-    });
-
-    it('given a PAGE agent context, should NOT filter its machines by visibleToGlobalAssistant (the flag only gates the global assistant)', async () => {
-      const machines: MachineRef[] = [{ kind: 'existing', machineId: 'hidden-1' }];
-      const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({
-          getAgentConfig: async () => ({ machineAccess: true, machines }),
-          findPage: async () => ({
-            title: 'Hidden Machine',
-            type: 'MACHINE',
-            driveId: 'drive-1',
-            allowPageAgents: true,
-            visibleToGlobalAssistant: false,
-          }),
-        }),
-      );
-      await expect(directory.listMachines(pageContext)).resolves.toEqual(machines);
     });
 
     it('given a page agent with machineAccess off, should return no machines (fail closed)', async () => {
@@ -365,14 +331,14 @@ describe('createMachineDirectory', () => {
 
   describe('describeMachine', () => {
     it('given the own machine, should return a fixed name without a DB lookup', async () => {
-      const findPage = async () => ({ title: 'should not be used', type: 'MACHINE', driveId: 'drive-1', allowPageAgents: true, visibleToGlobalAssistant: true });
+      const findPage = async () => ({ title: 'should not be used', type: 'MACHINE', driveId: 'drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true });
       const directory = createMachineDirectory(makeMachineDirectoryDeps({ findPage }));
       await expect(directory.describeMachine(undefined, { kind: 'own' })).resolves.toEqual({ name: 'My Machine' });
     });
 
     it('given an existing machine, should return the Terminal page title', async () => {
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Shared Terminal', type: 'MACHINE', driveId: 'drive-1', allowPageAgents: true, visibleToGlobalAssistant: true }) }),
+        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Shared Terminal', type: 'MACHINE', driveId: 'drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true }) }),
       );
       await expect(
         directory.describeMachine(undefined, { kind: 'existing', machineId: 't1' }),
@@ -412,7 +378,7 @@ describe('createMachineDirectory', () => {
 
     it('given the page exists but is not a MACHINE page, should deny', async () => {
       const directory = createMachineDirectory(
-        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Not a terminal', type: 'DOCUMENT', driveId: 'drive-1', allowPageAgents: true, visibleToGlobalAssistant: true }) }),
+        makeMachineDirectoryDeps({ findPage: async () => ({ title: 'Not a terminal', type: 'DOCUMENT', driveId: 'drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true }) }),
       );
       await expect(
         directory.isMachineAccessible(context, { kind: 'existing', machineId: 'doc-1' }),
@@ -433,22 +399,42 @@ describe('createMachineDirectory', () => {
       ).resolves.toEqual({ allowed: true });
     });
 
+    it('given a TRASHED machine page, should deny (a soft-deleted machine must not accept agent commands)', async () => {
+      const directory = createMachineDirectory(
+        makeMachineDirectoryDeps({
+          findPage: async () => ({
+            title: 'Trashed Machine',
+            type: 'MACHINE',
+            driveId: 'drive-1',
+            isTrashed: true,
+            allowPageAgents: true,
+            visibleToGlobalAssistant: true,
+          }),
+        }),
+      );
+      await expect(
+        directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
+      ).resolves.toEqual({ allowed: false });
+    });
+
     describe('allowPageAgents toggle (Machine Settings)', () => {
       const machineDenyingPageAgents = async () => ({
         title: 'Locked Machine',
         type: 'MACHINE',
         driveId: 'drive-1',
+        isTrashed: false,
         allowPageAgents: false,
         visibleToGlobalAssistant: true,
       });
 
-      it('given a page-scoped agent and allowPageAgents=false, should deny with an LLM-facing reason', async () => {
+      it('given a page-scoped agent and allowPageAgents=false, should deny with the toggle code and an LLM-facing reason', async () => {
         const directory = createMachineDirectory(
           makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
         );
         const decision = await directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' });
         expect(decision.allowed).toBe(false);
         if (decision.allowed) return;
+        expect(decision.code).toBe('page_agents_disabled');
         expect(decision.reason).toContain('does not allow page agents');
       });
 
@@ -494,17 +480,19 @@ describe('createMachineDirectory', () => {
         title: 'Hidden Machine',
         type: 'MACHINE',
         driveId: 'drive-1',
+        isTrashed: false,
         allowPageAgents: true,
         visibleToGlobalAssistant: false,
       });
 
-      it('given the GLOBAL assistant and visibleToGlobalAssistant=false, should deny with an LLM-facing reason', async () => {
+      it('given the GLOBAL assistant and visibleToGlobalAssistant=false, should deny with the toggle code and an LLM-facing reason', async () => {
         const directory = createMachineDirectory(
           makeMachineDirectoryDeps({ findPage: machineHiddenFromGlobal }),
         );
         const decision = await directory.isMachineAccessible(globalContext, { kind: 'existing', machineId: 't1' });
         expect(decision.allowed).toBe(false);
         if (decision.allowed) return;
+        expect(decision.code).toBe('hidden_from_global');
         expect(decision.reason).toContain('not visible to the global assistant');
       });
 
@@ -537,7 +525,7 @@ describe('createMachineDirectory', () => {
     it('given an existing machine, should return the Terminal page\'s own driveId, overriding the ambient one', async () => {
       const directory = createMachineDirectory(
         makeMachineDirectoryDeps({
-          findPage: async () => ({ title: 'Personal Machine', type: 'MACHINE', driveId: 'home-drive-1', allowPageAgents: true, visibleToGlobalAssistant: true }),
+          findPage: async () => ({ title: 'Personal Machine', type: 'MACHINE', driveId: 'home-drive-1', isTrashed: false, allowPageAgents: true, visibleToGlobalAssistant: true }),
         }),
       );
       await expect(

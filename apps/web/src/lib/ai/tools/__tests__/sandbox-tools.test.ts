@@ -98,6 +98,83 @@ describe('createSandboxTools', () => {
     });
   });
 
+  it('bash: given the default machines[0] is blocked but a later configured machine is usable, should fall back to the usable one instead of dead-ending', async () => {
+    const seenAcquisitions: Array<{ activeMachine?: unknown }> = [];
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async (input) => {
+      seenAcquisitions.push(input as { activeMachine?: unknown });
+      return { ok: true, sandboxId: 'sbx', resumed: false };
+    };
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [
+        { kind: 'existing', machineId: 'locked-1' },
+        { kind: 'existing', machineId: 'open-2' },
+      ],
+      describeMachine: async () => ({ name: 'Machine' }),
+      isMachineAccessible: async (_c, m) =>
+        m.kind === 'existing' && m.machineId === 'open-2'
+          ? { allowed: true }
+          : { allowed: false, reason: 'The machine "Locked Machine" does not allow page agents.' },
+    };
+    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toMatchObject({ success: true });
+    expect(seenAcquisitions).toEqual([
+      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 'open-2' } }),
+    ]);
+  });
+
+  it('bash: given EVERY configured machine is blocked, should surface the FIRST machine\'s specific denial reason (not the misleading "Terminal access is not enabled")', async () => {
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [
+        { kind: 'existing', machineId: 'hidden-1' },
+        { kind: 'existing', machineId: 'hidden-2' },
+      ],
+      describeMachine: async () => ({ name: 'Hidden' }),
+      isMachineAccessible: async (_c, m) => ({
+        allowed: false,
+        reason: `The machine "${m.kind === 'existing' ? m.machineId : 'own'}" is not visible to the global assistant.`,
+      }),
+    };
+    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toEqual({
+      success: false,
+      error: 'The machine "hidden-1" is not visible to the global assistant.',
+    });
+  });
+
+  it('bash: given an explicitly SWITCHED machine becomes blocked, should deny with its reason rather than silently rerouting to another machine', async () => {
+    let acquired = false;
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async () => {
+      acquired = true;
+      return { ok: true, sandboxId: 'sbx', resumed: false };
+    };
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [
+        { kind: 'existing', machineId: 'open-1' },
+        { kind: 'existing', machineId: 'locked-2' },
+      ],
+      describeMachine: async () => ({ name: 'Machine' }),
+      isMachineAccessible: async (_c, m) =>
+        m.kind === 'existing' && m.machineId === 'locked-2'
+          ? { allowed: false, reason: 'The machine "Locked" does not allow page agents.' }
+          : { allowed: true },
+    };
+    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+    const rawContext: ToolExecutionContext = {
+      userId: 'u1',
+      activeMachine: { kind: 'existing', machineId: 'locked-2' },
+    };
+    const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
+    expect(result).toEqual({
+      success: false,
+      error: 'The machine "Locked" does not allow page agents.',
+    });
+    expect(acquired).toBe(false);
+  });
+
   it('bash: given no configured machines (machineAccess off), should deny instead of falling back to the own machine', async () => {
     let acquired = false;
     const runDeps = fakeRunDeps();
@@ -324,6 +401,26 @@ describe('createSandboxTools', () => {
       expect(result.machines).toEqual([{ id: 'own', name: 'My Machine', active: true }]);
       expect(result.machines.find((m) => m.id === 'revoked')).toBeUndefined();
     });
+
+    it('given machines[0] is blocked, should mark the fallback machine as active — consistent with where bash will actually route', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [
+          { kind: 'existing', machineId: 'locked-1' },
+          { kind: 'existing', machineId: 'open-2' },
+        ],
+        describeMachine: async () => ({ name: 'Machine' }),
+        isMachineAccessible: async (_c, m) =>
+          m.kind === 'existing' && m.machineId === 'open-2'
+            ? { allowed: true }
+            : { allowed: false, reason: 'blocked' },
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      const result = (await exec(tools.list_machines, {}, {})) as {
+        success: true;
+        machines: Array<{ id: string; active: boolean }>;
+      };
+      expect(result.machines).toEqual([{ id: 'open-2', name: 'Machine', active: true }]);
+    });
   });
 
   describe('switch_machine', () => {
@@ -392,6 +489,27 @@ describe('createSandboxTools', () => {
         success: false,
         error: 'The machine "Locked Machine" does not allow page agents.',
         reason: 'inaccessible',
+      });
+      expect(rawContext.activeMachine).toBeUndefined();
+    });
+
+    it('given a toggle denial carrying a code, should return that code as the machine-readable reason (not "inaccessible")', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
+        describeMachine: async () => ({ name: 'Locked Machine' }),
+        isMachineAccessible: async () => ({
+          allowed: false,
+          code: 'page_agents_disabled',
+          reason: 'The machine "Locked Machine" does not allow page agents.',
+        }),
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      const rawContext: ToolExecutionContext = { userId: 'u1' };
+      const result = await exec(tools.switch_machine, { machine: 't1' }, rawContext);
+      expect(result).toEqual({
+        success: false,
+        error: 'The machine "Locked Machine" does not allow page agents.',
+        reason: 'page_agents_disabled',
       });
       expect(rawContext.activeMachine).toBeUndefined();
     });
