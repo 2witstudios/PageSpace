@@ -69,6 +69,7 @@ describe('useIosBadgeSync', () => {
     useNotificationStore.setState({
       notifications: [],
       unreadCount: 0,
+      hasHydrated: true,
       fetchNotifications: mockFetchNotifications,
     });
   });
@@ -93,6 +94,55 @@ describe('useIosBadgeSync', () => {
     renderHook(() => useIosBadgeSync());
 
     await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 0 }));
+  });
+
+  it('regression: does not project the default unreadCount 0 before the store has hydrated (cold launch)', async () => {
+    // Simulates cold launch: the store still holds its default unreadCount 0
+    // and the initial server fetch (kicked off elsewhere, e.g. NotificationBell)
+    // hasn't resolved yet. Projecting here would incorrectly zero a
+    // possibly-nonzero native badge left over from a prior session.
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+
+    renderHook(() => useIosBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('regression: once hydration completes with a real count of 0 (e.g. mark-all-read before the initial fetch resolved), still projects 0', async () => {
+    // The gate must be on hydration, not on the count value — projecting 0
+    // is the whole point of this feature (it's how the badge clears), so a
+    // hydrated 0 must always reach Badge.set, unlike an unhydrated 0.
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+    renderHook(() => useIosBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+
+    act(() => {
+      useNotificationStore.setState({ unreadCount: 0, hasHydrated: true });
+    });
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 0 }));
+  });
+
+  it('regression: projects the real count once hydration completes after a cold launch', async () => {
+    useNotificationStore.setState({ unreadCount: 0, hasHydrated: false });
+    renderHook(() => useIosBadgeSync());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+
+    // The store's own initial fetch (elsewhere in the app) resolves with the real count.
+    act(() => {
+      useNotificationStore.setState({ unreadCount: 4, hasHydrated: true });
+    });
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 4 }));
   });
 
   it('projects unreadCount 3 on mount', async () => {
@@ -130,12 +180,16 @@ describe('useIosBadgeSync', () => {
     await waitFor(() => expect(mockBadgeSet).toHaveBeenLastCalledWith({ count: 5 }));
   });
 
-  it('swallows a Badge.set failure without throwing', async () => {
+  it('swallows a Badge.set failure without throwing, but logs it', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockBadgeSet.mockRejectedValueOnce(new Error('not supported on this device'));
     useNotificationStore.setState({ unreadCount: 2 });
 
     expect(() => renderHook(() => useIosBadgeSync())).not.toThrow();
     await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 2 }));
+    await waitFor(() => expect(consoleError).toHaveBeenCalled());
+
+    consoleError.mockRestore();
   });
 
   it('stops projecting after unmount', async () => {
