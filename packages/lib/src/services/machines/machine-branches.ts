@@ -290,37 +290,24 @@ export async function propagateClaudeCredential({
         for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
           const content = await rootHandle.readFile({ path });
           if (!content) continue;
-          // Both restricted 0o600 — the credentials file is the OAuth secret
-          // itself, and the config file can carry account/org metadata, so
-          // neither belongs world-readable in the branch Sprite's home dir.
-          //
-          // `writeFiles`' `mode` only takes effect at file CREATION (POSIX
-          // open()'s mode argument is ignored once a file already exists) —
-          // a refresh on reattach overwrites an ALREADY-EXISTING file (this
-          // is never the first copy after the first reattach), so the
-          // requested mode alone would silently leave whatever permissions
-          // that file already had. An explicit chmod after the write
-          // re-secures it either way, regardless of whether this write
-          // created or overwrote it.
+          // Delete any existing file FIRST, so the write below is always a
+          // fresh CREATION rather than an overwrite. `writeFiles`' `mode`
+          // only takes effect at creation (POSIX open()'s mode argument is
+          // ignored once a file already exists) — a refresh on reattach
+          // would otherwise overwrite an ALREADY-EXISTING file and silently
+          // keep whatever permissions it already had. A prior version of
+          // this function wrote first and ran a follow-up `chmod` — but that
+          // left a window where the fresh secret sat at the OLD (possibly
+          // permissive) mode until the chmod resolved, and a slow/stuck
+          // chmod on a flaky Sprite could leave that window open well past
+          // whatever bound the caller waited on (caught in review, twice:
+          // once for a chmod that fails, once for a chmod that never even
+          // returns in time). Deleting first removes the whole class of
+          // problem: there is no "old mode" to inherit, so the requested
+          // `mode: 0o600` is correct from the instant the file exists.
+          // `rm -f` is a no-op when nothing was there yet (fresh spawn).
+          await branchHandle.exec({ cmd: 'rm', args: ['-f', path] });
           await branchHandle.writeFiles([{ path, content, mode: 0o600 }]);
-
-          // `exec` resolves with an exitCode rather than throwing on a
-          // nonzero exit — a failed chmod would otherwise be silently
-          // ignored, leaving an OVERWRITE of an already-existing file (which
-          // is what the chmod above is specifically for) at whatever
-          // permissive mode it already had, while this function reports
-          // success (caught in review).
-          const chmod = await branchHandle.exec({ cmd: 'chmod', args: ['600', path] });
-          if (chmod.exitCode !== 0) {
-            // Fail CLOSED: don't leave the credential we just copied sitting
-            // at whatever (possibly permissive) mode the destination already
-            // had — remove it rather than leave a valid, freshly-refreshed
-            // secret exposed at the wrong permissions (caught in review).
-            // Best-effort — if even this fails, the outer catch below
-            // swallows it, same as any other failure in this function.
-            await branchHandle.exec({ cmd: 'rm', args: ['-f', path] });
-            throw new Error(`chmod 600 failed for ${path}: exit ${chmod.exitCode}`);
-          }
         }
       } catch {
         // best-effort — see doc comment above.

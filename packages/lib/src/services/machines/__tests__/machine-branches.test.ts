@@ -851,7 +851,13 @@ describe('Claude Code credential propagation', () => {
     expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
   });
 
-  it('should chmod both copied files to 600 after writing — writeFiles\' mode only applies at creation, so an overwrite of an ALREADY-EXISTING file (e.g. a refresh) needs an explicit chmod to re-secure it', async () => {
+  it('should delete any existing file before writing the fresh copy, for both the credentials and config files — a fresh CREATION is what makes 0o600 take effect reliably even on a refresh', async () => {
+    // `writeFiles`' `mode` only applies at file CREATION (POSIX open()
+    // semantics) — an overwrite of an already-existing file silently keeps
+    // whatever permissions it already had. Deleting first (rather than
+    // writing then chmod-ing after) means every write IS a creation, so
+    // there's no separate step (and no window where the fresh secret sits
+    // at the OLD mode) that could fail or stall independently.
     const { host, byId } = makeFakeHost();
     const rootHandle = makeRootHandle({
       '/home/sprite/.claude/.credentials.json': 'secret-token',
@@ -863,45 +869,25 @@ describe('Claude Code credential propagation', () => {
     if (!result.ok) throw new Error('expected ok');
 
     const state = byId.get(result.sandboxId);
-    const chmodCalls = state?.execLog.filter((c) => c.cmd === 'chmod') ?? [];
-    expect(chmodCalls).toEqual([
-      { cmd: 'chmod', args: ['600', '/home/sprite/.claude/.credentials.json'] },
-      { cmd: 'chmod', args: ['600', '/home/sprite/.claude.json'] },
+    const rmCalls = state?.execLog.filter((c) => c.cmd === 'rm') ?? [];
+    expect(rmCalls).toEqual([
+      { cmd: 'rm', args: ['-f', '/home/sprite/.claude/.credentials.json'] },
+      { cmd: 'rm', args: ['-f', '/home/sprite/.claude.json'] },
     ]);
+    expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
+    expect(state?.fileModes.get('/home/sprite/.claude.json')).toBe(0o600);
   });
 
-  it('given the chmod exec fails (non-zero exit), should fail CLOSED by removing the just-copied credential rather than leaving it at the wrong permissions, and should stop copying further files', async () => {
-    // `exec` resolves with an exitCode rather than throwing on a nonzero
-    // exit — a failed chmod must not be silently ignored, since a failed
-    // chmod on an OVERWRITE of an already-existing file leaves it at
-    // whatever permissive mode it already had. Simulates `rm -f` deletion
-    // too, so the file's actual absence can be asserted below.
-    const { host, byId } = makeFakeHost((state, args) => {
-      if (args.cmd === 'chmod') return { exitCode: 1, stdout: '', stderr: 'chmod: permission denied' };
-      if (args.cmd === 'rm' && args.args?.[0] === '-f' && args.args[1] !== undefined) {
-        state.files.delete(args.args[1]);
-        state.fileModes.delete(args.args[1]);
-      }
+  it('given the pre-write rm exec throws (e.g. a transport failure), should not fail the spawn (best-effort)', async () => {
+    const { host } = makeFakeHost((_state, args) => {
+      if (args.cmd === 'rm') throw new Error('exec transport failure');
       return { exitCode: 0, stdout: '', stderr: '' };
     });
-    const rootHandle = makeRootHandle({
-      '/home/sprite/.claude/.credentials.json': 'secret-token',
-      '/home/sprite/.claude.json': '{"theme":"dark"}',
-    });
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
     const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
 
     const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
-    // Best-effort — a chmod failure must never fail the spawn itself.
     expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error('expected ok');
-
-    // The credentials file's chmod failed — it must have been REMOVED
-    // (fail closed), not left sitting there at the wrong permissions. And
-    // the failure aborted the rest of the copy — the config file (second in
-    // loop order) should never have been reached.
-    const state = byId.get(result.sandboxId);
-    expect(state?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
-    expect(state?.files.has('/home/sprite/.claude.json')).toBe(false);
   });
 
   it('given resolveRootMachineHandle never settles (e.g. a stuck root Sprite), should still return once the bound elapses rather than hanging indefinitely', async () => {
