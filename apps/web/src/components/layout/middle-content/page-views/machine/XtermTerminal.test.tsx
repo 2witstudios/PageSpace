@@ -6,6 +6,10 @@ import type { Socket } from 'socket.io-client';
 // xterm is a DOM/canvas library the pane imports dynamically; stub it so what's
 // under test is the PROTOCOL this component speaks over the socket.
 const written: string[] = [];
+/** Rendered in `written` where a buffer reset happened — the reconnect repaint
+ * must RESET-then-replay, never append the replay under what's already shown. */
+const RESET_MARK = '⟪reset⟫';
+let disposals = 0;
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     cols = 80;
@@ -22,7 +26,12 @@ vi.mock('@xterm/xterm', () => ({
     writeln(data: string) {
       written.push(data);
     }
-    dispose() {}
+    reset() {
+      written.push(RESET_MARK);
+    }
+    dispose() {
+      disposals += 1;
+    }
   },
 }));
 vi.mock('@xterm/addon-fit', () => ({
@@ -47,20 +56,27 @@ function fakeSocket() {
   // failed to unregister. Both are the machinery the prompt latches rest on.
   const handlers = new Map<string, Set<(payload: unknown) => void>>();
   const emitted: Array<{ event: string; payload: Record<string, unknown> }> = [];
+  const socket = {
+    connected: true,
+    on: (event: string, handler: (payload: unknown) => void) => {
+      const set = handlers.get(event) ?? new Set();
+      set.add(handler);
+      handlers.set(event, set);
+    },
+    off: (event: string, handler: (payload: unknown) => void) => {
+      handlers.get(event)?.delete(handler);
+    },
+    emit: (event: string, payload: Record<string, unknown>) => emitted.push({ event, payload }),
+  };
   return {
-    socket: {
-      connected: true,
-      on: (event: string, handler: (payload: unknown) => void) => {
-        const set = handlers.get(event) ?? new Set();
-        set.add(handler);
-        handlers.set(event, set);
-      },
-      off: (event: string, handler: (payload: unknown) => void) => {
-        handlers.get(event)?.delete(handler);
-      },
-      emit: (event: string, payload: Record<string, unknown>) => emitted.push({ event, payload }),
-    } as unknown as Socket,
+    socket: socket as unknown as Socket,
     emitted,
+    /** Drive the transport. socket.io reuses the SAME Socket object across a
+     * reconnect — a component only ever learns about one from `connected`
+     * flipping and the `connect`/`disconnect` lifecycle events. */
+    setConnected: (value: boolean) => {
+      socket.connected = value;
+    },
     /** The connectionIds the mounted panes announced — every event is tagged with one. */
     connectionIds: () =>
       emitted
@@ -457,6 +473,116 @@ describe('XtermTerminal — starting-prompt delivery', () => {
         'keep the prompt unspent — socket.io buffers the emit and flushes it on reconnect carrying a connectionId the server no longer knows, so it is dropped there while the prompt would already have been thrown away here',
       actual: { typed: inputs(fake.emitted), promptSpent: onSent.mock.calls.length },
       expected: { typed: [], promptSpent: 0 },
+    });
+  });
+});
+
+/** What XtermTerminal prints when a bound pane's transport drops. */
+const RECONNECTING_NOTICE = '\r\n\x1b[90mConnection lost — reconnecting…\x1b[0m';
+
+describe('XtermTerminal — PTY binding across socket reconnects', () => {
+  beforeEach(() => {
+    written.length = 0;
+    disposals = 0;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test('a transport reconnect re-fires agent-terminal:connect exactly once, on the pane’s own connectionId', async () => {
+    const fake = fakeSocket();
+    render(<XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} />);
+    await waitFor(() => expect(fake.connectionIds().length).toBe(1));
+    fake.server('agent-terminal:ready', { connectionId: fake.connectionId() });
+
+    // The transport drops and comes back. socket.io reuses the SAME Socket
+    // object, so the [socket, sessionId]-keyed mount effect never re-runs —
+    // the `connect` event is the only signal a re-bind can hang off.
+    fake.setConnected(false);
+    fake.server('disconnect', {});
+    fake.setConnected(true);
+    fake.server('connect', {});
+
+    assert({
+      given: 'a live pane whose socket dropped its transport and reconnected',
+      should:
+        're-emit agent-terminal:connect exactly once, reusing the pane’s connectionId, without recreating the terminal — the server side of the binding died with the transport, and without this the pane looks alive until the idle reap kills its agent',
+      actual: {
+        connects: fake.connectionIds().length,
+        distinctIds: new Set(fake.connectionIds()).size,
+        disposed: disposals,
+      },
+      expected: { connects: 2, distinctIds: 1, disposed: 0 },
+    });
+  });
+
+  test('the initial connection binds exactly once, wherever mount falls relative to it', async () => {
+    // Mounted AFTER the socket connected: the mount effect binds, and no
+    // `connect` event follows to double it.
+    const early = fakeSocket();
+    render(<XtermTerminal socket={early.socket} sessionId="s1" connectPayload={CONNECT} />);
+    await waitFor(() => expect(early.connectionIds().length).toBe(1));
+
+    // Mounted BEFORE the socket connected: nothing is emitted into the void —
+    // the `connect` event does the one and only bind. (`connect` firing on the
+    // INITIAL connection is exactly why re-binding cannot be unconditional.)
+    const late = fakeSocket();
+    late.setConnected(false);
+    render(<XtermTerminal socket={late.socket} sessionId="s2" connectPayload={CONNECT} />);
+    await waitFor(() => expect(late.hasHandlers()).toBe(true));
+    const whileDown = late.connectionIds().length;
+    late.setConnected(true);
+    late.server('connect', {});
+
+    assert({
+      given: 'one pane mounted after its socket connected, another mounted before',
+      should: 'emit exactly one agent-terminal:connect each — never zero, never two',
+      actual: { early: early.connectionIds().length, whileDown, late: late.connectionIds().length },
+      expected: { early: 1, whileDown: 0, late: 1 },
+    });
+  });
+
+  test('a reconnect reattach repaints from the replayed scrollback instead of appending it under what is shown', async () => {
+    const fake = fakeSocket();
+    render(<XtermTerminal socket={fake.socket} sessionId="s1" connectPayload={CONNECT} />);
+    await waitFor(() => expect(fake.connectionIds().length).toBe(1));
+    const connectionId = fake.connectionId();
+    fake.server('agent-terminal:ready', { scrollback: '$ bun run build\n', connectionId });
+    fake.server('agent-terminal:output', { data: 'compiling…\n', connectionId });
+
+    fake.setConnected(false);
+    fake.server('disconnect', {});
+    fake.setConnected(true);
+    fake.server('connect', {});
+    // The server answers a re-bind with the session's FULL scrollback —
+    // everything already on this screen plus whatever landed during the gap.
+    fake.server('agent-terminal:ready', {
+      scrollback: '$ bun run build\ncompiling…\ndone\n',
+      resumed: true,
+      connectionId,
+    });
+    // A later duplicate ready on the SAME connection must not wipe live output.
+    fake.server('agent-terminal:output', { data: '$ ', connectionId });
+    fake.server('agent-terminal:ready', { connectionId });
+
+    assert({
+      given: 'a pane with content on screen whose re-bind is answered with the full scrollback replay',
+      should:
+        'surface the drop, then reset the buffer ONCE and repaint from the replay — appending would duplicate everything already shown, and disposing would tear down the terminal the fix exists to preserve',
+      actual: { rendered: written, disposed: disposals },
+      expected: {
+        rendered: [
+          '$ bun run build\n',
+          'compiling…\n',
+          RECONNECTING_NOTICE,
+          RESET_MARK,
+          '$ bun run build\ncompiling…\ndone\n',
+          '$ ',
+        ],
+        disposed: 0,
+      },
     });
   });
 });
