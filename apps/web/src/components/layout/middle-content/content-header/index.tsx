@@ -159,7 +159,10 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
             </Button>
           )}
           {page && isPublishablePageType(page.type) && (
-            <HeaderPublishControls pageId={page.id} />
+            // Keyed on pageId so navigating to a different page remounts the
+            // control instead of reusing local UI state (e.g. an open Publish
+            // Settings dialog) across pages.
+            <HeaderPublishControls key={page.id} pageId={page.id} />
           )}
           <PageViewers pageId={pageId} />
           <ShareDialog pageId={pageId} />

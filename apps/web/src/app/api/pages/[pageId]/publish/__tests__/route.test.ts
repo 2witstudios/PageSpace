@@ -235,6 +235,10 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'acme',
       path: 'welcome',
       isHomePage: false,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
     });
   });
 
@@ -254,6 +258,10 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'pagespace-2',
       path: 'welcome',
       isHomePage: false,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
     });
   });
 
@@ -279,6 +287,10 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'acme',
       path: 'welcome',
       isHomePage: true,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
     });
   });
 

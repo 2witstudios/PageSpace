@@ -131,7 +131,8 @@ body {
 .ps-document a:hover {
   opacity: 0.8;
 }
-.ps-document a[data-mention-type] {
+.ps-document a[data-mention-type],
+.ps-document span[data-mention-type] {
   background-color: rgba(9, 105, 218, 0.08);
   border: 1px solid rgba(9, 105, 218, 0.2);
   border-radius: 0.375rem;
@@ -139,6 +140,14 @@ body {
   text-decoration: none;
   font-size: 0.95em;
   white-space: nowrap;
+}
+.ps-document span[data-mention-type] {
+  /* Neutralized mention (target unpublished): span isn't a link, so the anchor's
+   * base color/cursor never applies -- restate them here to keep the chip
+   * looking identical to a live mention instead of falling back to plain text. */
+  color: #0969da;
+  cursor: default;
+  display: inline-block;
 }
 @media (prefers-color-scheme: dark) {
   body {
@@ -172,9 +181,13 @@ body {
   .ps-document a {
     color: #4493f8;
   }
-  .ps-document a[data-mention-type] {
+  .ps-document a[data-mention-type],
+  .ps-document span[data-mention-type] {
     background-color: rgba(68, 147, 248, 0.12);
     border-color: rgba(68, 147, 248, 0.3);
+  }
+  .ps-document span[data-mention-type] {
+    color: #4493f8;
   }
 }
 `;

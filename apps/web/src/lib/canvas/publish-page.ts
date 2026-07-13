@@ -111,6 +111,17 @@ export interface PublishCanvasPageResult {
   path: string;
   /** True when this page is the drive's home page (also mirrored to the root). */
   isHomePage: boolean;
+  /**
+   * Effective author SEO overrides as persisted (after merging `input`'s
+   * partial overrides with whatever was already stored). Callers that resolve
+   * `ogImageUrl` from an uploaded file id should read it back from here rather
+   * than caching their own request payload — the request may carry a blank
+   * placeholder for a value the server just resolved to a real CDN URL.
+   */
+  title: string | null;
+  description: string | null;
+  ogImageUrl: string | null;
+  noindex: boolean;
 }
 
 /** Final SEO/head fields threaded into whichever type-specific renderer `preparePublishContent` selects. */
@@ -178,7 +189,12 @@ async function preparePublishContent(params: {
       return { meta, body: bodyHtml, render: (args) => renderPublishedDocument({ html: bodyHtml, ...args }) };
     }
     case PageType.CODE:
-      return { meta: {}, body: content ?? '', render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
+      // `body` (not the rendered `code`) feeds deriveDescription's fallback
+      // meta description when the author sets none — raw source isn't prose,
+      // and deriveDescription's HTML-tag stripping (`/<[^>]+>/g`) would mangle
+      // generics/comparisons in it, so leave it empty like SHEET's non-prose
+      // content (an empty derived description, same accepted tradeoff).
+      return { meta: {}, body: '', render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
     case PageType.SHEET:
       return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: content ?? '', ...args }) };
     default:
@@ -469,7 +485,16 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // copies the branded link visitors should land on. This is the same canonical
   // host baked into the rendered HTML above — `rootUrl`/`publishedUrl`.
   const responseUrl = isHomePage ? rootUrl : publishedUrl;
-  return { url: responseUrl, subdomain, path, isHomePage };
+  return {
+    url: responseUrl,
+    subdomain,
+    path,
+    isHomePage,
+    title: effectiveTitle,
+    description: effectiveDescription,
+    ogImageUrl: effectiveOgImageUrl,
+    noindex: effectiveNoindex,
+  };
 }
 
 /**

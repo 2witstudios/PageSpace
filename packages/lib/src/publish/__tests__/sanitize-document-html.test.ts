@@ -278,6 +278,24 @@ describe('sanitizeDocumentHtml', () => {
       });
     });
 
+    it('removes data:image/svg+xml hrefs (SVG documents can carry <script>)', () => {
+      assert({
+        given: 'an anchor navigating to an inline SVG document via a data: href',
+        should: 'remove the attribute — unlike data:image/png, svg+xml can execute script on navigation',
+        actual: sanitizeDocumentHtml('<a href="data:image/svg+xml,<svg><script>alert(1)</script></svg>">x</a>'),
+        expected: '<a>x</a>',
+      });
+    });
+
+    it('removes data:image/svg+xml hrefs regardless of casing', () => {
+      assert({
+        given: 'a href with an uppercase DATA:IMAGE/SVG+XML scheme',
+        should: 'remove the attribute',
+        actual: sanitizeDocumentHtml('<a href="DATA:IMAGE/SVG+XML;base64,x">x</a>'),
+        expected: '<a>x</a>',
+      });
+    });
+
     it('keeps benign URL schemes', () => {
       const benign =
         '<a href="https://example.com/a">a</a>' +

@@ -12,8 +12,12 @@
  *     fallback/control junk, not document prose). `<embed>`/`<base>`/`<meta>`/
  *     `<link>` are void — the tags are removed.
  *   - `on*` event-handler attributes are removed; the element is kept.
- *   - `href`/`src` values with `javascript:` or `data:text/html` schemes are
- *     removed (attribute only), after undoing case/whitespace/entity tricks.
+ *   - `href`/`src` values with `javascript:`, `data:text/html`, or
+ *     `data:image/svg+xml` schemes are removed (attribute only), after undoing
+ *     case/whitespace/entity tricks. SVG documents can carry `<script>`, so an
+ *     `<a href="data:image/svg+xml,...">` navigates to a live script context on
+ *     click even though `data:image/*` in general (png/jpeg/webp/gif) is inert
+ *     and kept — see the "keeps benign URL schemes" test.
  *
  * Pure function: no DOM, no I/O, deterministic — it runs identically in Node
  * and the browser. Benign TipTap output passes through byte-identical, and the
@@ -49,7 +53,8 @@ const isForbiddenElement = (name: string): boolean =>
  * numeric references plus every named entity that yields a character the two
  * denied scheme prefixes are built from — `:` (`&colon;`), `/` (`&sol;`) and
  * the whitespace browsers strip (`&Tab;`, `&NewLine;`). ASCII letters have no
- * named entities, so this set is complete for `javascript:`/`data:text/html`.
+ * named entities, so this set is complete for `javascript:`/`data:text/html`/
+ * `data:image/svg+xml`.
  * Decoding more would risk changing benign values; matching is deliberately
  * case-insensitive (broader than HTML) — a false decode only means we inspect
  * a stricter string.
@@ -85,7 +90,11 @@ const hasDangerousScheme = (rawValue: string): boolean => {
   const normalized = decodeEntitiesForCheck(rawValue)
     .replace(/[\u0000-\u0020]+/g, '')
     .toLowerCase();
-  return normalized.startsWith('javascript:') || normalized.startsWith('data:text/html');
+  return (
+    normalized.startsWith('javascript:') ||
+    normalized.startsWith('data:text/html') ||
+    normalized.startsWith('data:image/svg+xml')
+  );
 };
 
 interface ScannedAttribute {

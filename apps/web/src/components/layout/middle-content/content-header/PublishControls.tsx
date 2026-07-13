@@ -154,14 +154,18 @@ const PublishControls = ({ pageId, contentDirty }: PublishControlsProps) => {
         toast.error(await readError(res));
         return false;
       }
-      const data = (await res.json()) as { url: string };
+      const data = (await res.json()) as PublishStatusResponse & { url: string };
       setState((prev) => ({
         ...prev,
         published: true,
         url: data.url,
         available: true,
         isStale: false,
-        settings: overrides ?? prev.settings,
+        // Read the effective settings back from the server rather than caching
+        // the request payload: when `overrides.ogImageFileId` was set, the
+        // request's `ogImageUrl` is a blank placeholder — the server resolves
+        // it to the real CDN URL and returns that resolved value here.
+        settings: overrides ? settingsFromResponse(data) : prev.settings,
       }));
       toast.success(isUpdate ? 'Page updated' : 'Page published');
       return true;

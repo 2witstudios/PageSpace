@@ -459,6 +459,16 @@ describe('publishCanvasPage — per-type render branch', () => {
     );
   });
 
+  it('given a CODE page with no author description, does not derive one from the raw source (would mangle generics as HTML tags)', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CODE', title: 'main.ts', content: 'const x: Array<Map<string, number>> = [];', contentMode: 'html', driveId: 'drive-1',
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(renderPublishedCode).toHaveBeenCalledWith(expect.objectContaining({ description: '' }));
+  });
+
   it('given a SHEET page, passes the serialized content straight to renderPublishedSheet without HTML rewriting', async () => {
     const serialized = JSON.stringify({ cells: { A1: 'hi' } });
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
