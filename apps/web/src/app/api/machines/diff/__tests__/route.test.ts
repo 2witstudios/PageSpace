@@ -24,6 +24,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(() => false),
 }));
 
+const logApiError = vi.fn();
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: { api: { error: (...args: unknown[]) => logApiError(...(args as [])) } },
+}));
+
 type HandleResult =
   | { ok: true; handle: { machineId: string } }
   | { ok: false; reason: 'not_found' | 'vanished' };
@@ -222,11 +227,32 @@ describe('GET /api/machines/diff — list form', () => {
   it.each([
     { reason: 'exec_failed' as const, status: 502 },
     { reason: 'merge_base_failed' as const, status: 502 },
-  ])('maps a $reason service failure to $status', async ({ reason, status }) => {
-    listMachineDiffFiles.mockResolvedValue({ ok: false, reason, detail: 'boom' });
+  ])('maps a $reason service failure to $status with a sanitized error, logging the stderr detail', async ({ reason, status }) => {
+    const detail = "fatal: cannot access '/workspace/repo/.git': No such file or directory";
+    listMachineDiffFiles.mockResolvedValue({ ok: false, reason, detail });
     const res = await GET(get({}));
     expect(res.status).toBe(status);
-    expect(await res.json()).toEqual({ error: 'boom', reason });
+    const body = (await res.json()) as { error: string; reason: string };
+    expect(body).toEqual({ error: 'Failed to compute the changed-file list', reason });
+    expect(JSON.stringify(body)).not.toContain('/workspace');
+    expect(JSON.stringify(body)).not.toContain('fatal:');
+    expect(logApiError).toHaveBeenCalledWith(
+      'Machine diff list failed',
+      undefined,
+      expect.objectContaining({ reason, detail }),
+    );
+  });
+
+  it('still error-logs a detail-less service failure — the 502 must stay diagnosable', async () => {
+    listMachineDiffFiles.mockResolvedValue({ ok: false, reason: 'exec_failed' });
+    const res = await GET(get({}));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: 'Failed to compute the changed-file list', reason: 'exec_failed' });
+    expect(logApiError).toHaveBeenCalledWith(
+      'Machine diff list failed',
+      undefined,
+      expect.objectContaining({ reason: 'exec_failed', machineId: 't1', branchName: 'feature/x', scope: 'uncommitted' }),
+    );
   });
 });
 
@@ -311,9 +337,19 @@ describe('GET /api/machines/diff — per-file pair form', () => {
     expect(res.status).toBe(404);
   });
 
-  it('maps a pair-read exec failure to 502', async () => {
-    readMachineDiffPair.mockResolvedValue({ ok: false, reason: 'exec_failed', detail: 'boom' });
+  it('maps a pair-read exec failure to 502 with a sanitized error, logging the stderr detail', async () => {
+    const detail = "fatal: path '/workspace/repo/src/a.ts' does not exist in 'HEAD'";
+    readMachineDiffPair.mockResolvedValue({ ok: false, reason: 'exec_failed', detail });
     const res = await GET(get({ path: 'src/a.ts' }));
     expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string; reason: string };
+    expect(body).toEqual({ error: 'Failed to read the diff for this file', reason: 'exec_failed' });
+    expect(JSON.stringify(body)).not.toContain('/workspace');
+    expect(JSON.stringify(body)).not.toContain('fatal:');
+    expect(logApiError).toHaveBeenCalledWith(
+      'Machine diff pair read failed',
+      undefined,
+      expect.objectContaining({ reason: 'exec_failed', detail, path: 'src/a.ts' }),
+    );
   });
 });
