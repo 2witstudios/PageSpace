@@ -32,11 +32,19 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
 
-vi.mock('@/lib/machines/machine-workspaces-runtime', () => ({
-  buildMachineWorkspacesDeps: (...args: unknown[]) => mockBuildMachineWorkspacesDeps(...args),
-  canAccessMachine: (...args: unknown[]) => mockCanAccessMachine(...args),
-  toWorkspaceDTO: (...args: unknown[]) => mockToWorkspaceDTO(...args),
-}));
+// `scopeFromBody`/`forbiddenMachineAccess`/`RESOURCE_TYPE`/`WORKSPACE_DENIAL_STATUS`
+// are pure/shared helpers (no DB or sandbox I/O) — reused via `importOriginal`
+// rather than re-implemented a third time here; only the DB/auth-backed pieces
+// (deps, access checks, DTO mapping) are mocked.
+vi.mock('@/lib/machines/machine-workspaces-runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/machines/machine-workspaces-runtime')>();
+  return {
+    ...actual,
+    buildMachineWorkspacesDeps: (...args: unknown[]) => mockBuildMachineWorkspacesDeps(...args),
+    canAccessMachine: (...args: unknown[]) => mockCanAccessMachine(...args),
+    toWorkspaceDTO: (...args: unknown[]) => mockToWorkspaceDTO(...args),
+  };
+});
 
 vi.mock('@pagespace/lib/services/machines/machine-workspaces', () => ({
   bootstrapWorkspaces: (...args: unknown[]) => mockBootstrapWorkspaces(...args),

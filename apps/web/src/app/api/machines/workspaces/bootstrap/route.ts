@@ -17,24 +17,18 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { bootstrapWorkspaces, type BootstrapWorkspaceInput } from '@pagespace/lib/services/machines/machine-workspaces';
-import { buildMachineWorkspacesDeps, canAccessMachine, toWorkspaceDTO } from '@/lib/machines/machine-workspaces-runtime';
+import {
+  buildMachineWorkspacesDeps,
+  canAccessMachine,
+  forbiddenMachineAccess,
+  RESOURCE_TYPE,
+  scopeFromBody,
+  toWorkspaceDTO,
+  WORKSPACE_DENIAL_STATUS,
+} from '@/lib/machines/machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-const RESOURCE_TYPE = 'machine';
-
-function scopeFromBody(value: unknown): { projectName?: string; branchName?: string } {
-  if (typeof value !== 'object' || value === null) return {};
-  const candidate = value as { projectName?: unknown; branchName?: unknown };
-  return {
-    ...(typeof candidate.projectName === 'string' && candidate.projectName.length > 0
-      ? { projectName: candidate.projectName }
-      : {}),
-    ...(typeof candidate.branchName === 'string' && candidate.branchName.length > 0
-      ? { branchName: candidate.branchName }
-      : {}),
-  };
-}
 
 function parseWorkspaces(value: unknown): BootstrapWorkspaceInput[] | null {
   if (!Array.isArray(value)) return null;
@@ -48,11 +42,6 @@ function parseWorkspaces(value: unknown): BootstrapWorkspaceInput[] | null {
   }
   return parsed;
 }
-
-const DENIAL_STATUS: Record<string, number> = {
-  invalid_name: 400,
-  invalid_columns: 400,
-};
 
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -74,14 +63,7 @@ export async function POST(request: Request) {
   }
 
   if (!(await canAccessMachine(auth.userId, body.machineId))) {
-    auditRequest(request, {
-      eventType: 'authz.access.denied',
-      userId: auth.userId,
-      resourceType: RESOURCE_TYPE,
-      resourceId: body.machineId,
-      riskScore: 0.5,
-    });
-    return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
+    return forbiddenMachineAccess(request, auth.userId, body.machineId);
   }
 
   const deps = buildMachineWorkspacesDeps();
@@ -94,11 +76,11 @@ export async function POST(request: Request) {
   });
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: DENIAL_STATUS[result.reason] ?? 500 });
+    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: WORKSPACE_DENIAL_STATUS[result.reason] ?? 500 });
   }
 
   if (result.claimed) {
-    await broadcastMachineWorkspaceEvent(body.machineId, 'machine-workspace:bootstrapped', {
+    void broadcastMachineWorkspaceEvent(body.machineId, 'machine-workspace:bootstrapped', {
       machineId: body.machineId,
       workspaces: result.workspaces.map(toWorkspaceDTO),
     });

@@ -203,6 +203,44 @@ describe('useMachineWorkspaceSync', () => {
     expect(afterRevalidate).toHaveLength(2);
   });
 
+  // Regression: apps/realtime's `io.to(channelId).emit(...)` reaches EVERY
+  // socket in the room, including the browser that itself POSTed the
+  // bootstrap claim — so the winner receives its own `bootstrapped` broadcast
+  // back over the socket. Without the same `hydratedOnce` guard the other
+  // handlers respect, this would re-run the full-list replace and could wipe
+  // a workspace created in the narrow window between the POST resolving and
+  // the broadcast arriving.
+  it('given a machine-workspace:bootstrapped event AFTER this browser already hydrated (its own broadcast echoing back), does NOT re-run the full-list replace', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      jsonResponse({
+        bootstrapped: true,
+        workspaces: [{ id: 'ws-a', name: 'A', scope: {}, columns: [{ id: 'col-a', panes: [{ id: 'pane-a', scope: null }] }] }],
+      }),
+    );
+
+    renderHook(() => useMachineWorkspaceSync('m-bootstrapped-echo'));
+    await waitFor(() => {
+      const machine = selectMachine('m-bootstrapped-echo')(useMachineWorkspaceStore.getState());
+      expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-a']);
+    });
+
+    // A local-only workspace created just after hydration (its own create POST
+    // still in flight) — a redundant full replace would drop it.
+    act(() => {
+      useMachineWorkspaceStore.getState().createWorkspace('m-bootstrapped-echo');
+    });
+    expect(workspacesOf(selectMachine('m-bootstrapped-echo')(useMachineWorkspaceStore.getState()))).toHaveLength(2);
+
+    act(() => {
+      mockSocket.current!._trigger('machine-workspace:bootstrapped', {
+        machineId: 'm-bootstrapped-echo',
+        workspaces: [{ id: 'ws-a', name: 'A', scope: {}, columns: [{ id: 'col-a', panes: [{ id: 'pane-a', scope: null }] }] }],
+      });
+    });
+
+    expect(workspacesOf(selectMachine('m-bootstrapped-echo')(useMachineWorkspaceStore.getState()))).toHaveLength(2);
+  });
+
   it('given a machine-workspace:deleted event for this machine, removes the workspace', async () => {
     mockFetchWithAuth.mockResolvedValue(
       jsonResponse({

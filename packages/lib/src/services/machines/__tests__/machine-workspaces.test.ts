@@ -176,6 +176,24 @@ describe('createWorkspace', () => {
     }
   });
 
+  // Regression: `updateWorkspace` already trims on rename — create (and
+  // bootstrap seeding, which shares `planWorkspacePayload`) must persist the
+  // same trimmed string for the same input, or the same logical name ends up
+  // represented two different ways depending on which endpoint wrote it.
+  it('trims a whitespace-padded name — matching updateWorkspace\'s rename behavior', async () => {
+    const { deps } = makeDeps();
+    const result = await createWorkspace({
+      machineId: MACHINE_ID,
+      ownerId: 'user-1',
+      id: 'ws-1',
+      name: '  Foo  ',
+      scope: {},
+      layout: VALID_COLUMNS,
+      deps,
+    });
+    expect(result).toMatchObject({ ok: true, workspace: { name: 'Foo' } });
+  });
+
   it('rejects an invalid name/columns payload before touching the store', async () => {
     const { deps, rows } = makeDeps();
     const result = await createWorkspace({

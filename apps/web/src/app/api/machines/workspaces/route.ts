@@ -33,14 +33,16 @@ import {
   buildMachineWorkspacesDeps,
   canAccessMachine,
   canViewMachine,
+  forbiddenMachineAccess,
+  RESOURCE_TYPE,
+  scopeFromBody,
   toWorkspaceDTO,
+  WORKSPACE_DENIAL_STATUS,
 } from '@/lib/machines/machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
-
-const RESOURCE_TYPE = 'machine';
 
 type ParsedField<T> = { ok: true; value: T } | { ok: false; error: NextResponse };
 
@@ -53,37 +55,6 @@ function requireId(value: unknown, field: string): ParsedField<string> {
   return { ok: true, value };
 }
 
-/** Audit the authz denial (so SIEM can detect probing) and return a fresh 403. */
-function forbidden(request: Request, userId: string, machineId: string): NextResponse {
-  auditRequest(request, {
-    eventType: 'authz.access.denied',
-    userId,
-    resourceType: RESOURCE_TYPE,
-    resourceId: machineId,
-    riskScore: 0.5,
-  });
-  return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
-}
-
-const DENIAL_STATUS: Record<string, number> = {
-  invalid_name: 400,
-  invalid_columns: 400,
-  not_found: 404,
-};
-
-function scopeFromBody(value: unknown): { projectName?: string; branchName?: string } {
-  if (typeof value !== 'object' || value === null) return {};
-  const candidate = value as { projectName?: unknown; branchName?: unknown };
-  return {
-    ...(typeof candidate.projectName === 'string' && candidate.projectName.length > 0
-      ? { projectName: candidate.projectName }
-      : {}),
-    ...(typeof candidate.branchName === 'string' && candidate.branchName.length > 0
-      ? { branchName: candidate.branchName }
-      : {}),
-  };
-}
-
 export async function GET(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
@@ -92,7 +63,7 @@ export async function GET(request: Request) {
   const machineId = requireId(url.searchParams.get('machineId'), 'machineId');
   if (!machineId.ok) return machineId.error;
 
-  if (!(await canViewMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
+  if (!(await canViewMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
   const deps = buildMachineWorkspacesDeps();
   const [workspaces, bootstrapped] = await Promise.all([
@@ -119,7 +90,7 @@ export async function POST(request: Request) {
   if (!id.ok) return id.error;
   if (typeof body.name !== 'string') return fieldRequired('name');
 
-  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
+  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
   const deps = buildMachineWorkspacesDeps();
   const result = await createWorkspace({
@@ -133,11 +104,11 @@ export async function POST(request: Request) {
   });
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: DENIAL_STATUS[result.reason] ?? 500 });
+    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: WORKSPACE_DENIAL_STATUS[result.reason] ?? 500 });
   }
 
   if (result.created) {
-    await broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:created', {
+    void broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:created', {
       machineId: machineId.value,
       ...toWorkspaceDTO(result.workspace),
     });
@@ -179,7 +150,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'At least one of name or columns is required' }, { status: 400 });
   }
 
-  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
+  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
   const deps = buildMachineWorkspacesDeps();
   const result = await updateWorkspace({
@@ -191,10 +162,10 @@ export async function PATCH(request: Request) {
   });
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: DENIAL_STATUS[result.reason] ?? 500 });
+    return NextResponse.json({ error: result.reason, reason: result.reason }, { status: WORKSPACE_DENIAL_STATUS[result.reason] ?? 500 });
   }
 
-  await broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:updated', {
+  void broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:updated', {
     machineId: machineId.value,
     workspaceId: workspaceId.value,
     ...(hasName ? { name: result.workspace.name } : {}),
@@ -222,7 +193,7 @@ export async function DELETE(request: Request) {
   const workspaceId = requireId(url.searchParams.get('workspaceId'), 'workspaceId');
   if (!workspaceId.ok) return workspaceId.error;
 
-  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbidden(request, auth.userId, machineId.value);
+  if (!(await canAccessMachine(auth.userId, machineId.value))) return forbiddenMachineAccess(request, auth.userId, machineId.value);
 
   const deps = buildMachineWorkspacesDeps();
   const result = await removeWorkspace({ machineId: machineId.value, workspaceId: workspaceId.value, store: deps.store });
@@ -231,7 +202,7 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: result.reason }, { status: 404 });
   }
 
-  await broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:deleted', {
+  void broadcastMachineWorkspaceEvent(machineId.value, 'machine-workspace:deleted', {
     machineId: machineId.value,
     workspaceId: workspaceId.value,
   });

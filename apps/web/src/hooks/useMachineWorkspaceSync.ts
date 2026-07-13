@@ -133,6 +133,14 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
 
     post<BootstrapResponse>('/api/machines/workspaces/bootstrap', { machineId, workspaces: payload })
       .then((res) => {
+        // This request's own resolution races the socket subscription below:
+        // apps/realtime's `io.to(channelId).emit(...)` broadcasts this exact
+        // bootstrap claim back to every socket in the room, INCLUDING this
+        // browser's own — so `onBootstrapped` can already have hydrated (and
+        // set `hydratedOnce`) before this `.then()` runs. Re-running the
+        // full-list replace here too would risk wiping a workspace created in
+        // that window.
+        if (hydratedOnce.current) return;
         hydratedOnce.current = true;
         hydrateFromServer(machineId, res.workspaces);
       })
@@ -186,6 +194,17 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     };
     const onBootstrapped = (payload: { machineId: string; workspaces: ServerWorkspaceDTO[] }) => {
       if (payload.machineId !== mid) return;
+      // `io.to(channelId).emit(...)` (apps/realtime) reaches EVERY socket in the
+      // room, including the one that POSTed this very bootstrap — so the
+      // browser that just won the claim race receives its own broadcast back.
+      // Its own bootstrap POST already ran the (guarded) full-list replace via
+      // `hydratedOnce`; re-running it here unconditionally would risk wiping a
+      // workspace this browser created in the narrow window between that POST
+      // resolving and this broadcast arriving. Only apply it if this browser
+      // hasn't hydrated yet (e.g. it's a DIFFERENT browser that joined the
+      // socket room before its own GET/bootstrap round trip completed).
+      if (hydratedOnce.current) return;
+      hydratedOnce.current = true;
       hydrateFromServer(mid, payload.workspaces);
     };
 

@@ -84,6 +84,18 @@ vi.mock('@/hooks/useGithubRepos', () => ({
 }));
 vi.mock('@/hooks/useIntegrations', () => ({ useProviders: () => ({ providers: [] }) }));
 
+// `WorkspaceLeaves`/`WorkspaceNodeExtras` (rendered by this sidebar) also pull
+// `useSyncedWorkspaceActions` from this same module — preserved via
+// `importOriginal` so only `useMachineWorkspaceSync` itself is spied on.
+const mockUseMachineWorkspaceSync = vi.fn();
+vi.mock('@/hooks/useMachineWorkspaceSync', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks/useMachineWorkspaceSync')>();
+  return {
+    ...actual,
+    useMachineWorkspaceSync: (machineId: string | null) => mockUseMachineWorkspaceSync(machineId),
+  };
+});
+
 // Sidebar chrome that isn't under test.
 vi.mock('@/components/layout/navbar/DriveSwitcher', () => ({ default: () => <div /> }));
 vi.mock('../PrimaryNavigation', () => ({ default: () => <div /> }));
@@ -114,6 +126,19 @@ describe('DevelopmentSidebar', () => {
     render(<DevelopmentSidebar />);
 
     expect(await screen.findByText('Dev box')).toBeDefined();
+  });
+
+  // Regression: `WorkspaceLeaves`/`WorkspaceNodeExtras` render the SAME
+  // server-synced workspace tree the Machine page's Terminal tab does, but
+  // `MachineView` (the sync hook's OTHER mount point) only mounts once the
+  // user navigates INTO a machine. Without mounting the hook here too,
+  // expanding a machine's row in this sidebar without ever visiting its page
+  // would act on a never-hydrated local store.
+  test('mounts useMachineWorkspaceSync for each visible machine row, hydrating it even before the machine is ever opened', async () => {
+    render(<DevelopmentSidebar />);
+
+    await screen.findByText('Dev box');
+    expect(mockUseMachineWorkspaceSync).toHaveBeenCalledWith('machine-1');
   });
 
   test('refuses a non-admin, and asks the API for no machines on their behalf', () => {

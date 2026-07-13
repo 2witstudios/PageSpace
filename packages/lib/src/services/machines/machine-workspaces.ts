@@ -90,7 +90,10 @@ export function planWorkspacePayload({
 }): { ok: true; name: string; layout: WorkspaceLayoutInput } | { ok: false; reason: WorkspacePlanDenialReason } {
   if (!isValidWorkspaceName(name)) return { ok: false, reason: 'invalid_name' };
   if (!isValidLayout(layout)) return { ok: false, reason: 'invalid_columns' };
-  return { ok: true, name, layout };
+  // Trimmed here so create and rename persist the same string for the same
+  // input — `updateWorkspace` already trims on rename; this path (create AND
+  // bootstrap seeding, both of which route through this function) did not.
+  return { ok: true, name: name.trim(), layout };
 }
 
 export interface MachineWorkspacesDeps {
