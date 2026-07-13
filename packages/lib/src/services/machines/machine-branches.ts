@@ -208,6 +208,38 @@ async function cloneAndCheckoutBranch({
 }
 
 /**
+ * Hard cap on how long a single `propagateClaudeCredential` call may run.
+ * Every direct caller in this file (`spawnBranch`'s two success paths,
+ * `attachBranch`) awaits it inline on a real HTTP response, and the
+ * realtime PTY bridge's own bound (`agent-terminal-access.ts`'s
+ * `withTimeout`) only covers ITS OWN wrapper around this call, not a
+ * guarantee this function makes for its OTHER callers — a hibernating root
+ * Sprite's fs read/write can take up to the Sprite fs API's 30s timeout,
+ * with one retry (~60s worst case), and an unbounded copy would hang a
+ * branch-attach HTTP response on that (caught in review). The timer is
+ * always cleared, and the underlying work keeps running past the bound
+ * rather than being cancelled — a slow copy still lands, just too late to
+ * have been waited on by THIS call.
+ */
+const CREDENTIAL_COPY_TIMEOUT_MS = 5_000;
+
+function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
+/**
  * Copy Claude Code's OAuth credential (and config, if present) from the root
  * Machine's Sprite into a branch-terminal's freshly provisioned/attached one.
  * Each file is copied independently and skipped when the root read comes
@@ -228,8 +260,10 @@ async function cloneAndCheckoutBranch({
  * hiccup — strictly worse than the staleness this would have closed.
  *
  * Best-effort: any failure (root Sprite unreachable mid-copy, etc.) is
- * swallowed rather than failing the spawn/attach it's called from. A branch
- * without the credential still works, it just needs its own `claude` login.
+ * swallowed rather than failing the spawn/attach it's called from, AND the
+ * whole call is bounded by `CREDENTIAL_COPY_TIMEOUT_MS` so a slow/hibernating
+ * Sprite can't hang the caller's response. A branch without the credential
+ * still works, it just needs its own `claude` login.
  *
  * Exported for reuse by the realtime agent-terminal PTY bridge
  * (`apps/realtime/src/index.ts`'s `resolveAgentTerminalSandbox`), which is
@@ -247,30 +281,46 @@ export async function propagateClaudeCredential({
   branchHandle: MachineHandle;
   resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
 }): Promise<void> {
-  try {
-    const rootHandle = await resolveRootMachineHandle(machineId);
-    if (!rootHandle) return;
+  await withTimeout(
+    (async () => {
+      try {
+        const rootHandle = await resolveRootMachineHandle(machineId);
+        if (!rootHandle) return;
 
-    for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
-      const content = await rootHandle.readFile({ path });
-      if (!content) continue;
-      // Both restricted 0o600 — the credentials file is the OAuth secret
-      // itself, and the config file can carry account/org metadata, so
-      // neither belongs world-readable in the branch Sprite's home dir.
-      //
-      // `writeFiles`' `mode` only takes effect at file CREATION (POSIX
-      // open()'s mode argument is ignored once a file already exists) — a
-      // refresh on reattach overwrites an ALREADY-EXISTING file (this is
-      // never the first copy after the first reattach), so the requested
-      // mode alone would silently leave whatever permissions that file
-      // already had. An explicit chmod after the write re-secures it either
-      // way, regardless of whether this write created or overwrote it.
-      await branchHandle.writeFiles([{ path, content, mode: 0o600 }]);
-      await branchHandle.exec({ cmd: 'chmod', args: ['600', path] });
-    }
-  } catch {
-    // best-effort — see doc comment above.
-  }
+        for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
+          const content = await rootHandle.readFile({ path });
+          if (!content) continue;
+          // Both restricted 0o600 — the credentials file is the OAuth secret
+          // itself, and the config file can carry account/org metadata, so
+          // neither belongs world-readable in the branch Sprite's home dir.
+          //
+          // `writeFiles`' `mode` only takes effect at file CREATION (POSIX
+          // open()'s mode argument is ignored once a file already exists) —
+          // a refresh on reattach overwrites an ALREADY-EXISTING file (this
+          // is never the first copy after the first reattach), so the
+          // requested mode alone would silently leave whatever permissions
+          // that file already had. An explicit chmod after the write
+          // re-secures it either way, regardless of whether this write
+          // created or overwrote it.
+          await branchHandle.writeFiles([{ path, content, mode: 0o600 }]);
+
+          // `exec` resolves with an exitCode rather than throwing on a
+          // nonzero exit — a failed chmod would otherwise be silently
+          // ignored, leaving an OVERWRITE of an already-existing file (which
+          // is what the chmod above is specifically for) at whatever
+          // permissive mode it already had, while this function reports
+          // success (caught in review).
+          const chmod = await branchHandle.exec({ cmd: 'chmod', args: ['600', path] });
+          if (chmod.exitCode !== 0) {
+            throw new Error(`chmod 600 failed for ${path}: exit ${chmod.exitCode}`);
+          }
+        }
+      } catch {
+        // best-effort — see doc comment above.
+      }
+    })(),
+    CREDENTIAL_COPY_TIMEOUT_MS,
+  );
 }
 
 async function safeKillSprite(host: MachineHost, machineId: string): Promise<void> {

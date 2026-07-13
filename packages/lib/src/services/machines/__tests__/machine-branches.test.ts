@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   spawnBranch,
   attachBranch,
@@ -868,6 +868,51 @@ describe('Claude Code credential propagation', () => {
       { cmd: 'chmod', args: ['600', '/home/sprite/.claude/.credentials.json'] },
       { cmd: 'chmod', args: ['600', '/home/sprite/.claude.json'] },
     ]);
+  });
+
+  it('given the chmod exec fails (non-zero exit), should not silently trust the permissions and should stop copying further files', async () => {
+    // `exec` resolves with an exitCode rather than throwing on a nonzero
+    // exit — a failed chmod must not be silently ignored, since a failed
+    // chmod on an OVERWRITE of an already-existing file leaves it at
+    // whatever permissive mode it already had.
+    const { host, byId } = makeFakeHost((_state, args) => {
+      if (args.cmd === 'chmod') return { exitCode: 1, stdout: '', stderr: 'chmod: permission denied' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    // Best-effort — a chmod failure must never fail the spawn itself.
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    // The credentials file's chmod failed, aborting the rest of the copy —
+    // the config file (second in loop order) should never have been reached.
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.has('/home/sprite/.claude.json')).toBe(false);
+  });
+
+  it('given resolveRootMachineHandle never settles (e.g. a stuck root Sprite), should still return once the bound elapses rather than hanging indefinitely', async () => {
+    vi.useFakeTimers();
+    try {
+      const { host } = makeFakeHost();
+      const { deps } = makeDeps({
+        host,
+        resolveRootMachineHandle: () => new Promise<MachineHandle | null>(() => {}),
+      });
+
+      const pending = spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await pending;
+
+      expect(result.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // ---------------------------------------------------------------------------
