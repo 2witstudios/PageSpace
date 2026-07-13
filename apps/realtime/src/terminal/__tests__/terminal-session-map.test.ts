@@ -3,7 +3,7 @@ import { createTerminalSessionMap, appendScrollback, MAX_SCROLLBACK_BYTES, type 
 
 function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
   return {
-    command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn() },
+    command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn(), setViewerAttached: vi.fn() },
     sandboxId,
     sessionKey,
     releaseSlot: vi.fn(),

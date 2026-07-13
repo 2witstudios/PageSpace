@@ -1,60 +1,25 @@
-'use client';
-
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { useDriveStore } from '@/hooks/useDrive';
-import { resolveActiveDriveId } from '@/lib/development/resolve-active-drive';
+import { SquareTerminal } from 'lucide-react';
 
 /**
- * The driveless entry to the Development surface. NOT a second implementation of
- * the surface — it resolves the active drive and forwards to the one real route
- * tree at `/dashboard/[driveId]/development`, so there is exactly one page
- * component per view (deliberately unlike Channels/Tasks/Calendar, which each
- * ship a driveless `?driveId=` twin of their drive-scoped page).
+ * The GLOBAL Development surface with no machine selected — every drive's
+ * machines, aggregated (see `layout.tsx` for the detail region and
+ * `DevelopmentSidebar`'s global mode for the aggregated tree). The sidebar is
+ * the surface's actual content; this is only the detail pane's resting state.
  *
- * A client redirect rather than the server's `redirect()`: "the drive you were
- * last in" is `currentDriveId` in the persisted (localStorage) drive store, so
- * the server has nothing to resolve it from.
- *
- * `currentDriveId` is read ONCE, at first render. DriveSwitcher clears it on
- * mount whenever the URL names no drive — which this route, by definition, does
- * not — so reading it in an effect would race that clear and lose the very
- * answer we came for.
+ * NOT a redirect to a resolved drive (that was the bug this route used to
+ * have) — this driveless entry is itself a real view, the global twin of
+ * `/dashboard/{driveId}/development`'s empty state.
  */
-export default function DevelopmentRedirectPage() {
-  const router = useRouter();
-  const drives = useDriveStore((state) => state.drives);
-  const fetchDrives = useDriveStore((state) => state.fetchDrives);
-  const [lastVisitedDriveId] = useState(() => useDriveStore.getState().currentDriveId);
-  const [drivesSettled, setDrivesSettled] = useState(false);
-
-  // Gate the redirect on the fetch SETTLING, not on `isLoading` being false:
-  // with a cold store, `isLoading` is still false on the first render (the fetch
-  // hasn't started), and `drives` is still [] — so redirecting on that render
-  // would send anyone with an empty or expired cache to the drive picker even
-  // though they have drives. `fetchDrives` no-ops on a warm cache, so this costs
-  // a fresh session nothing.
-  useEffect(() => {
-    let cancelled = false;
-    void fetchDrives().finally(() => {
-      if (!cancelled) setDrivesSettled(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [fetchDrives]);
-
-  useEffect(() => {
-    if (!drivesSettled) return;
-    const driveId = resolveActiveDriveId(drives, lastVisitedDriveId);
-    // No drive to develop in — the drive picker is the only useful destination.
-    router.replace(driveId ? `/dashboard/${driveId}/development` : '/dashboard/drives');
-  }, [drives, drivesSettled, lastVisitedDriveId, router]);
-
+export default function GlobalDevelopmentPage() {
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-      <span className="sr-only">Opening Development…</span>
+    <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+      <SquareTerminal className="size-10 text-muted-foreground" />
+      <div>
+        <h2 className="text-lg font-semibold">Select a machine</h2>
+        <p className="text-sm text-muted-foreground">
+          Pick a machine from the sidebar to open its terminals, code, and diffs.
+        </p>
+      </div>
     </div>
   );
 }
