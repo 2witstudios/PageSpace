@@ -312,6 +312,13 @@ export async function propagateClaudeCredential({
           // success (caught in review).
           const chmod = await branchHandle.exec({ cmd: 'chmod', args: ['600', path] });
           if (chmod.exitCode !== 0) {
+            // Fail CLOSED: don't leave the credential we just copied sitting
+            // at whatever (possibly permissive) mode the destination already
+            // had — remove it rather than leave a valid, freshly-refreshed
+            // secret exposed at the wrong permissions (caught in review).
+            // Best-effort — if even this fails, the outer catch below
+            // swallows it, same as any other failure in this function.
+            await branchHandle.exec({ cmd: 'rm', args: ['-f', path] });
             throw new Error(`chmod 600 failed for ${path}: exit ${chmod.exitCode}`);
           }
         }

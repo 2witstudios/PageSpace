@@ -870,13 +870,18 @@ describe('Claude Code credential propagation', () => {
     ]);
   });
 
-  it('given the chmod exec fails (non-zero exit), should not silently trust the permissions and should stop copying further files', async () => {
+  it('given the chmod exec fails (non-zero exit), should fail CLOSED by removing the just-copied credential rather than leaving it at the wrong permissions, and should stop copying further files', async () => {
     // `exec` resolves with an exitCode rather than throwing on a nonzero
     // exit — a failed chmod must not be silently ignored, since a failed
     // chmod on an OVERWRITE of an already-existing file leaves it at
-    // whatever permissive mode it already had.
-    const { host, byId } = makeFakeHost((_state, args) => {
+    // whatever permissive mode it already had. Simulates `rm -f` deletion
+    // too, so the file's actual absence can be asserted below.
+    const { host, byId } = makeFakeHost((state, args) => {
       if (args.cmd === 'chmod') return { exitCode: 1, stdout: '', stderr: 'chmod: permission denied' };
+      if (args.cmd === 'rm' && args.args?.[0] === '-f' && args.args[1] !== undefined) {
+        state.files.delete(args.args[1]);
+        state.fileModes.delete(args.args[1]);
+      }
       return { exitCode: 0, stdout: '', stderr: '' };
     });
     const rootHandle = makeRootHandle({
@@ -890,9 +895,12 @@ describe('Claude Code credential propagation', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('expected ok');
 
-    // The credentials file's chmod failed, aborting the rest of the copy —
-    // the config file (second in loop order) should never have been reached.
+    // The credentials file's chmod failed — it must have been REMOVED
+    // (fail closed), not left sitting there at the wrong permissions. And
+    // the failure aborted the rest of the copy — the config file (second in
+    // loop order) should never have been reached.
     const state = byId.get(result.sandboxId);
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
     expect(state?.files.has('/home/sprite/.claude.json')).toBe(false);
   });
 
