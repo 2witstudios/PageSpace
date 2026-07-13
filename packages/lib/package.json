@@ -987,6 +987,11 @@
       "import": "./dist/publish/sanitize-document-html.js",
       "require": "./dist/publish/sanitize-document-html.js"
     },
+    "./publish/document-shell": {
+      "types": "./dist/publish/document-shell.d.ts",
+      "import": "./dist/publish/document-shell.js",
+      "require": "./dist/publish/document-shell.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -1995,6 +2000,9 @@
       ],
       "publish/sanitize-document-html": [
         "./dist/publish/sanitize-document-html.d.ts"
+      ],
+      "publish/document-shell": [
+        "./dist/publish/document-shell.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
