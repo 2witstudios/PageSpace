@@ -451,7 +451,7 @@ describe('XtermTerminal — starting-prompt delivery', () => {
     const fake = fakeSocket();
     const onSent = vi.fn();
     // The socket dropped (a realtime deploy) while the agent was booting.
-    (fake.socket as unknown as { connected: boolean }).connected = false;
+    fake.setConnected(false);
     render(
       <XtermTerminal
         socket={fake.socket}
