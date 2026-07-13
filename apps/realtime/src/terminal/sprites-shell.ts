@@ -376,6 +376,12 @@ export function openPtyShell({
   let inputReady = true;
   // Input written while `!inputReady`, held in order and flushed to the
   // replacement command's stdin the moment it opens.
+  //
+  // Never drained on a `fatal()` exit — an accepted, bounded exception, not an
+  // oversight. A fatal tears the whole PTY down (`onExit` fires, the client
+  // sees an explicit "lost connection" error), so there is no replacement
+  // command left to flush these bytes to; unlike the bug this queue fixes,
+  // this loss is never SILENT — the user is told the shell is gone.
   let pendingInput: string[] = [];
   const flushPendingInput = () => {
     if (pendingInput.length === 0) return;

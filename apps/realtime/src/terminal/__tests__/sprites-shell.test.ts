@@ -544,6 +544,87 @@ describe('input queued across a reconnect (no silent stdin loss)', () => {
     const writeMock = attachCmd.stdin!.write as ReturnType<typeof vi.fn>;
     expect(writeMock.mock.calls.map(([data]) => data)).toEqual(['a', 'b', 'c']);
   });
+
+  it('given the replacement delivers stdout WITHOUT a distinct spawn event, still flushes queued input (parity with how `opened` already treats the two as equivalent)', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+
+    shell.write('echo hi\n');
+
+    await vi.advanceTimersByTimeAsync(500);
+    // No 'spawn' ever fires on the replacement — only stdout, the shape some
+    // SDK/test doubles take.
+    attachCmd._stdout.emit('data', 'prompt\r\n');
+
+    expect(attachCmd.stdin!.write).toHaveBeenCalledWith('echo hi\n');
+  });
+
+  it('given both spawn AND stdout fire on the replacement, flushes the queue exactly once (no duplicate write)', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+
+    shell.write('echo hi\n');
+
+    await vi.advanceTimersByTimeAsync(500);
+    attachCmd._emitter.emit('spawn');
+    attachCmd._stdout.emit('data', 'prompt\r\n'); // fires again — must be a no-op for the queue
+
+    const writeMock = attachCmd.stdin!.write as ReturnType<typeof vi.fn>;
+    expect(writeMock.mock.calls.map(([data]) => data)).toEqual(['echo hi\n']);
+  });
+
+  it('given the retry budget is exhausted while input is queued, drops it without throwing (the shell is torn down and the user is told explicitly — see the doc on `pendingInput`)', async () => {
+    const sprite = buildFakeSprite(buildFakeCommand(), { listRejects: true });
+    sprite.createSession.mockImplementation(() => {
+      const next = buildFakeCommand();
+      setTimeout(() => next._emitter.emit('error', new Error('WebSocket closed before open')), 0);
+      return next;
+    });
+    const onOutput = vi.fn();
+    const onExit = vi.fn();
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit });
+    await vi.advanceTimersByTimeAsync(0); // the initial command's own error fires — now stale, queueing
+
+    expect(() => shell.write('doomed\n')).not.toThrow();
+
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(onExit).toHaveBeenCalledWith(-1);
+    expect(onOutput).toHaveBeenCalledWith(expect.stringContaining('lost connection'));
+  });
+
+  it('given a SUPERSEDED command emits a late spawn, does not corrupt inputReady for the actually-current command', async () => {
+    const cmd = buildFakeCommand(); // superseded once the fresh fallback is created
+    const freshCmd = buildFakeCommand(); // the fresh session the reconnect falls back to
+    const sprite = buildFakeSprite(cmd, { sessions: [] }); // sess-1 not live -> reconnect creates fresh
+    sprite.createSession.mockReturnValueOnce(cmd).mockReturnValueOnce(freshCmd);
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout')); // cmd goes stale
+
+    shell.write('queued\n'); // queued — inputReady is false
+
+    await vi.advanceTimersByTimeAsync(500); // reconnect() creates freshCmd; it hasn't opened yet
+
+    // cmd's LATE spawn — cmd is no longer `current`, so this must NOT flush.
+    cmd._emitter.emit('spawn');
+    expect(freshCmd.stdin!.write).not.toHaveBeenCalled();
+
+    freshCmd._emitter.emit('spawn'); // the ACTUALLY-current command's own spawn
+    expect(freshCmd.stdin!.write).toHaveBeenCalledWith('queued\n');
+  });
 });
 
 describe('spawnWithSelfHealingCwd', () => {
