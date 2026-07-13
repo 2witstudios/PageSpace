@@ -149,6 +149,38 @@ describe('neutralizeDashboardLinks', () => {
     });
   });
 
+  it('handles a quoted attribute value containing > in a dashboard anchor', () => {
+    assert({
+      given: 'a dashboard anchor with a quoted attribute containing >',
+      should: 'neutralize the whole anchor without corrupting the markup',
+      actual: neutralizeDashboardLinks(
+        '<a href="/dashboard/d/p" title="2 > 1" data-mention-type="page" data-page-id="p">x</a>',
+      ),
+      expected: '<span data-mention-type="page" data-page-id="p">x</span>',
+    });
+  });
+
+  it('handles a single-quoted attribute value containing > in a dashboard anchor', () => {
+    assert({
+      given: "a dashboard anchor with a single-quoted attribute containing >",
+      should: 'neutralize the whole anchor without corrupting the markup',
+      actual: neutralizeDashboardLinks(
+        "<a href='/dashboard/d/p' title='2 > 1'>x</a>",
+      ),
+      expected: '<span>x</span>',
+    });
+  });
+
+  it('leaves a non-dashboard anchor with a quoted > byte-identical', () => {
+    const html = '<a href="/pricing" title="2 > 1">pricing</a>';
+    assert({
+      given: 'a non-dashboard anchor with a quoted attribute containing >',
+      should: 'leave it byte-identical',
+      actual: neutralizeDashboardLinks(html),
+      expected: html,
+    });
+  });
+
   it('leaves an unclosed dashboard anchor unchanged without throwing', () => {
     const html = '<p><a href="/dashboard/d/p">never closed</p>';
     assert({
