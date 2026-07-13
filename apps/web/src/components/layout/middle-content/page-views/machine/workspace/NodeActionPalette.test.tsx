@@ -162,6 +162,25 @@ describe('NodeActionPalette', () => {
     });
   });
 
+  test('"New terminal" offers shell, claude, and codex — not pagespace-cli — with shell first/default', async () => {
+    renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
+
+    const user = await openPalette();
+    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
+    const agentTypeTrigger = await screen.findByLabelText('Agent type');
+    const defaultSelected = agentTypeTrigger.textContent;
+
+    await user.click(agentTypeTrigger);
+    const optionTexts = (await screen.findAllByRole('option')).map((o) => o.textContent);
+
+    assert({
+      given: 'the "New terminal" agent-type picker, opened',
+      should: 'offer exactly shell, claude, and codex (never pagespace-cli), defaulting to shell',
+      actual: { optionTexts, defaultSelected },
+      expected: { optionTexts: ['shell', 'claude', 'codex'], defaultSelected: 'shell' },
+    });
+  });
+
   test('"Add project" submits the trimmed name (server-side normalizes it; the field only previews that)', async () => {
     const onAddProject = vi.fn().mockResolvedValue(undefined);
     renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onAddProject={onAddProject} />);

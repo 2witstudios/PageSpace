@@ -52,6 +52,14 @@ if (typeof window !== 'undefined' && !window.HTMLElement.prototype.scrollIntoVie
   window.HTMLElement.prototype.scrollIntoView = () => {};
 }
 
+// jsdom does not implement the Pointer Events capture methods. Radix Select's
+// pointer-interaction internals call hasPointerCapture/releasePointerCapture
+// on open/close — without these, clicking a SelectTrigger throws.
+if (typeof window !== 'undefined' && !window.Element.prototype.hasPointerCapture) {
+  window.Element.prototype.hasPointerCapture = () => false;
+  window.Element.prototype.releasePointerCapture = () => {};
+}
+
 // jsdom does not implement matchMedia. Provide a permissive default that
 // returns false (i.e. desktop, non-touch) so hooks like useMobile / useTouchDevice
 // can boot during component tests without each test re-stubbing it.

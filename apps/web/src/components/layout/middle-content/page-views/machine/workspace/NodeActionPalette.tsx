@@ -56,13 +56,21 @@ import { useAgentTerminals } from '@/hooks/useAgentTerminals';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { normalizeProjectName } from '@pagespace/lib/services/machines/project-name';
 import { normalizeBranchName } from '@pagespace/lib/services/machines/branch-name';
-import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { useMachineWorkspaceStore, autoSessionName } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { AddButton } from './RemoveButton';
 import { nodeScopeOf } from './WorkspaceLeaves';
 import type { MachineTreeNode } from './MachineTree';
 
-const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
+/**
+ * The "New terminal" agent choices — a fixed, local list rather than
+ * `Object.keys(AGENT_LAUNCH_SPECS)`, for two reasons: `pagespace-cli` is
+ * being removed as an agent type by a sibling change, and `shell` must be
+ * offered and listed FIRST (a plain shell is a first-class choice here,
+ * arguably the default — not an afterthought). Defined locally so this
+ * palette can't silently inherit some other list that (buggily) excludes it.
+ */
+const PICKABLE_AGENT_TYPES: AgentRuntimeType[] = ['shell', 'claude', 'codex'];
 
 /** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
 export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
@@ -231,7 +239,7 @@ function TerminalSpawnForm({
   const createWorkspace = useMachineWorkspaceStore((state) => state.createWorkspace);
   const bindPaneTerminal = useMachineWorkspaceStore((state) => state.bindPaneTerminal);
 
-  const [agentType, setAgentType] = useState<AgentRuntimeType>(AGENT_TYPES[0]);
+  const [agentType, setAgentType] = useState<AgentRuntimeType>(PICKABLE_AGENT_TYPES[0]);
   const [prompt, setPrompt] = useState('');
   const [spawning, setSpawning] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
@@ -275,7 +283,7 @@ function TerminalSpawnForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {AGENT_TYPES.map((type) => (
+            {PICKABLE_AGENT_TYPES.map((type) => (
               <SelectItem key={type} value={type}>
                 {type}
               </SelectItem>
