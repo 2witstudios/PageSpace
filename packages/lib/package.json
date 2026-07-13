@@ -992,6 +992,36 @@
       "import": "./dist/canvas/primary-host.js",
       "require": "./dist/canvas/primary-host.js"
     },
+    "./publish/neutralize-dashboard-links": {
+      "types": "./dist/publish/neutralize-dashboard-links.d.ts",
+      "import": "./dist/publish/neutralize-dashboard-links.js",
+      "require": "./dist/publish/neutralize-dashboard-links.js"
+    },
+    "./publish/sanitize-document-html": {
+      "types": "./dist/publish/sanitize-document-html.d.ts",
+      "import": "./dist/publish/sanitize-document-html.js",
+      "require": "./dist/publish/sanitize-document-html.js"
+    },
+    "./publish/document-shell": {
+      "types": "./dist/publish/document-shell.d.ts",
+      "import": "./dist/publish/document-shell.js",
+      "require": "./dist/publish/document-shell.js"
+    },
+    "./publish/render-document-page": {
+      "types": "./dist/publish/render-document-page.d.ts",
+      "import": "./dist/publish/render-document-page.js",
+      "require": "./dist/publish/render-document-page.js"
+    },
+    "./publish/render-code-page": {
+      "types": "./dist/publish/render-code-page.d.ts",
+      "import": "./dist/publish/render-code-page.js",
+      "require": "./dist/publish/render-code-page.js"
+    },
+    "./publish/render-sheet-page": {
+      "types": "./dist/publish/render-sheet-page.d.ts",
+      "import": "./dist/publish/render-sheet-page.js",
+      "require": "./dist/publish/render-sheet-page.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -2003,6 +2033,21 @@
       ],
       "canvas/primary-host": [
         "./dist/canvas/primary-host.d.ts"
+      ],
+      "publish/sanitize-document-html": [
+        "./dist/publish/sanitize-document-html.d.ts"
+      ],
+      "publish/document-shell": [
+        "./dist/publish/document-shell.d.ts"
+      ],
+      "publish/render-document-page": [
+        "./dist/publish/render-document-page.d.ts"
+      ],
+      "publish/render-code-page": [
+        "./dist/publish/render-code-page.d.ts"
+      ],
+      "publish/render-sheet-page": [
+        "./dist/publish/render-sheet-page.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"

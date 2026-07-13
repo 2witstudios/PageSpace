@@ -21,9 +21,9 @@ import { Switch } from '@/components/ui/switch';
 import { PagePickerPopover } from '@/components/common/PagePickerPopover';
 import { PageType } from '@pagespace/lib/utils/enums';
 
-interface CanvasPublishControlsProps {
+interface PublishControlsProps {
   pageId: string;
-  /** Mirrors the canvas document's isDirty flag. When it transitions true→false
+  /** Mirrors the page document's isDirty flag. When it transitions true→false
    *  (a save just completed) and the page is published, the control marks itself
    *  stale so the user sees the Update button without a page reload. */
   contentDirty?: boolean;
@@ -83,7 +83,7 @@ const readError = async (res: Response): Promise<string> => {
   }
 };
 
-const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsProps) => {
+const PublishControls = ({ pageId, contentDirty }: PublishControlsProps) => {
   const params = useParams<{ driveId?: string }>();
   const driveId = params?.driveId;
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
@@ -154,14 +154,18 @@ const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsPr
         toast.error(await readError(res));
         return false;
       }
-      const data = (await res.json()) as { url: string };
+      const data = (await res.json()) as PublishStatusResponse & { url: string };
       setState((prev) => ({
         ...prev,
         published: true,
         url: data.url,
         available: true,
         isStale: false,
-        settings: overrides ?? prev.settings,
+        // Read the effective settings back from the server rather than caching
+        // the request payload: when `overrides.ogImageFileId` was set, the
+        // request's `ogImageUrl` is a blank placeholder — the server resolves
+        // it to the real CDN URL and returns that resolved value here.
+        settings: overrides ? settingsFromResponse(data) : prev.settings,
       }));
       toast.success(isUpdate ? 'Page updated' : 'Page published');
       return true;
@@ -418,4 +422,4 @@ function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, o
   );
 }
 
-export default CanvasPublishControls;
+export default PublishControls;

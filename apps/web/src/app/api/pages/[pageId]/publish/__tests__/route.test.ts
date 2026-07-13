@@ -185,12 +185,12 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(putPublishedArtifact).not.toHaveBeenCalled();
   });
 
-  it('returns 400 when the page is not a canvas page', async () => {
-    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'DOCUMENT', title: 'T', content: 'x', driveId: 'drive-1' });
+  it('returns 400 when the page type cannot be published', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CHANNEL', title: 'T', content: 'x', driveId: 'drive-1' });
     const res = await POST(makeReq({}), { params });
     expect(res.status).toBe(400);
     const json = await res.json();
-    expect(json.error).toMatch(/canvas/i);
+    expect(json.error).toMatch(/cannot be published/i);
   });
 
   it('returns 403 and touches nothing when the page is in a Home drive', async () => {
@@ -235,6 +235,10 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'acme',
       path: 'welcome',
       isHomePage: false,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
     });
   });
 
@@ -254,6 +258,10 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'pagespace-2',
       path: 'welcome',
       isHomePage: false,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
     });
   });
 
@@ -279,6 +287,10 @@ describe('POST /api/pages/[pageId]/publish', () => {
       subdomain: 'acme',
       path: 'welcome',
       isHomePage: true,
+      title: null,
+      description: null,
+      ogImageUrl: null,
+      noindex: false,
     });
   });
 
