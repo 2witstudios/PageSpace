@@ -22,6 +22,7 @@ function makeHandle(overrides: {
       throw new Error('stream() is not used by the fs primitives');
     },
     listStreams: async () => [],
+    killSession: async () => {},
   };
 }
 

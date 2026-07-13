@@ -14,12 +14,9 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/services/sandbox/machine-storage-reconcile', () => ({
-  reconcileMachineStorage: mockReconcile,
-}));
-
 vi.mock('@pagespace/lib/services/sandbox/machine-storage-billing', () => ({
   defaultReconcileMachineStorageDeps: {},
+  reconcileMachineStorageSerialized: mockReconcile,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -47,7 +44,15 @@ describe('/api/cron/reconcile-machine-storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockReconcile.mockResolvedValue({ processed: 3, charged: 2, skipped: 1, failed: 0, staleMeasurements: 1, totalCostDollars: 0.001234 });
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 3,
+      charged: 2,
+      skipped: 1,
+      failed: 0,
+      staleMeasurements: 1,
+      totalCostDollars: 0.001234,
+    });
   });
 
   it('returns the auth error and never reconciles when auth fails', async () => {
@@ -75,6 +80,17 @@ describe('/api/cron/reconcile-machine-storage', () => {
       }),
     );
     expect(body).toMatchObject({ success: true, processed: 3, charged: 2, skipped: 1, failed: 0, staleMeasurements: 1 });
+  });
+
+  it('given the advisory lock is held by another run, should no-op WITHOUT auditing and report lock_busy', async () => {
+    mockReconcile.mockResolvedValue({ outcome: 'lock_busy' });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ success: true, outcome: 'lock_busy' });
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it('returns a 500 with the error message when reconcile throws', async () => {

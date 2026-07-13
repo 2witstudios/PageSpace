@@ -71,7 +71,7 @@ describe('GET /api/machines/agent-terminals', () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({
       ok: true,
-      terminals: [{ name: 'cli', agentType: 'pagespace-cli', createdAt: new Date('2026-07-01') }],
+      terminals: [{ name: 'cli', agentType: 'claude', createdAt: new Date('2026-07-01') }],
     });
     const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     expect(res.status).toBe(200);
@@ -81,6 +81,17 @@ describe('GET /api/machines/agent-terminals', () => {
     expect(mockListAgentTerminals).toHaveBeenCalledWith(
       expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main' }),
     );
+  });
+
+  it('given a legacy row whose agentType is the retired pagespace-cli, still lists it as-is — launchability is the client\'s call via isAgentRuntimeType, not this route\'s', async () => {
+    mockCanViewMachine.mockResolvedValue(true);
+    mockListAgentTerminals.mockResolvedValue({
+      ok: true,
+      terminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: new Date('2026-07-01') }],
+    });
+    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
+    const body = await res.json();
+    expect(body.agentTerminals[0]).toEqual({ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-07-01T00:00:00.000Z' });
   });
 
   it('given no view access, returns 403 without listing', async () => {
@@ -133,7 +144,7 @@ describe('POST /api/machines/agent-terminals', () => {
       headers: { 'content-type': 'application/json' },
     });
   }
-  const VALID_BODY = { machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'pagespace-cli' };
+  const VALID_BODY = { machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'claude' };
 
   it('given no edit access, returns 403 without spawning', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
@@ -142,30 +153,30 @@ describe('POST /api/machines/agent-terminals', () => {
     expect(mockSpawnAgentTerminal).not.toHaveBeenCalled();
   });
 
-  it('given a fresh spawn of a pagespace-cli terminal, returns 201', async () => {
+  it('given a fresh spawn of a claude terminal, returns 201', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'pagespace-cli', resumed: false });
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'claude', resumed: false });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.agentTerminal).toMatchObject({ name: 'cli', agentType: 'pagespace-cli', resumed: false });
+    expect(body.agentTerminal).toMatchObject({ name: 'cli', agentType: 'claude', resumed: false });
     expect(mockSpawnAgentTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'pagespace-cli' }),
+      expect.objectContaining({ machineId: 't1', projectName: 'repo', branchName: 'main', name: 'cli', agentType: 'claude' }),
     );
   });
 
-  it('given a fresh spawn of a claude terminal, returns 201', async () => {
+  it('given a fresh spawn of a codex terminal, returns 201', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-2', agentType: 'claude', resumed: false });
-    const res = await POST(req({ ...VALID_BODY, name: 'reviewer', agentType: 'claude' }));
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-2', agentType: 'codex', resumed: false });
+    const res = await POST(req({ ...VALID_BODY, name: 'reviewer', agentType: 'codex' }));
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body.agentTerminal).toMatchObject({ name: 'reviewer', agentType: 'claude', resumed: false });
+    expect(body.agentTerminal).toMatchObject({ name: 'reviewer', agentType: 'codex', resumed: false });
   });
 
   it('given a resumed spawn, returns 200', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
-    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'pagespace-cli', resumed: true });
+    mockSpawnAgentTerminal.mockResolvedValue({ ok: true, id: 'agent-terminal-1', agentType: 'claude', resumed: true });
     const res = await POST(req(VALID_BODY));
     expect(res.status).toBe(200);
   });

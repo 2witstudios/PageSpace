@@ -187,6 +187,7 @@ function fakeSprite(name: string): SpriteInstanceLike {
     updateNetworkPolicy: async () => {},
     createCheckpoint: async () => { throw new Error('not used'); },
     destroy: async () => {},
+    killSession: async () => {},
   };
 }
 

@@ -154,13 +154,19 @@ function wrapSpriteHandle({
      * Opening a stream (attachSession/createSession) is itself an exec, so it IS
      * the wake for a hibernated Sprite — there is no wake API
      * (docs.sprites.dev/concepts/lifecycle). But Fly's wake-on-request can drop
-     * that FIRST connection before it ever opens, and this path had no retry at
-     * all: `killAgentTerminal` attaches and immediately SIGKILLs,
-     * so a dropped wake silently failed the kill and left the row behind. The
-     * exec path (`withWakeRetry`) and the realtime PTY (`openPtyShell`'s bounded
-     * reconnect) both already absorb that drop; this is the third caller, and now
-     * it does too — on the same bounded schedule, re-opening a fresh connection
-     * per attempt.
+     * that FIRST connection before it ever opens, so any caller of this method
+     * needs the same absorption the exec path (`withWakeRetry`) and the realtime
+     * PTY (`openPtyShell`'s bounded reconnect) already have — bounded retry,
+     * re-opening a fresh connection per attempt.
+     *
+     * NOTE (Sprites 2-3, the kill-endpoint leaf): `killAgentTerminal` used to be
+     * this method's reason for existing (`stream()` + `MachineStream.kill()`,
+     * with this retry protecting the wake) — it now calls
+     * `MachineHandle.killSession` directly (a REST call to the documented kill
+     * endpoint, idempotent on its own, with its own retry — see
+     * `killSpriteSession` in `sprites.ts`), bypassing `stream()` entirely. This
+     * method is kept as the general PTY-stream primitive `MachineHandle`
+     * promises callers (see file header); it currently has no production caller.
      */
     async stream(args) {
       const open = async (): Promise<MachineStream> => {
@@ -216,6 +222,11 @@ function wrapSpriteHandle({
       return sessions
         .filter((s) => s.tty !== false)
         .map((s) => ({ id: s.id, command: s.command, isActive: s.isActive }));
+    },
+
+    async killSession(sessionId: string): Promise<void> {
+      const sprite = await sdk.getSprite(exec.sandboxId);
+      await sprite.killSession(sessionId);
     },
   };
 }

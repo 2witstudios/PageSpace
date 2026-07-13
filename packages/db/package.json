@@ -7,6 +7,10 @@
       "types": "./dist/db.d.ts",
       "default": "./dist/db.js"
     },
+    "./advisory-lock": {
+      "types": "./dist/advisory-lock.d.ts",
+      "default": "./dist/advisory-lock.js"
+    },
     "./admin-db": {
       "types": "./dist/admin-db.d.ts",
       "default": "./dist/admin-db.js"

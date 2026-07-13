@@ -19,7 +19,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { useMobile } from '@/hooks/useMobile';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
-import { AGENT_LAUNCH_SPECS, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import { PICKABLE_AGENT_TYPES, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   useMachineWorkspaceStore,
   selectActiveWorkspace,
@@ -34,7 +34,7 @@ import { PaneLoading, PaneNotice } from '../tabs/tab-states';
 
 const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
 
-const AGENT_TYPES = Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[];
+const AGENT_TYPES = PICKABLE_AGENT_TYPES;
 
 interface TerminalPanesProps {
   machineId: string;

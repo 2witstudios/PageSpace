@@ -36,12 +36,7 @@
  * reconnected or resumed from hibernation.
  */
 
-import {
-  MachineStreamOpenTimeoutError,
-  type MachineHandle,
-  type MachineHost,
-  type MachineStreamSessionInfo,
-} from '../sandbox/machine-host';
+import { type MachineHandle, type MachineHost } from '../sandbox/machine-host';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
 import {
@@ -446,6 +441,17 @@ export async function listAgentTerminals({
 }): Promise<{ ok: true; terminals: MachineAgentTerminalRecord[] } | { ok: false; reason: 'invalid_target' | 'project_not_found' | 'branch_not_found' | 'scope_unsupported' }> {
   const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
+  // Deliberately UNFILTERED — a row whose agentType predates a since-retired
+  // AGENT_LAUNCH_SPECS entry (e.g. the removed 'pagespace-cli') is still listed.
+  // Dropping it here would make it undiscoverable: DELETE kills by name, and the
+  // navigator's "unclaimed session" adopt flow is the only way a name the local
+  // workspace store doesn't already know about ever resurfaces (see
+  // `WorkspaceLeaves.tsx`). Hiding it would strand the row (and any live PTY/
+  // billing session under it) with no path to clean it up. Callers distinguish
+  // "listed" from "launchable" via `isAgentRuntimeType(row.agentType)` themselves
+  // (the API route does this — see `agent-terminals/route.ts`); the actual launch
+  // path (`resolveAgentTerminal`/`resolveAgentTerminalRow`, below) still refuses
+  // to hand an invalid agentType to `resolveAgentLaunchSpec`.
   const terminals = await deps.store.list(scope.scopeKey);
   return { ok: true, terminals };
 }
@@ -469,40 +475,23 @@ async function killAtLocation(
 
     if (handle) {
       try {
-        const stream = await handle.stream({ sessionId: row.streamSessionId });
-        stream.kill('SIGKILL');
-      } catch (error) {
-        // A TIMEOUT is the one failure we refuse to reason further about. The
-        // machine went silent for the entire cap — it told us neither that the
-        // stream opened nor that it failed. A machine that will not answer the
-        // exec socket has not earned our trust in its session LISTING either, so
-        // we do not go on to ask: we keep the row and let a retry settle it.
-        if (error instanceof MachineStreamOpenTimeoutError) {
-          return { ok: false, reason: 'error' };
-        }
-
-        // Otherwise the stream would not open, and that alone says NOTHING about
-        // whether the PTY is alive: the WebSocket API cannot surface an HTTP status
-        // (see `isPreOpenWakeError`), so a vanished session, a 429, a 5xx
-        // mid-deploy and a socket hang-up are indistinguishable at this layer.
-        //
-        // So we ask the one API that CAN answer: the session LIST. If the machine
-        // tells us this session is not among its live ones, that is positive
-        // evidence it is gone — nothing left to kill, and keeping the row would
-        // strand the terminal permanently unkillable. Anything else (it IS still
-        // listed, or the listing itself failed) is an unknown, and unknowns must
-        // not be acted on: deleting the row of a PTY that is still running leaves a
-        // billable process with nothing pointing at it — silent and unrecoverable,
-        // where keeping the row is merely a visible, retryable annoyance.
-        let sessions: MachineStreamSessionInfo[];
-        try {
-          sessions = await handle.listStreams();
-        } catch {
-          return { ok: false, reason: 'error' };
-        }
-        if (sessions.some((session) => session.id === row.streamSessionId)) {
-          return { ok: false, reason: 'error' };
-        }
+        // The REST kill-by-id endpoint (`MachineHandle.killSession`, backed by
+        // sprites.dev's `POST .../exec/{session_id}/kill`) reaches this session
+        // whether or not we hold a live stream to it, and is idempotent against
+        // an already-dead/unknown id — see its doc. That retires the old
+        // open-a-stream-then-signal dance entirely: a signal only reaches the
+        // remote process while that stream's own socket happens to be open, so
+        // it needed a `listStreams()` corroboration fallback to tell "already
+        // gone" apart from "machine didn't answer." None of that is needed once
+        // the kill call itself answers authoritatively.
+        await handle.killSession(row.streamSessionId);
+      } catch {
+        // A genuine failure (control-plane outage, auth) — the kill call
+        // already resolves successfully for a session it no longer recognizes,
+        // so anything that reaches here is a real unknown. Keep the row so a
+        // retry can find it again; deleting it now would strand a possibly
+        // still-running, billable process with nothing pointing at it.
+        return { ok: false, reason: 'error' };
       }
     }
   }

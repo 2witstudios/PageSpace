@@ -393,10 +393,8 @@ function MachineTreeSection({
   );
 
   const renderNodeExtra = useCallback(
-    (node: MachineTreeNode) => (
-      <WorkspaceNodeExtras machineId={machineId} node={node} onWorkspaceCreated={onSelectWorkspace} />
-    ),
-    [machineId, onSelectWorkspace],
+    (node: MachineTreeNode) => <WorkspaceNodeExtras machineId={machineId} node={node} />,
+    [machineId],
   );
 
   return (
@@ -413,6 +411,7 @@ function MachineTreeSection({
       selectedNode={selected ? MACHINE_NODE : null}
       renderNodeChildren={renderNodeChildren}
       renderNodeExtra={renderNodeExtra}
+      onWorkspaceCreated={onSelectWorkspace}
     />
   );
 }

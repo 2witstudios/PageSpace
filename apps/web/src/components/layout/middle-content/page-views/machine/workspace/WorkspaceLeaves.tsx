@@ -35,7 +35,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Plus, TerminalSquare } from 'lucide-react';
+import { TerminalSquare } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   useMachineWorkspaceStore,
@@ -49,9 +50,10 @@ import {
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
+import { isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
-import RemoveButton, { AddButton } from './RemoveButton';
+import RemoveButton from './RemoveButton';
 
 /** A tree node's scope, minus the session/workspace name it might carry. */
 export function nodeScopeOf(node: MachineTreeNode): MachineNodeScope {
@@ -162,6 +164,18 @@ export default function WorkspaceLeaves({
     commitRename(workspaceId, currentName);
   };
 
+  /** Unlike removing a live workspace (routed through {@link ConfirmRemoveDialog}, which
+   * surfaces a thrown error as a toast), this is a one-click cleanup of an already-dead
+   * row — no confirmation step, but a failed DELETE must still be reported rather than
+   * silently no-op'ing (the row would otherwise look un-removable with no feedback why). */
+  const removeUnlaunchableSession = async (name: string) => {
+    try {
+      await removeAgentTerminal(name);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove session');
+    }
+  };
+
   return (
     <div>
       {workspaces.map((workspace) => (
@@ -208,22 +222,48 @@ export default function WorkspaceLeaves({
           <RemoveButton onClick={() => setPendingRemove(workspace.id)} label={`Remove workspace ${workspace.name}`} />
         </div>
       ))}
-      {unclaimedSessions.map((session) => (
-        <div
-          key={`unclaimed-${session.name}`}
-          className="group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none hover:bg-accent/50"
-        >
-          <button
-            type="button"
-            onClick={() => adopt(session.name)}
-            title="Running session not yet in this browser's workspace list — click to open it"
-            className="flex flex-1 items-center gap-1 text-left"
+      {unclaimedSessions.map((session) => {
+        // A row whose agentType predates a since-retired AGENT_LAUNCH_SPECS entry
+        // (e.g. the removed 'pagespace-cli') can't be adopted — resolving it
+        // server-side would just come back not_found. Still shown (not dropped
+        // from the list), because removing it is the only way to reclaim its
+        // name and stop billing on any PTY still running under it.
+        const launchable = isAgentRuntimeType(session.agentType);
+        return (
+          <div
+            key={`unclaimed-${session.name}`}
+            className="group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none hover:bg-accent/50"
           >
-            <TerminalSquare className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate font-normal text-sm leading-none text-muted-foreground">{session.name}</span>
-          </button>
-        </div>
-      ))}
+            <button
+              type="button"
+              onClick={launchable ? () => adopt(session.name) : undefined}
+              disabled={!launchable}
+              title={
+                launchable
+                  ? "Running session not yet in this browser's workspace list — click to open it"
+                  : "This session's agent type is no longer supported — it can't be opened, only removed"
+              }
+              className={cn('flex flex-1 items-center gap-1 text-left', !launchable && 'cursor-default')}
+            >
+              <TerminalSquare className={cn('size-3 shrink-0', launchable ? 'text-muted-foreground' : 'text-muted-foreground/60')} />
+              <span
+                className={cn(
+                  'truncate font-normal text-sm leading-none',
+                  launchable ? 'text-muted-foreground' : 'text-muted-foreground/60 italic',
+                )}
+              >
+                {session.name}
+              </span>
+            </button>
+            {!launchable && (
+              <RemoveButton
+                onClick={() => void removeUnlaunchableSession(session.name)}
+                label={`Remove unsupported session ${session.name}`}
+              />
+            )}
+          </div>
+        );
+      })}
       <ConfirmRemoveDialog
         open={pendingWorkspace !== undefined}
         onOpenChange={(open) => !open && setPendingRemove(null)}
@@ -257,38 +297,32 @@ export default function WorkspaceLeaves({
 }
 
 /**
- * A node's hover-revealed "N running" badge + new-workspace `+` button — the
- * de-bloated replacement for the "Terminals" sub-label and its modal (Sidebar
- * chrome section). Injected via `MachineTree`'s `renderNodeExtra` slot, kept
- * out of `MachineTree` itself: Diff/Files-tab callers reuse the same tree for
- * branch/file navigation and have no workspace to count or create.
+ * A node's hover-revealed "N running" badge — the de-bloated replacement for
+ * the "Terminals" sub-label and its modal (Sidebar chrome section). Injected
+ * via `MachineTree`'s `renderNodeExtra` slot, kept out of `MachineTree`
+ * itself: Diff/Files-tab callers reuse the same tree for branch/file
+ * navigation and have no workspace to count.
+ *
+ * The new-workspace `+` that used to live here has moved into the node row's
+ * single "+" action palette (`NodeActionPalette`, via `MachineTree`'s
+ * `onWorkspaceCreated` prop) — a row previously carried this trigger AND the
+ * structural Add project/Add branch trigger as two separate plus icons.
  */
 export function WorkspaceNodeExtras({
   machineId,
   node,
-  onWorkspaceCreated,
 }: {
   machineId: string;
   node: MachineTreeNode;
-  /** Called with the new workspace's id right after it's created (and made active). */
-  onWorkspaceCreated(workspaceId: string): void;
 }) {
   const scope = nodeScopeOf(node);
   const runningCount = useMachineWorkspaceStore(selectRunningPaneCount(machineId, scope));
-  const { createWorkspace } = useSyncedWorkspaceActions(machineId);
+
+  if (runningCount === 0) return null;
 
   return (
-    <span className="flex shrink-0 items-center gap-0.5">
-      {runningCount > 0 && (
-        <span className="rounded bg-muted px-1 py-0.5 text-[10px] tabular-nums text-muted-foreground" title={`${runningCount} running`}>
-          {runningCount} running
-        </span>
-      )}
-      <AddButton
-        onClick={() => onWorkspaceCreated(createWorkspace(scope))}
-        label="New workspace"
-        icon={<Plus className="mx-auto size-3" />}
-      />
+    <span className="rounded bg-muted px-1 py-0.5 text-[10px] tabular-nums text-muted-foreground" title={`${runningCount} running`}>
+      {runningCount} running
     </span>
   );
 }

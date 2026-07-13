@@ -20,6 +20,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: vi.fn(async () => new Response(null, { status: 204 })),
 }));
 
+import { toast } from 'sonner';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 // `pushWorkspaceUpdate` (useMachineWorkspaceSync) PATCHes via `fetchWithAuth`
@@ -374,6 +375,92 @@ describe('WorkspaceLeaves', () => {
       await waitFor(() => expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(1));
     });
   });
+
+  // Codex review (PR #2053): dropping a legacy/unsupported row from the list
+  // entirely would make it undiscoverable — DELETE still works by name, but
+  // nothing in the UI would ever offer that name again. Instead it stays
+  // listed and the client itself derives launchability from `agentType` via
+  // `isAgentRuntimeType` (no server-sent flag), rendering remove-only (never
+  // adopt) so it stays cleanable without ever being treated as an openable
+  // session.
+  test('a listed session whose agentType is not a recognized AgentRuntimeType cannot be adopted, only removed', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    const onSelectWorkspace = vi.fn();
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={onSelectWorkspace} />);
+
+    const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
+    await userEvent.click(screen.getByText('legacy-cli'));
+
+    assert({
+      given: 'a legacy row whose agentType is no longer a recognized AgentRuntimeType',
+      should: 'render it without an adopt affordance (clicking its name does nothing) but WITH a remove button',
+      actual: {
+        adoptedAnything: onSelectWorkspace.mock.calls.length,
+        hasRemoveButton: within(row).queryByRole('button', { name: /Remove unsupported session legacy-cli/ }) !== null,
+      },
+      expected: { adoptedAnything: 0, hasRemoveButton: true },
+    });
+  });
+
+  test('removing an unlaunchable session calls DELETE by name, same as any other agent terminal', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove unsupported session legacy-cli/ }));
+
+    await waitFor(() => {
+      assert({
+        given: 'the remove button on an unlaunchable session',
+        should: 'DELETE it by name server-side, exactly like a normal running agent',
+        actual: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=legacy-cli')),
+        expected: true,
+      });
+    });
+  });
+
+  // Self-review finding (PR #2053): unlike removing a live workspace (routed
+  // through ConfirmRemoveDialog, which reports a thrown error via toast), a
+  // fire-and-forget remove call with nothing observing the rejection would
+  // silently no-op on failure — the row stays, but the user gets no signal why.
+  test('a failed removal of an unlaunchable session is reported via toast, not swallowed silently', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.mocked(del).mockRejectedValueOnce(new Error('Failed to remove'));
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove unsupported session legacy-cli/ }));
+
+    await waitFor(() => {
+      assert({
+        given: 'a DELETE that rejects for an unlaunchable session\'s remove button',
+        should: 'surface the failure via toast.error rather than swallowing it',
+        actual: vi.mocked(toast.error).mock.calls.length,
+        expected: 1,
+      });
+    });
+  });
 });
 
 describe('WorkspaceNodeExtras', () => {
@@ -384,7 +471,7 @@ describe('WorkspaceNodeExtras', () => {
   });
 
   test('shows no running-count badge when nothing is running', () => {
-    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
+    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 
     assert({
       given: 'a machine with no running agents',
@@ -399,7 +486,7 @@ describe('WorkspaceNodeExtras', () => {
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
     store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
 
-    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
+    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 
     assert({
       given: 'one running pane at machine scope',
@@ -409,19 +496,17 @@ describe('WorkspaceNodeExtras', () => {
     });
   });
 
-  test('the new-workspace button creates a workspace at the node\'s scope and reports its id', async () => {
-    const onWorkspaceCreated = vi.fn();
-    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={PROJECT_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
+  // Regression: WorkspaceNodeExtras used to also render a "New workspace" +
+  // trigger — that's now the node row's single "+" action palette
+  // (NodeActionPalette, via MachineTree's onWorkspaceCreated prop) instead.
+  test('renders no add/create trigger of its own — that lives in the node row\'s single "+" palette now', () => {
+    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'New workspace' }));
-
-    const machine = selectMachine('m1')(store())!;
-    const created = machine.workspaces[machine.activeWorkspaceId];
     assert({
-      given: 'the new-workspace button clicked on a project node',
-      should: 'create a workspace scoped to that project and report its id',
-      actual: { scope: created.scope, reportedId: onWorkspaceCreated.mock.calls[0]?.[0] },
-      expected: { scope: { projectName: 'app' }, reportedId: created.id },
+      given: 'WorkspaceNodeExtras rendered standalone',
+      should: 'expose no button — it is a read-only badge',
+      actual: screen.queryByRole('button'),
+      expected: null,
     });
   });
 });
