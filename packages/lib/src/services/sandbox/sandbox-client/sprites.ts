@@ -756,6 +756,8 @@ export interface SpriteSessionKillTransport {
   token: string;
   /** Injected so a test can assert the exact request without a real network call. Defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
+  /** Injected so a test can assert the retry schedule without real wall-clock waits. Defaults to the real timer. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -791,8 +793,8 @@ export function killSessionStreamErrorMessage(line: string): string | undefined 
 }
 
 /**
- * Drive the one documented Sprites REST endpoint the `@fly/sprites` SDK (rc37)
- * does not wrap: `POST /v1/sprites/{name}/exec/{session_id}/kill`
+ * One attempt at the documented Sprites REST endpoint the `@fly/sprites` SDK
+ * (rc37) does not wrap: `POST /v1/sprites/{name}/exec/{session_id}/kill`
  * (sprites.dev/api/sprites/exec#kill-exec-session — NOT
  * `.../exec/sessions/{id}/kill`; the extra `sessions/` segment 404s against
  * the real API). `Sprite` exposes `attachSession`/`createSession`/`kill()`
@@ -815,7 +817,7 @@ export function killSessionStreamErrorMessage(line: string): string | undefined 
  * destroy never surfaces a user-visible error. Any other non-2xx response, or
  * an `error` line inside a 200 stream, is a genuine failure and rejects.
  */
-export async function killSpriteSession(
+async function attemptKillSpriteSession(
   { baseURL, token, fetchImpl = fetch }: SpriteSessionKillTransport,
   spriteName: string,
   sessionId: string,
@@ -841,6 +843,70 @@ export async function killSpriteSession(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * {@link attemptKillSpriteSession}, retried up to `MAX_EXEC_ATTEMPTS` times
+ * with the same linear backoff `withWakeRetry` uses (`wakeRetryDelayMs`).
+ *
+ * Deliberately retries on ANY failure, not just a structurally-detected
+ * pre-open drop the way the exec/spawn paths in this file do. Those paths
+ * must retry ONLY a provable pre-open failure, because re-running a
+ * side-effecting command after an ambiguous one risks running it twice. A
+ * kill has no such hazard — it is idempotent by construction (see the
+ * `404`/`410` handling above) — so repeating it after ANY failure, including
+ * the exact cold-Sprite wake-on-request connection drop the exec paths guard
+ * against (docs.sprites.dev/concepts/lifecycle: there is no wake API, so this
+ * REST call may itself be what wakes a hibernating Sprite), costs nothing and
+ * only improves the odds a genuine termination actually lands. This is the
+ * caller-visible guarantee: `killAgentTerminal`'s `MachineHandle.killSession`
+ * and `PtyShell.kill`'s fire-and-forget REST call both inherit it for free,
+ * without either needing its own retry logic.
+ */
+export async function killSpriteSession(
+  transport: SpriteSessionKillTransport,
+  spriteName: string,
+  sessionId: string,
+): Promise<void> {
+  const { sleep = delay } = transport;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_EXEC_ATTEMPTS; attempt += 1) {
+    try {
+      await attemptKillSpriteSession(transport, spriteName, sessionId);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= MAX_EXEC_ATTEMPTS) break;
+      await sleep(wakeRetryDelayMs(attempt));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Bolt `killSession` onto a raw SDK `Sprite`-shaped instance, so it satisfies
+ * `SpriteInstanceLike` — see {@link killSpriteSession}'s doc for why the SDK
+ * needs this at all. Shared by BOTH production `SpritesSdk` factories
+ * (`apps/web/src/lib/sandbox/sprites-client.ts`,
+ * `apps/realtime/src/terminal/realtime-sprites-client.ts`) — this used to be
+ * defined twice, near-verbatim, one per app boundary. Duck-typed (not
+ * `import type { Sprite } from '@fly/sprites'`) so this module never imports
+ * the ESM-only SDK (see the file header); a real `Sprite` instance already
+ * satisfies this shape structurally, and `client.baseURL`/`client.token` are
+ * public `readonly` fields on the real `SpritesClient`.
+ *
+ * Mutates and returns `sprite` (via `Object.assign`) rather than building a
+ * fresh wrapper object, so every OTHER method the caller already relies on
+ * (`spawn`, `createSession`, `attachSession`, `filesystem`, …) keeps working
+ * untouched — this only ever ADDS the one method the SDK is missing.
+ */
+export function withKillSession<T extends { name: string; client: { baseURL: string; token: string } }>(
+  sprite: T,
+): T & { killSession: (sessionId: string) => Promise<void> } {
+  return Object.assign(sprite, {
+    killSession: (sessionId: string) =>
+      killSpriteSession({ baseURL: sprite.client.baseURL, token: sprite.client.token }, sprite.name, sessionId),
+  });
 }
 
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {

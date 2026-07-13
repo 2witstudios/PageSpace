@@ -9,6 +9,7 @@ import {
   checkpointStreamErrorMessage,
   killSpriteSession,
   killSessionStreamErrorMessage,
+  withKillSession,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
@@ -1315,6 +1316,8 @@ describe('killSessionStreamErrorMessage (pure)', () => {
 
 describe('killSpriteSession', () => {
   const transport = { baseURL: 'https://api.sprites.dev', token: 'test-token' };
+  // A fast, no-op sleep — keeps the retry-path tests from paying real backoff wall-clock time.
+  const noSleep = async () => {};
 
   it('given a live session, POSTs the exact kill URL (no "sessions/" segment — sprites.dev/api/sprites/exec#kill-exec-session) with a bearer token', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
@@ -1325,6 +1328,7 @@ describe('killSpriteSession', () => {
       'https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill',
       expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer test-token' } }),
     );
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // no retry needed on the happy path
   });
 
   it('given a sprite name or session id with reserved URL characters, encodes them', async () => {
@@ -1350,20 +1354,23 @@ describe('killSpriteSession', () => {
     await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1')).resolves.toBeUndefined();
   });
 
-  it('given a 200 whose NDJSON stream reports an error line, rejects — a 200 status alone does not confirm the signal was delivered', async () => {
+  it('given a 200 whose NDJSON stream reports an error line, rejects (after exhausting retries) — a 200 status alone does not confirm the signal was delivered', async () => {
     const ndjson = [
       '{"type":"signal","message":"delivering SIGTERM","signal":"SIGTERM","pid":123}',
       '{"type":"error","message":"process would not die"}',
     ].join('\n');
     const fetchImpl = vi.fn(async () => new Response(ndjson, { status: 200 }));
 
-    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1')).rejects.toThrow(/process would not die/);
+    await expect(
+      killSpriteSession({ ...transport, fetchImpl, sleep: noSleep }, 'my-sprite', 'sess-1'),
+    ).rejects.toThrow(/process would not die/);
   });
 
   it('given the Sprite reports 404 (session already gone — the documented response for a missing session), resolves successfully — idempotent', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 404, statusText: 'Not Found' }));
 
     await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-dead')).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // 404 is success, not a failure — no retry
   });
 
   it('given the Sprite reports 410 (gone), resolves successfully — idempotent', async () => {
@@ -1372,9 +1379,80 @@ describe('killSpriteSession', () => {
     await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-dead')).resolves.toBeUndefined();
   });
 
-  it('given a genuine failure (5xx/auth), rejects rather than swallowing it', async () => {
+  it('given a genuine failure (5xx/auth) that persists across every attempt, rejects rather than swallowing it', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }));
 
-    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1')).rejects.toThrow(/500/);
+    await expect(
+      killSpriteSession({ ...transport, fetchImpl, sleep: noSleep }, 'my-sprite', 'sess-1'),
+    ).rejects.toThrow(/500/);
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // MAX_EXEC_ATTEMPTS — bounded, not infinite
+  });
+
+  it('given a transient failure (e.g. a cold-Sprite wake drop) that succeeds on a later attempt, resolves — retry is safe because kill is idempotent', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('WebSocket error: TypeError (cold wake)'))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    await expect(
+      killSpriteSession({ ...transport, fetchImpl, sleep: noSleep }, 'my-sprite', 'sess-1'),
+    ).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('given every attempt fails with a thrown (non-HTTP) error, retries up to the bound and then rejects with that error', async () => {
+    const networkError = new Error('fetch failed: ECONNRESET');
+    const fetchImpl = vi.fn().mockRejectedValue(networkError);
+
+    await expect(
+      killSpriteSession({ ...transport, fetchImpl, sleep: noSleep }, 'my-sprite', 'sess-1'),
+    ).rejects.toThrow(/ECONNRESET/);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('given retries are needed, waits with the same linear backoff withWakeRetry uses (500ms, 1000ms)', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }));
+    const delays: number[] = [];
+    const sleep = async (ms: number) => { delays.push(ms); };
+
+    await expect(killSpriteSession({ ...transport, fetchImpl, sleep }, 'my-sprite', 'sess-1')).rejects.toThrow();
+
+    expect(delays).toEqual([500, 1000]);
+  });
+});
+
+describe('withKillSession', () => {
+  it('given a raw SDK-shaped sprite, adds a killSession method that calls the REST endpoint using the sprite\'s own name/client credentials', async () => {
+    // withKillSession's killSession always calls killSpriteSession with no
+    // fetchImpl override (it has no injection point of its own — production
+    // wiring always wants the real global fetch), so this stubs the GLOBAL
+    // fetch for the duration of the call rather than threading a fake through.
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const fetchStub = vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push([url, init]);
+      return new Response(null, { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchStub);
+    try {
+      // Duck-typed like the real @fly/sprites `Sprite`: only `.name` and
+      // `.client.{baseURL,token}` are read — everything else (spawn,
+      // createSession, ...) passes through untouched via Object.assign.
+      const sprite = {
+        name: 'my-sprite',
+        client: { baseURL: 'https://api.sprites.dev', token: 'test-token' },
+        spawn: () => 'unrelated-spawn-marker',
+      };
+
+      const wrapped = withKillSession(sprite);
+      await wrapped.killSession('sess-1');
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0][0]).toBe('https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill');
+      expect(calls[0][1]).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer test-token' } });
+      expect(wrapped.spawn()).toBe('unrelated-spawn-marker'); // every other method survives untouched
+      expect(wrapped).toBe(sprite); // mutates and returns the same instance, not a fresh wrapper
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

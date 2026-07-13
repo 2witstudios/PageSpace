@@ -777,7 +777,7 @@ describe('openPtyShell', () => {
     assert({
       given: 'an explicit user-initiated kill',
       should: 'kill the session by id AND close the local socket',
-      actual: planTeardown({ trigger: 'user-kill' }),
+      actual: planTeardown({ trigger: 'forced-teardown' }),
       expected: { killSession: true, closeSocket: true },
     });
 
@@ -810,7 +810,7 @@ describe('openPtyShell', () => {
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
       cmd._emitter.emit('message', announces('sess-1'));
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
 
       expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
       expect(sprite.killSession).toHaveBeenCalledWith('sess-1');
@@ -858,7 +858,7 @@ describe('openPtyShell', () => {
 
       // No 'message'/session_info frame ever arrives — currentSessionId stays undefined.
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
 
       expect(cmd.kill).toHaveBeenCalledWith('SIGKILL');
       expect(sprite.killSession).not.toHaveBeenCalled();
@@ -870,7 +870,7 @@ describe('openPtyShell', () => {
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
       cmd._emitter.emit('message', announces('sess-1'));
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
       shell.kill('idle-reap');
 
       expect(sprite.killSession).toHaveBeenCalledTimes(1);
@@ -885,7 +885,7 @@ describe('openPtyShell', () => {
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
       cmd._emitter.emit('message', announces('sess-1'));
 
-      expect(() => shell.kill('user-kill')).not.toThrow();
+      expect(() => shell.kill('forced-teardown')).not.toThrow();
       await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
 
       errorSpy.mockRestore();
@@ -1186,7 +1186,7 @@ describe('openPtyShell', () => {
       const onExit = vi.fn();
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit });
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
       cmd._emitter.emit('exit', 0);
 
       expect(onExit).not.toHaveBeenCalled();
@@ -1227,7 +1227,7 @@ describe('openPtyShell', () => {
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
       cmd._emitter.emit('error', new Error('keepalive'));
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
       await vi.advanceTimersByTimeAsync(500);
 
       expect(sprite.attachSession).not.toHaveBeenCalled();
@@ -1337,7 +1337,7 @@ describe('openPtyShell', () => {
       attachCmd._emitter.emit('error', new Error('keepalive'));
       await vi.advanceTimersByTimeAsync(300); // past backoff; now suspended at await listSessions
 
-      shell.kill('user-kill');               // closed = true mid-await
+      shell.kill('forced-teardown');               // closed = true mid-await
       d.resolve([]);              // sess-dead gone → would otherwise take the create branch
       await vi.advanceTimersByTimeAsync(0);
 
@@ -1527,7 +1527,7 @@ describe('openPtyShell', () => {
       attach._stdout.emit('data', 'nothing here matches the anchor'); // held: window opens
       expect(vi.getTimerCount()).toBeGreaterThan(0); // settle + deadline are armed
 
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
 
       expect(vi.getTimerCount()).toBe(0);
     });
@@ -2767,7 +2767,7 @@ describe('openPtyShell', () => {
 
       const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn() });
       cmd._emitter.emit('spawn');
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
       cmd._stderr.emit('data', 'too late\r\n');
 
       expect(onOutput).not.toHaveBeenCalled();
@@ -2828,7 +2828,7 @@ describe('openPtyShell', () => {
       cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
       await vi.advanceTimersByTimeAsync(500);
       attachCmd._stdout.emit('data', 'unalignable\r\n'); // buffered, settle armed
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
       // Nothing may reach a client that is no longer there. Two things stand in the way and
       // either would do: kill() cancels the window timers, and every path out of the shell
       // re-checks `closed`. The redundancy is deliberate — a teardown is not the place to
@@ -2856,7 +2856,7 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(500);
       attachCmd._stdout.emit('data', BANNER); // the replay resolves; nothing emitted
 
-      shell.kill('user-kill');
+      shell.kill('forced-teardown');
       attachCmd._stdout.emit('data', 'in flight after the kill\r\n');
       await vi.advanceTimersByTimeAsync(2000);
 

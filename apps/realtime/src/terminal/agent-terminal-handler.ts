@@ -299,9 +299,12 @@ function endAgentTerminalSession(
  * heartbeat): release the concurrency slot, kill the PTY, settle + remove the
  * session (endAgentTerminalSession clears all timers), and notify the viewer.
  *
- * `'user-kill'`: a revoked-access or insolvent-payer teardown is a genuine,
- * permanent termination decided FOR the user, not a mere detach — the same
- * outcome an explicit kill request needs (see `planTeardown`).
+ * `'forced-teardown'`: this is the PLATFORM ending a session on the user's
+ * behalf (revoked access, or an insolvent payer) — never a click. It still
+ * needs a genuine, permanent termination (see `planTeardown`), so it maps to
+ * the same `TeardownPlan` an explicit kill would, but the trigger name says
+ * plainly who actually decided this, not "user-kill" — an incident review
+ * reading this trigger off a log line should not conclude the user did it.
  */
 function teardownAgentTerminalSession(
   billing: SandboxBillingDeps | undefined,
@@ -311,7 +314,7 @@ function teardownAgentTerminalSession(
   exitCode: number,
 ): void {
   session.releaseSlot();
-  session.command.kill('user-kill');
+  session.command.kill('forced-teardown');
   endAgentTerminalSession(billing, sessionMap, session, sessionKey);
   session.closedFn(exitCode);
 }

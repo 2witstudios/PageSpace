@@ -104,8 +104,9 @@ export type PtyShell = {
   /**
    * Tear this shell down, per `trigger` — see `planTeardown` for exactly what
    * each one does and why. The ONE teardown entry point every caller goes
-   * through, so `trigger` is what lets a genuine termination (`user-kill`,
-   * `idle-reap`) be told apart from a mere viewer detach that must survive it.
+   * through, so `trigger` is what lets a genuine termination
+   * (`forced-teardown`, `idle-reap`) be told apart from a mere viewer detach
+   * that must survive it.
    * Best-effort and idempotent: a second `kill()` after the shell is already
    * closed is a no-op, and the underlying REST kill call
    * (`SpriteInstanceLike.killSession`) itself succeeds against an
@@ -250,8 +251,28 @@ export function planWatchdogResponse({
  * teardown entry point every caller goes through (see `PtyShell`'s doc) — the
  * trigger is what lets `planTeardown` tell a genuine termination from a mere
  * detach, both of which currently reach the same call.
+ *
+ * Deliberately NOT named `user-kill`/`user-*`: an explicit, human-initiated
+ * "kill this terminal" request never reaches this type at all — that flow is
+ * `killAgentTerminal` (`packages/lib/src/services/machines/agent-terminals.ts`),
+ * which calls `MachineHandle.killSession` directly, bypassing `PtyShell` and
+ * this enum entirely. `forced-teardown`'s only real callers
+ * (`agent-terminal-handler.ts`'s `teardownAgentTerminalSession`) are the
+ * PLATFORM ending a session on the user's behalf — revoked access, or an
+ * insolvent payer — never a click. A `user-kill`-style label here would read,
+ * in an incident review, as "the user did this," inverting the actual cause.
+ *
+ * `detach` and `shell-exit` are part of the complete decision matrix
+ * `planTeardown` is unit-tested against (every trigger this shell could ever
+ * face must have a defined, safe answer), but neither has a real call site
+ * today: a plain detach never calls `kill()` at all (see `disconnectConnection`
+ * in `agent-terminal-handler.ts` — it only flips `setViewerAttached(false)`),
+ * and a real shell exit is handled entirely by `fatal()`, which also never
+ * calls `kill()` (the process already ended; there is nothing to close or
+ * kill). Both branches exist so the function's answer is defined and tested
+ * BEFORE a future caller needs it, not because one is wired today.
  */
-export type TeardownTrigger = 'user-kill' | 'detach' | 'idle-reap' | 'shell-exit';
+export type TeardownTrigger = 'forced-teardown' | 'detach' | 'idle-reap' | 'shell-exit';
 
 /** What a teardown should actually DO, decided by `planTeardown`. */
 export interface TeardownPlan {
@@ -283,13 +304,12 @@ export interface TeardownPlan {
  * Pure: what tearing this shell down should actually do, by INTENT — not by
  * whatever the exec socket's current state happens to be.
  *
- * - `user-kill` (an explicit, permanent kill request — an operator/API call,
- *   or the platform forcibly ending a session whose access was revoked or
- *   whose payer ran out of credits) and `idle-reap` (the 30-min
- *   detached-idle timer — ending the session IS the reap's whole point) both
- *   terminate for real: kill the session by id, which works no matter
- *   whether our own socket to it is still open, and signal the local command
- *   too as a redundant, harmless courtesy.
+ * - `forced-teardown` (the platform forcibly ending a session whose access
+ *   was revoked or whose payer ran out of credits) and `idle-reap` (the
+ *   30-min detached-idle timer — ending the session IS the reap's whole
+ *   point) both terminate for real: kill the session by id, which works no
+ *   matter whether our own socket to it is still open, and signal the local
+ *   command too as a redundant, harmless courtesy.
  * - `detach` (a viewer merely navigating away) must NEVER terminate — the
  *   entire point of a detachable session is that it survives exactly this.
  *   Nothing is signalled or killed; the exec connection is simply abandoned
@@ -303,7 +323,7 @@ export interface TeardownPlan {
  */
 export function planTeardown({ trigger }: { trigger: TeardownTrigger }): TeardownPlan {
   switch (trigger) {
-    case 'user-kill':
+    case 'forced-teardown':
     case 'idle-reap':
       return { killSession: true, closeSocket: true };
     case 'detach':

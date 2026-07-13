@@ -10,10 +10,10 @@
  * lifetime so the SDK is never touched on the code-execution-OFF path.
  */
 
-import { SpritesClient, type Sprite } from '@fly/sprites';
+import { SpritesClient } from '@fly/sprites';
 import {
   createSpritesSandboxClient,
-  killSpriteSession,
+  withKillSession,
   resolveSpritesToken,
   type SpritesSdk,
   type SpriteInstanceLike,
@@ -30,26 +30,14 @@ export async function getProductionSpritesSdk(): Promise<SpritesSdk> {
   return getSpritesSDK();
 }
 
-/**
- * Bolt `killSession` onto a raw SDK `Sprite` instance — `@fly/sprites` (rc37)
- * exposes no session-kill-by-id, only `attachSession`/`createSession`/`kill()`
- * (a per-command WebSocket signal); see `killSpriteSession`'s doc for why this
- * hits the REST endpoint directly. `baseURL`/`token` are public `readonly`
- * fields on `SpritesClient`, reachable straight off `sprite.client`.
- */
-function withKillSession(sprite: Sprite): SpriteInstanceLike {
-  return Object.assign(sprite, {
-    killSession: (sessionId: string) =>
-      killSpriteSession({ baseURL: sprite.client.baseURL, token: sprite.client.token }, sprite.name, sessionId),
-  }) as unknown as SpriteInstanceLike;
-}
-
 async function getSpritesSDK(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
   const client = new SpritesClient(resolveSpritesToken());
   cachedSdk = {
-    getSprite: async (name) => withKillSession(await client.getSprite(name)),
-    createSprite: async (name, config) => withKillSession(await client.createSprite(name, config)),
+    // withKillSession bolts the REST kill-session method onto the raw SDK
+    // instance — see its doc (sprites.ts) for why the SDK needs this at all.
+    getSprite: async (name) => withKillSession(await client.getSprite(name)) as unknown as SpriteInstanceLike,
+    createSprite: async (name, config) => withKillSession(await client.createSprite(name, config)) as unknown as SpriteInstanceLike,
     deleteSprite: (name) => client.deleteSprite(name),
   };
   return cachedSdk;

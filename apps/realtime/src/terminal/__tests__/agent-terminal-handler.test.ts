@@ -806,7 +806,7 @@ describe('buildAgentTerminalHandlers', () => {
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalledWith('user-kill');
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
 
@@ -867,7 +867,7 @@ describe('buildAgentTerminalHandlers', () => {
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalledWith('user-kill');
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
       expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock2' });
     });
@@ -879,7 +879,7 @@ describe('buildAgentTerminalHandlers', () => {
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalledWith('user-kill');
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock1' });
     });
@@ -1260,7 +1260,7 @@ describe('buildAgentTerminalHandlers', () => {
         expect(calls[0].holdId).toBe('hold-1');
         expect(calls[0].activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
         expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
-        expect(shell.kill).toHaveBeenCalledWith('user-kill');
+        expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
         expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
         expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', expect.objectContaining({ exitCode: -2 }));
       });
