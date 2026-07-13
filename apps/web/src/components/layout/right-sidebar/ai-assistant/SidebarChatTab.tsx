@@ -748,10 +748,14 @@ const SidebarChatTab: React.FC = () => {
   useEffect(() => {
     if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
     prevSidebarGlobalMessagesRef.current = globalInitialMessages;
-    if (!selectedAgent && globalIsInitialized && globalConversationId) {
+    // Guarded the same way as the refreshSignal effect above (line ~615) — without this, a
+    // mount/reload/conversation-switch that lands while this surface's own send is already
+    // streaming clobbers the in-progress assistant bubble with a stale DB snapshot that
+    // predates the reply.
+    if (!selectedAgent && globalIsInitialized && globalConversationId && !displayIsStreaming) {
       loadGlobalMessages(globalConversationId);
     }
-  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, loadGlobalMessages]);
+  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, displayIsStreaming, loadGlobalMessages]);
 
   // Load-on-select guarantee for agent mode: with a stable useChat id, the
   // sidebar's agent Chat instance is never recreated on conversation switch,
@@ -762,10 +766,13 @@ const SidebarChatTab: React.FC = () => {
   useEffect(() => {
     if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
     prevSidebarAgentMessagesRef.current = agentInitialMessages;
-    if (selectedAgent) {
+    // Same guard as the global-mode load-on-select effect above: a mount/reload/agent-switch
+    // that lands mid-stream must not clobber the in-progress assistant bubble with a stale
+    // conversation snapshot.
+    if (selectedAgent && !displayIsStreaming) {
       setMessages(agentInitialMessages);
     }
-  }, [agentInitialMessages, selectedAgent, setMessages]);
+  }, [agentInitialMessages, selectedAgent, displayIsStreaming, setMessages]);
 
   const handleNewConversation = useCallback(async () => {
     try {

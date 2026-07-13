@@ -972,19 +972,29 @@ const GlobalAssistantView: React.FC = () => {
   useEffect(() => {
     if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
     prevAgentLoadSignalRef.current = agentConversationLoadSignal;
-    if (selectedAgent && agentConversationId) {
+    // Guarded the same way as the global-mode load-on-select effect below: the load-signal
+    // indirection already avoids re-firing on every streamed token, but it still fires
+    // unconditionally on a fresh mount (seeded to `null`) — so a reload mid-stream needs this
+    // guard too, or it clobbers the in-progress bubble with the pre-reply snapshot.
+    if (selectedAgent && agentConversationId && !effectiveIsStreaming) {
       setAgentMessages(agentInitialMessages);
     }
-  }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, setAgentMessages]);
+  }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, effectiveIsStreaming, setAgentMessages]);
 
   // Global-mode load-on-select guarantee: apply messages from context whenever
   // they change (loadConversation or createNewConversation ran). With a stable
   // useChat id, setMessages is the sole writer — no race with store recreation.
+  //
+  // Guarded on !effectiveIsStreaming: without it, a mount/reload/conversation-switch that lands
+  // while this surface is actively streaming (locally or via a bootstrapped own stream)
+  // overwrites the in-progress assistant bubble with a stale snapshot that predates the reply —
+  // the live text itself keeps rendering separately via `remoteStreams` regardless, so this
+  // effect only ever needs to apply the persisted snapshot once streaming has stopped.
   useEffect(() => {
     if (selectedAgent) return;
-    if (!globalIsInitialized || !globalConversationId) return;
+    if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return;
     setGlobalLocalMessages(globalInitialMessages);
-  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, setGlobalLocalMessages]);
+  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, effectiveIsStreaming, setGlobalLocalMessages]);
 
   // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
   // is null. Encapsulates page-room subscription, stream bootstrap/socket

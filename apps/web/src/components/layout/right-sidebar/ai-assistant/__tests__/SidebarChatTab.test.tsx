@@ -51,15 +51,37 @@ function getStopFunction(
  * SidebarChatTab: with a stable useChat id, the agent Chat instance is never
  * recreated on conversation switch, so usePageAgentSidebarState's fetched
  * messages must be explicitly applied via setMessages whenever the reference
- * changes — but only while in agent mode.
+ * changes — but only while in agent mode, and never while this surface is
+ * actively streaming (a mount/reload/agent-switch landing mid-stream must not
+ * clobber the in-progress assistant bubble with a stale conversation snapshot).
  */
 function shouldApplySidebarAgentMessages<T>(
   selectedAgent: { id: string } | null,
   agentInitialMessages: T[],
-  prevAgentInitialMessages: T[] | null
+  prevAgentInitialMessages: T[] | null,
+  displayIsStreaming: boolean
 ): boolean {
   if (agentInitialMessages === prevAgentInitialMessages) return false;
-  return Boolean(selectedAgent);
+  return Boolean(selectedAgent) && !displayIsStreaming;
+}
+
+/**
+ * Pure function that mirrors the global-mode load-on-select effect in
+ * SidebarChatTab: GlobalChatContext's `initialMessages` reference changes on
+ * mount/loadConversation/createNewConversation, and must be explicitly
+ * re-fetched via loadGlobalMessages — but never while this surface is
+ * actively streaming, for the same clobber reason as the agent-mode twin.
+ */
+function shouldLoadSidebarGlobalMessages<T>(
+  selectedAgent: { id: string } | null,
+  globalIsInitialized: boolean,
+  globalConversationId: string | null,
+  globalInitialMessages: T[],
+  prevGlobalInitialMessages: T[] | null,
+  displayIsStreaming: boolean
+): boolean {
+  if (globalInitialMessages === prevGlobalInitialMessages) return false;
+  return !selectedAgent && globalIsInitialized && Boolean(globalConversationId) && !displayIsStreaming;
 }
 
 // ============================================
@@ -326,25 +348,97 @@ describe('SidebarChatTab Display Logic', () => {
 
   describe('shouldApplySidebarAgentMessages (agent-mode load-on-select)', () => {
     it('given an agent selected and a new messages reference, should apply', () => {
-      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null)).toBe(true);
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null, false)).toBe(true);
     });
 
     it('given an agent selected and conversation switch fetches a new reference, should apply', () => {
       const firstConversation = [mockUserMessage] as never[];
       const secondConversation = [mockAssistantMessage] as never[];
-      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation)).toBe(true);
+      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation, false)).toBe(true);
     });
 
     it('given an agent selected but the messages reference is unchanged, should NOT re-apply (no-op)', () => {
-      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, mockAgentMessages)).toBe(false);
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, mockAgentMessages, false)).toBe(false);
     });
 
     it('given global mode (no agent selected), should never apply agent messages even on a new reference', () => {
-      expect(shouldApplySidebarAgentMessages(null, mockAgentMessages, null)).toBe(false);
+      expect(shouldApplySidebarAgentMessages(null, mockAgentMessages, null, false)).toBe(false);
     });
 
     it('given a new empty-array reference (new conversation created), should still apply', () => {
-      expect(shouldApplySidebarAgentMessages(mockAgent, [], null)).toBe(true);
+      expect(shouldApplySidebarAgentMessages(mockAgent, [], null, false)).toBe(true);
+    });
+
+    // Regression coverage for the clobber bug fixed in this PR: a mount/reload/agent-switch
+    // landing while this surface is actively streaming must NOT overwrite the in-progress
+    // assistant bubble with a stale conversation snapshot, even though the messages
+    // reference did change (this is exactly the condition a reload produces).
+    it('given a new messages reference while streaming, should NOT apply (would clobber the live reply)', () => {
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null, true)).toBe(false);
+    });
+
+    it('given a conversation switch fetch lands mid-stream, should NOT apply', () => {
+      const firstConversation = [mockUserMessage] as never[];
+      const secondConversation = [mockAssistantMessage] as never[];
+      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation, true)).toBe(false);
+    });
+  });
+
+  // ============================================
+  // Global-mode load-on-select regression tests
+  //
+  // Regression coverage for the same clobber bug as the agent-mode twin above,
+  // but on the global-assistant path: GlobalChatContext's `initialMessages`
+  // changes reference on mount/loadConversation/createNewConversation, and
+  // SidebarChatTab re-fetches via loadGlobalMessages whenever it does — but
+  // must skip that re-fetch while this surface is actively streaming, or a
+  // reload/conversation-switch mid-stream clobbers the in-progress reply with
+  // a DB snapshot that predates it (the flash + "invisible streaming" bug).
+  // ============================================
+
+  describe('shouldLoadSidebarGlobalMessages (global-mode load-on-select)', () => {
+    it('given global mode, initialized, with a new messages reference, should load', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', mockContextMessages, null, false)
+      ).toBe(true);
+    });
+
+    it('given the messages reference is unchanged, should NOT re-load (no-op)', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', mockContextMessages, mockContextMessages, false)
+      ).toBe(false);
+    });
+
+    it('given agent mode (agent selected), should never load global messages', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(mockAgent, true, 'conv-1', mockContextMessages, null, false)
+      ).toBe(false);
+    });
+
+    it('given not yet initialized, should NOT load', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, false, 'conv-1', mockContextMessages, null, false)
+      ).toBe(false);
+    });
+
+    it('given no conversation id, should NOT load', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, null, mockContextMessages, null, false)
+      ).toBe(false);
+    });
+
+    it('given a new messages reference while streaming (e.g. reload mid-stream), should NOT load (would clobber the live reply)', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', mockContextMessages, null, true)
+      ).toBe(false);
+    });
+
+    it('given a conversation switch lands mid-stream, should NOT load', () => {
+      const firstConversation = [mockUserMessage] as never[];
+      const secondConversation = [mockAssistantMessage] as never[];
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', secondConversation, firstConversation, true)
+      ).toBe(false);
     });
   });
 });
