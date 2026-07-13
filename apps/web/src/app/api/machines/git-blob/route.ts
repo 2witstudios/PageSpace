@@ -114,7 +114,10 @@ export async function GET(request: Request) {
   });
   if (!result.ok) {
     if (result.detail !== undefined) {
-      loggers.api.error('Machine git-blob read failed', undefined, {
+      // Level follows severity: only exec_failed (502) is an operational error.
+      // A not_found miss is an expected 404 (a file absent at this ref) — its
+      // stderr detail is still kept, but at warn so it never pages anyone.
+      const meta = {
         machineId: machineId.value,
         projectName: projectName.value,
         branchName: branchName.value,
@@ -122,7 +125,12 @@ export async function GET(request: Request) {
         path: path.value,
         reason: result.reason,
         detail: result.detail,
-      });
+      };
+      if (result.reason === 'exec_failed') {
+        loggers.api.error('Machine git-blob read failed', undefined, meta);
+      } else {
+        loggers.api.warn('Machine git-blob read failed', meta);
+      }
     }
     return NextResponse.json(
       { error: DENIAL_MESSAGE[result.reason] ?? 'Failed to read the file at this ref', reason: result.reason },

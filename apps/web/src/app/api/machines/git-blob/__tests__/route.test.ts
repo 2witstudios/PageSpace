@@ -18,8 +18,14 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 const logApiError = vi.fn();
+const logApiWarn = vi.fn();
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: { api: { error: (...args: unknown[]) => logApiError(...(args as [])) } },
+  loggers: {
+    api: {
+      error: (...args: unknown[]) => logApiError(...(args as [])),
+      warn: (...args: unknown[]) => logApiWarn(...(args as [])),
+    },
+  },
 }));
 
 type HandleResult =
@@ -138,11 +144,17 @@ describe('/api/machines/git-blob request contract', () => {
     expect(await res.json()).toEqual({ error: 'That git reference is not valid', reason: 'invalid_ref' });
   });
 
-  it('maps not_found to 404 without echoing the git detail', async () => {
-    readMachineGitBlob.mockResolvedValue({ ok: false, reason: 'not_found', detail: "does not exist in 'HEAD'" });
+  it('maps not_found to 404 without echoing the git detail, logging at warn (an expected miss, not an error)', async () => {
+    const detail = "fatal: path 'src/index.ts' does not exist in 'HEAD'";
+    readMachineGitBlob.mockResolvedValue({ ok: false, reason: 'not_found', detail });
     const res = await GET(get({}));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'File not found at this ref', reason: 'not_found' });
+    expect(logApiError).not.toHaveBeenCalled();
+    expect(logApiWarn).toHaveBeenCalledWith(
+      'Machine git-blob read failed',
+      expect.objectContaining({ reason: 'not_found', detail }),
+    );
   });
 
   it('maps exec_failed to 502 with a sanitized error, logging the stderr detail', async () => {
@@ -166,5 +178,6 @@ describe('/api/machines/git-blob request contract', () => {
     const res = await GET(get({}));
     expect(res.status).toBe(502);
     expect(logApiError).not.toHaveBeenCalled();
+    expect(logApiWarn).not.toHaveBeenCalled();
   });
 });
