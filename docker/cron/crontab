@@ -63,15 +63,13 @@
 */10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
 
 # Machine storage reconcile - Hourly
-# Bills Terminal Machines' persistent-storage cost from each machine's last
-# persisted measured footprint (active or hibernating; never wakes a sprite).
-# Idempotent via per-machine last-billed watermarks for sequential runs, but
-# the charge and the watermark advance are two un-transactioned writes — two
-# CONCURRENT reconciles could bill the same elapsed window twice. flock -n
-# serializes them at the sole caller: if a run is still going at the next tick
-# the new tick is skipped (not queued), and the skipped window is simply
-# caught up by the watermark on the following hour.
-0 * * * * flock -n /tmp/reconcile-machine-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1
+# Bills each Terminal Machine's persistent storage from its last persisted
+# measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks
+# make sequential reruns and missed runs self-correcting, but CONCURRENT runs
+# can double-bill. flock -n is a best-effort guard so this container's own
+# ticks never overlap (a skipped tick is caught up by the watermark next
+# hour); in-service serialization covering ALL callers is tracked follow-up.
+0 * * * * flock -n /run/reconcile-machine-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-machine-storage.log
 
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
