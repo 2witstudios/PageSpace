@@ -92,7 +92,13 @@ export function SidebarNotice({
         </p>
       )}
       {actionLabel && onAction && (
-        <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={onAction}>
+        // Wrapped rather than `onClick={onAction}`: React calls onClick with the
+        // click's MouseEvent, and a caller whose `onAction` is (or wraps) an SWR
+        // `mutate` would have that event handed to it as a first argument — SWR
+        // reads that as replacement cache data, not "revalidate now". Calling
+        // onAction() with no arguments here means every caller's zero-arg
+        // contract holds regardless of what onAction closes over.
+        <Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-xs" onClick={() => onAction()}>
           {actionLabel}
         </Button>
       )}
@@ -133,7 +139,8 @@ export function PaneNotice({
       <p className={cn('max-w-md text-sm font-medium', toneClass(tone))}>{title}</p>
       {description && <p className="max-w-md text-sm text-muted-foreground">{description}</p>}
       {actionLabel && onAction && (
-        <Button type="button" variant="outline" size="sm" onClick={onAction}>
+        // Same zero-arg wrapping as SidebarNotice above, and for the same reason.
+        <Button type="button" variant="outline" size="sm" onClick={() => onAction()}>
           {actionLabel}
         </Button>
       )}
