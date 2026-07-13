@@ -812,6 +812,25 @@ describe('Claude Code credential propagation', () => {
     const state = byId.get(result.sandboxId);
     expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
   });
+
+  it('should chmod both copied files to 600 after writing — writeFiles\' mode only applies at creation, so an overwrite of an ALREADY-EXISTING file (e.g. a refresh) needs an explicit chmod to re-secure it', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    const chmodCalls = state?.execLog.filter((c) => c.cmd === 'chmod') ?? [];
+    expect(chmodCalls).toEqual([
+      { cmd: 'chmod', args: ['600', '/home/sprite/.claude/.credentials.json'] },
+      { cmd: 'chmod', args: ['600', '/home/sprite/.claude.json'] },
+    ]);
+  });
 });
 
 describe('killBranch', () => {

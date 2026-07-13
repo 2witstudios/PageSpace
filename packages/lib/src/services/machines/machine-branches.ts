@@ -241,9 +241,19 @@ export async function propagateClaudeCredential({
     for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
       const content = await rootHandle.readFile({ path });
       if (!content) continue;
-      await branchHandle.writeFiles([
-        { path, content, mode: path === CLAUDE_CREDENTIALS_PATH ? 0o600 : undefined },
-      ]);
+      // Both restricted 0o600 — the credentials file is the OAuth secret
+      // itself, and the config file can carry account/org metadata, so
+      // neither belongs world-readable in the branch Sprite's home dir.
+      //
+      // `writeFiles`' `mode` only takes effect at file CREATION (POSIX
+      // open()'s mode argument is ignored once a file already exists) — a
+      // refresh on reattach overwrites an ALREADY-EXISTING file (this is
+      // never the first copy after the first reattach), so the requested
+      // mode alone would silently leave whatever permissions that file
+      // already had. An explicit chmod after the write re-secures it either
+      // way, regardless of whether this write created or overwrote it.
+      await branchHandle.writeFiles([{ path, content, mode: 0o600 }]);
+      await branchHandle.exec({ cmd: 'chmod', args: ['600', path] });
     }
   } catch {
     // best-effort — see doc comment above.

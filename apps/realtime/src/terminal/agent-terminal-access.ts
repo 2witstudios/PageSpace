@@ -147,7 +147,15 @@ export async function resolveMachineSandbox(
     return { ok: false, reason: 'provision_failed', sandboxId: resolved.sandboxId };
   }
 
-  if (target.branchName !== undefined && deps.refreshBranchCredential) {
+  // Both `projectName` AND `branchName` must be set for true branch scope —
+  // matching `resolveScopeKey`/`resolveScopeLocation`'s own discriminator
+  // (`agent-terminals.ts`), rather than relying on the implicit invariant
+  // that a real `resolveAgentTerminal` already rejects `branchName` without
+  // `projectName` as `invalid_target` before ever reaching here. Checking
+  // both explicitly means this gate stays correct even if that upstream
+  // validation ever changes, or a caller wires a resolver that doesn't
+  // enforce it (e.g. a test double).
+  if (target.projectName !== undefined && target.branchName !== undefined && deps.refreshBranchCredential) {
     try {
       await deps.refreshBranchCredential({ machineId: target.machineId, sandboxId: resolved.sandboxId });
     } catch {

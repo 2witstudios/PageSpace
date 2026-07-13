@@ -243,6 +243,9 @@ async function resolveAgentTerminalSandbox({
   name: string;
 }) {
   const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+  // Construction only (no I/O) — cheap to build unconditionally even for
+  // machine/project-scope targets that never touch `refreshBranchCredential`.
+  const host = createSpriteMachineHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
   return resolveMachineSandbox(
     { machineId, projectName, branchName, name },
@@ -280,8 +283,6 @@ async function resolveAgentTerminalSandbox({
       // costs nothing; only the root Sprite's read is a genuinely new call.
       refreshBranchCredential: async ({ machineId: rootMachineId, sandboxId }) => {
         try {
-          const rawClient = createSpritesSandboxClient({ sdk });
-          const host = createSpriteMachineHost({ sdk, client: rawClient });
           const branchHandle = await host.attach({ machineId: sandboxId });
           if (!branchHandle) return;
           await propagateClaudeCredential({

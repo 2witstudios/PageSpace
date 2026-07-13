@@ -287,6 +287,26 @@ describe('resolveMachineSandbox', () => {
     });
   });
 
+  it('given branchName set WITHOUT projectName (malformed — a real resolveAgentTerminal would reject this as invalid_target before ever reaching here), should still NOT refresh any credential even against a permissive fake resolver', async () => {
+    // A real `resolveAgentTerminal` (agent-terminals.ts) already rejects this
+    // shape as `invalid_target` before Sprite resolution — but this test's
+    // fake resolver deliberately does NOT enforce that, to prove the gate
+    // itself checks BOTH projectName and branchName rather than relying on
+    // that upstream invariant alone.
+    const refresh = spyRefresh();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', branchName: 'feature-x', name: 'claude' },
+      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn, refreshBranchCredential: refresh.fn },
+    );
+
+    assert({
+      given: 'a branchName-only target reaching a permissive fake resolver',
+      should: 'never call refreshBranchCredential — the gate requires projectName too, not branchName alone',
+      actual: refresh.calls.length,
+      expected: 0,
+    });
+  });
+
   it('given a branch-scope target with refreshBranchCredential OMITTED, should still resolve successfully', async () => {
     const result = await resolveMachineSandbox(
       { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
