@@ -100,9 +100,15 @@ export interface ResolveMachineSandboxDeps {
    * explicit attach API, neither of which this realtime PTY bridge calls.
    *
    * Optional so tests that don't exercise branch scope (or don't care about
-   * credential propagation) can omit it. MUST be best-effort on the
-   * implementation side — swallow its own failures — since a credential
-   * refresh must never block or fail opening the PTY itself.
+   * credential propagation) can omit it. Called fire-and-forget — NEVER
+   * awaited by `resolveMachineSandbox` (a cold/hibernating Sprite's fs
+   * read/write can take up to the Sprite fs API's 30s timeout, with one
+   * retry, so up to ~60s; blocking every branch PTY open on that would
+   * regress the "opening a PTY is itself the wake, nothing upstream waits on
+   * it" invariant). MUST still be best-effort on the implementation side —
+   * swallow its own failures — as defense in depth against an unhandled
+   * rejection, even though a rejection can no longer fail or delay the PTY
+   * resolution itself.
    */
   refreshBranchCredential?: (args: { machineId: string; sandboxId: string }) => Promise<void>;
 }
@@ -156,14 +162,23 @@ export async function resolveMachineSandbox(
   // validation ever changes, or a caller wires a resolver that doesn't
   // enforce it (e.g. a test double).
   if (target.projectName !== undefined && target.branchName !== undefined && deps.refreshBranchCredential) {
-    try {
-      await deps.refreshBranchCredential({ machineId: target.machineId, sandboxId: resolved.sandboxId });
-    } catch {
+    // Fire-and-forget — NEVER awaited (caught in review, P2). A cold or
+    // hibernating Sprite's filesystem read/write can take up to the Sprite
+    // fs API's 30s timeout, WITH one retry (so up to ~60s) — blocking every
+    // branch PTY open on that would regress this codebase's core Sprite
+    // invariant that opening a PTY is itself the wake and NOTHING upstream
+    // of it waits on that wake (see `buildMachineSandbox`'s own doc comment
+    // on this file's sibling `acquire`). The refresh still normally lands
+    // well before a user manually runs `claude`; the narrower race — typing
+    // `claude` faster than an in-flight refresh completes — self-heals
+    // moments later once the copy finishes, and is a FAR smaller cost than a
+    // multi-second stall on every cold terminal open.
+    void deps.refreshBranchCredential({ machineId: target.machineId, sandboxId: resolved.sandboxId }).catch(() => {
       // Best-effort by contract (see the doc comment on
       // `ResolveMachineSandboxDeps.refreshBranchCredential`) — defense in
       // depth here too, so an implementation that forgets to swallow its own
-      // errors still never fails opening the PTY over a credential hiccup.
-    }
+      // errors still never produces an unhandled rejection.
+    });
   }
 
   return {

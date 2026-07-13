@@ -103,6 +103,27 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
 }
 
 /**
+ * A page's CURRENT driveId + that drive's owner (the `tenantId` convention
+ * `deriveMachineSessionKey` uses) — the two reads `buildMachineSandbox.acquire`
+ * already did inline, now shared with `refreshBranchCredential` below so a
+ * bare-`pageId` lookup is never substituted for deriving the exact CURRENT
+ * session key (a page moved between drives can leave its OLD drive's session
+ * row behind under a DIFFERENT key — see `findLiveMachineSandboxId`'s doc
+ * comment on `machine-session-manager.ts`).
+ */
+type DriveOwnerContextResult =
+  | { ok: true; driveId: string; tenantId: string }
+  | { ok: false; reason: 'page_not_found' | 'drive_not_found' };
+
+async function resolveDriveOwnerContext(pageId: string): Promise<DriveOwnerContextResult> {
+  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
+  if (!pageRow) return { ok: false, reason: 'page_not_found' };
+  const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
+  if (!driveRow) return { ok: false, reason: 'drive_not_found' };
+  return { ok: true, driveId: pageRow.driveId, tenantId: driveRow.ownerId };
+}
+
+/**
  * Acquires the OWNING Machine's persistent Sprite for `AgentTerminalMachineSandbox`
  * (machine/project scope share this one Sprite — see `agent-terminals.ts`),
  * re-authorizing `actorUserId` (resume re-authz) on every call. Mirrors the
@@ -132,10 +153,9 @@ function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTermina
 
   return {
     acquire: async (machineId): Promise<AgentTerminalMachineSandboxResult> => {
-      const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
-      if (!pageRow) return deny('page_not_found', machineId);
-      const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
-      if (!driveRow) return deny('drive_not_found', machineId);
+      const context = await resolveDriveOwnerContext(machineId);
+      if (!context.ok) return deny(context.reason, machineId);
+      const { driveId, tenantId } = context;
 
       const nowMs = Date.now();
       const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
@@ -148,8 +168,8 @@ function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTermina
 
       const result = await acquireMachineSession({
         pageId: machineId,
-        driveId: pageRow.driveId,
-        tenantId: driveRow.ownerId,
+        driveId,
+        tenantId,
         userId: actorUserId,
         // Already authorized by the caller's access + canRunCode checks before
         // resolveAgentTerminal ever reaches this acquire.
@@ -289,7 +309,18 @@ async function resolveAgentTerminalSandbox({
             machineId: rootMachineId,
             branchHandle,
             resolveRootMachineHandle: async (mid) => {
-              const rootSandboxId = await findLiveMachineSandboxId(mid);
+              // Derives the CURRENT session key (driveId + drive owner), not
+              // a bare-pageId lookup — see `findLiveMachineSandboxId`'s doc
+              // comment on why that would risk resolving a STALE session
+              // left behind by a prior drive move (caught in review, P1).
+              const context = await resolveDriveOwnerContext(mid);
+              if (!context.ok) return null;
+              const rootSandboxId = await findLiveMachineSandboxId({
+                tenantId: context.tenantId,
+                driveId: context.driveId,
+                pageId: mid,
+                secret: getSandboxSessionSecret(),
+              });
               if (!rootSandboxId) return null;
               return host.attach({ machineId: rootSandboxId });
             },
