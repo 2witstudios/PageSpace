@@ -17,6 +17,12 @@
  * sidebar: both hang the same workspace items off the same tree, and differ
  * only in what `onSelectWorkspace`/`onCreateWorkspace` do (activate in place
  * here; route to the machine first, there).
+ *
+ * Removing a workspace STOPS every agent its panes hold (`removeAgentTerminal`
+ * per running pane) before dropping the local grid — this is the only
+ * terminal-level stop/remove path left once `SessionLeaves`'s per-session
+ * remove button is gone, so it must not merely hide a still-running (and
+ * still-billing) agent with no row left to reach it from.
  */
 
 import { useEffect, useState } from 'react';
@@ -27,9 +33,11 @@ import {
   selectMachine,
   selectRunningPaneCount,
   workspacesOf,
+  panesOf,
   isSameNodeScope,
   type MachineNodeScope,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useAgentTerminals } from '@/hooks/useAgentTerminals';
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton, { AddButton } from './RemoveButton';
@@ -67,11 +75,21 @@ export default function WorkspaceLeaves({
   const removeWorkspace = useMachineWorkspaceStore((state) => state.removeWorkspace);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
 
+  const scope = nodeScopeOf(node);
+  // Every pane in a workspace runs in the WORKSPACE's own node scope (see
+  // newWorkspace), which is this node's scope — so one scoped hook covers
+  // every pane this node's workspaces could hold.
+  const { removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName, scope.branchName);
+
   if (!machine) return null;
 
-  const scope = nodeScopeOf(node);
   const workspaces = workspacesOf(machine).filter((workspace) => isSameNodeScope(workspace.scope, scope));
   const pendingWorkspace = workspaces.find((workspace) => workspace.id === pendingRemove);
+  const pendingRunningNames = pendingWorkspace
+    ? panesOf(pendingWorkspace)
+        .map((pane) => pane.scope?.name)
+        .filter((name): name is string => name !== undefined)
+    : [];
 
   return (
     <div>
@@ -99,9 +117,19 @@ export default function WorkspaceLeaves({
         open={pendingWorkspace !== undefined}
         onOpenChange={(open) => !open && setPendingRemove(null)}
         title="Remove workspace?"
-        description={pendingWorkspace ? `Remove workspace "${pendingWorkspace.name}"? Its running agents keep running server-side; this only closes the local pane grid.` : ''}
+        description={
+          pendingWorkspace
+            ? pendingRunningNames.length > 0
+              ? `Remove workspace "${pendingWorkspace.name}"? This stops its ${pendingRunningNames.length} running agent${pendingRunningNames.length === 1 ? '' : 's'} — this cannot be undone.`
+              : `Remove workspace "${pendingWorkspace.name}"?`
+            : ''
+        }
         onConfirm={async () => {
           if (pendingRemove === null) return;
+          // Stop every running agent this workspace's panes hold BEFORE
+          // dropping the local entry — otherwise the agent (and its billing)
+          // survives with no sidebar row left to reach it from.
+          await Promise.all(pendingRunningNames.map((name) => removeAgentTerminal(name)));
           removeWorkspace(machineId, pendingRemove);
         }}
       />

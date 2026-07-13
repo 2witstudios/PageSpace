@@ -8,6 +8,14 @@ import type { MachineTreeNode } from './MachineTree';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
+  post: vi.fn(),
+  del: vi.fn(async () => new Response(null, { status: 204 })),
+}));
+
+import { del } from '@/lib/auth/auth-fetch';
+
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
 
@@ -102,7 +110,7 @@ describe('WorkspaceLeaves', () => {
     });
   });
 
-  test('removing a workspace calls the store action after confirming', async () => {
+  test('removing an EMPTY workspace calls the store action after confirming', async () => {
     store().ensureMachine('m1');
     store().createWorkspace('m1');
 
@@ -115,10 +123,41 @@ describe('WorkspaceLeaves', () => {
 
     await waitFor(() => {
       assert({
-        given: 'a workspace remove confirmed',
+        given: 'an empty workspace remove confirmed',
         should: 'drop it from the machine\'s workspace set',
         actual: Object.keys(selectMachine('m1')(store())!.workspaces).length,
         expected: 1,
+      });
+    });
+  });
+
+  // Regression (Codex P1): SessionLeaves (deleted by this redesign) was the
+  // only UI caller that ever stopped a specific agent_terminal server-side.
+  // Removing a workspace must not just hide a still-running agent locally —
+  // it has to actually stop it, or the sidebar leaves no way back to a
+  // running (and billing) Sprite.
+  test('removing a workspace WITH a running pane stops that agent server-side before dropping the workspace', async () => {
+    store().ensureMachine('m1');
+    const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
+    store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
+
+    render(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const rows = await waitFor(() => screen.getAllByRole('button', { name: /^Workspace \d+$/ }));
+    const row = rows[0].closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
+    await screen.findByText(/stops its 1 running agent/);
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'a workspace holding one running pane, remove confirmed',
+        should: 'DELETE that agent_terminal server-side, then drop the local workspace',
+        actual: {
+          deletedRunningAgent: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=claude-a1b2c3')),
+          workspaceCount: Object.keys(selectMachine('m1')(store())!.workspaces).length,
+        },
+        expected: { deletedRunningAgent: true, workspaceCount: 1 },
       });
     });
   });

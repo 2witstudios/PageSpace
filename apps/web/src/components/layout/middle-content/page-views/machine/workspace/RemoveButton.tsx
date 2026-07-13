@@ -27,13 +27,12 @@ export default function RemoveButton({ onClick, label }: { onClick(): void; labe
  * a project, Project [+] adds a branch, any node's [+] starts a new workspace).
  * Icons convey type; this is deliberately just the container button — callers
  * pass whichever icon fits (`Plus` for structural adds). */
-export function AddButton({ onClick, label, icon, disabled }: { onClick(): void; label: string; icon: ReactNode; disabled?: boolean }) {
+export function AddButton({ onClick, label, icon }: { onClick(): void; label: string; icon: ReactNode }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      disabled={disabled}
-      className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-0"
+      className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100"
       title={label}
       aria-label={label}
     >
