@@ -162,6 +162,11 @@ export async function handleTerminalActivityRequest(
 
   const text = formatTerminalActivityLine(parsed.payload);
   appendScrollback(session, text);
+  // An agent's bash run on this machine IS activity for the session's
+  // platform task hold: a detached multi-step agent run must not have its
+  // hold deleted between steps (agent-terminal-handler's hold heartbeat
+  // reads this via latestActivityAt).
+  session.lastOutputAt = Date.now();
   session.outputFn(text);
 
   return { status: 200, body: { success: true, delivered: true } };
