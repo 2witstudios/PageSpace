@@ -809,6 +809,13 @@ export function killSessionStreamErrorMessage(line: string): string | undefined 
  * drained and checked line-by-line via {@link killSessionStreamErrorMessage};
  * only a stream with no `error` line resolves.
  *
+ * Requests `?signal=SIGKILL` explicitly. The endpoint defaults to `SIGTERM`
+ * when `signal` is omitted, but every caller of this driver is replacing an
+ * old `SpriteCommandLike.kill('SIGKILL')` WebSocket signal — a graceful-only
+ * SIGTERM would let a process that traps/ignores TERM survive the call while
+ * this function still reports success, so the row/session bookkeeping gets
+ * removed out from under a still-live, still-billable session.
+ *
  * `404`/`410` means the Sprite no longer recognizes this session id (the
  * documented response for a missing session/sprite) — that IS success, not a
  * failure: the caller's whole reason for calling is "make sure this session
@@ -826,7 +833,7 @@ async function attemptKillSpriteSession(
   const timer = setTimeout(() => controller.abort(), KILL_SESSION_TIMEOUT_MS);
   try {
     const response = await fetchImpl(
-      `${baseURL}/v1/sprites/${encodeURIComponent(spriteName)}/exec/${encodeURIComponent(sessionId)}/kill`,
+      `${baseURL}/v1/sprites/${encodeURIComponent(spriteName)}/exec/${encodeURIComponent(sessionId)}/kill?signal=SIGKILL`,
       { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: controller.signal },
     );
     if (!response.ok) {

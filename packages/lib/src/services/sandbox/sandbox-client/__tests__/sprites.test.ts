@@ -1319,13 +1319,13 @@ describe('killSpriteSession', () => {
   // A fast, no-op sleep — keeps the retry-path tests from paying real backoff wall-clock time.
   const noSleep = async () => {};
 
-  it('given a live session, POSTs the exact kill URL (no "sessions/" segment — sprites.dev/api/sprites/exec#kill-exec-session) with a bearer token', async () => {
+  it('given a live session, POSTs the exact kill URL (no "sessions/" segment — sprites.dev/api/sprites/exec#kill-exec-session) with a bearer token and explicit SIGKILL', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
 
     await killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1');
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill',
+      'https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill?signal=SIGKILL',
       expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer test-token' } }),
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1); // no retry needed on the happy path
@@ -1337,9 +1337,17 @@ describe('killSpriteSession', () => {
     await killSpriteSession({ ...transport, fetchImpl }, 'my/sprite', 'sess/1');
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://api.sprites.dev/v1/sprites/my%2Fsprite/exec/sess%2F1/kill',
+      'https://api.sprites.dev/v1/sprites/my%2Fsprite/exec/sess%2F1/kill?signal=SIGKILL',
       expect.anything(),
     );
+  });
+
+  it('requests signal=SIGKILL explicitly rather than relying on the endpoint\'s SIGTERM default — the old WS-signal path always used SIGKILL, and a process that traps/ignores TERM would survive a default-signal call while this still reports success', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1');
+
+    expect(fetchImpl).toHaveBeenCalledWith(expect.stringContaining('signal=SIGKILL'), expect.anything());
   });
 
   it('given a 200 whose NDJSON stream reports only progress (signal -> exited -> complete), resolves — the whole point of draining it', async () => {
@@ -1447,7 +1455,7 @@ describe('withKillSession', () => {
       await wrapped.killSession('sess-1');
 
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toBe('https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill');
+      expect(calls[0][0]).toBe('https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill?signal=SIGKILL');
       expect(calls[0][1]).toMatchObject({ method: 'POST', headers: { Authorization: 'Bearer test-token' } });
       expect(wrapped.spawn()).toBe('unrelated-spawn-marker'); // every other method survives untouched
       expect(wrapped).toBe(sprite); // mutates and returns the same instance, not a fresh wrapper
