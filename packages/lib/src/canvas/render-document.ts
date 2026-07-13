@@ -115,6 +115,14 @@ export interface RenderCanvasDocumentInput {
    * standalone documents and use `prefers-color-scheme` for OS-level matching.
    */
   injectThemeBridge?: boolean;
+  /**
+   * When set, used VERBATIM as the emitted CSP `<meta>` content instead of
+   * `buildBaselineCsp(formActionOrigin)`. Lets other renderers (e.g. the
+   * published-document pipeline, which needs `script-src 'none'`) reuse this
+   * renderer's whole head assembly without duplicating it. Omit to keep the
+   * unchanged canvas baseline CSP.
+   */
+  cspOverride?: string;
 }
 
 /**
@@ -314,8 +322,8 @@ function extractAndSanitizeStyles(html: string, allowedHttpsHosts?: string[], no
  * Render a complete, standalone HTML document for a canvas page.
  */
 export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
-  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, nonce } = input;
-  const csp = buildBaselineCsp(formActionOrigin);
+  const { html, title, baseTarget, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, formActionOrigin, injectThemeBridge, nonce, cspOverride } = input;
+  const csp = cspOverride ?? buildBaselineCsp(formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce);
   const rawTitle = title && title.trim() ? title : 'Untitled';

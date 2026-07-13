@@ -18,3 +18,17 @@ export function buildBaselineCsp(formActionOrigin?: string): string {
 
   return `${base} form-action 'self' ${formActionOrigin}; connect-src ${formActionOrigin}`;
 }
+
+/**
+ * Builds the CSP for published DOCUMENT pages (see `../publish/render-document-page.ts`).
+ * Unlike canvas pages, documents never run author scripts — the sanitizer
+ * (`sanitizeDocumentHtml`) already strips `<script>` tags, and this policy is
+ * the hard enforcement layer: `script-src 'none'` blocks any that slip
+ * through, and `form-action 'none'` blocks form submission entirely (the
+ * sanitizer also strips `<form>`). Every other baseline directive (asset/
+ * font/image hosts, `object-src`, `base-uri`) is unchanged from
+ * `buildBaselineCsp()`.
+ */
+export function buildDocumentCsp(): string {
+  return "default-src 'none'; img-src data: https:; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+}
