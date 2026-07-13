@@ -83,18 +83,7 @@ describe('GET /api/machines/agent-terminals', () => {
     );
   });
 
-  it('given a known agentType, marks the terminal launchable', async () => {
-    mockCanViewMachine.mockResolvedValue(true);
-    mockListAgentTerminals.mockResolvedValue({
-      ok: true,
-      terminals: [{ name: 'cli', agentType: 'claude', createdAt: new Date('2026-07-01') }],
-    });
-    const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
-    const body = await res.json();
-    expect(body.agentTerminals[0]).toMatchObject({ name: 'cli', agentType: 'claude', launchable: true });
-  });
-
-  it('given a legacy row whose agentType is the retired pagespace-cli, still lists it but marks it NOT launchable', async () => {
+  it('given a legacy row whose agentType is the retired pagespace-cli, still lists it as-is — launchability is the client\'s call via isAgentRuntimeType, not this route\'s', async () => {
     mockCanViewMachine.mockResolvedValue(true);
     mockListAgentTerminals.mockResolvedValue({
       ok: true,
@@ -102,7 +91,7 @@ describe('GET /api/machines/agent-terminals', () => {
     });
     const res = await GET(new Request('https://x.test/api/machines/agent-terminals?machineId=t1&projectName=repo&branchName=main'));
     const body = await res.json();
-    expect(body.agentTerminals[0]).toMatchObject({ name: 'legacy-cli', agentType: 'pagespace-cli', launchable: false });
+    expect(body.agentTerminals[0]).toEqual({ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-07-01T00:00:00.000Z' });
   });
 
   it('given no view access, returns 403 without listing', async () => {

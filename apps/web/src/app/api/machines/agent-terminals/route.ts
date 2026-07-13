@@ -20,7 +20,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { spawnAgentTerminal, killAgentTerminal, listAgentTerminals } from '@pagespace/lib/services/machines/agent-terminals';
-import { isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   buildSpawnAgentTerminalDeps,
   buildKillAgentTerminalDeps,
@@ -97,15 +96,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: result.reason }, { status: SCOPE_DENIAL_STATUS[result.reason] ?? 500 });
   }
   return NextResponse.json({
-    // `launchable` is false for a row whose agentType predates a since-retired
-    // AGENT_LAUNCH_SPECS entry (e.g. the removed 'pagespace-cli') — still listed
-    // (so it stays discoverable/removable), but the UI must not try to open it.
-    agentTerminals: result.terminals.map((t) => ({
-      name: t.name,
-      agentType: t.agentType,
-      createdAt: t.createdAt,
-      launchable: isAgentRuntimeType(t.agentType),
-    })),
+    agentTerminals: result.terminals.map((t) => ({ name: t.name, agentType: t.agentType, createdAt: t.createdAt })),
   });
 }
 

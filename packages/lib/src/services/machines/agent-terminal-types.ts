@@ -21,14 +21,29 @@
  * Resolving the sentinel to an actual shell binary is an IO concern (reading
  * `process.env.SHELL`) that belongs to whichever layer actually spawns the
  * PTY (the realtime bridge), not this pure module.
+ *
+ * `pickable` gates the empty-pane "spawn an agent" picker (`TerminalPanes.tsx`
+ * — see `PICKABLE_AGENT_TYPES` below): `shell` is a real, fully-launchable
+ * `AgentRuntimeType`, but picking one from that flow means choosing an AI
+ * agent identity, not a bare interactive shell — spawning a default/bare
+ * shell terminal is a distinct UX (a separate follow-up wires that up) this
+ * picker doesn't own. Keeping the marker on the registry entry itself (rather
+ * than a hardcoded exclusion list living in the UI file) is what keeps the
+ * picker in sync when a new entry is added here: forgetting to set `pickable`
+ * fails safe (excluded, not silently spawnable) instead of failing open.
  */
 export const AGENT_LAUNCH_SPECS = {
-  claude: { command: 'claude', args: [] },
-  codex: { command: 'codex', args: [] },
-  shell: { command: 'shell', args: [] },
-} as const satisfies Record<string, { command: string; args: readonly string[] }>;
+  claude: { command: 'claude', args: [], pickable: true },
+  codex: { command: 'codex', args: [], pickable: true },
+  shell: { command: 'shell', args: [], pickable: false },
+} as const satisfies Record<string, { command: string; args: readonly string[]; pickable: boolean }>;
 
 export type AgentRuntimeType = keyof typeof AGENT_LAUNCH_SPECS;
+
+/** The subset of `AgentRuntimeType`s a user can pick from the empty-pane "spawn an agent" picker — see the `pickable` doc comment above. */
+export const PICKABLE_AGENT_TYPES: readonly AgentRuntimeType[] = (Object.keys(AGENT_LAUNCH_SPECS) as AgentRuntimeType[]).filter(
+  (type) => AGENT_LAUNCH_SPECS[type].pickable,
+);
 
 export interface AgentLaunchSpec {
   command: string;

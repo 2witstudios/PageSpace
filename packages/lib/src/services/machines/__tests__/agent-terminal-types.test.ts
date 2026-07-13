@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   AGENT_LAUNCH_SPECS,
+  PICKABLE_AGENT_TYPES,
   isAgentRuntimeType,
   resolveAgentLaunchSpec,
   isValidAgentTerminalName,
@@ -51,6 +52,16 @@ describe('resolveAgentLaunchSpec', () => {
 
   it('should not expose a registry entry for the retired pagespace-cli agent type', () => {
     expect(Object.keys(AGENT_LAUNCH_SPECS)).not.toContain('pagespace-cli');
+  });
+});
+
+describe('PICKABLE_AGENT_TYPES', () => {
+  it('should include every AI-agent AgentRuntimeType a user can pick from the empty-pane picker', () => {
+    expect(PICKABLE_AGENT_TYPES).toEqual(['claude', 'codex']);
+  });
+
+  it('should exclude the shell sentinel — a bare shell is not an AI agent identity to pick', () => {
+    expect(PICKABLE_AGENT_TYPES).not.toContain('shell');
   });
 });
 

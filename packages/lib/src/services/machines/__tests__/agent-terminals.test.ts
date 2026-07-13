@@ -160,6 +160,27 @@ function makeDeps(overrides: Partial<AgentTerminalsDeps> = {}): AgentTerminalsDe
   };
 }
 
+/** A pre-existing DB row stuck with the retired 'pagespace-cli' agentType — simulates a machine
+ * that spawned one before it was removed from AGENT_LAUNCH_SPECS, bypassing planSpawnAgentTerminal's
+ * validation (which now rejects it) since this is seeded directly into the store. */
+function makeLegacyRow(overrides: Partial<MachineAgentTerminalRecord> = {}): MachineAgentTerminalRecord {
+  return {
+    id: 'agent-terminal-legacy',
+    ownerId: actor.userId,
+    machineId: TERMINAL_ID,
+    scope: 'machine',
+    projectName: null,
+    machineBranchId: null,
+    name: 'legacy-cli',
+    agentType: 'pagespace-cli',
+    command: null,
+    streamSessionId: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
 describe('deriveAgentTerminalScope', () => {
   it('given machineBranchId set, should classify branch (regardless of projectName)', () => {
     expect(deriveAgentTerminalScope({ projectName: PROJECT_NAME, machineBranchId: BRANCH_ID })).toBe('branch');
@@ -469,21 +490,7 @@ describe('resolveAgentTerminalRow', () => {
   });
 
   it('given an EXISTING row whose agentType is the retired pagespace-cli, should deny not_found rather than crash', async () => {
-    const legacyRow: MachineAgentTerminalRecord = {
-      id: 'agent-terminal-legacy',
-      ownerId: actor.userId,
-      machineId: TERMINAL_ID,
-      scope: 'machine',
-      projectName: null,
-      machineBranchId: null,
-      name: 'legacy-cli',
-      agentType: 'pagespace-cli',
-      command: null,
-      streamSessionId: null,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
-    const { store } = makeStore([legacyRow]);
+    const { store } = makeStore([makeLegacyRow()]);
     const deps = makeDeps({ store, machineSandbox: undefined });
 
     const result = await resolveAgentTerminalRow({ machineId: TERMINAL_ID, name: 'legacy-cli', deps });
@@ -554,21 +561,7 @@ describe('resolveAgentTerminal', () => {
   });
 
   it('given an EXISTING row whose agentType is the retired pagespace-cli, should deny not_found rather than crash or hand it to resolveAgentLaunchSpec', async () => {
-    const legacyRow: MachineAgentTerminalRecord = {
-      id: 'agent-terminal-legacy',
-      ownerId: actor.userId,
-      machineId: TERMINAL_ID,
-      scope: 'machine',
-      projectName: null,
-      machineBranchId: null,
-      name: 'legacy-cli',
-      agentType: 'pagespace-cli',
-      command: null,
-      streamSessionId: null,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
-    const { store } = makeStore([legacyRow]);
+    const { store } = makeStore([makeLegacyRow()]);
     const deps = makeDeps({ store });
 
     const result = await resolveAgentTerminal({ machineId: TERMINAL_ID, name: 'legacy-cli', deps });
@@ -808,21 +801,7 @@ describe('listAgentTerminals', () => {
   });
 
   it('given a legacy row whose agentType is the retired pagespace-cli, should STILL list it — dropping it would strand it with no way to clean it up', async () => {
-    const legacyRow: MachineAgentTerminalRecord = {
-      id: 'agent-terminal-legacy',
-      ownerId: actor.userId,
-      machineId: TERMINAL_ID,
-      scope: 'machine',
-      projectName: null,
-      machineBranchId: null,
-      name: 'legacy-cli',
-      agentType: 'pagespace-cli',
-      command: null,
-      streamSessionId: null,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
-    const { store } = makeStore([legacyRow]);
+    const { store } = makeStore([makeLegacyRow()]);
     const deps = makeDeps({ store });
     await spawnAgentTerminal({ machineId: TERMINAL_ID, name: 'cli', agentType: 'claude', actor, deps });
 

@@ -9,11 +9,10 @@ export interface AgentTerminal {
   name: string;
   // A raw DB value, not narrowed to AgentRuntimeType — a row can carry an
   // agentType from a since-retired AGENT_LAUNCH_SPECS entry (e.g. the removed
-  // 'pagespace-cli'). Check `launchable` before treating it as one.
+  // 'pagespace-cli'). Callers check `isAgentRuntimeType(agentType)` before
+  // treating it as a launchable one (see WorkspaceLeaves.tsx).
   agentType: string;
   createdAt: string;
-  /** False for a row whose agentType is no longer a recognized AgentRuntimeType — still listed for cleanup, but the navigator must not try to open it. */
-  launchable: boolean;
 }
 
 const fetcher = (url: string) =>

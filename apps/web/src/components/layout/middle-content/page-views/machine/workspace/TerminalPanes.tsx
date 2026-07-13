@@ -18,7 +18,7 @@ import {
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
-import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import { PICKABLE_AGENT_TYPES, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   useMachineWorkspaceStore,
   selectActiveWorkspace,
@@ -33,12 +33,7 @@ import { PaneLoading, PaneNotice } from '../tabs/tab-states';
 
 const XtermTerminal = dynamic(() => import('../XtermTerminal'), { ssr: false });
 
-// User-pickable agent types for the empty-pane picker below — deliberately NOT
-// every AGENT_LAUNCH_SPECS key: `shell` is an internal sentinel (a bare machine
-// shell, not an AI agent a user spawns from this picker; see
-// agent-terminal-types.ts), so it's excluded here even though it's a valid
-// AgentRuntimeType elsewhere.
-const AGENT_TYPES: AgentRuntimeType[] = ['claude', 'codex'];
+const AGENT_TYPES = PICKABLE_AGENT_TYPES;
 
 interface TerminalPanesProps {
   machineId: string;

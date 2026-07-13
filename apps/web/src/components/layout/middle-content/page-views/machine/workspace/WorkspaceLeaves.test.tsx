@@ -16,6 +16,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: vi.fn(async () => new Response(null, { status: 204 })),
 }));
 
+import { toast } from 'sonner';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
@@ -227,7 +228,7 @@ describe('WorkspaceLeaves', () => {
   test('a server-backed session with no local workspace is reachable — clicking adopts it into a real workspace', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
-        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'claude', createdAt: '2026-01-01', launchable: true }] }),
+        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'claude', createdAt: '2026-01-01' }] }),
         { status: 200 },
       ),
     );
@@ -255,14 +256,16 @@ describe('WorkspaceLeaves', () => {
 
   // Codex review (PR #2053): dropping a legacy/unsupported row from the list
   // entirely would make it undiscoverable — DELETE still works by name, but
-  // nothing in the UI would ever offer that name again. Instead it's listed
-  // with `launchable: false`, rendered as remove-only (never adopt), so it
-  // stays cleanable without ever being treated as an openable session.
-  test('a listed session with launchable: false cannot be adopted, only removed', async () => {
+  // nothing in the UI would ever offer that name again. Instead it stays
+  // listed and the client itself derives launchability from `agentType` via
+  // `isAgentRuntimeType` (no server-sent flag), rendering remove-only (never
+  // adopt) so it stays cleanable without ever being treated as an openable
+  // session.
+  test('a listed session whose agentType is not a recognized AgentRuntimeType cannot be adopted, only removed', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
         JSON.stringify({
-          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01', launchable: false }],
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
         }),
         { status: 200 },
       ),
@@ -288,7 +291,7 @@ describe('WorkspaceLeaves', () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
         JSON.stringify({
-          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01', launchable: false }],
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
         }),
         { status: 200 },
       ),
@@ -304,6 +307,35 @@ describe('WorkspaceLeaves', () => {
         should: 'DELETE it by name server-side, exactly like a normal running agent',
         actual: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=legacy-cli')),
         expected: true,
+      });
+    });
+  });
+
+  // Self-review finding (PR #2053): unlike removing a live workspace (routed
+  // through ConfirmRemoveDialog, which reports a thrown error via toast), a
+  // fire-and-forget remove call with nothing observing the rejection would
+  // silently no-op on failure — the row stays, but the user gets no signal why.
+  test('a failed removal of an unlaunchable session is reported via toast, not swallowed silently', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.mocked(del).mockRejectedValueOnce(new Error('Failed to remove'));
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove unsupported session legacy-cli/ }));
+
+    await waitFor(() => {
+      assert({
+        given: 'a DELETE that rejects for an unlaunchable session\'s remove button',
+        should: 'surface the failure via toast.error rather than swallowing it',
+        actual: vi.mocked(toast.error).mock.calls.length,
+        expected: 1,
       });
     });
   });
