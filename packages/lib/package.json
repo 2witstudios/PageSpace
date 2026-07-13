@@ -992,6 +992,11 @@
       "import": "./dist/publish/document-shell.js",
       "require": "./dist/publish/document-shell.js"
     },
+    "./publish/render-document-page": {
+      "types": "./dist/publish/render-document-page.d.ts",
+      "import": "./dist/publish/render-document-page.js",
+      "require": "./dist/publish/render-document-page.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -2003,6 +2008,9 @@
       ],
       "publish/document-shell": [
         "./dist/publish/document-shell.d.ts"
+      ],
+      "publish/render-document-page": [
+        "./dist/publish/render-document-page.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
