@@ -177,6 +177,15 @@ describe('sanitizeDocumentHtml', () => {
       });
     });
 
+    it('removes on* attributes separated by a slash instead of whitespace', () => {
+      assert({
+        given: 'an <img/onerror=...> using "/" as the attribute separator',
+        should: 'remove the handler (browsers treat "/" like whitespace here)',
+        actual: sanitizeDocumentHtml('<img/onerror=alert(1) src="x.png">'),
+        expected: '<img src="x.png">',
+      });
+    });
+
     it('handles a ">" inside a quoted attribute value before the handler', () => {
       assert({
         given: 'an element whose alt contains ">" followed by an onerror',
@@ -194,6 +203,24 @@ describe('sanitizeDocumentHtml', () => {
         should: 'remove the href attribute, keep the anchor',
         actual: sanitizeDocumentHtml('<a href="javascript:alert(1)">x</a>'),
         expected: '<a>x</a>',
+      });
+    });
+
+    it('removes unquoted javascript: hrefs', () => {
+      assert({
+        given: 'an unquoted javascript: href value',
+        should: 'remove the attribute',
+        actual: sanitizeDocumentHtml('<a href=javascript:alert(1)>x</a>'),
+        expected: '<a>x</a>',
+      });
+    });
+
+    it('removes javascript: xlink:href values on SVG elements', () => {
+      assert({
+        given: 'an SVG <a xlink:href="javascript:...">',
+        should: 'remove the attribute, keep the element',
+        actual: sanitizeDocumentHtml('<svg><a xlink:href="javascript:alert(1)"><text>x</text></a></svg>'),
+        expected: '<svg><a><text>x</text></a></svg>',
       });
     });
 

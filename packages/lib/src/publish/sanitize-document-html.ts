@@ -178,7 +178,8 @@ const skipPastCloseTag = (html: string, name: string, from: number): number => {
   return match ? match.index + match[0].length : html.length;
 };
 
-const TAG_NAME = /^[a-zA-Z][a-zA-Z0-9-]*/;
+// Sticky so it matches in place at lastIndex — no per-tag slicing.
+const TAG_NAME = /[a-zA-Z][a-zA-Z0-9-]*/y;
 
 /** One full sanitize pass. Only ever deletes characters, never inserts. */
 const sanitizePass = (html: string): string => {
@@ -193,7 +194,8 @@ const sanitizePass = (html: string): string => {
     out += html.slice(i, lt);
 
     const isCloseTag = html[lt + 1] === '/';
-    const nameMatch = TAG_NAME.exec(html.slice(lt + (isCloseTag ? 2 : 1)));
+    TAG_NAME.lastIndex = lt + (isCloseTag ? 2 : 1);
+    const nameMatch = TAG_NAME.exec(html);
     if (!nameMatch) {
       // Not a tag (stray `<`, comment, doctype…) — emit the `<` and move on.
       out += '<';
