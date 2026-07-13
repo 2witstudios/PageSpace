@@ -99,6 +99,14 @@ export interface MachineDescriptor {
 }
 
 /**
+ * Outcome of a machine access check. A denial MAY carry an LLM-facing `reason`
+ * explaining the specific policy that blocked access (e.g. the machine's
+ * "Allow page agents" toggle is off); without one, callers fall back to their
+ * generic revoked-access message.
+ */
+export type MachineAccessDecision = { allowed: true } | { allowed: false; reason?: string };
+
+/**
  * Resolves an actor's configured machines and their metadata/accessibility.
  * `PageAgentConfig.machineAccess`/`machines` (apps/web/src/lib/repositories/
  * page-agent-repository.ts) is the canonical config source; production wires
@@ -112,8 +120,16 @@ export interface MachineDirectoryDeps {
     rawContext: ToolExecutionContext | undefined,
     machine: MachineRef,
   ) => Promise<MachineDescriptor>;
-  /** Page-permission accessibility check ('existing' checks Terminal page view access; 'own' is always true). */
-  isMachineAccessible: (rawContext: ToolExecutionContext | undefined, machine: MachineRef) => Promise<boolean>;
+  /**
+   * Machine access check ('own' is always allowed). For 'existing' machines this
+   * covers Terminal page view access AND the Machine's own access toggles
+   * (`allowPageAgents` for page-scoped agents, `visibleToGlobalAssistant` for
+   * the global assistant); a toggle denial carries an explanatory `reason`.
+   */
+  isMachineAccessible: (
+    rawContext: ToolExecutionContext | undefined,
+    machine: MachineRef,
+  ) => Promise<MachineAccessDecision>;
   /**
    * Resolve the drive that actually backs a machine, overriding the ambient
    * `ctx.driveId` (from chat location context) when it differs. Needed for
@@ -249,13 +265,15 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     // Terminal page itself) can change between calls, and this is the actual
     // execution boundary: routing a command to a machine the actor can no
     // longer view would be a silent access-control bypass (OWASP A01).
-    const accessible = await machines.isMachineAccessible(rawContext, activeMachine);
-    if (!accessible) {
+    const access = await machines.isMachineAccessible(rawContext, activeMachine);
+    if (!access.allowed) {
       return {
         ok: false,
         error: {
           success: false,
-          error: `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
+          error:
+            access.reason ??
+            `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
         },
       };
     }
@@ -335,11 +353,11 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
           };
         }
 
-        const accessible = await machines.isMachineAccessible(rawContext, target);
-        if (!accessible) {
+        const access = await machines.isMachineAccessible(rawContext, target);
+        if (!access.allowed) {
           return {
             success: false,
-            error: `You no longer have access to "${requestedId}".`,
+            error: access.reason ?? `You no longer have access to "${requestedId}".`,
             reason: 'inaccessible' as const,
           };
         }
@@ -378,7 +396,10 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
         // configured, and describeMachine's title lookup does not itself
         // check accessibility.
         const accessibleEntries = await Promise.all(
-          configured.map(async (m) => ({ machine: m, accessible: await machines.isMachineAccessible(rawContext, m) })),
+          configured.map(async (m) => ({
+            machine: m,
+            accessible: (await machines.isMachineAccessible(rawContext, m)).allowed,
+          })),
         );
         const entries = await Promise.all(
           accessibleEntries

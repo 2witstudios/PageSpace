@@ -161,13 +161,15 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     // Re-verify page-view access on EVERY call, mirroring sandbox-tools.ts —
     // the actual execution boundary must not trust a machine reference that
     // was accessible only at a past switch_machine call (OWASP A01).
-    const accessible = await machines.isMachineAccessible(rawContext, activeMachine);
-    if (!accessible) {
+    const access = await machines.isMachineAccessible(rawContext, activeMachine);
+    if (!access.allowed) {
       return {
         ok: false,
         error: {
           success: false,
-          error: `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
+          error:
+            access.reason ??
+            `You no longer have access to the active machine ("${machineRefId(activeMachine)}"). Call list_machines to see the available options.`,
         },
       };
     }

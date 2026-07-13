@@ -346,7 +346,15 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
  * without a real database connection.
  */
 export interface MachineDirectoryRuntimeDeps {
-  findPage: (pageId: string) => Promise<{ title: string; type: string; driveId: string } | undefined>;
+  findPage: (pageId: string) => Promise<{
+    title: string;
+    type: string;
+    driveId: string;
+    /** Machine access toggle: whether page-scoped agents may use this machine. */
+    allowPageAgents: boolean;
+    /** Machine access toggle: whether the global assistant may see/use this machine. */
+    visibleToGlobalAssistant: boolean;
+  } | undefined>;
   canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
   /** `PageAgentConfig.machineAccess`/`machines` — the canonical config source. */
   getAgentConfig: (agentPageId: string) => Promise<{ machineAccess: boolean; machines: MachineRef[] } | null>;
@@ -360,7 +368,10 @@ export interface MachineDirectoryRuntimeDeps {
 
 const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
   findPage: async (pageId) =>
-    db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true, driveId: true } }),
+    db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { title: true, type: true, driveId: true, allowPageAgents: true, visibleToGlobalAssistant: true },
+    }),
   canViewPage: canActorViewPage,
   getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
   getGlobalConfig: (userId) => globalMachineConfigRepository.getConfig(userId),
@@ -376,6 +387,13 @@ const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
  * transparently here into the user's lazily-provisioned personal Terminal
  * page — everything downstream (routing, permissions, activity) then treats
  * it exactly like any other 'existing' machine.
+ *
+ * Machines whose `visibleToGlobalAssistant` toggle is off are EXCLUDED here,
+ * at resolution — not just denied at the access check — so the global
+ * assistant never sees them and the default-active fallback (machines[0])
+ * lands on the next visible machine instead of dead-ending on a hidden one.
+ * A machine whose page has vanished passes through unfiltered:
+ * `isMachineAccessible` already denies it at the execution boundary.
  */
 async function resolveGlobalConfiguredMachines(
   userId: string,
@@ -384,13 +402,20 @@ async function resolveGlobalConfiguredMachines(
   const config = await deps.getGlobalConfig(userId);
   if (!config.machineAccess) return [];
   const configured = config.machines.length > 0 ? config.machines : [{ kind: 'own' as const }];
-  return Promise.all(
+  const resolved = await Promise.all(
     configured.map(async (m) =>
       m.kind === 'own'
         ? { kind: 'existing' as const, machineId: await deps.getOrCreateOwnMachinePageId(userId) }
         : m,
     ),
   );
+  const visible = await Promise.all(
+    resolved.map(async (m) => {
+      const page = await deps.findPage(m.machineId);
+      return !page || page.visibleToGlobalAssistant;
+    }),
+  );
+  return resolved.filter((_, i) => visible[i]);
 }
 
 /**
@@ -434,11 +459,32 @@ export function createMachineDirectory(
       return { name: page?.title ?? 'Terminal' };
     },
     isMachineAccessible: async (rawContext, machine) => {
-      if (machine.kind === 'own') return true;
-      if (!rawContext) return false;
+      if (machine.kind === 'own') return { allowed: true };
+      if (!rawContext) return { allowed: false };
       const page = await deps.findPage(machine.machineId);
-      if (!page || !isMachinePage(page.type as PageType)) return false;
-      return deps.canViewPage(rawContext, machine.machineId);
+      if (!page || !isMachinePage(page.type as PageType)) return { allowed: false };
+      const canView = await deps.canViewPage(rawContext, machine.machineId);
+      if (!canView) return { allowed: false };
+      // Machine access toggles (Settings tab). An agentPageId — the agent's own
+      // page or the parent's for a sub-agent — marks the actor page-scoped and
+      // subject to `allowPageAgents`; without one the actor is the global
+      // assistant, subject to `visibleToGlobalAssistant`. Checked AFTER
+      // canViewPage so a toggle reason (which names the machine) is never
+      // surfaced to an actor who can't view the page in the first place.
+      const agentPageId = activeMachineAgentPageId(rawContext);
+      if (agentPageId && !page.allowPageAgents) {
+        return {
+          allowed: false,
+          reason: `The machine "${page.title}" does not allow page agents ("Allow page agents" is turned off in its settings), so this agent cannot run terminal tools on it.`,
+        };
+      }
+      if (!agentPageId && !page.visibleToGlobalAssistant) {
+        return {
+          allowed: false,
+          reason: `The machine "${page.title}" is not visible to the global assistant ("Visible to global assistant" is turned off in its settings).`,
+        };
+      }
+      return { allowed: true };
     },
     resolveDriveId: async (_rawContext, machine, ambientDriveId) => {
       if (machine.kind === 'own') return ambientDriveId;
