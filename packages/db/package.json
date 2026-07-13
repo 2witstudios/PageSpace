@@ -67,6 +67,14 @@
       "types": "./dist/schema/machine-agent-terminals.d.ts",
       "default": "./dist/schema/machine-agent-terminals.js"
     },
+    "./schema/machine-workspaces": {
+      "types": "./dist/schema/machine-workspaces.d.ts",
+      "default": "./dist/schema/machine-workspaces.js"
+    },
+    "./schema/machine-workspace-bootstraps": {
+      "types": "./dist/schema/machine-workspace-bootstraps.d.ts",
+      "default": "./dist/schema/machine-workspace-bootstraps.js"
+    },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",
       "default": "./dist/schema/share-links.js"

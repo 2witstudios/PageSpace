@@ -22,6 +22,7 @@ import { parseSelectedMachineId, buildMachineHref } from '@/lib/development/deve
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
 import WorkspaceLeaves, { WorkspaceNodeExtras } from '@/components/layout/middle-content/page-views/machine/workspace/WorkspaceLeaves';
 import { SidebarLoading, SidebarNotice } from '@/components/layout/middle-content/page-views/machine/tabs/tab-states';
+import { useMachineWorkspaceSync } from '@/hooks/useMachineWorkspaceSync';
 
 /**
  * The Development surface's left sidebar. Two modes, one component (mirroring
@@ -344,6 +345,18 @@ function MachineTreeSection({
   const requestWorkspace = usePendingWorkspaceStore((state) => state.requestWorkspace);
   const clearPending = usePendingWorkspaceStore((state) => state.clearPending);
   const focusTerminal = useMachineTabStore((state) => state.focusTerminal);
+  // `WorkspaceLeaves`/`WorkspaceNodeExtras` below render the SAME server-synced
+  // workspace tree `MachineView`'s Terminal tab does (see this file's own doc
+  // comment), but `MachineView` — the sync hook's OTHER mount point — is only
+  // mounted once the user actually navigates INTO a machine. Without mounting
+  // it here too, expanding a machine's row in this sidebar without ever
+  // visiting its page renders/acts on a never-hydrated local store: `ensureMachine`
+  // fabricates a phantom "Workspace 1", and any click/create/rename/remove in
+  // this sidebar pushes to the server from that unhydrated state. Mounted once
+  // per machine row (this component's own lifetime in the sidebar list, not
+  // tied to the tree node's expand/collapse) so it doesn't re-join the socket
+  // room or re-fetch on every expand.
+  useMachineWorkspaceSync(machineId);
 
   const navigateToMachine = useCallback(() => {
     router.push(buildMachineHref(driveId, machineId));

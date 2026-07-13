@@ -8,6 +8,15 @@ import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspa
 const mockUseMobile = vi.fn<() => boolean>();
 vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mockUseMobile() }));
 
+// `useSyncedWorkspaceActions` (#2048) pushes layout changes to the server via
+// these — fire-and-forget from the component's point of view, but each must
+// resolve rather than return undefined, or the wrapper's `.catch()` throws.
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  post: vi.fn(async () => ({})),
+  patch: vi.fn(async () => ({})),
+  del: vi.fn(async () => ({})),
+}));
+
 // jsdom has neither the pointer-capture APIs nor scrollIntoView Radix's Select
 // uses when opening — without these stubs, clicking the agent-type trigger
 // throws instead of rendering its options.
@@ -106,21 +115,26 @@ vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', async () => {
   const actual = await vi.importActual<typeof import('@/stores/machine-workspace/useMachineWorkspaceStore')>(
     '@/stores/machine-workspace/useMachineWorkspaceStore',
   );
+  const fakeState = () => ({
+    machines: {
+      m1: { workspaces: { [WORKSPACE_ID]: workspace }, order: [WORKSPACE_ID], activeWorkspaceId: WORKSPACE_ID },
+    },
+    selectPane,
+    splitRight,
+    splitDown,
+    closePane,
+    bindPaneTerminal,
+    clearPanePrompt,
+    dismissPicker,
+  });
+  const useMachineWorkspaceStoreMock = (selector: (state: Record<string, unknown>) => unknown) => selector(fakeState());
+  // `useSyncedWorkspaceActions` (#2048) reads fresh state imperatively via
+  // `.getState()`, outside the selector/render cycle — real zustand stores
+  // expose this as a static method on the hook function itself.
+  useMachineWorkspaceStoreMock.getState = fakeState;
   return {
     ...actual,
-    useMachineWorkspaceStore: (selector: (state: Record<string, unknown>) => unknown) =>
-      selector({
-        machines: {
-          m1: { workspaces: { [WORKSPACE_ID]: workspace }, order: [WORKSPACE_ID], activeWorkspaceId: WORKSPACE_ID },
-        },
-        selectPane,
-        splitRight,
-        splitDown,
-        closePane,
-        bindPaneTerminal,
-        clearPanePrompt,
-        dismissPicker,
-      }),
+    useMachineWorkspaceStore: useMachineWorkspaceStoreMock,
   };
 });
 

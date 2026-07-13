@@ -1436,6 +1436,13 @@
       "when": 1783877348608,
       "tag": "0204_next_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 205,
+      "version": "7",
+      "when": 1783966913177,
+      "tag": "0205_daily_nuke",
+      "breakpoints": true
     }
   ]
 }

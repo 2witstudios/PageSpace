@@ -10,9 +10,13 @@ import type { MachineTreeNode } from './MachineTree';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+// `createWorkspace`/`bindPaneTerminal` (useSyncedWorkspaceActions, #2048) push
+// the resulting workspace to the server via these — fire-and-forget from this
+// component's point of view, but each must resolve rather than return
+// undefined, or `pushNewWorkspace`'s `.then()` throws synchronously.
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
-  post: vi.fn(),
+  post: vi.fn(async () => ({})),
   del: vi.fn(async () => new Response(null, { status: 204 })),
 }));
 

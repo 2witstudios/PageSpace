@@ -327,6 +327,12 @@ export function updateWorkspace(
   return { ...state, workspaces: { ...state.workspaces, [workspaceId]: next } };
 }
 
+/** Renames one workspace, addressed by id — same explicit-id convention as
+ * every other machine-level transition here (never "the active one"). */
+export function renameWorkspace(state: MachineWorkspacesState, workspaceId: string, name: string): MachineWorkspacesState {
+  return updateWorkspace(state, workspaceId, (workspace) => (workspace.name === name ? workspace : { ...workspace, name }));
+}
+
 export function workspacesOf(state: MachineWorkspacesState): WorkspaceState[] {
   return state.order.map((id) => state.workspaces[id]).filter(Boolean);
 }
@@ -451,6 +457,128 @@ export function removeWorkspace(state: MachineWorkspacesState, workspaceId: stri
 }
 
 // ---------------------------------------------------------------------------
+// Server sync — reconciling the shared, pushed workspace list (#2048)
+// ---------------------------------------------------------------------------
+
+/**
+ * The shared, server-owned half of a workspace — what `GET
+ * /api/machines/workspaces` and every `machine-workspace:*` broadcast carry.
+ * Deliberately mirrors (does not import) the server's `WorkspaceDTO`
+ * (apps/web/src/lib/machines/machine-workspaces-runtime.ts): this reducer
+ * cannot depend on an API route module, the same duplication already exists
+ * between this file's `OpenTerminalScope`/`MachineNodeScope` and the
+ * `machine_agent_terminals` schema's scope columns.
+ *
+ * Excludes `activePaneId`, `pendingPickerPaneId`, and any pane's
+ * `pendingPrompt` — those are local-only UI state (see `sanitizeMachines`'s
+ * doc) and are preserved from whatever this browser already had, never
+ * overwritten by an incoming server payload.
+ */
+export interface ServerWorkspaceDTO {
+  id: string;
+  name: string;
+  scope: MachineNodeScope;
+  columns: TerminalColumnState[];
+}
+
+function pendingPromptsOf(workspace: WorkspaceState | undefined): Map<string, string> {
+  const prompts = new Map<string, string>();
+  if (!workspace) return prompts;
+  for (const pane of panesOf(workspace)) {
+    if (pane.pendingPrompt !== undefined) prompts.set(pane.id, pane.pendingPrompt);
+  }
+  return prompts;
+}
+
+/** Applies the server's columns, but keeps any surviving pane's local-only
+ * `pendingPrompt` — a starting prompt not yet typed into its PTY must not be
+ * dropped just because an unrelated layout change from another browser landed. */
+function mergeColumns(existing: WorkspaceState | undefined, serverColumns: TerminalColumnState[]): TerminalColumnState[] {
+  const prompts = pendingPromptsOf(existing);
+  return serverColumns.map((column) => ({
+    id: column.id,
+    panes: column.panes.map((pane) => {
+      const pendingPrompt = prompts.get(pane.id);
+      return pendingPrompt === undefined ? { id: pane.id, scope: pane.scope } : { id: pane.id, scope: pane.scope, pendingPrompt };
+    }),
+  }));
+}
+
+/** One server workspace, reconciled against whatever local copy (if any) this
+ * browser already had — the shared fields come from the server; the local-only
+ * ones (`activePaneId`, `pendingPickerPaneId`, panes' `pendingPrompt`) are
+ * preserved when they still resolve, defaulted otherwise. */
+function toLocalWorkspace(existing: WorkspaceState | undefined, ws: ServerWorkspaceDTO): WorkspaceState {
+  const columns = mergeColumns(existing, ws.columns);
+  const paneIds = columns.flatMap((column) => column.panes.map((pane) => pane.id));
+
+  const activePaneId =
+    existing && paneIds.includes(existing.activePaneId) ? existing.activePaneId : paneIds[0];
+  const pendingPickerPaneId =
+    existing?.pendingPickerPaneId && paneIds.includes(existing.pendingPickerPaneId) ? existing.pendingPickerPaneId : null;
+
+  return { id: ws.id, name: ws.name, scope: ws.scope, columns, activePaneId, pendingPickerPaneId };
+}
+
+/**
+ * Reconciles a machine's FULL server workspace list into its local state —
+ * used once, on initial load (`useMachineWorkspaceSync`'s hydrate step).
+ * `order` follows the server's list order (`createdAt` ascending).
+ *
+ * Deliberately does NOT keep local-only stragglers — a workspace this browser
+ * has locally but the server list doesn't include. `ensureMachine` runs
+ * synchronously, before the server ever answers, so by the time this merge
+ * sees it, one of two things is true: either this browser's local list was
+ * exactly what got bootstrapped (same ids come back, no stragglers to begin
+ * with), or it LOST the bootstrap race / the machine was already bootstrapped
+ * by someone else — in which case its own local-only workspace is a disposable
+ * placeholder or unmigrated pre-existing history, not data the server has
+ * ever agreed exists. Keeping it would leave a phantom workspace in the
+ * sidebar forever, since nothing re-reconciles or prunes it after this one
+ * hydrate. This is the accepted limitation of first-writer-bootstrap (see
+ * machine-workspaces.ts's module doc): the loser's unpublished history is not
+ * merged in.
+ */
+export function mergeServerWorkspaces(
+  local: MachineWorkspacesState | undefined,
+  serverWorkspaces: ServerWorkspaceDTO[]
+): MachineWorkspacesState {
+  const workspaces: Record<string, WorkspaceState> = {};
+  const order: string[] = [];
+
+  for (const ws of serverWorkspaces) {
+    workspaces[ws.id] = toLocalWorkspace(local?.workspaces[ws.id], ws);
+    order.push(ws.id);
+  }
+
+  // Should not happen in practice — the server always has at least the
+  // workspace(s) this browser's own bootstrap call just seeded — but a
+  // machine must never end up with zero workspaces to render.
+  if (order.length === 0) return local ?? { workspaces: {}, order: [], activeWorkspaceId: '' };
+
+  const activeWorkspaceId = local && workspaces[local.activeWorkspaceId] ? local.activeWorkspaceId : order[0];
+  return { workspaces, order, activeWorkspaceId };
+}
+
+/** Reconciles ONE incoming `machine-workspace:created`/`:updated` event —
+ * same per-workspace merge as {@link mergeServerWorkspaces}, appending to
+ * `order` if this browser didn't already know about it. */
+export function applyServerWorkspaceUpsert(state: MachineWorkspacesState, ws: ServerWorkspaceDTO): MachineWorkspacesState {
+  const existing = state.workspaces[ws.id];
+  const workspaces = { ...state.workspaces, [ws.id]: toLocalWorkspace(existing, ws) };
+  const order = existing ? state.order : [...state.order, ws.id];
+  return { ...state, workspaces, order };
+}
+
+/** Reconciles an incoming `machine-workspace:deleted` event — delegates to
+ * {@link removeWorkspace}, so a machine reduced to its last server-known
+ * workspace keeps showing it locally (the existing "always keep ≥1" floor),
+ * converging once this browser's own next write reconciles it. */
+export function applyServerWorkspaceDeleted(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
+  return removeWorkspace(state, workspaceId);
+}
+
+// ---------------------------------------------------------------------------
 // Rehydration — what comes back out of localStorage is untrusted
 // ---------------------------------------------------------------------------
 
@@ -458,6 +586,24 @@ function isPane(value: unknown): value is TerminalPaneState {
   if (typeof value !== 'object' || value === null) return false;
   const pane = value as Partial<TerminalPaneState>;
   return typeof pane.id === 'string' && (pane.scope === null || typeof pane.scope === 'object');
+}
+
+/**
+ * Migrates a workspace id persisted by a version of this app that predates
+ * the U+001F delimiter switch (see `sessionWorkspaceId`'s doc): those ids used
+ * U+0000 (NUL) instead, which the server's `machine_workspaces.id` column
+ * (Postgres `text`) rejects outright. Without this, a returning user's
+ * session-derived workspaces would fail every bootstrap attempt forever —
+ * `useMachineWorkspaceSync` posts whatever this browser holds locally
+ * verbatim, and the same doomed id would keep coming back on every retry.
+ *
+ * A plain 1:1 character substitution preserves the "same session, same id"
+ * property (two different sessions that produced different pre-migration ids
+ * still produce different post-migration ids), and is a no-op for every other
+ * id shape (`crypto.randomUUID()` never contains either character).
+ */
+function migrateLegacyWorkspaceId(id: string): string {
+  return id.includes('\u0000') ? id.replaceAll('\u0000', '\u001f') : id;
 }
 
 function isWorkspace(value: unknown): value is WorkspaceState {
@@ -496,6 +642,11 @@ function isWorkspace(value: unknown): value is WorkspaceState {
  * (a picker that auto-focused days ago must not steal the caret on load) and
  * `pendingPrompt` (see `assignPane` — a prompt that was never delivered must
  * never be typed at an agent that has been running ever since).
+ *
+ * Every workspace/order/activeWorkspaceId id also passes through
+ * `migrateLegacyWorkspaceId` (#2048) — a returning user may have session-
+ * derived ids minted before the NUL-to-U+001F delimiter switch, and those
+ * would otherwise fail every server-sync bootstrap attempt forever.
  */
 export function sanitizeMachines(value: unknown): Record<string, MachineWorkspacesState> {
   if (typeof value !== 'object' || value === null) return {};
@@ -517,8 +668,13 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
       }));
       const paneIds = columns.flatMap((column) => column.panes.map((pane) => pane.id));
 
-      workspaces[workspaceId] = {
+      // Migrate a legacy NUL-delimited id (see `migrateLegacyWorkspaceId`'s
+      // doc) — the record key and the object's own `id` field must agree,
+      // since `order`/`activeWorkspaceId` below reference the record key.
+      const migratedId = migrateLegacyWorkspaceId(workspaceId);
+      workspaces[migratedId] = {
         ...workspace,
+        id: migratedId,
         columns,
         // An activePaneId naming no pane is not merely cosmetic: every grid
         // transition no-ops on a pane it cannot resolve, so a split anchored on
@@ -528,13 +684,15 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
       };
     }
 
-    const order = (Array.isArray(candidate.order) ? candidate.order : []).filter((id) => workspaces[id]);
+    const order = (Array.isArray(candidate.order) ? candidate.order : [])
+      .map((id) => (typeof id === 'string' ? migrateLegacyWorkspaceId(id) : id))
+      .filter((id) => workspaces[id]);
     if (order.length === 0) continue;
 
+    const migratedActiveWorkspaceId =
+      typeof candidate.activeWorkspaceId === 'string' ? migrateLegacyWorkspaceId(candidate.activeWorkspaceId) : undefined;
     const activeWorkspaceId =
-      typeof candidate.activeWorkspaceId === 'string' && workspaces[candidate.activeWorkspaceId]
-        ? candidate.activeWorkspaceId
-        : order[0];
+      migratedActiveWorkspaceId && workspaces[migratedActiveWorkspaceId] ? migratedActiveWorkspaceId : order[0];
 
     machines[machineId] = { workspaces, order, activeWorkspaceId };
   }
@@ -545,11 +703,15 @@ export function sanitizeMachines(value: unknown): Record<string, MachineWorkspac
 /**
  * The id of the workspace owned by one session — derived from the session
  * rather than random, so clicking that sidebar row again lands on the SAME
- * workspace, with whatever panes were split into it still there. NUL-joined:
- * project and branch names can contain '/' and ':'.
+ * workspace, with whatever panes were split into it still there. Joined with
+ * U+001F (Unit Separator): project and branch names can contain '/' and ':',
+ * so an ordinary character can't be used as the delimiter. NOT NUL (U+0000)
+ * — this id is also the primary key of the server-side `machine_workspaces`
+ * row (see `machine-workspaces-runtime.ts`), and Postgres `text` columns
+ * reject a literal NUL byte outright.
  */
 export function sessionWorkspaceId(scope: OpenTerminalScope): string {
-  return `session\u0000${scope.projectName ?? ''}\u0000${scope.branchName ?? ''}\u0000${scope.name}`;
+  return `session\u001f${scope.projectName ?? ''}\u001f${scope.branchName ?? ''}\u001f${scope.name}`;
 }
 
 /** Auto-name for a workspace the user created empty ("Workspace 1", "Workspace

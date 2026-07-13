@@ -469,4 +469,90 @@ describe('useMachineWorkspaceStore', () => {
       expected: { stable: true, freshAfterChange: true },
     });
   });
+
+  // ---------------------------------------------------------------------
+  // Server sync actions (#2048)
+  // ---------------------------------------------------------------------
+
+  it('given renameWorkspace, should rename only the named workspace', () => {
+    store().ensureMachine('m1');
+    const workspace = activeOf('m1')!;
+
+    store().renameWorkspace('m1', workspace.id, 'Renamed');
+
+    assert({
+      given: "a rename of a machine's only workspace",
+      should: 'apply the new name in place',
+      actual: activeOf('m1')?.name,
+      expected: 'Renamed',
+    });
+  });
+
+  it('given hydrateFromServer with no prior local state, should build a renderable machine from the server list', () => {
+    store().hydrateFromServer('m1', [
+      { id: 'ws-1', name: 'Workspace 1', scope: {}, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+    ]);
+
+    assert({
+      given: 'the sync hook\'s initial hydrate, for a machine this browser has never opened',
+      should: 'adopt the server\'s workspace as this machine\'s state',
+      actual: { active: activeOf('m1')?.id, name: activeOf('m1')?.name },
+      expected: { active: 'ws-1', name: 'Workspace 1' },
+    });
+  });
+
+  it('given hydrateFromServer for an already-open workspace, should preserve local focus', () => {
+    store().ensureMachine('m1');
+    const workspace = activeOf('m1')!;
+    store().splitRight('m1', workspace.id, workspace.activePaneId);
+    const afterSplit = activeOf('m1')!;
+    const secondPaneId = paneIds(afterSplit)[1];
+    store().selectPane('m1', workspace.id, secondPaneId);
+
+    store().hydrateFromServer('m1', [
+      { id: workspace.id, name: workspace.name, scope: workspace.scope, columns: afterSplit.columns },
+    ]);
+
+    assert({
+      given: 'a server payload for a workspace this browser already has open with a pane focused',
+      should: 'keep the LOCAL activePaneId — focus never comes from the server',
+      actual: activeOf('m1')?.activePaneId,
+      expected: secondPaneId,
+    });
+  });
+
+  it('given applyServerUpsert for an unseen workspace id, should add it', () => {
+    store().ensureMachine('m1');
+    const existing = activeOf('m1')!;
+
+    store().applyServerUpsert('m1', {
+      id: 'ws-from-elsewhere',
+      name: 'Created elsewhere',
+      scope: {},
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+    });
+
+    assert({
+      given: 'a machine-workspace:created broadcast for a workspace another browser just made',
+      should: "add it alongside this machine's existing workspace",
+      actual: workspacesOf(selectMachine('m1')(store())).map((w) => w.id).sort(),
+      expected: [existing.id, 'ws-from-elsewhere'].sort(),
+    });
+  });
+
+  it('given applyServerDelete for the active workspace, should show a neighbour', () => {
+    store().ensureMachine('m1');
+    const first = activeOf('m1')!;
+    const secondId = store().createWorkspace('m1');
+    store().setActiveWorkspace('m1', secondId);
+
+    store().applyServerDelete('m1', secondId);
+
+    assert({
+      given: 'a machine-workspace:deleted broadcast for the workspace currently on screen',
+      should: 'drop it and fall back to a neighbour, same as a local removeWorkspace',
+      actual: activeOf('m1')?.id,
+      expected: first.id,
+    });
+  });
 });

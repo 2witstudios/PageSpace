@@ -71,12 +71,14 @@ describe('TerminalTab', () => {
     const first = await waitFor(() => screen.getByText('Workspace 1'));
     await userEvent.click(first);
 
-    const machine = selectMachine('machine-1')(store())!;
-    assert({
-      given: 'a workspace row clicked while a different workspace was active',
-      should: 'set the clicked workspace as the machine\'s active one',
-      actual: machine.workspaces[machine.activeWorkspaceId].name,
-      expected: 'Workspace 1',
+    await waitFor(() => {
+      const machine = selectMachine('machine-1')(store())!;
+      assert({
+        given: 'a workspace row clicked while a different workspace was active',
+        should: 'set the clicked workspace as the machine\'s active one',
+        actual: machine.workspaces[machine.activeWorkspaceId].name,
+        expected: 'Workspace 1',
+      });
     });
   });
 

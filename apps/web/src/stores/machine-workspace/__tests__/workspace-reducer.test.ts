@@ -20,10 +20,15 @@ import {
   panesOf,
   showSessionIn,
   removeWorkspace,
+  renameWorkspace,
+  mergeServerWorkspaces,
+  applyServerWorkspaceUpsert,
+  applyServerWorkspaceDeleted,
   sanitizeMachines,
   autoSessionName,
   MACHINE_NODE_SCOPE,
   type WorkspaceState,
+  type ServerWorkspaceDTO,
 } from '../workspace-reducer';
 
 const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
@@ -187,6 +192,17 @@ describe('sessionWorkspaceId', () => {
       should: 'give each its own workspace — they are different sessions in different checkouts',
       actual: ids.size,
       expected: 3,
+    });
+  });
+
+  it('given any scope, should never contain a NUL byte', () => {
+    const id = sessionWorkspaceId({ projectName: 'app', branchName: 'main', name: 'claude-a1b2c3' });
+
+    assert({
+      given: 'a workspace id that is also the primary key of the server-side machine_workspaces row',
+      should: 'contain no U+0000 — Postgres text columns reject a literal NUL byte outright',
+      actual: id.includes('\u0000'),
+      expected: false,
     });
   });
 });
@@ -559,6 +575,166 @@ describe('removeWorkspace', () => {
   });
 });
 
+describe('renameWorkspace', () => {
+  it('given a new name, should rename only that workspace', () => {
+    const machine = addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1'));
+
+    const renamed = renameWorkspace(machine, 'ws-b', 'Renamed');
+
+    assert({
+      given: 'a rename addressed to one workspace of two',
+      should: 'change only its name, leaving the sibling and the rest of the grid untouched',
+      actual: { a: renamed.workspaces['ws-a'].name, b: renamed.workspaces['ws-b'].name },
+      expected: { a: 'ws-a', b: 'Renamed' },
+    });
+  });
+
+  it('given an unknown workspace id, should be a no-op', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'a rename addressed to a workspace that is gone',
+      should: 'be a no-op rather than an error',
+      actual: renameWorkspace(machine, 'ws-gone', 'Renamed'),
+      expected: machine,
+    });
+  });
+});
+
+describe('mergeServerWorkspaces — reconciling the server\'s workspace list', () => {
+  const serverWorkspace = (overrides: Partial<ServerWorkspaceDTO> = {}): ServerWorkspaceDTO => ({
+    id: 'ws-1',
+    name: 'Workspace 1',
+    scope: BRANCH_SCOPE,
+    columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+    ...overrides,
+  });
+
+  it('given no local state, should build a fresh machine from the server list', () => {
+    const merged = mergeServerWorkspaces(undefined, [serverWorkspace()]);
+
+    assert({
+      given: 'a browser with nothing local yet for this machine',
+      should: 'adopt the server workspace, defaulting activePaneId to its first pane',
+      actual: { order: merged.order, active: merged.activeWorkspaceId, activePane: merged.workspaces['ws-1'].activePaneId },
+      expected: { order: ['ws-1'], active: 'ws-1', activePane: 'pane-1' },
+    });
+  });
+
+  it('given a matching local workspace, should preserve its local-only fields, not the server\'s', () => {
+    const local = initialMachineWorkspaces(
+      splitRight(aWorkspace('ws-1', 'pane-1'), 'pane-1', 'col-2', 'pane-2')
+    );
+    const focused = { ...local, workspaces: { ...local.workspaces, 'ws-1': selectPane(local.workspaces['ws-1'], 'pane-2') } };
+
+    // The server reports the SAME grid shape (both panes still exist).
+    const merged = mergeServerWorkspaces(focused, [
+      serverWorkspace({ columns: focused.workspaces['ws-1'].columns.map((c) => ({ id: c.id, panes: c.panes.map((p) => ({ id: p.id, scope: p.scope })) })) }),
+    ]);
+
+    assert({
+      given: 'a server payload for a workspace this browser already has open, with a pane focused',
+      should: 'keep the LOCAL activePaneId — focus is presence-like and never comes from the server',
+      actual: merged.workspaces['ws-1'].activePaneId,
+      expected: 'pane-2',
+    });
+  });
+
+  it('given a surviving pane with a local pendingPrompt, should preserve it across the server\'s columns', () => {
+    const local = initialMachineWorkspaces(assignPane(aWorkspace('ws-1', 'pane-1'), 'pane-1', { name: 'claude-a1' }, 'fix the build'));
+
+    const merged = mergeServerWorkspaces(local, [
+      serverWorkspace({ columns: [{ id: 'pane-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1' } }] }] }),
+    ]);
+
+    assert({
+      given: 'an incoming layout for a pane that still exists locally with an undelivered starting prompt',
+      should: 'keep the prompt — it has not been typed into its PTY yet, and the server never carries this field',
+      actual: panesOf(merged.workspaces['ws-1'])[0].pendingPrompt,
+      expected: 'fix the build',
+    });
+  });
+
+  it('given a local-only workspace the server does not know about, should drop it — not merge unpublished history', () => {
+    const local = addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1'));
+
+    const merged = mergeServerWorkspaces(local, [serverWorkspace({ id: 'ws-a', columns: local.workspaces['ws-a'].columns })]);
+
+    assert({
+      given:
+        'a server list that only includes one of this browser\'s two local workspaces (it lost the bootstrap race, or the machine was already bootstrapped by someone else)',
+      should:
+        'adopt ONLY the server\'s list — a local-only straggler is either a disposable ensureMachine placeholder or unmigrated history, and keeping it would leave a permanent phantom workspace nothing ever prunes',
+      actual: merged.order,
+      expected: ['ws-a'],
+    });
+  });
+});
+
+describe('applyServerWorkspaceUpsert', () => {
+  it('given a brand-new workspace id, should add it to the end of order', () => {
+    const machine = initialMachineWorkspaces(aWorkspace('ws-a', 'a1'));
+
+    const applied = applyServerWorkspaceUpsert(machine, {
+      id: 'ws-b',
+      name: 'Workspace 2',
+      scope: {},
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
+    });
+
+    assert({
+      given: 'a machine-workspace:created event for a workspace this browser has never seen',
+      should: 'append it to order and make it renderable',
+      actual: { order: applied.order, name: applied.workspaces['ws-b'].name },
+      expected: { order: ['ws-a', 'ws-b'], name: 'Workspace 2' },
+    });
+  });
+
+  it('given an existing workspace id, should update it in place without touching order', () => {
+    const machine = addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1'));
+
+    const applied = applyServerWorkspaceUpsert(machine, {
+      id: 'ws-a',
+      name: 'Renamed elsewhere',
+      scope: BRANCH_SCOPE,
+      columns: machine.workspaces['ws-a'].columns,
+    });
+
+    assert({
+      given: 'a machine-workspace:updated event (a rename from another browser) for a known workspace',
+      should: 'update its name in place — order is unchanged, this workspace already had a slot',
+      actual: { order: applied.order, name: applied.workspaces['ws-a'].name },
+      expected: { order: ['ws-a', 'ws-b'], name: 'Renamed elsewhere' },
+    });
+  });
+});
+
+describe('applyServerWorkspaceDeleted', () => {
+  it('given an incoming delete for a known workspace, should remove it and show a neighbour', () => {
+    const machine = addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1'));
+
+    const applied = applyServerWorkspaceDeleted(setActiveWorkspace(machine, 'ws-b'), 'ws-b');
+
+    assert({
+      given: 'a machine-workspace:deleted event for the workspace currently on screen',
+      should: 'drop it and show its neighbour — same behaviour as a local removeWorkspace',
+      actual: { order: applied.order, active: applied.activeWorkspaceId },
+      expected: { order: ['ws-a'], active: 'ws-a' },
+    });
+  });
+
+  it('given the machine\'s only workspace, should keep it — a machine never renders zero workspaces', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'a delete event for the last workspace this browser has locally',
+      should: 'be a no-op, converging once this browser\'s own next write reconciles the server',
+      actual: applyServerWorkspaceDeleted(machine, 'ws-1'),
+      expected: machine,
+    });
+  });
+});
+
 describe('sanitizeMachines — what comes back from storage is untrusted', () => {
   it('given a workspace from an older, incompatible shape, should drop it rather than crash on render', () => {
     const persisted = {
@@ -586,6 +762,32 @@ describe('sanitizeMachines — what comes back from storage is untrusted', () =>
         active: actual.m1.activeWorkspaceId,
       },
       expected: { workspaces: ['good'], order: ['good'], active: 'good' },
+    });
+  });
+
+  it('given a workspace id persisted with the legacy NUL delimiter, should migrate it to the current one', () => {
+    const legacyId = 'session repo main claude-a1';
+    const currentId = 'sessionrepomainclaude-a1';
+    const persisted = {
+      m1: {
+        workspaces: { [legacyId]: aWorkspace(legacyId, 'p1') },
+        order: [legacyId],
+        activeWorkspaceId: legacyId,
+      },
+    };
+
+    const actual = sanitizeMachines(persisted);
+
+    assert({
+      given: "a session-derived workspace id persisted by a version of this app that predates the U+001F delimiter switch (it used NUL, which Postgres text columns reject outright)",
+      should: 'migrate the id everywhere it appears — the record key, the workspace\'s own id field, order, and activeWorkspaceId — so a bootstrap POST of this browser\'s local history never sends a doomed id to the server',
+      actual: {
+        keys: Object.keys(actual.m1.workspaces),
+        ownId: actual.m1.workspaces[currentId]?.id,
+        order: actual.m1.order,
+        active: actual.m1.activeWorkspaceId,
+      },
+      expected: { keys: [currentId], ownId: currentId, order: [currentId], active: currentId },
     });
   });
 

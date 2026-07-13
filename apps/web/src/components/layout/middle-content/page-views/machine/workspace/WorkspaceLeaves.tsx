@@ -34,7 +34,7 @@
  * removing a workspace is the only stop path now) can't be stopped either.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { TerminalSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -49,6 +49,7 @@ import {
   type MachineNodeScope,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import { isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
@@ -84,10 +85,33 @@ export default function WorkspaceLeaves({
   }, [machineId, ensureMachine]);
 
   const machine = useMachineWorkspaceStore(selectMachine(machineId));
-  const removeWorkspace = useMachineWorkspaceStore((state) => state.removeWorkspace);
-  const closePane = useMachineWorkspaceStore((state) => state.closePane);
-  const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
+  // Identity/layout-affecting actions push to the server (#2048); local-only
+  // UI state (which row is being renamed, which is pending removal) stays here.
+  const { removeWorkspace, closePanes, openTerminal, renameWorkspace } = useSyncedWorkspaceActions(machineId);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+  // Escape/Enter close the input by setting `renamingId` to null, which
+  // unmounts it — and in Chromium, unmounting a still-focused element can
+  // itself fire a NATIVE blur event that reaches `onBlur` below. Without this
+  // guard, Escape's blur would re-commit the very draft the user just
+  // cancelled, and Enter's would fire a redundant second commit. Set right
+  // before closing, consumed (and reset) by the next `onBlur`; also reset
+  // when a fresh rename starts, so a stale `true` can never suppress a later,
+  // legitimate blur-to-commit.
+  const skipNextBlur = useRef(false);
+  // A browser fires BOTH `click` events of a double-click before `dblclick` —
+  // so a bare `onClick={() => onSelectWorkspace(...)}` selects the workspace
+  // (running whatever side effects the caller's `onSelectWorkspace` has, e.g.
+  // DevelopmentSidebar's navigates to the machine) on the way to renaming it,
+  // not just on an intentional single click. Deferring the first click and
+  // cancelling it if a second one (i.e. a double-click) follows within the
+  // window is the standard single/double-click disambiguation for exactly
+  // this conflict.
+  const pendingSelectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (pendingSelectTimer.current) clearTimeout(pendingSelectTimer.current);
+  }, []);
 
   const scope = nodeScopeOf(node);
   // Every pane in a workspace runs in the WORKSPACE's own node scope (see
@@ -118,8 +142,56 @@ export default function WorkspaceLeaves({
   const unclaimedSessions = agentTerminals.filter((terminal) => !localNames.has(terminal.name));
 
   const adopt = (name: string) => {
-    openTerminal(machineId, { ...scope, name });
+    openTerminal({ ...scope, name });
     onSelectWorkspace(sessionWorkspaceId({ ...scope, name }));
+  };
+
+  const startRename = (workspace: { id: string; name: string }) => {
+    skipNextBlur.current = false;
+    setRenamingId(workspace.id);
+    setDraftName(workspace.name);
+  };
+
+  // Deferred so a double-click's first `click` doesn't select the workspace
+  // on its way to renaming it (see `pendingSelectTimer`'s doc above).
+  const handleRowClick = (workspaceId: string) => {
+    if (pendingSelectTimer.current) clearTimeout(pendingSelectTimer.current);
+    pendingSelectTimer.current = setTimeout(() => {
+      pendingSelectTimer.current = null;
+      onSelectWorkspace(workspaceId);
+    }, 250);
+  };
+
+  const handleRowDoubleClick = (workspace: { id: string; name: string }) => {
+    if (pendingSelectTimer.current) {
+      clearTimeout(pendingSelectTimer.current);
+      pendingSelectTimer.current = null;
+    }
+    startRename(workspace);
+  };
+
+  const commitRename = (workspaceId: string, currentName: string) => {
+    const trimmed = draftName.trim();
+    if (trimmed && trimmed !== currentName) renameWorkspace(workspaceId, trimmed);
+    setRenamingId(null);
+  };
+
+  const cancelRename = () => {
+    skipNextBlur.current = true;
+    setRenamingId(null);
+  };
+
+  const commitRenameViaKey = (workspaceId: string, currentName: string) => {
+    skipNextBlur.current = true;
+    commitRename(workspaceId, currentName);
+  };
+
+  const commitRenameViaBlur = (workspaceId: string, currentName: string) => {
+    if (skipNextBlur.current) {
+      skipNextBlur.current = false;
+      return;
+    }
+    commitRename(workspaceId, currentName);
   };
 
   /** Unlike removing a live workspace (routed through {@link ConfirmRemoveDialog}, which
@@ -144,15 +216,39 @@ export default function WorkspaceLeaves({
             workspace.id === machine.activeWorkspaceId ? 'bg-accent' : 'hover:bg-accent/50',
           )}
         >
-          <button
-            type="button"
-            onClick={() => onSelectWorkspace(workspace.id)}
-            aria-current={workspace.id === machine.activeWorkspaceId ? 'true' : undefined}
-            className="flex flex-1 items-center gap-1 text-left"
-          >
-            <TerminalSquare className="size-3 shrink-0" />
-            <span className="truncate font-normal text-sm leading-none">{workspace.name}</span>
-          </button>
+          {renamingId === workspace.id ? (
+            <div className="flex flex-1 items-center gap-1">
+              <TerminalSquare className="size-3 shrink-0" />
+              <input
+                autoFocus
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onBlur={() => commitRenameViaBlur(workspace.id, workspace.name)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitRenameViaKey(workspace.id, workspace.name);
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cancelRename();
+                  }
+                }}
+                aria-label={`Rename workspace ${workspace.name}`}
+                className="w-full truncate rounded-sm border border-border bg-background px-1 text-sm font-normal leading-none outline-none"
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleRowClick(workspace.id)}
+              onDoubleClick={() => handleRowDoubleClick(workspace)}
+              aria-current={workspace.id === machine.activeWorkspaceId ? 'true' : undefined}
+              className="flex flex-1 items-center gap-1 text-left"
+            >
+              <TerminalSquare className="size-3 shrink-0" />
+              <span className="truncate font-normal text-sm leading-none">{workspace.name}</span>
+            </button>
+          )}
           <RemoveButton onClick={() => setPendingRemove(workspace.id)} label={`Remove workspace ${workspace.name}`} />
         </div>
       ))}
@@ -220,9 +316,9 @@ export default function WorkspaceLeaves({
           // instead of dropping the (unchanged) workspace, or it would linger
           // bound to the agent names just killed above.
           if (workspacesOf(machine).length <= 1) {
-            pendingRunningPaneIds.forEach((paneId) => closePane(machineId, pendingRemove, paneId));
+            closePanes(pendingRemove, pendingRunningPaneIds);
           } else {
-            removeWorkspace(machineId, pendingRemove);
+            removeWorkspace(pendingRemove);
           }
         }}
       />

@@ -53,6 +53,7 @@ import {
 import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
 import { useProviders } from '@/hooks/useIntegrations';
 import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
 import { normalizeProjectName } from '@pagespace/lib/services/machines/project-name';
 import { normalizeBranchName } from '@pagespace/lib/services/machines/branch-name';
@@ -240,8 +241,9 @@ function TerminalSpawnForm({
 }) {
   const scope = nodeScopeOf(node);
   const { addAgentTerminal, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName ?? null, scope.branchName ?? null);
-  const createWorkspace = useMachineWorkspaceStore((state) => state.createWorkspace);
-  const bindPaneTerminal = useMachineWorkspaceStore((state) => state.bindPaneTerminal);
+  // Server-synced (#2048) — a workspace/pane created here must push to the
+  // server like every other create/bind path, not just materialize locally.
+  const { createWorkspace, bindPaneTerminal } = useSyncedWorkspaceActions(machineId);
 
   const [agentType, setAgentType] = useState<AgentRuntimeType>(PICKABLE_AGENT_TYPES[0]);
   const [prompt, setPrompt] = useState('');
@@ -275,11 +277,10 @@ function TerminalSpawnForm({
         return;
       }
 
-      const workspaceId = createWorkspace(machineId, scope);
+      const workspaceId = createWorkspace(scope);
       const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
       const bound = workspace
         ? bindPaneTerminal(
-            machineId,
             workspaceId,
             workspace.activePaneId,
             { projectName: scope.projectName, branchName: scope.branchName, name: created.name },
