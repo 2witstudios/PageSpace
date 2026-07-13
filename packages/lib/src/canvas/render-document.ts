@@ -357,7 +357,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
     ogTags +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<style>${BASELINE_RESET}${css}</style>` +
-    (injectThemeBridge ? THEME_BRIDGE_SCRIPT : '') +
+    (injectThemeBridge ? (nonce ? stampScriptNonce(THEME_BRIDGE_SCRIPT, nonce) : THEME_BRIDGE_SCRIPT) : '') +
     '</head><body>' +
     body +
     '</body></html>'
