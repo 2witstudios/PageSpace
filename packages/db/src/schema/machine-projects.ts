@@ -18,9 +18,13 @@ import { pages } from './core';
  * governed by page permissions on `machineId`.
  *
  * `path` is the absolute directory on the Sprite's filesystem the repo was
- * cloned into (always under services/machines/project-paths.ts#PROJECTS_ROOT).
- * One row per (machineId, name) — a machine cannot have two projects with
- * the same directory name.
+ * cloned into (always under services/machines/project-paths.ts#PROJECTS_ROOT),
+ * and is unique PER ROW: `<name>-<id>` (services/machines/
+ * project-paths.ts#resolveProjectClonePath), so two operations can never own
+ * the same directory. Rows created before per-row paths are plain `<name>` —
+ * both resolve the same way, because every consumer reads this persisted
+ * column rather than re-deriving a path from the name. One row per
+ * (machineId, name) — a machine cannot have two projects with the same name.
  */
 export const machineProjects = pgTable('machine_projects', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
