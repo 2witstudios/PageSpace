@@ -24,6 +24,11 @@
  *     status) so a deletion's modified side is forced null rather than reading
  *     an untracked file masquerading at the same path (e.g. `git rm --cached`).
  *
+ * FAILURES are `{ error, reason }` — `reason` is the machine-readable token
+ * clients switch on; `error` is a sentence fit to show a human, NEVER git's
+ * stderr (which names absolute paths inside the Sprite). The stderr goes to
+ * the server log. Same contract as the Files route.
+ *
  * On the main branch ('master'/'main' — the literal default-branch names,
  * there is no schema flag), the 'committed' and 'branch' scopes are
  * meaningless (a merge-base with itself), so both forms return
@@ -39,6 +44,7 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listMachineDiffFiles, readMachineDiffPair } from '@pagespace/lib/services/sandbox/machine-diff';
 import {
   isMachineDiffFileStatus,
@@ -163,8 +169,23 @@ export async function GET(request: Request) {
       deps,
     });
     if (!result.ok) {
+      // The exec's stderr has real diagnostic value, but it is OUR stderr: it
+      // names absolute paths inside the Sprite ("fatal: ... '/workspace/repo/…'").
+      // It goes to the server log — never into `error`, which the Diff tab
+      // renders straight at a person. Same contract as the Files route.
+      if (result.detail !== undefined) {
+        loggers.api.error('Machine diff pair read failed', undefined, {
+          machineId: machineId.value,
+          projectName: projectName.value,
+          branchName: branchName.value,
+          scope,
+          path: rawPath,
+          reason: result.reason,
+          detail: result.detail,
+        });
+      }
       return NextResponse.json(
-        { error: result.detail ?? result.reason, reason: result.reason },
+        { error: 'Failed to read the diff for this file', reason: result.reason },
         { status: DENIAL_STATUS[result.reason] ?? 500 },
       );
     }
@@ -190,8 +211,19 @@ export async function GET(request: Request) {
     deps,
   });
   if (!result.ok) {
+    // Same rule as the pair form above: stderr detail is logged, never returned.
+    if (result.detail !== undefined) {
+      loggers.api.error('Machine diff list failed', undefined, {
+        machineId: machineId.value,
+        projectName: projectName.value,
+        branchName: branchName.value,
+        scope,
+        reason: result.reason,
+        detail: result.detail,
+      });
+    }
     return NextResponse.json(
-      { error: result.detail ?? result.reason, reason: result.reason },
+      { error: 'Failed to compute the changed-file list', reason: result.reason },
       { status: DENIAL_STATUS[result.reason] ?? 500 },
     );
   }

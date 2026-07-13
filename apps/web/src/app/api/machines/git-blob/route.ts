@@ -7,6 +7,11 @@
  * GET ?machineId=&projectName=&branchName=&ref=&path=
  *   → { content, truncated }
  *
+ * FAILURES are `{ error, reason }` — `reason` is the machine-readable token
+ * clients switch on; `error` is a sentence fit to show a human, NEVER git's
+ * stderr (which names absolute paths inside the Sprite). The stderr goes to
+ * the server log. Same contract as the Files route.
+ *
  * `ref` is a resolved commit-ish (a branch, tag, SHA, or a merge-base the
  * caller already computed — see `sandbox-git-tools.ts`'s `gitDiff` three-dot
  * `base...head` composition for how a caller derives one); this route does not
@@ -24,6 +29,7 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { readMachineGitBlob } from '@pagespace/lib/services/sandbox/machine-git-blob';
 import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 import {
@@ -47,6 +53,16 @@ const DENIAL_STATUS: Record<string, number> = {
   invalid_ref: 400,
   not_found: 404,
   exec_failed: 502,
+};
+
+// `error` is user-facing (clients render it straight into the UI), so it is a
+// sentence per reason token — never the token itself and never git's stderr,
+// which names absolute paths inside the Sprite. Same contract as the Files
+// route; the stderr goes to the server log instead.
+const DENIAL_MESSAGE: Record<string, string> = {
+  invalid_ref: 'That git reference is not valid',
+  not_found: 'File not found at this ref',
+  exec_failed: 'Failed to read the file at this ref',
 };
 
 export async function GET(request: Request) {
@@ -97,8 +113,19 @@ export async function GET(request: Request) {
     deps,
   });
   if (!result.ok) {
+    if (result.detail !== undefined) {
+      loggers.api.error('Machine git-blob read failed', undefined, {
+        machineId: machineId.value,
+        projectName: projectName.value,
+        branchName: branchName.value,
+        ref: ref.value,
+        path: path.value,
+        reason: result.reason,
+        detail: result.detail,
+      });
+    }
     return NextResponse.json(
-      { error: result.detail ?? result.reason, reason: result.reason },
+      { error: DENIAL_MESSAGE[result.reason] ?? 'Failed to read the file at this ref', reason: result.reason },
       { status: DENIAL_STATUS[result.reason] ?? 500 },
     );
   }
