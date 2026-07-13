@@ -8,6 +8,7 @@ import {
   readSessionInfoId,
   checkpointStreamErrorMessage,
   killSpriteSession,
+  killSessionStreamErrorMessage,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
@@ -1261,17 +1262,68 @@ describe('readSessionInfoId (pure)', () => {
   });
 });
 
+describe('killSessionStreamErrorMessage (pure)', () => {
+  assert({
+    given: 'a signal event',
+    should: 'return undefined — not a failure',
+    actual: killSessionStreamErrorMessage('{"type":"signal","message":"delivering SIGTERM","signal":"SIGTERM","pid":123}'),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'an exited event',
+    should: 'return undefined — not a failure',
+    actual: killSessionStreamErrorMessage('{"type":"exited","message":"process exited"}'),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'a complete event',
+    should: 'return undefined — not a failure',
+    actual: killSessionStreamErrorMessage('{"type":"complete","exit_code":0}'),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'an error event with a message',
+    should: 'return that message',
+    actual: killSessionStreamErrorMessage('{"type":"error","message":"signal delivery failed"}'),
+    expected: 'signal delivery failed',
+  });
+
+  assert({
+    given: 'an error event with no message field',
+    should: 'return a generic fallback rather than undefined',
+    actual: killSessionStreamErrorMessage('{"type":"error"}'),
+    expected: 'session kill reported an error',
+  });
+
+  assert({
+    given: 'a blank line (the trailing newline of an NDJSON body)',
+    should: 'return undefined',
+    actual: killSessionStreamErrorMessage('   '),
+    expected: undefined,
+  });
+
+  assert({
+    given: 'an unparseable line',
+    should: 'return undefined rather than fail a kill that otherwise succeeded',
+    actual: killSessionStreamErrorMessage('not json'),
+    expected: undefined,
+  });
+});
+
 describe('killSpriteSession', () => {
   const transport = { baseURL: 'https://api.sprites.dev', token: 'test-token' };
 
-  it('given a live session, POSTs the exact kill URL with a bearer token', async () => {
+  it('given a live session, POSTs the exact kill URL (no "sessions/" segment — sprites.dev/api/sprites/exec#kill-exec-session) with a bearer token', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
 
     await killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1');
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://api.sprites.dev/v1/sprites/my-sprite/exec/sessions/sess-1/kill',
-      { method: 'POST', headers: { Authorization: 'Bearer test-token' } },
+      'https://api.sprites.dev/v1/sprites/my-sprite/exec/sess-1/kill',
+      expect.objectContaining({ method: 'POST', headers: { Authorization: 'Bearer test-token' } }),
     );
   });
 
@@ -1281,12 +1333,34 @@ describe('killSpriteSession', () => {
     await killSpriteSession({ ...transport, fetchImpl }, 'my/sprite', 'sess/1');
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://api.sprites.dev/v1/sprites/my%2Fsprite/exec/sessions/sess%2F1/kill',
+      'https://api.sprites.dev/v1/sprites/my%2Fsprite/exec/sess%2F1/kill',
       expect.anything(),
     );
   });
 
-  it('given the Sprite reports 404 (session already gone), resolves successfully — idempotent', async () => {
+  it('given a 200 whose NDJSON stream reports only progress (signal -> exited -> complete), resolves — the whole point of draining it', async () => {
+    const ndjson = [
+      '{"type":"signal","message":"delivering SIGTERM","signal":"SIGTERM","pid":123}',
+      '{"type":"exited","message":"process exited"}',
+      '{"type":"complete","exit_code":0}',
+      '',
+    ].join('\n');
+    const fetchImpl = vi.fn(async () => new Response(ndjson, { status: 200 }));
+
+    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1')).resolves.toBeUndefined();
+  });
+
+  it('given a 200 whose NDJSON stream reports an error line, rejects — a 200 status alone does not confirm the signal was delivered', async () => {
+    const ndjson = [
+      '{"type":"signal","message":"delivering SIGTERM","signal":"SIGTERM","pid":123}',
+      '{"type":"error","message":"process would not die"}',
+    ].join('\n');
+    const fetchImpl = vi.fn(async () => new Response(ndjson, { status: 200 }));
+
+    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1')).rejects.toThrow(/process would not die/);
+  });
+
+  it('given the Sprite reports 404 (session already gone — the documented response for a missing session), resolves successfully — idempotent', async () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 404, statusText: 'Not Found' }));
 
     await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-dead')).resolves.toBeUndefined();

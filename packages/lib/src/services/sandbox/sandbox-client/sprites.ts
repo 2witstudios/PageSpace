@@ -315,7 +315,7 @@ export interface SpriteInstanceLike {
   destroy(): Promise<void>;
   /**
    * Terminate a specific exec session server-side via `POST
-   * /v1/sprites/{name}/exec/sessions/{id}/kill` (sprites.dev/api) — see
+   * /v1/sprites/{name}/exec/{session_id}/kill` (sprites.dev/api) — see
    * {@link killSpriteSession} for the driver. Unlike `SpriteCommandLike.kill()`
    * (a signal delivered over that command's OWN WebSocket, which reaches the
    * remote process only while that socket happens to be open — see
@@ -759,31 +759,88 @@ export interface SpriteSessionKillTransport {
 }
 
 /**
+ * Wall-clock cap on `killSpriteSession` (the request plus draining its
+ * response stream — see below). A bare `fetch` has no timeout of its own, and
+ * every other network call this driver makes is bounded (filesystem ops via
+ * `withTimeout`, checkpoints via `CHECKPOINT_TIMEOUT_MS`), so an unbounded
+ * kill call would be the one exception that can hang a caller forever against
+ * a stalled connection.
+ */
+const KILL_SESSION_TIMEOUT_MS = 10_000;
+
+/**
+ * Pure: does this line of the kill endpoint's NDJSON progress stream report a
+ * failure? Returns the failure text for a `{"type":"error",...}` line, or
+ * undefined for every other documented event (`signal`/`timeout`/`exited`/
+ * `killed`/`complete`) and for a blank or unparseable line — a malformed
+ * progress line must never mask an otherwise-successful kill.
+ */
+export function killSessionStreamErrorMessage(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  let event: unknown;
+  try {
+    event = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (typeof event !== 'object' || event === null) return undefined;
+  const { type, message } = event as { type?: unknown; message?: unknown };
+  if (type !== 'error') return undefined;
+  return typeof message === 'string' && message.length > 0 ? message : 'session kill reported an error';
+}
+
+/**
  * Drive the one documented Sprites REST endpoint the `@fly/sprites` SDK (rc37)
- * does not wrap: `POST /v1/sprites/{name}/exec/sessions/{id}/kill`
- * (sprites.dev/api). `Sprite` exposes `attachSession`/`createSession`/`kill()`
+ * does not wrap: `POST /v1/sprites/{name}/exec/{session_id}/kill`
+ * (sprites.dev/api/sprites/exec#kill-exec-session — NOT
+ * `.../exec/sessions/{id}/kill`; the extra `sessions/` segment 404s against
+ * the real API). `Sprite` exposes `attachSession`/`createSession`/`kill()`
  * (a per-command WebSocket signal) but no session-kill-by-id, so this hits the
  * endpoint directly — `baseURL` and `token` are public `readonly` fields on the
  * real `SpritesClient`, reachable off any `Sprite` instance's own `.client`.
  *
- * A 404/410 means the Sprite no longer recognizes this session id — that IS
- * success, not a failure: the caller's whole reason for calling is "make sure
- * this session is dead," and it already is. Idempotent by construction, so a
- * kill racing (or arriving after) another kill, a natural process exit, or a
- * Sprite-level destroy never surfaces a user-visible error. Any other non-2xx
- * response is a genuine failure and rejects.
+ * A success response is `200` with a STREAMING NDJSON body (`signal` ->
+ * `exited`/`killed` -> `complete`, or a `type: 'error'` line if the signal
+ * could not actually be delivered) — the HTTP status alone does not confirm
+ * the session was killed, only that the request was accepted. So a `200` is
+ * drained and checked line-by-line via {@link killSessionStreamErrorMessage};
+ * only a stream with no `error` line resolves.
+ *
+ * `404`/`410` means the Sprite no longer recognizes this session id (the
+ * documented response for a missing session/sprite) — that IS success, not a
+ * failure: the caller's whole reason for calling is "make sure this session
+ * is dead," and it already is. Idempotent by construction, so a kill racing
+ * (or arriving after) another kill, a natural process exit, or a Sprite-level
+ * destroy never surfaces a user-visible error. Any other non-2xx response, or
+ * an `error` line inside a 200 stream, is a genuine failure and rejects.
  */
 export async function killSpriteSession(
   { baseURL, token, fetchImpl = fetch }: SpriteSessionKillTransport,
   spriteName: string,
   sessionId: string,
 ): Promise<void> {
-  const response = await fetchImpl(
-    `${baseURL}/v1/sprites/${encodeURIComponent(spriteName)}/exec/sessions/${encodeURIComponent(sessionId)}/kill`,
-    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (response.ok || response.status === 404 || response.status === 410) return;
-  throw new Error(`Sprite session kill failed: ${response.status} ${response.statusText}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KILL_SESSION_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(
+      `${baseURL}/v1/sprites/${encodeURIComponent(spriteName)}/exec/${encodeURIComponent(sessionId)}/kill`,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: controller.signal },
+    );
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 410) return;
+      throw new Error(`Sprite session kill failed: ${response.status} ${response.statusText}`);
+    }
+    const body = await response.text();
+    for (const line of body.split('\n')) {
+      const errorMessage = killSessionStreamErrorMessage(line);
+      if (errorMessage !== undefined) {
+        throw new Error(`Sprite session kill reported an error: ${errorMessage}`);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {

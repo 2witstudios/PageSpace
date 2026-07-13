@@ -465,7 +465,7 @@ async function killAtLocation(
     if (handle) {
       try {
         // The REST kill-by-id endpoint (`MachineHandle.killSession`, backed by
-        // sprites.dev's `POST .../exec/sessions/{id}/kill`) reaches this session
+        // sprites.dev's `POST .../exec/{session_id}/kill`) reaches this session
         // whether or not we hold a live stream to it, and is idempotent against
         // an already-dead/unknown id — see its doc. That retires the old
         // open-a-stream-then-signal dance entirely: a signal only reaches the
