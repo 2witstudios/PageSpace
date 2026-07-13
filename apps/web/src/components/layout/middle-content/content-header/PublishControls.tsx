@@ -21,9 +21,9 @@ import { Switch } from '@/components/ui/switch';
 import { PagePickerPopover } from '@/components/common/PagePickerPopover';
 import { PageType } from '@pagespace/lib/utils/enums';
 
-interface CanvasPublishControlsProps {
+interface PublishControlsProps {
   pageId: string;
-  /** Mirrors the canvas document's isDirty flag. When it transitions true→false
+  /** Mirrors the page document's isDirty flag. When it transitions true→false
    *  (a save just completed) and the page is published, the control marks itself
    *  stale so the user sees the Update button without a page reload. */
   contentDirty?: boolean;
@@ -83,7 +83,7 @@ const readError = async (res: Response): Promise<string> => {
   }
 };
 
-const CanvasPublishControls = ({ pageId, contentDirty }: CanvasPublishControlsProps) => {
+const PublishControls = ({ pageId, contentDirty }: PublishControlsProps) => {
   const params = useParams<{ driveId?: string }>();
   const driveId = params?.driveId;
   const [state, setState] = useState<PublishState>({ published: false, url: null, available: false, isStale: false, settings: EMPTY_SETTINGS });
@@ -418,4 +418,4 @@ function PublishSettingsDialog({ open, onOpenChange, initial, driveId, isBusy, o
   );
 }
 
-export default CanvasPublishControls;
+export default PublishControls;
