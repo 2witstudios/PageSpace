@@ -39,6 +39,16 @@ import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } 
 /** The directory on a branch-terminal's OWN Sprite the project is cloned into. */
 export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
 
+/**
+ * Where Claude Code writes its OAuth credential/config on a Sprite's own
+ * persistent filesystem. A branch-terminal is a SEPARATE Sprite from its
+ * owning Machine (see module doc), so it never inherits whatever the user
+ * logged into on the root Sprite — these paths are copied across explicitly,
+ * see `propagateClaudeCredential` below.
+ */
+const CLAUDE_CREDENTIALS_PATH = '/home/sprite/.claude/.credentials.json';
+const CLAUDE_CONFIG_PATH = '/home/sprite/.claude.json';
+
 export type SpawnBranchDenialReason =
   | 'kill_switch_off'
   | 'project_not_found'
@@ -74,6 +84,14 @@ export interface MachineBranchesDeps {
   /** REQUIRED full-egress enablement gate — a branch-terminal's Sprite runs open egress, same as a human Terminal. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   resolveGitHubToken: (userId: string) => Promise<string | null>;
+  /**
+   * Live handle to the OWNING Machine's own persistent Sprite (never a
+   * branch's) — the source a branch-terminal's Claude Code credential is
+   * copied from. `null` when the root Machine has no live session yet (the
+   * user hasn't opened its Terminal / isn't logged into Claude Code there),
+   * which `propagateClaudeCredential` treats as a graceful no-op.
+   */
+  resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
   quota: SandboxQuotaDeps;
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
@@ -189,6 +207,42 @@ async function cloneAndCheckoutBranch({
   return { ok: true, createdNew: true };
 }
 
+/**
+ * Copy Claude Code's OAuth credential (and config, if present) from the root
+ * Machine's Sprite into a branch-terminal's freshly provisioned/attached one.
+ * Each file is copied independently and skipped when absent on the root
+ * Sprite — most commonly because the user hasn't run `claude` there yet — so
+ * a branch-terminal always ends up usable even with no credential to copy.
+ *
+ * Best-effort: any failure (root Sprite unreachable mid-copy, etc.) is
+ * swallowed rather than failing the spawn/attach it's called from. A branch
+ * without the credential still works, it just needs its own `claude` login.
+ */
+async function propagateClaudeCredential({
+  machineId,
+  branchHandle,
+  resolveRootMachineHandle,
+}: {
+  machineId: string;
+  branchHandle: MachineHandle;
+  resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
+}): Promise<void> {
+  try {
+    const rootHandle = await resolveRootMachineHandle(machineId);
+    if (!rootHandle) return;
+
+    for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
+      const content = await rootHandle.readFile({ path });
+      if (!content) continue;
+      await branchHandle.writeFiles([
+        { path, content, mode: path === CLAUDE_CREDENTIALS_PATH ? 0o600 : undefined },
+      ]);
+    }
+  } catch {
+    // best-effort — see doc comment above.
+  }
+}
+
 async function safeKillSprite(host: MachineHost, machineId: string): Promise<void> {
   try {
     await host.kill({ machineId });
@@ -276,7 +330,12 @@ export async function spawnBranch({
 
   if (existing) {
     const handle = await deps.host.attach({ machineId: existing.sandboxId });
-    if (handle) return { ok: true, sandboxId: handle.machineId, branchName, resumed: true };
+    if (handle) {
+      // Refresh on every reattach, not just first spawn — Claude Code OAuth
+      // credentials rotate, so a one-time copy would drift stale over time.
+      await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+      return { ok: true, sandboxId: handle.machineId, branchName, resumed: true };
+    }
     // Vanished — fall through and re-provision under the SAME session key.
   }
 
@@ -301,6 +360,8 @@ export async function spawnBranch({
     if ('ok' in reconciled) return reconciled;
     return { ok: false, reason: cloned.reason, detail: cloned.detail };
   }
+
+  await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
 
   if (existing) {
     const updated = await deps.store.updateSandboxId({
@@ -364,12 +425,14 @@ export async function attachBranch({
   branchName: requestedBranchName,
   store,
   host,
+  resolveRootMachineHandle,
 }: {
   machineId: string;
   projectName: string;
   branchName: string;
   store: MachineBranchStore;
   host: MachineHost;
+  resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
 }): Promise<AttachBranchResult> {
   // Shadow the raw params with their canonical forms, as `spawnBranch` does, so no
   // line below can reach the untrusted text by accident.
@@ -381,6 +444,10 @@ export async function attachBranch({
 
   const handle = await host.attach({ machineId: existing.sandboxId });
   if (!handle) return { ok: false, reason: 'vanished' };
+
+  // Refresh on every reattach — see `propagateClaudeCredential`'s doc comment
+  // on why this isn't a one-time, spawn-only copy.
+  await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle });
   return { ok: true, sandboxId: handle.machineId, branchName };
 }
 

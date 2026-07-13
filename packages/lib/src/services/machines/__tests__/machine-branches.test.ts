@@ -84,6 +84,7 @@ interface SpriteState {
   machineId: string;
   execLog: RunCommandArgs[];
   files: Map<string, string>;
+  fileModes: Map<string, number | undefined>;
 }
 
 /**
@@ -109,7 +110,10 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
         return execImpl ? execImpl(state, args) : { exitCode: 0, stdout: '', stderr: '' };
       },
       writeFiles: async (files) => {
-        for (const f of files) state.files.set(f.path, String(f.content));
+        for (const f of files) {
+          state.files.set(f.path, String(f.content));
+          state.fileModes.set(f.path, f.mode);
+        }
       },
       readFile: async ({ path }) => {
         const content = state.files.get(path);
@@ -129,7 +133,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
       let state = byName.get(name);
       if (!state) {
         counter += 1;
-        state = { machineId: `sbx-${counter}`, execLog: [], files: new Map() };
+        state = { machineId: `sbx-${counter}`, execLog: [], files: new Map(), fileModes: new Map() };
         byName.set(name, state);
         byId.set(state.machineId, state);
       }
@@ -166,6 +170,7 @@ function makeDeps(overrides: Partial<MachineBranchesDeps> = {}, storeSeed: Machi
     secret: SECRET,
     checkFullEgressEnablement: async () => ({ ok: true }),
     resolveGitHubToken: async () => 'ghp_secret_token',
+    resolveRootMachineHandle: async () => null,
     quota: { acquireSlot: () => true, releaseSlot: () => {} },
     buildEnv: () => ({ NODE_ENV: 'test' }),
     audit: async (input) => {
@@ -591,6 +596,8 @@ describe('spawnBranch — isolation between two branches of one project', () => 
   });
 });
 
+const noRootHandle = async () => null;
+
 describe('attachBranch', () => {
   it('given an existing, live branch, should reattach to its Sprite', async () => {
     const { host } = makeFakeHost();
@@ -598,7 +605,14 @@ describe('attachBranch', () => {
     const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!spawned.ok) throw new Error('expected ok');
 
-    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: noRootHandle,
+    });
     expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId, branchName: 'main' });
   });
 
@@ -620,6 +634,7 @@ describe('attachBranch', () => {
       branchName: 'My Cool Feature',
       store,
       host,
+      resolveRootMachineHandle: noRootHandle,
     });
     expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId, branchName: 'my-cool-feature' });
   });
@@ -627,7 +642,14 @@ describe('attachBranch', () => {
   it('given no tracked branch, should return not_found', async () => {
     const { host } = makeFakeHost();
     const { store } = makeDeps({ host });
-    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'nope', store, host });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'nope',
+      store,
+      host,
+      resolveRootMachineHandle: noRootHandle,
+    });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
   });
 
@@ -639,8 +661,156 @@ describe('attachBranch', () => {
 
     await host.kill({ machineId: spawned.sandboxId });
 
-    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: noRootHandle,
+    });
     expect(result).toEqual({ ok: false, reason: 'vanished' });
+  });
+});
+
+describe('Claude Code credential propagation', () => {
+  /** A fake root Machine's Sprite pre-seeded with the given files, standing in for `resolveRootMachineHandle`. */
+  function makeRootHandle(files: Record<string, string>): MachineHandle {
+    return {
+      machineId: 'root-sbx',
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFiles: async () => {},
+      readFile: async ({ path }) => (path in files ? Buffer.from(files[path]!) : null),
+      createCheckpoint: async () => {},
+      stream: async () => {
+        throw new Error('not used');
+      },
+      listStreams: async () => [],
+    };
+  }
+
+  it('given the root Machine has a live Claude credential, should copy it into a freshly spawned branch Sprite', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('secret-token');
+  });
+
+  it('given the root Machine also has a Claude config file, should copy that too', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.get('/home/sprite/.claude.json')).toBe('{"theme":"dark"}');
+  });
+
+  it('given the root Machine has no live session, should skip the copy without failing the spawn', async () => {
+    const { host, byId } = makeFakeHost();
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => null });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
+  });
+
+  it('given the root Machine is live but has never logged into Claude Code, should skip the copy without failing the spawn', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({});
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
+  });
+
+  it('given resolving the root handle throws, should not fail the spawn', async () => {
+    const { host } = makeFakeHost();
+    const { deps } = makeDeps({
+      host,
+      resolveRootMachineHandle: async () => {
+        throw new Error('root Sprite unreachable');
+      },
+    });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a refreshed credential on reattach (existing, live branch-terminal), should re-copy rather than only copying once at first spawn', async () => {
+    const { host } = makeFakeHost();
+    let currentToken = 'first-token';
+    const rootHandle = () => makeRootHandle({ '/home/sprite/.claude/.credentials.json': currentToken });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle() });
+
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!first.ok) throw new Error('expected ok');
+
+    currentToken = 'refreshed-token';
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(second).toMatchObject({ ok: true, resumed: true });
+    if (!second.ok) throw new Error('expected ok');
+
+    const state = (await host.attach({ machineId: second.sandboxId }));
+    expect((await state?.readFile({ path: '/home/sprite/.claude/.credentials.json' }))?.toString('utf8')).toBe(
+      'refreshed-token',
+    );
+  });
+
+  it('should also propagate the credential on attachBranch (not only spawnBranch)', async () => {
+    const { host } = makeFakeHost();
+    const { deps, store } = makeDeps({ host });
+    const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!spawned.ok) throw new Error('expected ok');
+
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'attach-time-token' });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: async () => rootHandle,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const handle = await host.attach({ machineId: result.sandboxId });
+    expect((await handle?.readFile({ path: '/home/sprite/.claude/.credentials.json' }))?.toString('utf8')).toBe(
+      'attach-time-token',
+    );
+  });
+
+  it('should write the credential file with restrictive (0o600) permissions', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
   });
 });
 
