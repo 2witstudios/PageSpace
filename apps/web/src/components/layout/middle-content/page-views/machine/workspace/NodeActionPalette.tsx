@@ -152,8 +152,12 @@ export default function NodeActionPalette({ machineId, node, onAddProject, onAdd
   const actions = actionsFor(node, onWorkspaceCreated !== undefined);
   if (actions.length === 0) return null;
 
-  const close = () => setOpen(false);
   const reset = () => setPhase('select');
+  // Also resets the phase: this is called on SUCCESS (a spawn/add completing),
+  // not via Radix's onOpenChange — setting `open` false ourselves doesn't fire
+  // that callback, so without resetting here too, the palette would reopen
+  // straight back into the just-completed action's form instead of the list.
+  const close = () => { setOpen(false); reset(); };
 
   return (
     <>

@@ -222,4 +222,40 @@ describe('NodeActionPalette', () => {
       });
     });
   });
+
+  // Regression (Codex P2): a successful submit closes the palette via `close()`,
+  // which sets `open` false directly rather than through Radix's onOpenChange —
+  // so the phase-reset that onOpenChange triggers on an Escape/backdrop close
+  // must ALSO happen on this path, or reopening the "+" drops the user straight
+  // back into the just-completed form instead of the action list.
+  test('reopening the "+" after a successful "Add branch" shows the action list again, not the same form', async () => {
+    const onAddBranch = vi.fn().mockResolvedValue(undefined);
+    renderPalette(<NodeActionPalette machineId="m1" node={PROJECT_NODE} onAddBranch={onAddBranch} onWorkspaceCreated={vi.fn()} />);
+
+    const user = await openPalette();
+    await user.click(await screen.findByRole('option', { name: 'Add branch' }));
+    await user.type(screen.getByPlaceholderText('Branch name'), 'feat/z');
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Add branch' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'a successful "Add branch" submit',
+        should: 'close the palette dialog',
+        actual: screen.queryByRole('dialog'),
+        expected: null,
+      });
+    });
+    await user.click(screen.getByTitle('Add…'));
+
+    assert({
+      given: 'the palette reopened right after a successful "Add branch" submit',
+      should: 'show the action list (New terminal / Add branch), not the branch-name form left over from last time',
+      actual: {
+        actionList: screen.queryByRole('option', { name: 'Add branch' }) !== null,
+        staleForm: screen.queryByPlaceholderText('Branch name') !== null,
+      },
+      expected: { actionList: true, staleForm: false },
+    });
+  });
 });
