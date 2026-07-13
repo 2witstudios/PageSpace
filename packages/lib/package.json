@@ -982,6 +982,11 @@
       "import": "./dist/publish/neutralize-dashboard-links.js",
       "require": "./dist/publish/neutralize-dashboard-links.js"
     },
+    "./publish/sanitize-document-html": {
+      "types": "./dist/publish/sanitize-document-html.d.ts",
+      "import": "./dist/publish/sanitize-document-html.js",
+      "require": "./dist/publish/sanitize-document-html.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
@@ -1987,6 +1992,9 @@
       ],
       "canvas/primary-host": [
         "./dist/canvas/primary-host.d.ts"
+      ],
+      "publish/sanitize-document-html": [
+        "./dist/publish/sanitize-document-html.d.ts"
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
