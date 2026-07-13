@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 const mockDb = vi.hoisted(() => ({ select: vi.fn(), update: vi.fn() }));
-vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+const mockAdvisoryLockClient = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
+const mockAdvisoryLockPool = vi.hoisted(() => ({ connect: vi.fn(async () => mockAdvisoryLockClient) }));
+vi.mock('@pagespace/db/db', () => ({ db: mockDb, advisoryLockPool: mockAdvisoryLockPool }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/machine-sessions', () => ({
   machineSessions: {
@@ -35,6 +37,9 @@ beforeEach(() => {
   mockDb.select.mockReset();
   mockDb.update.mockReset();
   mockTrackUsage.mockReset();
+  mockAdvisoryLockPool.connect.mockClear();
+  mockAdvisoryLockClient.query.mockReset();
+  mockAdvisoryLockClient.release.mockReset();
   // Clear the module-level in-process caches so cases don't bleed state.
   __resetStorageMeasurementCachesForTests();
 });
@@ -448,6 +453,24 @@ describe('reconcileMachineStorageSerialized', () => {
     const third = await reconcileMachineStorageSerialized(deps, pool);
     expect(third.outcome).toBe('reconciled');
     expect(deps.listMachines).toHaveBeenCalledTimes(2);
+  });
+
+  it('given no explicit pool override, should acquire the lock from the dedicated advisoryLockPool (NOT the shared db pool)', async () => {
+    // Regression test for the pool-exhaustion deadlock a reviewer flagged: at
+    // DB_POOL_MAX=1, pinning the lock connection from the SAME pool Drizzle's
+    // `db` draws from would starve `listMachines`'s own query forever, since
+    // nothing can free the one connection while the lock holds it. The lock
+    // must come from `advisoryLockPool` — a pool dedicated to holding locks,
+    // never application queries — so the two can never contend.
+    mockAdvisoryLockClient.query.mockResolvedValueOnce({ rows: [{ acquired: true }] }); // try-lock
+    mockAdvisoryLockClient.query.mockResolvedValueOnce({ rows: [] }); // unlock
+    const deps = makeDeps();
+
+    const result = await reconcileMachineStorageSerialized(deps);
+
+    expect(result.outcome).toBe('reconciled');
+    expect(mockAdvisoryLockPool.connect).toHaveBeenCalledTimes(1);
+    expect(mockAdvisoryLockClient.release).toHaveBeenCalledTimes(1);
   });
 
   it('given the unlock query itself fails, should destroy the connection instead of releasing it alive', async () => {

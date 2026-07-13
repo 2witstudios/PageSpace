@@ -10,7 +10,7 @@
  */
 
 import { eq } from '@pagespace/db/operators';
-import { db, pool } from '@pagespace/db/db';
+import { db, advisoryLockPool } from '@pagespace/db/db';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
@@ -90,6 +90,15 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
  * un-transactioned writes (see machine-storage-reconcile.ts's module doc), so
  * two overlapping runs can double-bill the same watermark window. This lock
  * makes every caller overlap-safe, in addition to (not instead of) the flock.
+ *
+ * Acquired on `@pagespace/db/db`'s dedicated `advisoryLockPool`, NOT the main
+ * `pool` `db` itself draws from: `deps` below (listMachines/advanceWatermark)
+ * issues its OWN Drizzle queries against the main pool WHILE this lock is
+ * held for the whole reconcile run, so pinning the lock's connection from
+ * that same pool would deadlock any deployment where `DB_POOL_MAX` doesn't
+ * leave a spare connection for those queries (DB_POOL_MAX=1 is the sharpest
+ * case: the only connection would be stuck holding the lock while
+ * `listMachines`'s first `db.select()` waits forever for one to free up).
  */
 const RECONCILE_MACHINE_STORAGE_LOCK_KEY = 'reconcile-machine-storage';
 
@@ -123,7 +132,7 @@ export type ReconcileMachineStorageRunResult =
  */
 export async function reconcileMachineStorageSerialized(
   deps: ReconcileMachineStorageDeps,
-  pgPool: AdvisoryLockPool = pool,
+  pgPool: AdvisoryLockPool = advisoryLockPool,
 ): Promise<ReconcileMachineStorageRunResult> {
   const client = await pgPool.connect();
   let lockAcquired = false;
