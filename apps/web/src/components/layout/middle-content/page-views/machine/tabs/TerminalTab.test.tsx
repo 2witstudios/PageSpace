@@ -24,6 +24,11 @@ vi.mock('@/hooks/useGithubRepos', () => ({
   useGithubRepos: () => ({ repos: [], connected: true, isLoading: false, error: undefined, mutate: vi.fn() }),
 }));
 vi.mock('@/hooks/useIntegrations', () => ({ useProviders: () => ({ providers: [] }) }));
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
+  post: vi.fn(async () => ({ agentTerminal: { name: 'claude-a1b2c3', agentType: 'claude', resumed: false } })),
+  del: vi.fn(async () => new Response(null, { status: 204 })),
+}));
 
 import TerminalTab from './TerminalTab';
 
@@ -75,21 +80,25 @@ describe('TerminalTab', () => {
     });
   });
 
-  test('the machine row\'s new-workspace button creates and activates a fresh workspace', async () => {
+  test('the machine row\'s single "+" palette spawns a new terminal into a fresh, now-active workspace', async () => {
     render(<TerminalTab machineId="machine-1" />);
 
     await screen.findByText('Machine');
-    await userEvent.click(screen.getByRole('button', { name: 'New workspace' }));
+    await userEvent.click(screen.getByTitle('Add…'));
+    await userEvent.click(await screen.findByRole('option', { name: 'New terminal' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Spawn agent' }));
 
-    const machine = selectMachine('machine-1')(store())!;
-    assert({
-      given: 'the machine row\'s new-workspace trigger clicked',
-      should: 'create a second, now-active workspace at machine scope',
-      actual: {
-        count: Object.keys(machine.workspaces).length,
-        activeScope: machine.workspaces[machine.activeWorkspaceId].scope,
-      },
-      expected: { count: 2, activeScope: {} },
+    await waitFor(() => {
+      const machine = selectMachine('machine-1')(store())!;
+      assert({
+        given: 'the machine row\'s single "+" trigger used to spawn a new terminal',
+        should: 'create a second, now-active workspace at machine scope',
+        actual: {
+          count: Object.keys(machine.workspaces).length,
+          activeScope: machine.workspaces[machine.activeWorkspaceId].scope,
+        },
+        expected: { count: 2, activeScope: {} },
+      });
     });
   });
 

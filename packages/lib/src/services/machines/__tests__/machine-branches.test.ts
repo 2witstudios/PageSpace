@@ -120,6 +120,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
         throw new Error('not used by machine-branches');
       },
       listStreams: async () => [],
+      killSession: async () => {},
     };
   }
 

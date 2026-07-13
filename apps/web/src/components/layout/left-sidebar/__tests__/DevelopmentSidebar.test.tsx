@@ -9,7 +9,7 @@
  * and navigate.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const mockPush = vi.fn();
@@ -83,6 +83,12 @@ vi.mock('@/hooks/useGithubRepos', () => ({
   useGithubRepos: () => ({ repos: [], connected: true, isLoading: false, error: undefined, mutate: vi.fn() }),
 }));
 vi.mock('@/hooks/useIntegrations', () => ({ useProviders: () => ({ providers: [] }) }));
+
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
+  post: vi.fn(async () => ({ agentTerminal: { name: 'claude-a1b2c3', agentType: 'claude', resumed: false } })),
+  del: vi.fn(async () => new Response(null, { status: 204 })),
+}));
 
 // Sidebar chrome that isn't under test.
 vi.mock('@/components/layout/navbar/DriveSwitcher', () => ({ default: () => <div /> }));
@@ -285,19 +291,23 @@ describe('DevelopmentSidebar', () => {
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });
 
-  test('the machine row\'s new-workspace trigger creates a workspace and drives the same click flow', async () => {
+  test('the machine row\'s single "+" palette spawns a new terminal and drives the same click flow', async () => {
     const user = userEvent.setup();
     render(<DevelopmentSidebar />);
 
-    await user.click(await screen.findByRole('button', { name: 'New workspace' }));
+    await user.click(await screen.findByTitle('Add…'));
+    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
+    await user.click(await screen.findByRole('button', { name: 'Spawn agent' }));
 
-    const machine = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
-    expect(Object.keys(machine.workspaces).length).toBe(2);
-    expect(usePendingWorkspaceStore.getState().pending).toEqual({
-      machineId: 'machine-1',
-      workspaceId: machine.activeWorkspaceId,
+    await waitFor(() => {
+      const machine = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
+      expect(Object.keys(machine.workspaces).length).toBe(2);
+      expect(usePendingWorkspaceStore.getState().pending).toEqual({
+        machineId: 'machine-1',
+        workspaceId: machine.activeWorkspaceId,
+      });
+      expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
     });
-    expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });
 
   test('clicking the machine itself drops a stale workspace intent', async () => {
