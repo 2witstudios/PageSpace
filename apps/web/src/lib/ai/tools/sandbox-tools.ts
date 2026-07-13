@@ -225,6 +225,28 @@ export async function resolveActiveMachine(
 }
 
 /**
+ * Selects the active machine from an ALREADY-COMPUTED decision set. Mirrors
+ * `resolveActiveMachine`'s selection policy (an explicitly switched machine
+ * wins even if it's since become inaccessible; otherwise the first ACCESSIBLE
+ * configured machine; otherwise, when every machine is denied, the first
+ * configured machine) without re-invoking `isMachineAccessible` — for
+ * `list_machines`, which already computes a decision for every configured
+ * machine to build its accessible-only display list, calling
+ * `resolveActiveMachine` separately would re-fetch the machine list and
+ * re-check accessibility, doubling the `isMachineAccessible` calls.
+ */
+function selectActiveFromDecisions(
+  configured: MachineRef[],
+  decisions: MachineAccessDecision[],
+  switched: MachineRef | undefined,
+): MachineRef | undefined {
+  if (configured.length === 0) return undefined;
+  if (switched && configured.some((m) => machineRefEquals(m, switched))) return switched;
+  const firstAllowedIndex = decisions.findIndex((d) => d.allowed);
+  return firstAllowedIndex !== -1 ? configured[firstAllowedIndex] : configured[0];
+}
+
+/**
  * Renders a machine access denial as the tool-facing error object, preferring
  * the decision's specific LLM-facing reason (e.g. which Settings toggle blocked
  * it) over the generic revoked-access message. Shared by the bash/file tools
@@ -433,21 +455,19 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
         if ('error' in ctx) return { success: false, error: ctx.error };
 
         const configured = await machines.listMachines(rawContext);
-        const active = (await resolveActiveMachine(rawContext, machines))?.machine;
-        // Mirror list_pages: only surface machines the actor can currently
-        // access — a machine's page permissions can be revoked after it was
-        // configured, and describeMachine's title lookup does not itself
-        // check accessibility. (When every machine is denied, `active` is the
-        // first configured machine, which is filtered out below with the rest
-        // — the model correctly sees an empty list.)
-        const accessibleEntries = await Promise.all(
-          configured.map(async (m) => ({
-            machine: m,
-            accessible: (await machines.isMachineAccessible(rawContext, m)).allowed,
-          })),
-        );
+        // ONE isMachineAccessible pass, reused for both active-machine
+        // selection (selectActiveFromDecisions, no I/O) and the accessible-only
+        // filter below — mirrors list_pages: only surface machines the actor
+        // can currently access, since a machine's page permissions can be
+        // revoked after it was configured and describeMachine's title lookup
+        // does not itself check accessibility. (When every machine is denied,
+        // `active` is the first configured machine, which is filtered out
+        // below with the rest — the model correctly sees an empty list.)
+        const decisions = await Promise.all(configured.map((m) => machines.isMachineAccessible(rawContext, m)));
+        const active = selectActiveFromDecisions(configured, decisions, rawContext?.activeMachine);
         const entries = await Promise.all(
-          accessibleEntries
+          configured
+            .map((m, i) => ({ machine: m, accessible: decisions[i].allowed }))
             .filter(({ accessible }) => accessible)
             .map(async ({ machine: m }) => {
               const desc = await machines.describeMachine(rawContext, m);

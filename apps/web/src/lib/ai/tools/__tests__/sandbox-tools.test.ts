@@ -421,6 +421,23 @@ describe('createSandboxTools', () => {
       };
       expect(result.machines).toEqual([{ id: 'open-2', name: 'Machine', active: true }]);
     });
+
+    it('given N configured machines, should call isMachineAccessible exactly N times — once each, not once for active-selection plus once for the display filter', async () => {
+      const isMachineAccessible = vi.fn(async (_c: unknown, m: { kind: string; machineId?: string }) =>
+        m.kind === 'existing' && m.machineId === 'open-2' ? { allowed: true } : { allowed: false, reason: 'blocked' },
+      );
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [
+          { kind: 'existing', machineId: 'locked-1' },
+          { kind: 'existing', machineId: 'open-2' },
+        ],
+        describeMachine: async () => ({ name: 'Machine' }),
+        isMachineAccessible,
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      await exec(tools.list_machines, {}, {});
+      expect(isMachineAccessible).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('switch_machine', () => {
