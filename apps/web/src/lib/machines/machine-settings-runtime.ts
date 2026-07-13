@@ -358,6 +358,9 @@ async function teardownOneMachine(machineId: string): Promise<void> {
  * not just the root. Runs AFTER the trash, so it must not filter on isTrashed.
  */
 async function collectDescendantMachineIds(rootId: string): Promise<string[]> {
+  // `seen` guards against parentId cycles: page moves reject them, but a
+  // corrupt tree must degrade to a bounded walk, not an infinite teardown loop.
+  const seen = new Set<string>([rootId]);
   const machineIds: string[] = [];
   let frontier = [rootId];
   while (frontier.length > 0) {
@@ -365,9 +368,11 @@ async function collectDescendantMachineIds(rootId: string): Promise<string[]> {
       .select({ id: pages.id, type: pages.type })
       .from(pages)
       .where(inArray(pages.parentId, frontier));
-    frontier = children.map((child) => child.id);
+    const fresh = children.filter((child) => !seen.has(child.id));
+    for (const child of fresh) seen.add(child.id);
+    frontier = fresh.map((child) => child.id);
     machineIds.push(
-      ...children.filter((child) => isMachinePage(child.type as PageType)).map((child) => child.id),
+      ...fresh.filter((child) => isMachinePage(child.type as PageType)).map((child) => child.id),
     );
   }
   return machineIds;

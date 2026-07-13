@@ -366,6 +366,21 @@ describe('createMachineSpriteTeardown().teardown', () => {
     expect(mockHostKill.mock.calls.map((c) => c[0])).toContainEqual({ machineId: `own-key-${MACHINE}` });
   });
 
+  it('terminates and tears down each machine ONCE even when the page tree contains a parentId cycle', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([{ id: 'child-machine', type: 'MACHINE' }]) // children of root
+      .mockResolvedValueOnce([{ id: MACHINE, type: 'MACHINE' }]) // corrupt: cycles back to the root
+      .mockResolvedValueOnce([]) // child machine's branches
+      .mockResolvedValueOnce([]); // root's branches
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(mockHostKill.mock.calls.map((c) => c[0])).toEqual([
+      { machineId: 'own-key-child-machine' },
+      { machineId: `own-key-${MACHINE}` },
+    ]);
+  });
+
   it('does nothing when neither branches nor a live session exist', async () => {
     mockSelectWhere
       .mockResolvedValueOnce([]) // no children
