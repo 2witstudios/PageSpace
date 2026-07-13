@@ -79,6 +79,7 @@ function fakeSprite(over: Partial<SpriteInstanceLike> = {}): SpriteInstanceLike 
     updateNetworkPolicy: async () => {},
     createCheckpoint: async () => ({ processAll: async () => {}, close: () => {} }),
     destroy: async () => {},
+    killSession: async () => {},
     ...over,
   };
 }
@@ -411,6 +412,31 @@ describe('createSpriteMachineHost', () => {
     expect(writes).toEqual(['ls\n']);
     expect(resizes).toEqual([[100, 40]]);
     expect(killed).toEqual(['SIGKILL']);
+  });
+
+  it('given killSession, should delegate to the underlying Sprite.killSession by id', async () => {
+    const killed: string[] = [];
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ killSession: async (id) => { killed.push(id); } }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await handle.killSession('sess-1');
+
+    expect(killed).toEqual(['sess-1']);
+  });
+
+  it('given killSession against an already-dead/unknown session, should resolve rather than reject — idempotent', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ killSession: async () => {} }), // the driver already treats 404/410 as success
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.killSession('sess-dead')).resolves.toBeUndefined();
   });
 
   it('given a MachineStream with no stdin (batch command reused as a stream), should throw on write rather than silently drop input', async () => {

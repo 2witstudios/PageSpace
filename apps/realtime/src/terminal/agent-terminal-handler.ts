@@ -298,6 +298,10 @@ function endAgentTerminalSession(
  * Forced teardown of a live session (failed re-auth, payer insolvent at a
  * heartbeat): release the concurrency slot, kill the PTY, settle + remove the
  * session (endAgentTerminalSession clears all timers), and notify the viewer.
+ *
+ * `'user-kill'`: a revoked-access or insolvent-payer teardown is a genuine,
+ * permanent termination decided FOR the user, not a mere detach — the same
+ * outcome an explicit kill request needs (see `planTeardown`).
  */
 function teardownAgentTerminalSession(
   billing: SandboxBillingDeps | undefined,
@@ -307,7 +311,7 @@ function teardownAgentTerminalSession(
   exitCode: number,
 ): void {
   session.releaseSlot();
-  session.command.kill();
+  session.command.kill('user-kill');
   endAgentTerminalSession(billing, sessionMap, session, sessionKey);
   session.closedFn(exitCode);
 }
@@ -647,7 +651,12 @@ export function buildAgentTerminalHandlers({
     });
     session.idleTimer = setTimeout(() => {
       session.releaseSlot();
-      session.command.kill();
+      // 'idle-reap': ending the session server-side is this timer's whole
+      // point — the exec socket is almost always already dead by now (no
+      // viewer means no reconnect since the detach above), so the REST
+      // session-kill (not a local WS signal that would silently no-op) is
+      // what actually reaches it — see `planTeardown`.
+      session.command.kill('idle-reap');
       // Clears all of the session's timers (re-auth, settle heartbeat, idle).
       endAgentTerminalSession(billing, sessionMap, session, sessionKey);
       loggers.realtime.info('Agent terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });

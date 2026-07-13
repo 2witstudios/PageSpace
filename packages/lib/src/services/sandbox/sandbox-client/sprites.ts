@@ -313,6 +313,25 @@ export interface SpriteInstanceLike {
    */
   createCheckpoint(comment?: string): Promise<SpriteCheckpointStreamLike>;
   destroy(): Promise<void>;
+  /**
+   * Terminate a specific exec session server-side via `POST
+   * /v1/sprites/{name}/exec/sessions/{id}/kill` (sprites.dev/api) — see
+   * {@link killSpriteSession} for the driver. Unlike `SpriteCommandLike.kill()`
+   * (a signal delivered over that command's OWN WebSocket, which reaches the
+   * remote process only while that socket happens to be open — see
+   * `sprite-machine-host.ts`'s note on the private, unreachable
+   * `WSCommand.close()`), this reaches a session regardless of whether we hold
+   * a live connection to it: a detachable TTY session has
+   * `max_run_after_disconnect: 0` and keeps running server-side long after its
+   * client socket has dropped, which is exactly the case a stale local `kill()`
+   * silently no-ops on.
+   *
+   * MUST be idempotent: killing an id the Sprite no longer recognizes (already
+   * dead, or never existed) resolves successfully rather than rejecting, so a
+   * caller never surfaces a user-visible failure for a session that is already
+   * gone — see {@link killSpriteSession}.
+   */
+  killSession(sessionId: string): Promise<void>;
 }
 
 /** The injectable Sprites SDK statics. Defaults to the real `@fly/sprites`. */
@@ -724,6 +743,48 @@ export function checkpointStreamErrorMessage(message: SpriteCheckpointStreamMess
  * review finding, PR #2025).
  */
 const CHECKPOINT_TIMEOUT_MS = 10_000;
+
+/**
+ * The HTTP credentials `killSpriteSession` needs — deliberately narrow (not
+ * the whole `SpritesClient`) so production wiring (`apps/web/.../sprites-client.ts`,
+ * `apps/realtime/.../realtime-sprites-client.ts`) can pass the real client's
+ * public `baseURL`/`token` fields without this module importing `@fly/sprites`
+ * (it stays a pure-logic/type-safe-wrapper module — see the file header).
+ */
+export interface SpriteSessionKillTransport {
+  baseURL: string;
+  token: string;
+  /** Injected so a test can assert the exact request without a real network call. Defaults to the global `fetch`. */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Drive the one documented Sprites REST endpoint the `@fly/sprites` SDK (rc37)
+ * does not wrap: `POST /v1/sprites/{name}/exec/sessions/{id}/kill`
+ * (sprites.dev/api). `Sprite` exposes `attachSession`/`createSession`/`kill()`
+ * (a per-command WebSocket signal) but no session-kill-by-id, so this hits the
+ * endpoint directly — `baseURL` and `token` are public `readonly` fields on the
+ * real `SpritesClient`, reachable off any `Sprite` instance's own `.client`.
+ *
+ * A 404/410 means the Sprite no longer recognizes this session id — that IS
+ * success, not a failure: the caller's whole reason for calling is "make sure
+ * this session is dead," and it already is. Idempotent by construction, so a
+ * kill racing (or arriving after) another kill, a natural process exit, or a
+ * Sprite-level destroy never surfaces a user-visible error. Any other non-2xx
+ * response is a genuine failure and rejects.
+ */
+export async function killSpriteSession(
+  { baseURL, token, fetchImpl = fetch }: SpriteSessionKillTransport,
+  spriteName: string,
+  sessionId: string,
+): Promise<void> {
+  const response = await fetchImpl(
+    `${baseURL}/v1/sprites/${encodeURIComponent(spriteName)}/exec/sessions/${encodeURIComponent(sessionId)}/kill`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (response.ok || response.status === 404 || response.status === 410) return;
+  throw new Error(`Sprite session kill failed: ${response.status} ${response.statusText}`);
+}
 
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {

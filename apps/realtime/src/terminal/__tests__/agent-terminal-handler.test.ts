@@ -806,7 +806,7 @@ describe('buildAgentTerminalHandlers', () => {
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalledWith('user-kill');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
 
@@ -867,7 +867,7 @@ describe('buildAgentTerminalHandlers', () => {
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalledWith('user-kill');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
       expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock2' });
     });
@@ -879,7 +879,7 @@ describe('buildAgentTerminalHandlers', () => {
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalledWith();
+      expect(shell.kill).toHaveBeenCalledWith('user-kill');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
       expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock1' });
     });
@@ -1087,7 +1087,7 @@ describe('buildAgentTerminalHandlers', () => {
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
 
       expect(auth.releaseSlot).toHaveBeenCalledTimes(1);
-      expect(shell.kill).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalledWith('idle-reap');
     });
 
     it('given the idle timeout elapses, should kill the shell and drop the session', async () => {
@@ -1096,7 +1096,7 @@ describe('buildAgentTerminalHandlers', () => {
       onDisconnect();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
 
-      expect(shell.kill).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalledWith('idle-reap');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
     });
   });
@@ -1260,7 +1260,7 @@ describe('buildAgentTerminalHandlers', () => {
         expect(calls[0].holdId).toBe('hold-1');
         expect(calls[0].activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
         expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
-        expect(shell.kill).toHaveBeenCalled();
+        expect(shell.kill).toHaveBeenCalledWith('user-kill');
         expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
         expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', expect.objectContaining({ exitCode: -2 }));
       });
@@ -1937,7 +1937,7 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getByKey('branch1:agent:cli')?.idleTimer).toBeDefined();
       await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS + 1000);
       expect(first.releaseSlot).toHaveBeenCalled();
-      expect(shell.kill).toHaveBeenCalled();
+      expect(shell.kill).toHaveBeenCalledWith('idle-reap');
     });
 
     it('must not take the session away from a pane that is still WATCHING it', async () => {

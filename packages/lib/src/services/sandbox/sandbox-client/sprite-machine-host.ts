@@ -217,6 +217,11 @@ function wrapSpriteHandle({
         .filter((s) => s.tty !== false)
         .map((s) => ({ id: s.id, command: s.command, isActive: s.isActive }));
     },
+
+    async killSession(sessionId: string): Promise<void> {
+      const sprite = await sdk.getSprite(exec.sandboxId);
+      await sprite.killSession(sessionId);
+    },
   };
 }
 

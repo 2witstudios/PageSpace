@@ -101,7 +101,17 @@ export function planReconnect({
 export type PtyShell = {
   write(data: string): void;
   resize(cols: number, rows: number): void;
-  kill(): void;
+  /**
+   * Tear this shell down, per `trigger` — see `planTeardown` for exactly what
+   * each one does and why. The ONE teardown entry point every caller goes
+   * through, so `trigger` is what lets a genuine termination (`user-kill`,
+   * `idle-reap`) be told apart from a mere viewer detach that must survive it.
+   * Best-effort and idempotent: a second `kill()` after the shell is already
+   * closed is a no-op, and the underlying REST kill call
+   * (`SpriteInstanceLike.killSession`) itself succeeds against an
+   * already-dead session id rather than throwing.
+   */
+  kill(trigger: TeardownTrigger): void;
   /**
    * Tell this shell whether a viewer is currently attached — see
    * `planWatchdogResponse`. `false` on a detach stops the watchdog from
@@ -233,6 +243,73 @@ export function planWatchdogResponse({
   if (closed) return 'detach-quiet';
   if (!viewersAttached) return 'detach-quiet';
   return consecutiveFailures > MAX_RECONNECT_ATTEMPTS ? 'fatal' : 'reattach';
+}
+
+/**
+ * Why a PTY shell is being torn down. `PtyShell.kill(trigger)` is the ONE
+ * teardown entry point every caller goes through (see `PtyShell`'s doc) — the
+ * trigger is what lets `planTeardown` tell a genuine termination from a mere
+ * detach, both of which currently reach the same call.
+ */
+export type TeardownTrigger = 'user-kill' | 'detach' | 'idle-reap' | 'shell-exit';
+
+/** What a teardown should actually DO, decided by `planTeardown`. */
+export interface TeardownPlan {
+  /**
+   * Call the REST kill-session endpoint (`sprite.killSession`, sprites.ts) for
+   * the bound session id. This is the ONLY mechanism that reaches a session
+   * whose exec WebSocket is not currently open — exactly the state a
+   * detached-then-reaped shell is almost always in (see `killSession`'s doc on
+   * `SpriteInstanceLike`) — so it is the one that must fire for a trigger that
+   * means genuine, permanent termination.
+   */
+  killSession: boolean;
+  /**
+   * Signal the currently-wired exec command via `SpriteCommandLike.kill()`.
+   * The SDK exposes no side-effect-free way to drop only OUR side of the
+   * connection — `kill()` IS `signal()`, delivered to the REMOTE PROCESS
+   * whenever the socket happens to be open (see `sprite-machine-host.ts`'s
+   * note on the private, unreachable `WSCommand.close()`) — so this is only
+   * ever true alongside `killSession`. For a trigger that must NOT terminate
+   * the remote (a mere detach), signalling would be exactly the bug this leaf
+   * closes in reverse: a socket that is STILL open at the instant of detach
+   * would take the very session down that "detachable" promises survives a
+   * client drop.
+   */
+  closeSocket: boolean;
+}
+
+/**
+ * Pure: what tearing this shell down should actually do, by INTENT — not by
+ * whatever the exec socket's current state happens to be.
+ *
+ * - `user-kill` (an explicit, permanent kill request — an operator/API call,
+ *   or the platform forcibly ending a session whose access was revoked or
+ *   whose payer ran out of credits) and `idle-reap` (the 30-min
+ *   detached-idle timer — ending the session IS the reap's whole point) both
+ *   terminate for real: kill the session by id, which works no matter
+ *   whether our own socket to it is still open, and signal the local command
+ *   too as a redundant, harmless courtesy.
+ * - `detach` (a viewer merely navigating away) must NEVER terminate — the
+ *   entire point of a detachable session is that it survives exactly this.
+ *   Nothing is signalled or killed; the exec connection is simply abandoned
+ *   to the shell's own reconnect/keepalive policy (`planWatchdogResponse`'s
+ *   `detach-quiet`), and the 30-min idle reap is the only thing that will
+ *   ever end it from here.
+ * - `shell-exit` (the remote process already ended on its own — the user
+ *   typed `exit`) has nothing left to tear down either way: the exit already
+ *   happened server-side, so there is no session left to kill and no live
+ *   socket left to signal.
+ */
+export function planTeardown({ trigger }: { trigger: TeardownTrigger }): TeardownPlan {
+  switch (trigger) {
+    case 'user-kill':
+    case 'idle-reap':
+      return { killSession: true, closeSocket: true };
+    case 'detach':
+    case 'shell-exit':
+      return { killSession: false, closeSocket: false };
+  }
 }
 
 /**
@@ -1020,7 +1097,33 @@ export function openPtyShell({
     resize: (c, r) => { lastCols = c; lastRows = r; if (!closed) current.resize?.(c, r); },
     // Anything still held (an unresolved replay, queued stderr) is dropped with it: the
     // viewer is gone, and `closed` stops every listener from speaking after this point.
-    kill: () => { closed = true; cancelReplayTimers(); current.kill('SIGKILL'); },
+    //
+    // Idempotent: a repeat call (or a second trigger racing the first) after
+    // `closed` is already true is a no-op, so the REST kill below never fires
+    // twice for one shell.
+    kill: (trigger) => {
+      if (closed) return;
+      closed = true;
+      cancelReplayTimers();
+      const plan = planTeardown({ trigger });
+      if (plan.closeSocket) current.kill('SIGKILL');
+      // Reaches a session regardless of whether OUR socket to it is still
+      // open — see `killSession`'s doc on `SpriteInstanceLike`. No id in hand
+      // means this shell never learned which session it was driving (the
+      // abandoned-unnamed-session edge case `abandonedUnnamedSessions`
+      // already bounds) — there is nothing to kill BY, so this is a no-op,
+      // not a failure.
+      if (plan.killSession && currentSessionId !== undefined) {
+        const sessionId = currentSessionId;
+        void sprite.killSession(sessionId).catch((error) => {
+          loggers.realtime.error(
+            'Sprite session kill failed',
+            error instanceof Error ? error : new Error(String(error)),
+            { sessionId, trigger },
+          );
+        });
+      }
+    },
     setViewerAttached: (attached) => {
       viewerAttached = attached;
       // A lazy reattach only fires if a watchdog trip actually got swallowed while

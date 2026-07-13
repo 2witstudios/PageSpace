@@ -7,6 +7,7 @@ import {
   planProvisionFailure,
   readSessionInfoId,
   checkpointStreamErrorMessage,
+  killSpriteSession,
   SandboxCommandTimeoutError,
   SandboxOutputLimitError,
   type SpritesSdk,
@@ -142,6 +143,7 @@ function fakeSprite(
     updateNetworkPolicy: async () => {},
     createCheckpoint: async () => fakeCheckpointStream(),
     destroy: async () => {},
+    killSession: async () => {},
     ...over,
   };
 }
@@ -1256,5 +1258,49 @@ describe('readSessionInfoId (pure)', () => {
     should: 'return undefined',
     actual: readSessionInfoId(null),
     expected: undefined,
+  });
+});
+
+describe('killSpriteSession', () => {
+  const transport = { baseURL: 'https://api.sprites.dev', token: 'test-token' };
+
+  it('given a live session, POSTs the exact kill URL with a bearer token', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1');
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.sprites.dev/v1/sprites/my-sprite/exec/sessions/sess-1/kill',
+      { method: 'POST', headers: { Authorization: 'Bearer test-token' } },
+    );
+  });
+
+  it('given a sprite name or session id with reserved URL characters, encodes them', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+
+    await killSpriteSession({ ...transport, fetchImpl }, 'my/sprite', 'sess/1');
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://api.sprites.dev/v1/sprites/my%2Fsprite/exec/sessions/sess%2F1/kill',
+      expect.anything(),
+    );
+  });
+
+  it('given the Sprite reports 404 (session already gone), resolves successfully — idempotent', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 404, statusText: 'Not Found' }));
+
+    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-dead')).resolves.toBeUndefined();
+  });
+
+  it('given the Sprite reports 410 (gone), resolves successfully — idempotent', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 410, statusText: 'Gone' }));
+
+    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-dead')).resolves.toBeUndefined();
+  });
+
+  it('given a genuine failure (5xx/auth), rejects rather than swallowing it', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 500, statusText: 'Internal Server Error' }));
+
+    await expect(killSpriteSession({ ...transport, fetchImpl }, 'my-sprite', 'sess-1')).rejects.toThrow(/500/);
   });
 });
