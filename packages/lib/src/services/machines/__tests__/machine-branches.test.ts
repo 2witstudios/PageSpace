@@ -831,6 +831,60 @@ describe('Claude Code credential propagation', () => {
       { cmd: 'chmod', args: ['600', '/home/sprite/.claude.json'] },
     ]);
   });
+
+  // ---------------------------------------------------------------------------
+  // Concurrency safety: the row MUST be persisted before the credential copy's
+  // extra I/O runs — see review (chatgpt-codex-connector, P2). Doing the copy
+  // first would widen the window between "clone succeeded" and "row
+  // persisted", during which a concurrent racer's `reconcileProvisionCollision`
+  // (running because ITS OWN clone failed against this same shared,
+  // name-keyed Sprite) would find no matching row yet, conclude the shared
+  // Sprite is its own redundant one, and kill it out from under the winner —
+  // which is still mid-copy and about to persist that exact sandboxId.
+  // ---------------------------------------------------------------------------
+
+  it('given a brand-new branch, should persist the row BEFORE copying the credential (not after)', async () => {
+    const { host } = makeFakeHost();
+    let sawRowAtCopyTime: unknown;
+    const { deps, store } = makeDeps({
+      host,
+      resolveRootMachineHandle: async (mid) => {
+        // If the row isn't there yet when the copy starts, a concurrent
+        // racer's reconcile step could kill this call's freshly-provisioned
+        // Sprite before it ever gets to persist its own row.
+        sawRowAtCopyTime = await store.findByName(mid, PROJECT_NAME, 'main');
+        return null;
+      },
+    });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    expect(sawRowAtCopyTime).toMatchObject({ branchName: 'main', projectName: PROJECT_NAME });
+  });
+
+  it('given a re-provision of a vanished branch, should persist the updated sandboxId BEFORE copying the credential (not after)', async () => {
+    const { host } = makeFakeHost();
+    const { deps, store } = makeDeps({ host, resolveRootMachineHandle: async () => null });
+
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!first.ok) throw new Error('expected ok');
+    await host.kill({ machineId: first.sandboxId });
+
+    let sawSandboxIdAtCopyTime: string | undefined;
+    const deps2: MachineBranchesDeps = {
+      ...deps,
+      resolveRootMachineHandle: async (mid) => {
+        const row = await store.findByName(mid, PROJECT_NAME, 'main');
+        sawSandboxIdAtCopyTime = row?.sandboxId;
+        return null;
+      },
+    };
+
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps: deps2 });
+    expect(second).toMatchObject({ ok: true, resumed: false });
+    if (!second.ok) throw new Error('expected ok');
+    expect(sawSandboxIdAtCopyTime).toBe(second.sandboxId);
+  });
 });
 
 describe('killBranch', () => {

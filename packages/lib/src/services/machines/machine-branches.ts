@@ -378,8 +378,15 @@ export async function spawnBranch({
     return { ok: false, reason: cloned.reason, detail: cloned.detail };
   }
 
-  await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
-
+  // Persist the row FIRST, before the credential copy — not after. A
+  // concurrent racer's `reconcileProvisionCollision` (its own clone having
+  // failed against this same name-keyed shared Sprite) looks up this branch's
+  // row to decide whether the Sprite it's about to kill is actually the
+  // winner's. Doing the credential copy's extra network I/O (a root-Sprite
+  // read + branch-Sprite writes/execs) BEFORE that row exists would widen the
+  // window in which no matching row exists yet — during which the racer would
+  // find nothing, conclude it's *its own* redundant Sprite, and kill the very
+  // Sprite this call is about to record as the winner (caught in review).
   if (existing) {
     const updated = await deps.store.updateSandboxId({
       id: existing.id,
@@ -397,6 +404,7 @@ export async function spawnBranch({
       }
       return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
     }
+    await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
     return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
   }
 
@@ -422,6 +430,7 @@ export async function spawnBranch({
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 
+  await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
   return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
 }
 
