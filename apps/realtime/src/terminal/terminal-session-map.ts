@@ -1,4 +1,5 @@
 import type { PtyShell } from './sprites-shell';
+import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 
 export const MAX_SCROLLBACK_BYTES = 64 * 1024;
 export const DETACHED_IDLE_MS = 30 * 60 * 1000;
@@ -16,6 +17,20 @@ export type TerminalSession = {
   viewerUserId: string;
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   sessionId?: string;
+  /**
+   * Is a viewer currently attached? Set true on create/reattach, false on
+   * detach — one of the two "work is in progress" signals the Sprites Tasks
+   * API hold (leaf 5-1) keys on. Kept explicit rather than inferred from
+   * `idleTimer === undefined` so the hold heartbeat reads a stated fact, not
+   * a coincidence of the reap machinery.
+   */
+  viewerAttached: boolean;
+  /** When the PTY last produced output — the hold's "agent output is flowing" signal. */
+  lastOutputAt?: number;
+  /** The session's platform task hold (Sprites Tasks API), when the seam is wired. */
+  taskHold?: TaskHoldController;
+  /** Heartbeat driving `taskHold` ticks on the refresh cadence. */
+  holdInterval?: ReturnType<typeof setInterval>;
   reAuthInterval?: ReturnType<typeof setInterval>;
   /** Heartbeat that settles the accrued active window mid-session (see agent-terminal-handler), bounding what a realtime restart can lose to one interval. */
   settleInterval?: ReturnType<typeof setInterval>;

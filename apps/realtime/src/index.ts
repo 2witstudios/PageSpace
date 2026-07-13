@@ -26,6 +26,12 @@ import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
+import {
+  createSpriteTasksClient,
+  createTaskHoldController,
+  taskHoldName,
+  resolveTaskHoldConfig,
+} from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import {
@@ -1272,6 +1278,23 @@ io.on('connection', (socket: AuthSocket) => {
       await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
     },
     billing: defaultSandboxBillingDeps,
+    // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
+    // viewer attached, a short-expiry platform task (refreshed on a
+    // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
+    // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
+    // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
+    // SPRITE_TASK_HOLD_REFRESH_MS.
+    createTaskHold: ({ sprite, sessionKey }) =>
+      createTaskHoldController({
+        client: createSpriteTasksClient({ sprite }),
+        taskName: taskHoldName(sessionKey),
+        ...resolveTaskHoldConfig(process.env),
+        onError: (stage, result) => {
+          // Degrade gracefully: a lost hold means a possible pause, which the
+          // checkpoint work (5-2) already survives — log and carry on.
+          loggers.realtime.warn(`Sprite task hold ${stage} failed`, { sessionKey, status: result.status });
+        },
+      }),
   });
 
   socket.on('agent-terminal:connect', (payload) => {
