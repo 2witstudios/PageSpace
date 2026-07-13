@@ -1680,6 +1680,9 @@ describe('openPtyShell', () => {
     });
 
     it('given a replay that overflows the byte cap on a transparent reconnect, STILL shows it (too large to be a mere redraw) and leaves a usable history', async () => {
+      // Builds two ~5.3MB floods (220k lines each via Array.from + join) — the array
+      // construction and join alone routinely exceed vitest's 5000ms default, independent
+      // of the fake timers below. An explicit timeout, not a logic change.
       // The other give-up path: the replay never aligns and grows past MAX_PENDING_BYTES, so
       // the pure core resolves inside `planReplayEmission` rather than the window timer.
       // Unlike a SMALL give-up, this one is NOT discarded even on a transparent reconnect: a
@@ -1723,9 +1726,12 @@ describe('openPtyShell', () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       expect(outputs(onOutput).join('')).toBe(afterOverflow); // nothing reprinted a SECOND time
-    });
+    }, 15_000);
 
     it('given a pending-cap give-up on a transparent reconnect, still shows it (too large to discard) and keeps forwarding what arrives right after', async () => {
+      // Builds a ~5.3MB flood (220k lines via Array.from + join) — the array construction
+      // and join alone can approach vitest's 5000ms default. An explicit timeout, not a
+      // logic change.
       // The pending-cap give-up resolves SYNCHRONOUSLY inside the chunk that pushed it over —
       // unlike the window-closed give-up, there is no timer in between. A burst this size is
       // always past `MAX_DISCARDABLE_GIVEUP_BYTES`, so it is shown (see the test above); what
@@ -1750,7 +1756,7 @@ describe('openPtyShell', () => {
 
       attachCmd._stdout.emit('data', 'genuinely live output\r\n'); // same command, after resolution
       expect(outputs(onOutput).join('')).toBe(`${BANNER}${flood}genuinely live output\r\n`);
-    });
+    }, 15_000);
 
     it('given a CHATTY shell across the reconnect, discards the held burst on its deadline but keeps forwarding afterward', async () => {
       // The quiet-gap timer alone is not a bound: a build or a repainting TUI
