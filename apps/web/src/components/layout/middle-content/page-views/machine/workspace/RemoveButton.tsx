@@ -13,11 +13,11 @@ export default function RemoveButton({ onClick, label }: { onClick(): void; labe
     <button
       type="button"
       onClick={onClick}
-      className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+      className="size-4 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
       title={label}
       aria-label={label}
     >
-      <X className="mx-auto size-3.5" />
+      <X className="mx-auto size-3" />
     </button>
   );
 }
@@ -32,7 +32,7 @@ export function AddButton({ onClick, label, icon }: { onClick(): void; label: st
     <button
       type="button"
       onClick={onClick}
-      className="size-5 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100"
+      className="size-4 shrink-0 rounded-sm text-muted-foreground opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100"
       title={label}
       aria-label={label}
     >

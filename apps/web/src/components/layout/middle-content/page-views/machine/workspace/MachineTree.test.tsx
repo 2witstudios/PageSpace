@@ -333,6 +333,26 @@ describe('MachineTree', () => {
     });
   });
 
+  // Density regression (user feedback): rows read as too spacious — bold
+  // labels, generous padding. Pin the compact, PurePoint-like shape so a
+  // future edit can't silently re-inflate it.
+  test('rows are dense: regular-weight labels, tight vertical padding', async () => {
+    renderTree();
+
+    const machineLabel = await waitFor(() => screen.getByText('Machine'));
+    const machineRow = machineLabel.closest('.group') as HTMLElement;
+    assert({
+      given: 'the machine row',
+      should: 'use a regular-weight label and tight (py-0.5) row padding — not font-medium/py-1',
+      actual: {
+        labelIsBold: machineLabel.className.includes('font-medium'),
+        labelIsRegular: machineLabel.className.includes('font-normal'),
+        rowPadding: machineRow.className.includes('py-0.5'),
+      },
+      expected: { labelIsBold: false, labelIsRegular: true, rowPadding: true },
+    });
+  });
+
   // Regression: the row-level "Add project"/"Add branch" triggers are always
   // mounted (hover-revealed on the row, not gated by expansion), but the
   // underlying useMachineProjects/useMachineBranches list fetch is still

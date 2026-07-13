@@ -250,7 +250,7 @@ function GlobalMachineList({
     <>
       {drives.map((drive) => (
         <div key={drive.driveId} className="space-y-1">
-          <div className="px-2 pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="px-2 pt-1 text-xs font-normal uppercase tracking-wide text-muted-foreground leading-none">
             {drive.driveName}
           </div>
           {drive.machines.map((machine) => (

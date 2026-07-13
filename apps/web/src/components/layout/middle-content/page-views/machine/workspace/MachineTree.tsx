@@ -156,7 +156,6 @@ function TreeRow({
   selected,
   icon,
   label,
-  labelClassName,
   extra,
   onRemove,
   removeTitle,
@@ -167,7 +166,6 @@ function TreeRow({
   selected?: boolean;
   icon: ReactNode;
   label: string;
-  labelClassName?: string;
   /** Hover-revealed row content between the label and the remove button — the
    * structural add-child dialog trigger, plus whatever `renderNodeExtra` hands
    * back. */
@@ -183,7 +181,7 @@ function TreeRow({
   return (
     <div
       className={cn(
-        'group flex items-center gap-1 rounded-sm py-1 pr-1',
+        'group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none',
         // Hover must not fight the selected state: bg-accent and hover:bg-accent/50
         // are different variant groups, so twMerge keeps both and the hover rule
         // wins — pointing at the selected row would LIGHTEN it, making it read as
@@ -199,10 +197,10 @@ function TreeRow({
           aria-label={expanded ? 'Collapse' : 'Expand'}
           data-testid="expand-chevron"
         >
-          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </button>
       ) : (
-        <span className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="size-3 shrink-0" aria-hidden="true" />
       )}
       <button
         type="button"
@@ -215,7 +213,7 @@ function TreeRow({
         className={cn('flex flex-1 items-center gap-1 text-left', !onLabelClick && 'cursor-default')}
       >
         {icon}
-        <span className={cn('truncate', labelClassName)}>{label}</span>
+        <span className="truncate font-normal text-sm leading-none">{label}</span>
       </button>
       {extra}
       {onRemove && removeTitle && <RemoveButton onClick={onRemove} label={removeTitle} />}
@@ -256,9 +254,8 @@ function MachineNode({
         onToggleExpand={() => setExpanded((e) => !e)}
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
-        icon={<Cpu className="size-3.5 shrink-0" />}
+        icon={<Cpu className="size-3 shrink-0" />}
         label={machineLabel}
-        labelClassName="font-medium"
         extra={
           <>
             {renderNodeExtra?.(node)}
@@ -318,9 +315,8 @@ function ProjectNode({
         onToggleExpand={() => setExpanded((e) => !e)}
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
-        icon={<FolderGit2 className="size-3.5 shrink-0" />}
+        icon={<FolderGit2 className="size-3 shrink-0" />}
         label={projectName}
-        labelClassName="font-medium"
         extra={
           <>
             {renderNodeExtra?.(node)}
@@ -386,7 +382,7 @@ function BranchNode({
         onToggleExpand={expandable ? () => setExpanded((e) => !e) : undefined}
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
-        icon={<GitBranch className="size-3.5 shrink-0" />}
+        icon={<GitBranch className="size-3 shrink-0" />}
         label={branchName}
         extra={renderNodeExtra?.(node)}
         onRemove={() => setConfirmingRemove(true)}
@@ -466,7 +462,7 @@ export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url
  * pattern, built on `Button` (rather than the plain `AddButton`) because a
  * `DialogTrigger asChild` needs a ref-forwarding child. */
 const ADD_DIALOG_TRIGGER_CLASSNAME =
-  'size-5 opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100';
+  'size-4 opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100';
 
 /** What the user's raw input will actually be saved as, shown live as they
  * type — the client-side half of "normalize-and-accept": `normalize` never
@@ -528,7 +524,7 @@ function AddProjectDialog({ onAdd }: { onAdd(name: string, repoUrl: string): Pro
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) resetAndClose(); }}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" className={ADD_DIALOG_TRIGGER_CLASSNAME} title="Add project">
-          <Plus className="size-3.5" />
+          <Plus className="size-3" />
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -607,7 +603,7 @@ function AddBranchDialog({ onAdd }: { onAdd(branchName: string): Promise<unknown
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" className={ADD_DIALOG_TRIGGER_CLASSNAME} title="Add branch-terminal">
-          <Plus className="size-3.5" />
+          <Plus className="size-3" />
         </Button>
       </DialogTrigger>
       <DialogContent>

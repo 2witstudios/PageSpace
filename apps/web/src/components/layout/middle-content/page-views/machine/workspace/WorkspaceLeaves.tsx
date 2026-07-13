@@ -97,7 +97,7 @@ export default function WorkspaceLeaves({
         <div
           key={workspace.id}
           className={cn(
-            'group flex items-center gap-1 rounded-sm py-1 pr-1',
+            'group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none',
             workspace.id === machine.activeWorkspaceId ? 'bg-accent' : 'hover:bg-accent/50',
           )}
         >
@@ -107,8 +107,8 @@ export default function WorkspaceLeaves({
             aria-current={workspace.id === machine.activeWorkspaceId ? 'true' : undefined}
             className="flex flex-1 items-center gap-1 text-left"
           >
-            <TerminalSquare className="size-3.5 shrink-0" />
-            <span className="truncate">{workspace.name}</span>
+            <TerminalSquare className="size-3 shrink-0" />
+            <span className="truncate font-normal text-sm leading-none">{workspace.name}</span>
           </button>
           <RemoveButton onClick={() => setPendingRemove(workspace.id)} label={`Remove workspace ${workspace.name}`} />
         </div>
@@ -168,7 +168,7 @@ export function WorkspaceNodeExtras({
       <AddButton
         onClick={() => onWorkspaceCreated(createWorkspace(machineId, scope))}
         label="New workspace"
-        icon={<Plus className="mx-auto size-3.5" />}
+        icon={<Plus className="mx-auto size-3" />}
       />
     </span>
   );
