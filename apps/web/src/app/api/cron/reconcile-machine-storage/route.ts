@@ -13,10 +13,14 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * real work), to the machine's actual page owner. It NEVER wakes a sprite to
  * measure; a never-measured machine bills a conservative 0 for that window.
  *
- * Idempotent / drift-correcting: each machine tracks its own last-billed
- * watermark, so overlapping or repeated runs never double-bill and a missed
- * run is caught up exactly on the next one — see
- * `reconcileMachineStorage` in @pagespace/lib.
+ * Idempotent / drift-correcting for SEQUENTIAL runs: each machine tracks its
+ * own last-billed watermark, so a rerun bills zero elapsed time and a missed
+ * run is caught up exactly on the next one — see `reconcileMachineStorage`
+ * in @pagespace/lib. CONCURRENT invocations are NOT safe — the charge and the
+ * watermark advance are two un-transactioned writes, so overlapping runs can
+ * bill the same window twice. Callers must serialize externally (the
+ * docker/cron crontab entry does, via flock); an in-service advisory lock
+ * covering every caller is tracked follow-up work.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce,
  * X-Cron-Signature headers.
