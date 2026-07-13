@@ -1,9 +1,8 @@
 import { create } from 'zustand';
-import type { PendingSession } from '@/lib/development/pending-session';
-import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import type { PendingWorkspace } from '@/lib/development/pending-workspace';
 
 /**
- * The one session-open intent in flight from the Development sidebar.
+ * The one workspace-select intent in flight from the Development sidebar.
  *
  * The sidebar and the machine's pane region are siblings in the layout (the
  * sidebar lives above the routed page), so the click and the component that can
@@ -12,17 +11,17 @@ import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWor
  *
  * Single-slot on purpose: a second click supersedes the first, because the user
  * only ever ends up on one machine. All the decision-making lives in the pure
- * `resolvePendingSession`; this only holds the value.
+ * `resolvePendingWorkspace`; this only holds the value.
  */
-interface PendingSessionStoreState {
-  pending: PendingSession | null;
-  requestSession: (machineId: string, scope: OpenTerminalScope) => void;
+interface PendingWorkspaceStoreState {
+  pending: PendingWorkspace | null;
+  requestWorkspace: (machineId: string, workspaceId: string) => void;
   clearPending: () => void;
 }
 
-export const usePendingSessionStore = create<PendingSessionStoreState>((set) => ({
+export const usePendingWorkspaceStore = create<PendingWorkspaceStoreState>((set) => ({
   pending: null,
-  requestSession: (machineId, scope) => set({ pending: { machineId, scope } }),
+  requestWorkspace: (machineId, workspaceId) => set({ pending: { machineId, workspaceId } }),
   // Identity-stable when there's nothing to clear, so a no-op clear can't
   // re-render (and so the drain effect can call it unconditionally).
   clearPending: () => set((state) => (state.pending === null ? state : { pending: null })),

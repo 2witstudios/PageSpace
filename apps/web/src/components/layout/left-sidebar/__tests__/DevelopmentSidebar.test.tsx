@@ -1,12 +1,12 @@
 /**
  * The Development sidebar's wiring: who may see the machine list, and what a
- * session click actually does.
+ * workspace click actually does.
  *
- * The session-click path is the one worth pinning down — it was broken twice in
- * review. It has to do three things in concert: bring the machine's Terminal tab
- * forward (only that tab mounts a workspace, so otherwise the session has
- * nowhere to land), record the intent (the pane region isn't mounted yet, so it
- * cannot be applied now), and navigate.
+ * The workspace-click path is the one worth pinning down — it has to do three
+ * things in concert: bring the machine's Terminal tab forward (only that tab
+ * mounts a workspace grid, so otherwise the click has nowhere to land), record
+ * the intent (the pane region isn't mounted yet, so it cannot be applied now),
+ * and navigate.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -74,14 +74,6 @@ vi.mock('@/hooks/useMachineProjects', () => ({
 vi.mock('@/hooks/useMachineBranches', () => ({
   useMachineBranches: () => ({ branches: [], isLoading: false, addBranch: vi.fn(), removeBranch: vi.fn() }),
 }));
-vi.mock('@/hooks/useAgentTerminals', () => ({
-  useAgentTerminals: (machineId: string | null) => ({
-    agentTerminals: machineId ? [{ name: 'agent-1', agentType: 'claude', createdAt: '2026-07-12' }] : [],
-    isLoading: false,
-    addAgentTerminal: vi.fn(),
-    removeAgentTerminal: vi.fn(),
-  }),
-}));
 vi.mock('@/hooks/useGithubRepos', () => ({
   useGithubRepos: () => ({ repos: [], connected: true, isLoading: false, error: undefined, mutate: vi.fn() }),
 }));
@@ -94,13 +86,16 @@ vi.mock('../DriveFooter', () => ({ default: () => <div /> }));
 vi.mock('../DashboardFooter', () => ({ default: () => <div /> }));
 
 import DevelopmentSidebar from '../DevelopmentSidebar';
-import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
+import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  usePendingSessionStore.setState({ pending: null });
+  window.localStorage.clear();
+  usePendingWorkspaceStore.setState({ pending: null });
   useMachineTabStore.setState({ tabs: {} });
+  useMachineWorkspaceStore.setState({ machines: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/development');
@@ -136,7 +131,7 @@ describe('DevelopmentSidebar', () => {
     // The list polls, and SWR keeps the last good data while setting `error` on a
     // failed revalidation. Reporting the error ahead of the data would let one
     // blip tear down every MachineTree, losing its expansion state and the
-    // session leaves under it, while the app still holds a good list.
+    // workspace leaves under it, while the app still holds a good list.
     mockUseDriveMachines.mockReturnValueOnce({
       machines: [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }],
       isLoading: false,
@@ -160,37 +155,51 @@ describe('DevelopmentSidebar', () => {
     expect(screen.queryByText(/administrator privileges/i)).toBeNull();
   });
 
-  test('clicking a session focuses the machine\'s Terminal tab, records the intent, and navigates', async () => {
+  test('clicking a workspace focuses the machine\'s Terminal tab, records the intent, and navigates', async () => {
     const user = userEvent.setup();
     // The machine is parked on another tab — the case where the click used to do
-    // nothing at all, because only the Terminal tab mounts a workspace.
+    // nothing at all, because only the Terminal tab mounts a workspace grid.
     useMachineTabStore.getState().setTab('machine-1', 'code');
     render(<DevelopmentSidebar />);
 
-    // Expand the machine to reveal its session leaves.
+    // Expand the machine to reveal its (idempotent-repaired) first workspace.
     await user.click(await screen.findByRole('button', { name: 'Expand' }));
-    await user.click(await screen.findByText('agent-1'));
+    await user.click(await screen.findByText('Workspace 1'));
+
+    const workspaceId = Object.keys(selectMachine('machine-1')(useMachineWorkspaceStore.getState())!.workspaces)[0];
 
     expect(useMachineTabStore.getState().tabs['machine-1']).toBe('terminal');
-    expect(usePendingSessionStore.getState().pending).toMatchObject({
+    expect(usePendingWorkspaceStore.getState().pending).toEqual({ machineId: 'machine-1', workspaceId });
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
+  });
+
+  test('the machine row\'s new-workspace trigger creates a workspace and drives the same click flow', async () => {
+    const user = userEvent.setup();
+    render(<DevelopmentSidebar />);
+
+    await user.click(await screen.findByRole('button', { name: 'New workspace' }));
+
+    const machine = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
+    expect(Object.keys(machine.workspaces).length).toBe(2);
+    expect(usePendingWorkspaceStore.getState().pending).toEqual({
       machineId: 'machine-1',
-      scope: { name: 'agent-1' },
+      workspaceId: machine.activeWorkspaceId,
     });
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });
 
-  test('clicking the machine itself drops a stale session intent', async () => {
-    // Picking the machine (not one of its sessions) says "this machine as it is"
-    // — an older intent must not follow the user here and take over the pane.
+  test('clicking the machine itself drops a stale workspace intent', async () => {
+    // Picking the machine (not one of its workspaces) says "this machine as it
+    // is" — an older intent must not follow the user here and take over the pane.
     const user = userEvent.setup();
-    usePendingSessionStore.setState({
-      pending: { machineId: 'machine-1', scope: { name: 'old-session' } },
+    usePendingWorkspaceStore.setState({
+      pending: { machineId: 'machine-1', workspaceId: 'stale-workspace' },
     });
     render(<DevelopmentSidebar />);
 
     await user.click(await screen.findByText('Dev box'));
 
-    expect(usePendingSessionStore.getState().pending).toBeNull();
+    expect(usePendingWorkspaceStore.getState().pending).toBeNull();
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });
 });

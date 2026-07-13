@@ -10,7 +10,7 @@ import { render, screen } from '@testing-library/react';
 
 const mockUseAuth = vi.fn();
 const mockUseAllMachines = vi.fn();
-const hostRenders: { activePageId: string | null; machineIds: readonly string[] }[] = [];
+const hostRenders: { activePageId: string | null; machineIds: readonly string[]; embedded?: boolean }[] = [];
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard/development/machine-1',
@@ -20,14 +20,14 @@ vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 vi.mock('@/hooks/useDriveMachines', () => ({ useAllMachines: (enabled: boolean) => mockUseAllMachines(enabled) }));
 
 vi.mock('@/components/layout/middle-content/MachineKeepAliveHost', () => ({
-  default: (props: { activePageId: string | null; machineIds: readonly string[] }) => {
-    hostRenders.push({ activePageId: props.activePageId, machineIds: props.machineIds });
+  default: (props: { activePageId: string | null; machineIds: readonly string[]; embedded?: boolean }) => {
+    hostRenders.push({ activePageId: props.activePageId, machineIds: props.machineIds, embedded: props.embedded });
     return <div data-testid="keepalive-host" />;
   },
 }));
 
 import GlobalDevelopmentLayout from '../layout';
-import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { useMachineWorkspaceStore } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 const machine = (id: string) => ({ id, title: id, updatedAt: '2026-07-12T00:00:00.000Z' });
@@ -47,17 +47,17 @@ const allMachines = (over: Partial<{ drives: ReturnType<typeof group>[]; isLoadi
 beforeEach(() => {
   vi.clearAllMocks();
   hostRenders.length = 0;
-  usePendingSessionStore.setState({ pending: null });
+  usePendingWorkspaceStore.setState({ pending: null });
   useMachineWorkspaceStore.setState({ machines: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseAllMachines.mockReturnValue(allMachines());
 });
 
 describe('GlobalDevelopmentLayout', () => {
-  test('hands the selected machine and the flattened cross-drive list to the keep-alive host', () => {
+  test('hands the selected machine and the flattened cross-drive list to the keep-alive host, embedded', () => {
     render(<GlobalDevelopmentLayout>{null}</GlobalDevelopmentLayout>);
 
-    expect(hostRenders.at(-1)).toEqual({ activePageId: 'machine-1', machineIds: ['machine-1'] });
+    expect(hostRenders.at(-1)).toEqual({ activePageId: 'machine-1', machineIds: ['machine-1'], embedded: true });
   });
 
   test('flattens machines across every drive group', () => {
@@ -137,12 +137,12 @@ describe('GlobalDevelopmentLayout', () => {
     expect(screen.queryByText(/administrator privileges/i)).toBeNull();
   });
 
-  test('drops an unconverged session intent when the surface is left', () => {
-    usePendingSessionStore.setState({ pending: { machineId: 'machine-9', scope: { name: 'agent-1' } } });
+  test('drops an unconverged workspace intent when the surface is left', () => {
+    usePendingWorkspaceStore.setState({ pending: { machineId: 'machine-9', workspaceId: 'ws-1' } });
     const { unmount } = render(<GlobalDevelopmentLayout>{null}</GlobalDevelopmentLayout>);
 
     unmount();
 
-    expect(usePendingSessionStore.getState().pending).toBeNull();
+    expect(usePendingWorkspaceStore.getState().pending).toBeNull();
   });
 });

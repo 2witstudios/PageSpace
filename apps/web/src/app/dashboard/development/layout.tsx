@@ -7,7 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useAllMachines } from '@/hooks/useDriveMachines';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
 import { useStickyMachineIds } from '@/lib/development/use-sticky-machine-ids';
-import { useDrainPendingSession } from '@/lib/development/use-drain-pending-session';
+import { useDrainPendingWorkspace } from '@/lib/development/use-drain-pending-workspace';
 import { DetailState } from '@/lib/development/DetailState';
 import { resolveDisplayedMachine } from '@/lib/development/displayed-machine';
 
@@ -59,7 +59,7 @@ export default function GlobalDevelopmentLayout({ children }: { children: React.
 
   const { isKnownMachine, displayedMachineId } = resolveDisplayedMachine(machines, selectedMachineId);
 
-  useDrainPendingSession(displayedMachineId);
+  useDrainPendingWorkspace(displayedMachineId);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -75,7 +75,7 @@ export default function GlobalDevelopmentLayout({ children }: { children: React.
         />
       )}
 
-      <MachineKeepAliveHost driveId={undefined} activePageId={displayedMachineId} machineIds={stickyMachineIds} />
+      <MachineKeepAliveHost driveId={undefined} activePageId={displayedMachineId} machineIds={stickyMachineIds} embedded />
     </div>
   );
 }

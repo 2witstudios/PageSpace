@@ -19,6 +19,8 @@ import SettingsTab from './tabs/SettingsTab';
 
 interface MachineViewProps {
   pageId: string;
+  /** See `MachineKeepAliveHost`'s doc — set only inside the Development surface, where the Terminal tab's own tree would be redundant with `DevelopmentSidebar`'s. */
+  embedded?: boolean;
 }
 
 // The tab's stored value/id stays `'code'` — it's the key `useMachineTabStore`
@@ -51,7 +53,7 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
  * nowhere to land. Behaviour is otherwise unchanged — a machine with no stored
  * tab shows Terminal, as before.
  */
-const MachineView = ({ pageId }: MachineViewProps) => {
+const MachineView = ({ pageId, embedded = false }: MachineViewProps) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const activeTab = useMachineTabStore((state) => state.tabs[pageId] ?? DEFAULT_MACHINE_TAB);
@@ -104,7 +106,7 @@ const MachineView = ({ pageId }: MachineViewProps) => {
           </div>
 
           <TabsContent value="terminal" className="min-h-0 flex-1 outline-none">
-            <TerminalTab machineId={pageId} />
+            <TerminalTab machineId={pageId} embedded={embedded} />
           </TabsContent>
           <TabsContent value="code" className="min-h-0 flex-1 outline-none">
             <FilesTab machineId={pageId} />

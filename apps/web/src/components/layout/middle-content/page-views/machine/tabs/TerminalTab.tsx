@@ -2,65 +2,85 @@
 
 import { useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { useMachineWorkspaceStore, type OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useMachineWorkspaceStore } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
-import SessionLeaves from '../workspace/SessionLeaves';
+import WorkspaceLeaves, { WorkspaceNodeExtras } from '../workspace/WorkspaceLeaves';
 import TabSidebar from './TabSidebar';
 
 // MachineWorkspace owns the xterm subtree + socket; it must never SSR.
 const MachineWorkspace = dynamic(() => import('../workspace/MachineWorkspace'), { ssr: false });
 
 interface TerminalTabProps {
-  /** The Machine page's own id (= pageId). Sessions/panes are keyed by it. */
+  /** The Machine page's own id (= pageId). Workspaces/panes are keyed by it. */
   machineId: string;
+  /**
+   * Set when this tab is hosted inside the Development surface rather than the
+   * standalone Machine page. There, `DevelopmentSidebar` already renders the
+   * SAME shared tree with the SAME workspace items one level up — so the inner
+   * sidebar here would be a redundant second copy. Embedded, this renders just
+   * the active workspace's grid; standalone (default), it keeps its own tree,
+   * the only workspace nav on that page.
+   */
+  embedded?: boolean;
 }
 
 /**
  * The Machine page's Terminal tab: the shared {@link TabSidebar} (plain border
  * chrome — deliberately NOT the app's liquid-glass sidebars) rendering the shared
- * {@link MachineTree} with session-terminal leaves injected under every
+ * {@link MachineTree} with workspace-item leaves injected under every
  * Machine/Project/Branch node, beside the pane workspace. This is the new home of
  * the session navigation that used to live in the right-sidebar Navigator tab —
- * clicking a session opens it in the workspace via the shared machine-workspace
- * store, exactly as before.
+ * clicking a workspace switches the ENTIRE middle view to its grid, via the
+ * shared machine-workspace store.
  *
- * Opening a session also `close()`s the sidebar, which on a narrow viewport
- * dismisses the sheet the tree is in — the user asked to look at that terminal,
- * and it is behind the sheet.
+ * Selecting a workspace also `close()`s the sidebar, which on a narrow viewport
+ * dismisses the sheet the tree is in — the user asked to look at that grid, and
+ * it is behind the sheet.
  */
-export default function TerminalTab({ machineId }: TerminalTabProps) {
+export default function TerminalTab({ machineId, embedded = false }: TerminalTabProps) {
+  const workspacePane = <MachineWorkspace machineId={machineId} />;
+  if (embedded) return workspacePane;
+
   return (
-    <TabSidebar title="Sessions" pane={<MachineWorkspace machineId={machineId} />}>
-      {({ close }) => <SessionTree machineId={machineId} onOpened={close} />}
+    <TabSidebar title="Workspaces" pane={workspacePane}>
+      {({ close }) => <WorkspaceTree machineId={machineId} onSelected={close} />}
     </TabSidebar>
   );
 }
 
 /**
- * The session tree. A component rather than inline JSX so the open handler — and
- * through it `renderNodeChildren` — can be built with `useCallback` in a scope
- * that has stable inputs: `TabSidebar` hands out a stable `close`, so this memo
- * genuinely holds instead of being invalidated by a fresh closure every render.
+ * The workspace tree. A component rather than inline JSX so the select handler
+ * — and through it `renderNodeChildren`/`renderNodeExtra` — can be built with
+ * `useCallback` in a scope that has stable inputs: `TabSidebar` hands out a
+ * stable `close`, so this memo genuinely holds instead of being invalidated by
+ * a fresh closure every render.
  */
-function SessionTree({ machineId, onOpened }: { machineId: string; onOpened: () => void }) {
-  const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
+function WorkspaceTree({ machineId, onSelected }: { machineId: string; onSelected: () => void }) {
+  const setActiveWorkspace = useMachineWorkspaceStore((state) => state.setActiveWorkspace);
 
-  const onOpenTerminal = useCallback(
-    (scope: OpenTerminalScope) => {
-      openTerminal(machineId, scope);
-      // On a narrow viewport the tree is in a sheet, and the terminal the user
-      // just asked for is behind it. A no-op on desktop.
-      onOpened();
+  const onSelectWorkspace = useCallback(
+    (workspaceId: string) => {
+      setActiveWorkspace(machineId, workspaceId);
+      // On a narrow viewport the tree is in a sheet, and the grid the user just
+      // asked for is behind it. A no-op on desktop.
+      onSelected();
     },
-    [openTerminal, machineId, onOpened],
+    [setActiveWorkspace, machineId, onSelected],
   );
 
   const renderNodeChildren = useCallback(
     (node: MachineTreeNode) => (
-      <SessionLeaves machineId={machineId} node={node} onOpenTerminal={onOpenTerminal} />
+      <WorkspaceLeaves machineId={machineId} node={node} onSelectWorkspace={onSelectWorkspace} />
     ),
-    [machineId, onOpenTerminal],
+    [machineId, onSelectWorkspace],
   );
 
-  return <MachineTree machineId={machineId} renderNodeChildren={renderNodeChildren} />;
+  const renderNodeExtra = useCallback(
+    (node: MachineTreeNode) => (
+      <WorkspaceNodeExtras machineId={machineId} node={node} onWorkspaceCreated={onSelectWorkspace} />
+    ),
+    [machineId, onSelectWorkspace],
+  );
+
+  return <MachineTree machineId={machineId} renderNodeChildren={renderNodeChildren} renderNodeExtra={renderNodeExtra} />;
 }

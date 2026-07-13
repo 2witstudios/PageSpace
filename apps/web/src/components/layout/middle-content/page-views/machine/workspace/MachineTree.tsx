@@ -41,9 +41,11 @@ import { useMachineBranches } from '@/hooks/useMachineBranches';
 import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
 import { useProviders } from '@/hooks/useIntegrations';
 import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
+import { normalizeProjectName } from '@pagespace/lib/services/machines/project-name';
+import { normalizeBranchName } from '@pagespace/lib/services/machines/branch-name';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton from './RemoveButton';
-import { SidebarLoading, SidebarNotice } from '../tabs/tab-states';
+import { SidebarLoading } from '../tabs/tab-states';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
 export type MachineTreeNode =
@@ -82,8 +84,16 @@ interface MachineTreeProps {
   isNodeSelectable?: (node: MachineTreeNode) => boolean;
   /** The currently-selected node, highlighted and marked `aria-current`. Omit for trees where selection isn't a persistent state (e.g. the Terminal tab, whose clicks open panes rather than select a row). */
   selectedNode?: MachineTreeNode | null;
-  /** Renders caller-owned content under a node when it's expanded (e.g. session-terminal rows). Branch nodes are only expandable when this is provided — otherwise they render as a flat, non-expandable row. */
+  /** Renders caller-owned content under a node when it's expanded (e.g. workspace-item rows). Branch nodes are only expandable when this is provided — otherwise they render as a flat, non-expandable row. */
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
+  /**
+   * Renders caller-owned content INLINE in a node's own row, hover-revealed
+   * beside the structural add-project/add-branch button (e.g. a "N running"
+   * count and a new-workspace `+`). Kept out of `MachineTree` itself — the
+   * Diff and Files tabs reuse this same tree for branch/file navigation and
+   * have no workspace to count or create, so they simply omit this prop.
+   */
+  renderNodeExtra?: (node: MachineTreeNode) => ReactNode;
 }
 
 /**
@@ -111,7 +121,7 @@ export function isSameMachineTreeNode(a: MachineTreeNode | null | undefined, b: 
 }
 
 /** Presentation-only Machine → Project → Branch tree, reusable across any tab that needs this navigation shape (Terminal, Diff, …). Has no opinion on what a row click does — callers own that via `onSelectNode`. */
-export default function MachineTree({ machineId, machineLabel, defaultExpanded, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren }: MachineTreeProps) {
+export default function MachineTree({ machineId, machineLabel, defaultExpanded, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren, renderNodeExtra }: MachineTreeProps) {
   return (
     <div className="p-1 text-sm">
       <MachineNode
@@ -122,6 +132,7 @@ export default function MachineTree({ machineId, machineLabel, defaultExpanded, 
         isNodeSelectable={isNodeSelectable}
         selectedNode={selectedNode}
         renderNodeChildren={renderNodeChildren}
+        renderNodeExtra={renderNodeExtra}
       />
     </div>
   );
@@ -145,7 +156,7 @@ function TreeRow({
   selected,
   icon,
   label,
-  labelClassName,
+  extra,
   onRemove,
   removeTitle,
 }: {
@@ -155,7 +166,10 @@ function TreeRow({
   selected?: boolean;
   icon: ReactNode;
   label: string;
-  labelClassName?: string;
+  /** Hover-revealed row content between the label and the remove button — the
+   * structural add-child dialog trigger, plus whatever `renderNodeExtra` hands
+   * back. */
+  extra?: ReactNode;
   onRemove?(): void;
   removeTitle?: string;
 }) {
@@ -167,7 +181,7 @@ function TreeRow({
   return (
     <div
       className={cn(
-        'group flex items-center gap-1 rounded-sm py-1 pr-1',
+        'group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none',
         // Hover must not fight the selected state: bg-accent and hover:bg-accent/50
         // are different variant groups, so twMerge keeps both and the hover rule
         // wins — pointing at the selected row would LIGHTEN it, making it read as
@@ -183,10 +197,10 @@ function TreeRow({
           aria-label={expanded ? 'Collapse' : 'Expand'}
           data-testid="expand-chevron"
         >
-          {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+          {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         </button>
       ) : (
-        <span className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="size-3 shrink-0" aria-hidden="true" />
       )}
       <button
         type="button"
@@ -199,8 +213,9 @@ function TreeRow({
         className={cn('flex flex-1 items-center gap-1 text-left', !onLabelClick && 'cursor-default')}
       >
         {icon}
-        <span className={cn('truncate', labelClassName)}>{label}</span>
+        <span className="truncate font-normal text-sm leading-none">{label}</span>
       </button>
+      {extra}
       {onRemove && removeTitle && <RemoveButton onClick={onRemove} label={removeTitle} />}
     </div>
   );
@@ -211,6 +226,7 @@ interface TreeLevelProps {
   isNodeSelectable?: (node: MachineTreeNode) => boolean;
   selectedNode?: MachineTreeNode | null;
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
+  renderNodeExtra?: (node: MachineTreeNode) => ReactNode;
 }
 
 function MachineNode({
@@ -221,10 +237,15 @@ function MachineNode({
   isNodeSelectable,
   selectedNode,
   renderNodeChildren,
+  renderNodeExtra,
 }: TreeLevelProps & { machineId: string; machineLabel?: string; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const node: MachineTreeNode = { level: 'machine' };
-  const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(expanded ? machineId : null);
+  // The row's "Add project" trigger is always mounted (hover-revealed on the
+  // row itself, not gated by expansion — see MachineTree's header-ectomy), so
+  // `addProject` must work before the row is ever expanded. Only the list
+  // FETCH is gated on `expanded`.
+  const { projects, isLoading: projectsLoading, addProject, removeProject } = useMachineProjects(machineId, { enabled: expanded });
 
   return (
     <div>
@@ -233,26 +254,19 @@ function MachineNode({
         onToggleExpand={() => setExpanded((e) => !e)}
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
-        icon={<Cpu className="size-3.5 shrink-0" />}
+        icon={<Cpu className="size-3 shrink-0" />}
         label={machineLabel}
-        labelClassName="font-medium"
+        extra={
+          <>
+            {renderNodeExtra?.(node)}
+            <AddProjectDialog onAdd={addProject} />
+          </>
+        }
       />
       {expanded && (
         <div className="pl-4">
           {renderNodeChildren?.(node)}
-          <div className="mt-1 flex items-center justify-between py-0.5 pr-1">
-            <span className="text-xs text-muted-foreground">Projects</span>
-            <AddProjectDialog onAdd={addProject} />
-          </div>
           {projectsLoading && <SidebarLoading message="Loading projects…" />}
-          {!projectsLoading && projects.length === 0 && (
-            <SidebarNotice
-              title="No projects yet"
-              description="Add a git repo to this machine to start a branch-terminal."
-            >
-              <AddProjectDialog onAdd={addProject} triggerLabel="Add your first project" />
-            </SidebarNotice>
-          )}
           {projects.map((project) => (
             <ProjectNode
               key={project.name}
@@ -262,6 +276,7 @@ function MachineNode({
               isNodeSelectable={isNodeSelectable}
               selectedNode={selectedNode}
               renderNodeChildren={renderNodeChildren}
+              renderNodeExtra={renderNodeExtra}
               onRemoveProject={() => removeProject(project.name)}
             />
           ))}
@@ -278,6 +293,7 @@ function ProjectNode({
   isNodeSelectable,
   selectedNode,
   renderNodeChildren,
+  renderNodeExtra,
   onRemoveProject,
 }: TreeLevelProps & {
   machineId: string;
@@ -287,7 +303,10 @@ function ProjectNode({
   const [expanded, setExpanded] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const node: MachineTreeNode = { level: 'project', projectName };
-  const { branches, isLoading: branchesLoading, addBranch, removeBranch } = useMachineBranches(expanded ? machineId : null, projectName);
+  // Same reasoning as the machine row's "Add project" trigger above: "Add
+  // branch" is always mounted, so `addBranch` must work before the row is
+  // ever expanded. Only the list FETCH is gated on `expanded`.
+  const { branches, isLoading: branchesLoading, addBranch, removeBranch } = useMachineBranches(machineId, projectName, { enabled: expanded });
 
   return (
     <div>
@@ -296,9 +315,14 @@ function ProjectNode({
         onToggleExpand={() => setExpanded((e) => !e)}
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
-        icon={<FolderGit2 className="size-3.5 shrink-0" />}
+        icon={<FolderGit2 className="size-3 shrink-0" />}
         label={projectName}
-        labelClassName="font-medium"
+        extra={
+          <>
+            {renderNodeExtra?.(node)}
+            <AddBranchDialog onAdd={addBranch} />
+          </>
+        }
         onRemove={() => setConfirmingRemove(true)}
         removeTitle="Remove project"
       />
@@ -312,17 +336,7 @@ function ProjectNode({
       {expanded && (
         <div className="pl-4">
           {renderNodeChildren?.(node)}
-          <div className="mt-1 flex items-center justify-between py-0.5 pr-1">
-            <span className="text-xs text-muted-foreground">Branches</span>
-            <AddBranchDialog onAdd={addBranch} />
-          </div>
           {branchesLoading && <SidebarLoading message="Loading branches…" />}
-          {!branchesLoading && branches.length === 0 && (
-            <SidebarNotice
-              title="No branches yet"
-              description="Add a branch-terminal to check this repo out in its own Sprite."
-            />
-          )}
           {branches.map((branch) => (
             <BranchNode
               key={branch.branchName}
@@ -332,6 +346,7 @@ function ProjectNode({
               isNodeSelectable={isNodeSelectable}
               selectedNode={selectedNode}
               renderNodeChildren={renderNodeChildren}
+              renderNodeExtra={renderNodeExtra}
               onRemoveBranch={() => removeBranch(branch.branchName)}
             />
           ))}
@@ -348,6 +363,7 @@ function BranchNode({
   isNodeSelectable,
   selectedNode,
   renderNodeChildren,
+  renderNodeExtra,
   onRemoveBranch,
 }: TreeLevelProps & {
   projectName: string;
@@ -366,8 +382,9 @@ function BranchNode({
         onToggleExpand={expandable ? () => setExpanded((e) => !e) : undefined}
         onSelect={selectHandlerFor(node, onSelectNode, isNodeSelectable)}
         selected={isSameMachineTreeNode(node, selectedNode)}
-        icon={<GitBranch className="size-3.5 shrink-0" />}
+        icon={<GitBranch className="size-3 shrink-0" />}
         label={branchName}
+        extra={renderNodeExtra?.(node)}
         onRemove={() => setConfirmingRemove(true)}
         removeTitle="Remove branch-terminal"
       />
@@ -440,7 +457,29 @@ export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url
   return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
 }
 
-function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl: string): Promise<unknown>; triggerLabel?: string }) {
+/** Hover-revealed trigger chrome shared by the two "add a child node" dialogs
+ * (project, branch) — the non-destructive sibling of `RemoveButton`'s reveal
+ * pattern, built on `Button` (rather than the plain `AddButton`) because a
+ * `DialogTrigger asChild` needs a ref-forwarding child. */
+const ADD_DIALOG_TRIGGER_CLASSNAME =
+  'size-4 opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100';
+
+/** What the user's raw input will actually be saved as, shown live as they
+ * type — the client-side half of "normalize-and-accept": `normalize` never
+ * rejects, so this is purely informational and never blocks submission. */
+function NamePreview({ value, normalize }: { value: string; normalize(input: string): string }) {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = normalize(trimmed);
+  if (normalized === trimmed) return null;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Will be saved as <span className="font-mono">{normalized}</span>
+    </p>
+  );
+}
+
+function AddProjectDialog({ onAdd }: { onAdd(name: string, repoUrl: string): Promise<unknown> }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
@@ -484,15 +523,9 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) resetAndClose(); }}>
       <DialogTrigger asChild>
-        {triggerLabel ? (
-          <Button variant="outline" size="sm" className="h-7 text-xs">
-            {triggerLabel}
-          </Button>
-        ) : (
-          <Button variant="ghost" size="icon" className="size-6" title="Add project">
-            <Plus className="size-3.5" />
-          </Button>
-        )}
+        <Button variant="ghost" size="icon" className={ADD_DIALOG_TRIGGER_CLASSNAME} title="Add project">
+          <Plus className="size-3" />
+        </Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -500,7 +533,10 @@ function AddProjectDialog({ onAdd, triggerLabel }: { onAdd(name: string, repoUrl
           <DialogDescription>Clone a git repo onto this machine&apos;s persistent filesystem.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} />
+          <div>
+            <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} />
+            <NamePreview value={name} normalize={normalizeProjectName} />
+          </div>
 
           {mode === 'manual' && (
             <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
@@ -566,8 +602,8 @@ function AddBranchDialog({ onAdd }: { onAdd(branchName: string): Promise<unknown
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-5" title="Add branch-terminal">
-          <Plus className="size-3.5" />
+        <Button variant="ghost" size="icon" className={ADD_DIALOG_TRIGGER_CLASSNAME} title="Add branch-terminal">
+          <Plus className="size-3" />
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -575,7 +611,10 @@ function AddBranchDialog({ onAdd }: { onAdd(branchName: string): Promise<unknown
           <DialogTitle>Add branch-terminal</DialogTitle>
           <DialogDescription>Checks out this branch in its own isolated Sprite.</DialogDescription>
         </DialogHeader>
-        <Input placeholder="Branch name" value={branchName} onChange={(e) => setBranchName(e.target.value)} />
+        <div>
+          <Input placeholder="Branch name" value={branchName} onChange={(e) => setBranchName(e.target.value)} />
+          <NamePreview value={branchName} normalize={normalizeBranchName} />
+        </div>
         <DialogFooter>
           <Button onClick={handleSubmit} disabled={submitting || !branchName.trim()}>
             {submitting ? 'Spawning…' : 'Add branch'}
