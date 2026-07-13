@@ -1,5 +1,5 @@
 {
-  "id": "5ded24a8-7956-4de5-b833-f79d399bf2f4",
+  "id": "ad1d8030-d806-4073-8c6e-fe2147d6a803",
   "prevId": "fdd777fb-d869-420e-970b-43c8d7ae9ab3",
   "version": "7",
   "dialect": "postgresql",
@@ -19405,7 +19405,7 @@
           "name": "bootstrappedByUserId",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "bootstrappedAt": {
           "name": "bootstrappedAt",
@@ -19440,7 +19440,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS "machine_workspaces" (
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "machine_workspace_bootstraps" (
 	"machineId" text PRIMARY KEY NOT NULL,
-	"bootstrappedByUserId" text NOT NULL,
+	"bootstrappedByUserId" text,
 	"bootstrappedAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -37,7 +37,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
- ALTER TABLE "machine_workspace_bootstraps" ADD CONSTRAINT "machine_workspace_bootstraps_bootstrappedByUserId_users_id_fk" FOREIGN KEY ("bootstrappedByUserId") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+ ALTER TABLE "machine_workspace_bootstraps" ADD CONSTRAINT "machine_workspace_bootstraps_bootstrappedByUserId_users_id_fk" FOREIGN KEY ("bootstrappedByUserId") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
