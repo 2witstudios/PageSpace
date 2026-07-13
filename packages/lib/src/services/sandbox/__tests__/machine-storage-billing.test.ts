@@ -4,7 +4,8 @@ import { assert } from './riteway';
 const mockDb = vi.hoisted(() => ({ select: vi.fn(), update: vi.fn() }));
 const mockAdvisoryLockClient = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
 const mockAdvisoryLockPool = vi.hoisted(() => ({ connect: vi.fn(async () => mockAdvisoryLockClient) }));
-vi.mock('@pagespace/db/db', () => ({ db: mockDb, advisoryLockPool: mockAdvisoryLockPool }));
+const mockGetAdvisoryLockPool = vi.hoisted(() => vi.fn(() => mockAdvisoryLockPool));
+vi.mock('@pagespace/db/db', () => ({ db: mockDb, getAdvisoryLockPool: mockGetAdvisoryLockPool }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/machine-sessions', () => ({
   machineSessions: {
@@ -40,6 +41,7 @@ beforeEach(() => {
   mockAdvisoryLockPool.connect.mockClear();
   mockAdvisoryLockClient.query.mockReset();
   mockAdvisoryLockClient.release.mockReset();
+  mockGetAdvisoryLockPool.mockClear();
   // Clear the module-level in-process caches so cases don't bleed state.
   __resetStorageMeasurementCachesForTests();
 });
@@ -469,6 +471,7 @@ describe('reconcileMachineStorageSerialized', () => {
     const result = await reconcileMachineStorageSerialized(deps);
 
     expect(result.outcome).toBe('reconciled');
+    expect(mockGetAdvisoryLockPool).toHaveBeenCalledTimes(1);
     expect(mockAdvisoryLockPool.connect).toHaveBeenCalledTimes(1);
     expect(mockAdvisoryLockClient.release).toHaveBeenCalledTimes(1);
   });
@@ -489,5 +492,22 @@ describe('reconcileMachineStorageSerialized', () => {
     expect(result.outcome).toBe('reconciled');
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+  });
+
+  it('given the try-lock query itself throws (not just acquired:false), should destroy the connection and rethrow', async () => {
+    const client = {
+      query: vi.fn().mockRejectedValueOnce(new Error('connection reset')),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    const deps = makeDeps();
+
+    await expect(reconcileMachineStorageSerialized(deps, pool)).rejects.toThrow('connection reset');
+
+    // Never resolved acquired/not-acquired — the connection's protocol state
+    // is indeterminate, so it must be destroyed, not pooled alive.
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(deps.listMachines).not.toHaveBeenCalled();
   });
 });

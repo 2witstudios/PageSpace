@@ -10,7 +10,8 @@
  */
 
 import { eq } from '@pagespace/db/operators';
-import { db, advisoryLockPool } from '@pagespace/db/db';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
@@ -90,31 +91,11 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
  * un-transactioned writes (see machine-storage-reconcile.ts's module doc), so
  * two overlapping runs can double-bill the same watermark window. This lock
  * makes every caller overlap-safe, in addition to (not instead of) the flock.
- *
- * Acquired on `@pagespace/db/db`'s dedicated `advisoryLockPool`, NOT the main
- * `pool` `db` itself draws from: `deps` below (listMachines/advanceWatermark)
- * issues its OWN Drizzle queries against the main pool WHILE this lock is
- * held for the whole reconcile run, so pinning the lock's connection from
- * that same pool would deadlock any deployment where `DB_POOL_MAX` doesn't
- * leave a spare connection for those queries (DB_POOL_MAX=1 is the sharpest
- * case: the only connection would be stuck holding the lock while
- * `listMachines`'s first `db.select()` waits forever for one to free up).
+ * Acquired via `withAdvisoryLock` on `getAdvisoryLockPool()`'s dedicated
+ * pool — see that pool's doc in `@pagespace/db/db` for why it must stay
+ * separate from the main `db` pool `deps` below queries against.
  */
 const RECONCILE_MACHINE_STORAGE_LOCK_KEY = 'reconcile-machine-storage';
-
-/**
- * Minimal subset of pg's Pool/PoolClient API the lock needs — kept local
- * (mirrors audit-chainer-worker.ts's PgClient/PgPool) so it's mockable in
- * tests without a real Postgres connection.
- */
-interface AdvisoryLockClient {
-  query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
-  /** pg semantics: release(err) DESTROYS the connection instead of pooling it. */
-  release(destroyWithError?: Error): void;
-}
-interface AdvisoryLockPool {
-  connect(): Promise<AdvisoryLockClient>;
-}
 
 export type ReconcileMachineStorageRunResult =
   | { outcome: 'lock_busy' }
@@ -122,46 +103,21 @@ export type ReconcileMachineStorageRunResult =
 
 /**
  * Serializes `reconcileMachineStorage` with a Postgres session-level advisory
- * try-lock, acquired on a dedicated connection: a run that cannot acquire it
- * (another run — any process, any container — already holds it) is a clean
- * no-op and never touches `deps.listMachines`/`chargeStorage`/`advanceWatermark`.
- * The lock is always released in the `finally` when acquired; if the unlock
- * query itself fails, the connection is DESTROYED rather than returned to the
- * pool alive, so a poisoned session cannot leak the session-level lock forever
- * (same rationale as audit-chainer-worker.ts).
+ * try-lock (see `withAdvisoryLock`): a run that cannot acquire it (another
+ * run — any process, any container — already holds it) is a clean no-op and
+ * never touches `deps.listMachines`/`chargeStorage`/`advanceWatermark`.
  */
 export async function reconcileMachineStorageSerialized(
   deps: ReconcileMachineStorageDeps,
-  pgPool: AdvisoryLockPool = advisoryLockPool,
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
 ): Promise<ReconcileMachineStorageRunResult> {
-  const client = await pgPool.connect();
-  let lockAcquired = false;
-
-  try {
-    const lockResult = await client.query(
-      'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
-      [RECONCILE_MACHINE_STORAGE_LOCK_KEY],
-    );
-    lockAcquired = Boolean(lockResult.rows[0]?.acquired);
-    if (!lockAcquired) {
-      return { outcome: 'lock_busy' };
-    }
-
-    const result = await reconcileMachineStorage(deps);
-    return { outcome: 'reconciled', ...result };
-  } finally {
-    if (lockAcquired) {
-      try {
-        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [RECONCILE_MACHINE_STORAGE_LOCK_KEY]);
-        client.release();
-      } catch (unlockError) {
-        const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
-        client.release(err);
-      }
-    } else {
-      client.release();
-    }
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_MACHINE_STORAGE_LOCK_KEY, () =>
+    reconcileMachineStorage(deps),
+  );
+  if (locked.outcome === 'lock_busy') {
+    return { outcome: 'lock_busy' };
   }
+  return { outcome: 'reconciled', ...locked.result };
 }
 
 /**
