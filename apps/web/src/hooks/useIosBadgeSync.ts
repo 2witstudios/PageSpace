@@ -8,21 +8,21 @@ import { deriveBadgeCount } from '@pagespace/lib/notifications/derive-badge-coun
 
 async function projectNativeBadge(unreadCount: number): Promise<void> {
   try {
-    // NOTE: on iOS, Badge.set() internally calls
-    // UNUserNotificationCenter.requestAuthorization(options: .badge) before
-    // writing the count (see @capawesome/capacitor-badge's ios/Plugin/Badge.swift).
-    // iOS only ever shows the permission prompt once per install and honors
-    // whichever options were in the FIRST request an app ever makes — so if this
-    // badge-only request somehow raced ahead of PushNotificationManager's broader
-    // [.alert, .badge, .sound] request, alert/sound could be silently capped forever
-    // with no re-prompt. In practice this hook's Badge.set() only runs after
-    // `hasHydrated` (a completed /api/notifications network round trip), which is
-    // far slower than PushNotificationManager's native-bridge-only permission
-    // check+request, so the push flow wins in all observed conditions. Flagged for
-    // device verification during TestFlight rather than fixed here, since resolving
-    // it for certain would mean coordinating with usePushNotifications/
-    // PushNotificationManager — out of this PR's scope.
     const { Badge } = await import('@capawesome/capacitor-badge');
+    // Badge.set() internally calls UNUserNotificationCenter.requestAuthorization(
+    // options: .badge) before writing the count (see @capawesome/capacitor-badge's
+    // ios/Plugin/Badge.swift). iOS shows the permission prompt only once per
+    // install and permanently caps the granted option set to whatever the FIRST
+    // request ever asked for, with no re-prompt — so if this badge-only request
+    // won the race against PushNotificationManager's broader
+    // [.alert, .badge, .sound] request, alert/sound notifications could be
+    // silently disabled forever. checkPermissions() reads the current status
+    // WITHOUT prompting, so gating on it here guarantees Badge.set() can never
+    // itself be the first-ever authorization request — by the time badge
+    // permission reads as granted, the push flow's broader request already
+    // decided the option set.
+    const permissions = await Badge.checkPermissions();
+    if (permissions.display !== 'granted') return;
     await Badge.set({ count: deriveBadgeCount(unreadCount) });
   } catch (error) {
     // Best-effort only — never let a missing/broken native plugin crash the app.

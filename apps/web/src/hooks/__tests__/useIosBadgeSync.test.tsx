@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
-const { mockBadgeSet, mockFetchNotifications } = vi.hoisted(() => ({
+const { mockBadgeSet, mockCheckPermissions, mockFetchNotifications } = vi.hoisted(() => ({
   mockBadgeSet: vi.fn().mockResolvedValue(undefined),
+  mockCheckPermissions: vi.fn().mockResolvedValue({ display: 'granted' }),
   mockFetchNotifications: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -33,7 +34,7 @@ vi.mock('@/hooks/useCapacitor', () => ({
 }));
 
 vi.mock('@capawesome/capacitor-badge', () => ({
-  Badge: { set: mockBadgeSet },
+  Badge: { set: mockBadgeSet, checkPermissions: mockCheckPermissions },
 }));
 
 import { useIosBadgeSync } from '../useIosBadgeSync';
@@ -57,6 +58,7 @@ describe('useIosBadgeSync', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockBadgeSet.mockResolvedValue(undefined);
+    mockCheckPermissions.mockResolvedValue({ display: 'granted' });
     mockFetchNotifications.mockResolvedValue(undefined);
     mockCapacitorState = {
       isNative: true,
@@ -94,6 +96,41 @@ describe('useIosBadgeSync', () => {
     renderHook(() => useIosBadgeSync());
 
     await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 0 }));
+  });
+
+  it('regression: never calls Badge.set when badge permission is not granted (prompt), to avoid Badge.set itself triggering the first-ever authorization request', async () => {
+    mockCheckPermissions.mockResolvedValue({ display: 'prompt' });
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useIosBadgeSync());
+    await waitFor(() => expect(mockCheckPermissions).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('regression: never calls Badge.set when badge permission is denied', async () => {
+    mockCheckPermissions.mockResolvedValue({ display: 'denied' });
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useIosBadgeSync());
+    await waitFor(() => expect(mockCheckPermissions).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockBadgeSet).not.toHaveBeenCalled();
+  });
+
+  it('calls Badge.set once permission checks as granted', async () => {
+    mockCheckPermissions.mockResolvedValue({ display: 'granted' });
+    useNotificationStore.setState({ unreadCount: 3 });
+
+    renderHook(() => useIosBadgeSync());
+
+    await waitFor(() => expect(mockBadgeSet).toHaveBeenCalledWith({ count: 3 }));
   });
 
   it('regression: does not project the default unreadCount 0 before the store has hydrated (cold launch)', async () => {
