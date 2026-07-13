@@ -10,7 +10,7 @@
  */
 
 import { eq } from '@pagespace/db/operators';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
@@ -23,7 +23,11 @@ import {
   STORAGE_MEASUREMENT_THROTTLE_MS,
   type PersistStorageMeasurement,
 } from './machine-storage-measure';
-import type { ReconcileMachineStorageDeps } from './machine-storage-reconcile';
+import {
+  reconcileMachineStorage,
+  type ReconcileMachineStorageDeps,
+  type ReconcileMachineStorageResult,
+} from './machine-storage-reconcile';
 
 export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
   async listMachines() {
@@ -75,6 +79,81 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
 
   now: () => new Date(),
 };
+
+/**
+ * Advisory-lock key for serializing `reconcileMachineStorage` across EVERY
+ * caller — a second web/worker container, or a manual/API trigger, can run
+ * the cron route concurrently with no shared state to stop it. The crontab
+ * flock (Sprites Platform Alignment, #2032) only guards one container's own
+ * scheduled ticks; it does nothing for a second container or an out-of-band
+ * invocation. `chargeStorage` and `advanceWatermark` are two separate
+ * un-transactioned writes (see machine-storage-reconcile.ts's module doc), so
+ * two overlapping runs can double-bill the same watermark window. This lock
+ * makes every caller overlap-safe, in addition to (not instead of) the flock.
+ */
+const RECONCILE_MACHINE_STORAGE_LOCK_KEY = 'reconcile-machine-storage';
+
+/**
+ * Minimal subset of pg's Pool/PoolClient API the lock needs — kept local
+ * (mirrors audit-chainer-worker.ts's PgClient/PgPool) so it's mockable in
+ * tests without a real Postgres connection.
+ */
+interface AdvisoryLockClient {
+  query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  /** pg semantics: release(err) DESTROYS the connection instead of pooling it. */
+  release(destroyWithError?: Error): void;
+}
+interface AdvisoryLockPool {
+  connect(): Promise<AdvisoryLockClient>;
+}
+
+export type ReconcileMachineStorageRunResult =
+  | { outcome: 'lock_busy' }
+  | ({ outcome: 'reconciled' } & ReconcileMachineStorageResult);
+
+/**
+ * Serializes `reconcileMachineStorage` with a Postgres session-level advisory
+ * try-lock, acquired on a dedicated connection: a run that cannot acquire it
+ * (another run — any process, any container — already holds it) is a clean
+ * no-op and never touches `deps.listMachines`/`chargeStorage`/`advanceWatermark`.
+ * The lock is always released in the `finally` when acquired; if the unlock
+ * query itself fails, the connection is DESTROYED rather than returned to the
+ * pool alive, so a poisoned session cannot leak the session-level lock forever
+ * (same rationale as audit-chainer-worker.ts).
+ */
+export async function reconcileMachineStorageSerialized(
+  deps: ReconcileMachineStorageDeps,
+  pgPool: AdvisoryLockPool = pool,
+): Promise<ReconcileMachineStorageRunResult> {
+  const client = await pgPool.connect();
+  let lockAcquired = false;
+
+  try {
+    const lockResult = await client.query(
+      'SELECT pg_try_advisory_lock(hashtext($1)) AS acquired',
+      [RECONCILE_MACHINE_STORAGE_LOCK_KEY],
+    );
+    lockAcquired = Boolean(lockResult.rows[0]?.acquired);
+    if (!lockAcquired) {
+      return { outcome: 'lock_busy' };
+    }
+
+    const result = await reconcileMachineStorage(deps);
+    return { outcome: 'reconciled', ...result };
+  } finally {
+    if (lockAcquired) {
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [RECONCILE_MACHINE_STORAGE_LOCK_KEY]);
+        client.release();
+      } catch (unlockError) {
+        const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
+        client.release(err);
+      }
+    } else {
+      client.release();
+    }
+  }
+}
 
 /**
  * Persist an opportunistic storage measurement onto the machine's
