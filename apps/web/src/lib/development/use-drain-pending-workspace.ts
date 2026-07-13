@@ -22,7 +22,7 @@ import { resolvePendingWorkspace } from '@/lib/development/pending-workspace';
  * singleton, so an intent left behind here would otherwise still be sitting
  * there on the user's next visit, ready to fire into whatever machine was active.
  */
-export function useDrainPendingSession(displayedMachineId: string | null) {
+export function useDrainPendingWorkspace(displayedMachineId: string | null) {
   const pending = usePendingWorkspaceStore((state) => state.pending);
   const clearPending = usePendingWorkspaceStore((state) => state.clearPending);
   const setActiveWorkspace = useMachineWorkspaceStore((state) => state.setActiveWorkspace);
