@@ -85,6 +85,43 @@ export function resolveProjectPath(name: string): string | null {
   return resolvePathWithinSync(PROJECTS_ROOT, name);
 }
 
+/**
+ * A project row id as a path suffix. Ids are cuid2 (lowercase alphanumerics),
+ * but the row id crosses a trust boundary into an `rm -rf` argument, so it is
+ * validated by charset here rather than assumed.
+ */
+const PROJECT_ID_RE = /^[A-Za-z0-9]+$/;
+
+/**
+ * Resolve the clone path for one project ROW: `PROJECTS_ROOT/<name>-<id>`.
+ *
+ * The id suffix is what makes the directory unique per row rather than per
+ * name — two concurrent adds of the SAME name land in two different
+ * directories, so neither operation can ever clone into (or `rm -rf`) a
+ * directory the other owns. The name prefix is kept purely for human
+ * legibility in a shell; nothing resolves a path from a name anymore — every
+ * consumer reads the row's persisted `path`.
+ *
+ * The combined directory name is capped at `MAX_PROJECT_NAME_LENGTH` by
+ * truncating the NAME portion (the id must survive intact — it is the
+ * uniqueness), and the join is confined the same way `resolveProjectPath` is.
+ * Returns `null` if the name is invalid, the id is malformed, or the id alone
+ * would blow the cap — all fail closed.
+ */
+export function resolveProjectClonePath(name: string, id: string): string | null {
+  if (!isValidProjectName(name)) return null;
+  if (!PROJECT_ID_RE.test(id)) return null;
+
+  const maxNameLength = MAX_PROJECT_NAME_LENGTH - id.length - '-'.length;
+  if (maxNameLength < 1) return null;
+
+  // Truncation cannot invalidate the name: the charset is per-character and
+  // only the FIRST character is position-constrained (no leading dot).
+  const dirName = `${name.slice(0, maxNameLength)}-${id}`;
+  if (!isValidProjectName(dirName)) return null;
+  return resolvePathWithinSync(PROJECTS_ROOT, dirName);
+}
+
 const HTTPS_REPO_URL_RE = /^https:\/\/.+/;
 
 /** Only HTTPS remotes are supported — mirrors the agent `git_clone` tool's constraint. */
