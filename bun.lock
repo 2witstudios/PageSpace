@@ -189,6 +189,7 @@
         "@capacitor/push-notifications": "^7.0.0",
         "@capacitor/splash-screen": "^7.0.3",
         "@capacitor/status-bar": "^7.0.3",
+        "@capawesome/capacitor-badge": "^7.0.0",
         "@capgo/capacitor-social-login": "^7.20.0",
       },
       "devDependencies": {
@@ -437,6 +438,7 @@
         "@capacitor/browser": "^7.0.3",
         "@capacitor/core": "^7.0.0",
         "@capacitor/preferences": "^7.0.0",
+        "@capawesome/capacitor-badge": "^7.0.0",
         "@capgo/capacitor-social-login": "^7.0.5",
         "@eslint/eslintrc": "^3",
         "@next/eslint-plugin-next": "15.5.18",
@@ -772,6 +774,8 @@
     "@capacitor/splash-screen": ["@capacitor/splash-screen@7.0.5", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-bPG2SamFL7VT5I3XsgsGgJhkiyxq3OXCOVKEDupSieVdtEiG7j2vLbSD0xL+91zteF/qLuxsjbugGy5LD8mS2A=="],
 
     "@capacitor/status-bar": ["@capacitor/status-bar@7.0.6", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-7AVqj46b26QikImQzWfsJmzG8NUJZBGkrVSuoeTo+SX/YH3hXH0MqwwFgMqMGHfa/BICDgSvTjM9miVFlq0+RQ=="],
+
+    "@capawesome/capacitor-badge": ["@capawesome/capacitor-badge@7.0.1", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-jhVieRRVLgGO1NU7PW8uWZmf3WD4IsYUlkrJ82KuoRgLFx1tbJGwHU1ro0sUJmEwfLO9vldhBnJJ/J5nHrjbQQ=="],
 
     "@capgo/capacitor-social-login": ["@capgo/capacitor-social-login@7.20.0", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-rHlEALFUonLe4sDG+qybDowh2/XDiHJ4DK9pShe1aPTGSrmA5j7kz8VbHYGqgof5xdyeC7pAY3+8PASTW+qGKg=="],
 
