@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, it, vi } from 'vitest';
 import { assert } from './riteway';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { ResolveAgentTerminalResult } from '@pagespace/lib/services/machines/agent-terminals';
@@ -339,6 +339,33 @@ describe('resolveMachineSandbox', () => {
       actual: result.ok,
       expected: true,
     });
+  });
+
+  it('given a refresh that never settles (a stuck root or branch Sprite), should resolve once the bound elapses rather than hanging forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = resolveMachineSandbox(
+        { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
+        {
+          resolveAgentTerminal: async () => resolvedOk,
+          getSprite: spyGetSprite().fn,
+          // Never resolves — simulates a Sprite fs op that's stuck (e.g. a
+          // hibernating Sprite mid wake-retry).
+          refreshBranchCredential: () => new Promise<void>(() => {}),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await pending;
+
+      assert({
+        given: 'a refreshBranchCredential that never settles',
+        should: 'still resolve ok once the bound elapses, not hang indefinitely',
+        actual: result.ok,
+        expected: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

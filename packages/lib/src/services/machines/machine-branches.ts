@@ -210,15 +210,22 @@ async function cloneAndCheckoutBranch({
 /**
  * Copy Claude Code's OAuth credential (and config, if present) from the root
  * Machine's Sprite into a branch-terminal's freshly provisioned/attached one.
- * Each file is handled independently: absent on the root Sprite — most
- * commonly because the user hasn't run `claude` there yet — copies nothing
- * (a branch-terminal always ends up usable even with no credential to copy);
- * absent on the root Sprite when it WAS present before (an explicit `claude
- * logout`, or manual removal) actively REMOVES any stale copy already on the
- * branch Sprite, rather than leaving it silently authenticated after the
- * source was cleared. Since this refresh runs on every reattach specifically
- * to keep rotated credentials in sync, a revocation on the root is exactly
- * the kind of change that sync must also propagate (caught in review).
+ * Each file is copied independently and skipped when the root read comes
+ * back empty — most commonly because the user hasn't run `claude` there yet
+ * — so a branch-terminal always ends up usable even with no credential to
+ * copy.
+ *
+ * Deliberately does NOT delete an existing branch-side copy on an empty
+ * root read, even though that read coming back empty could also mean an
+ * explicit `claude logout` on the root (a tempting "propagate the
+ * revocation" behavior — tried and reverted, see review history). The
+ * driver's `readFile` maps EVERY read failure to the same `null` a missing
+ * file produces (`sprites.ts`'s `readFileToBuffer`: "a missing file (or ANY
+ * read failure after a wake retry) resolves to null") — there is no way,
+ * from this signal alone, to tell "confirmed gone" apart from "root Sprite
+ * was briefly unreachable." Deleting on that ambiguous signal would risk
+ * destroying a branch's perfectly valid, working credential on a transient
+ * hiccup — strictly worse than the staleness this would have closed.
  *
  * Best-effort: any failure (root Sprite unreachable mid-copy, etc.) is
  * swallowed rather than failing the spawn/attach it's called from. A branch
@@ -246,14 +253,7 @@ export async function propagateClaudeCredential({
 
     for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
       const content = await rootHandle.readFile({ path });
-      if (!content) {
-        // The root's own file is gone — most commonly an explicit `claude
-        // logout` (or manual removal) — which must propagate as a
-        // revocation to any branch Sprite that received a copy, not leave a
-        // stale one behind. `rm -f` is a no-op when nothing was ever copied.
-        await branchHandle.exec({ cmd: 'rm', args: ['-f', path] });
-        continue;
-      }
+      if (!content) continue;
       // Both restricted 0o600 — the credentials file is the OAuth secret
       // itself, and the config file can carry account/org metadata, so
       // neither belongs world-readable in the branch Sprite's home dir.

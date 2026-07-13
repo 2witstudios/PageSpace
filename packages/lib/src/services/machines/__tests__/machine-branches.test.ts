@@ -107,15 +107,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
       machineId: state.machineId,
       exec: async (args) => {
         state.execLog.push(args);
-        if (execImpl) return execImpl(state, args);
-        // Default `rm -f <path>` semantics, so tests can assert an actual
-        // removal (propagateClaudeCredential's stale-credential cleanup)
-        // rather than only the exec call shape.
-        if (args.cmd === 'rm' && args.args?.[0] === '-f' && args.args[1] !== undefined) {
-          state.files.delete(args.args[1]);
-          state.fileModes.delete(args.args[1]);
-        }
-        return { exitCode: 0, stdout: '', stderr: '' };
+        return execImpl ? execImpl(state, args) : { exitCode: 0, stdout: '', stderr: '' };
       },
       writeFiles: async (files) => {
         for (const f of files) {
@@ -782,7 +774,13 @@ describe('Claude Code credential propagation', () => {
     );
   });
 
-  it('given the root credential is later REMOVED (e.g. a `claude logout`), should remove the stale copy from the branch Sprite too, rather than leaving it silently authenticated', async () => {
+  it('given the root read later comes back empty (e.g. a `claude logout`, OR simply a transient root-Sprite read failure), should NOT delete the branch\'s existing valid credential', async () => {
+    // `readFile` maps EVERY read failure to the same `null` a missing file
+    // produces (see the doc comment on `propagateClaudeCredential`) — an
+    // empty read is NOT reliable evidence of a real logout, so deleting on
+    // it would risk destroying a perfectly valid, working branch credential
+    // on a transient hiccup. Tried deleting on this signal and reverted it
+    // (see review history) — this test guards against reintroducing it.
     const { host, byId } = makeFakeHost();
     let rootFiles: Record<string, string> = { '/home/sprite/.claude/.credentials.json': 'first-token' };
     const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => makeRootHandle(rootFiles) });
@@ -791,16 +789,17 @@ describe('Claude Code credential propagation', () => {
     if (!first.ok) throw new Error('expected ok');
     expect(byId.get(first.sandboxId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('first-token');
 
-    // Root has since logged out — its own credential file is gone.
+    // The root read now comes back empty (logout, or just a transient blip —
+    // indistinguishable from here).
     rootFiles = {};
     const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     expect(second).toMatchObject({ ok: true, resumed: true });
     if (!second.ok) throw new Error('expected ok');
 
-    expect(byId.get(second.sandboxId)?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
+    expect(byId.get(second.sandboxId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('first-token');
   });
 
-  it('given the root Machine has never had a credential, removing a nonexistent branch-side file should be a harmless no-op', async () => {
+  it('given the root Machine has never had a credential, should skip the copy without ever touching the branch Sprite\'s exec log', async () => {
     const { host, byId } = makeFakeHost();
     const rootHandle = makeRootHandle({});
     const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
@@ -810,10 +809,7 @@ describe('Claude Code credential propagation', () => {
     if (!result.ok) throw new Error('expected ok');
 
     const state = byId.get(result.sandboxId);
-    expect(state?.execLog.filter((c) => c.cmd === 'rm')).toEqual([
-      { cmd: 'rm', args: ['-f', '/home/sprite/.claude/.credentials.json'] },
-      { cmd: 'rm', args: ['-f', '/home/sprite/.claude.json'] },
-    ]);
+    expect(state?.execLog.filter((c) => c.cmd === 'rm' || c.cmd === 'chmod')).toEqual([]);
   });
 
   it('should also propagate the credential on attachBranch (not only spawnBranch)', async () => {
