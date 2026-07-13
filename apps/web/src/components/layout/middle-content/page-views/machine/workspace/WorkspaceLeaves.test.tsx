@@ -227,7 +227,7 @@ describe('WorkspaceLeaves', () => {
   test('a server-backed session with no local workspace is reachable — clicking adopts it into a real workspace', async () => {
     vi.mocked(fetchWithAuth).mockImplementation(async () =>
       new Response(
-        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'claude', createdAt: '2026-01-01' }] }),
+        JSON.stringify({ agentTerminals: [{ name: 'orphan-1', agentType: 'claude', createdAt: '2026-01-01', launchable: true }] }),
         { status: 200 },
       ),
     );
@@ -249,6 +249,61 @@ describe('WorkspaceLeaves', () => {
           nowRemovable: screen.queryByTitle('Remove workspace orphan-1') !== null,
         },
         expected: { reportedId: expectedWorkspaceId, nowActive: true, nowRemovable: true },
+      });
+    });
+  });
+
+  // Codex review (PR #2053): dropping a legacy/unsupported row from the list
+  // entirely would make it undiscoverable — DELETE still works by name, but
+  // nothing in the UI would ever offer that name again. Instead it's listed
+  // with `launchable: false`, rendered as remove-only (never adopt), so it
+  // stays cleanable without ever being treated as an openable session.
+  test('a listed session with launchable: false cannot be adopted, only removed', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01', launchable: false }],
+        }),
+        { status: 200 },
+      ),
+    );
+    const onSelectWorkspace = vi.fn();
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={onSelectWorkspace} />);
+
+    const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
+    await userEvent.click(screen.getByText('legacy-cli'));
+
+    assert({
+      given: 'a legacy row whose agentType is no longer a recognized AgentRuntimeType',
+      should: 'render it without an adopt affordance (clicking its name does nothing) but WITH a remove button',
+      actual: {
+        adoptedAnything: onSelectWorkspace.mock.calls.length,
+        hasRemoveButton: within(row).queryByRole('button', { name: /Remove unsupported session legacy-cli/ }) !== null,
+      },
+      expected: { adoptedAnything: 0, hasRemoveButton: true },
+    });
+  });
+
+  test('removing an unlaunchable session calls DELETE by name, same as any other agent terminal', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'legacy-cli', agentType: 'pagespace-cli', createdAt: '2026-01-01', launchable: false }],
+        }),
+        { status: 200 },
+      ),
+    );
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove unsupported session legacy-cli/ }));
+
+    await waitFor(() => {
+      assert({
+        given: 'the remove button on an unlaunchable session',
+        should: 'DELETE it by name server-side, exactly like a normal running agent',
+        actual: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=legacy-cli')),
+        expected: true,
       });
     });
   });

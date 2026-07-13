@@ -147,15 +147,33 @@ export default function WorkspaceLeaves({
           key={`unclaimed-${session.name}`}
           className="group flex items-center gap-1 rounded-sm py-0.5 pr-1 leading-none hover:bg-accent/50"
         >
-          <button
-            type="button"
-            onClick={() => adopt(session.name)}
-            title="Running session not yet in this browser's workspace list — click to open it"
-            className="flex flex-1 items-center gap-1 text-left"
-          >
-            <TerminalSquare className="size-3 shrink-0 text-muted-foreground" />
-            <span className="truncate font-normal text-sm leading-none text-muted-foreground">{session.name}</span>
-          </button>
+          {session.launchable ? (
+            <button
+              type="button"
+              onClick={() => adopt(session.name)}
+              title="Running session not yet in this browser's workspace list — click to open it"
+              className="flex flex-1 items-center gap-1 text-left"
+            >
+              <TerminalSquare className="size-3 shrink-0 text-muted-foreground" />
+              <span className="truncate font-normal text-sm leading-none text-muted-foreground">{session.name}</span>
+            </button>
+          ) : (
+            <>
+              {/* A row whose agentType is no longer supported (e.g. the retired
+                  'pagespace-cli') can't be adopted — resolving it server-side would
+                  just come back not_found. Still shown (not dropped from the list),
+                  because removing it is the only way to reclaim its name and stop
+                  billing on any PTY still running under it. */}
+              <span
+                title="This session's agent type is no longer supported — it can't be opened, only removed"
+                className="flex flex-1 cursor-default items-center gap-1 text-left"
+              >
+                <TerminalSquare className="size-3 shrink-0 text-muted-foreground/60" />
+                <span className="truncate font-normal text-sm leading-none text-muted-foreground/60 italic">{session.name}</span>
+              </span>
+              <RemoveButton onClick={() => void removeAgentTerminal(session.name)} label={`Remove unsupported session ${session.name}`} />
+            </>
+          )}
         </div>
       ))}
       <ConfirmRemoveDialog

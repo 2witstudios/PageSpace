@@ -807,7 +807,7 @@ describe('listAgentTerminals', () => {
     expect(result).toEqual({ ok: true, terminals: [] });
   });
 
-  it('given a legacy row whose agentType is the retired pagespace-cli, should hide it rather than surface an unlaunchable session', async () => {
+  it('given a legacy row whose agentType is the retired pagespace-cli, should STILL list it — dropping it would strand it with no way to clean it up', async () => {
     const legacyRow: MachineAgentTerminalRecord = {
       id: 'agent-terminal-legacy',
       ownerId: actor.userId,
@@ -829,7 +829,7 @@ describe('listAgentTerminals', () => {
     const result = await listAgentTerminals({ machineId: TERMINAL_ID, deps });
 
     expect(result.ok).toBe(true);
-    expect(result.ok && result.terminals.map((t) => t.name)).toEqual(['cli']);
+    expect(result.ok && result.terminals.map((t) => t.name).sort()).toEqual(['cli', 'legacy-cli']);
   });
 });
 
