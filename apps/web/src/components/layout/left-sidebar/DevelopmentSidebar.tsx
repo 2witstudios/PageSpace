@@ -73,14 +73,25 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
     machines,
     isLoading: driveMachinesLoading,
     error: driveMachinesError,
-    mutate: retryDriveMachines,
+    mutate: mutateDriveMachines,
   } = useDriveMachines(isAdmin && driveId ? driveId : null);
   const {
     drives: machineDrives,
     isLoading: allMachinesLoading,
     error: allMachinesError,
-    mutate: retryAllMachines,
+    mutate: mutateAllMachines,
   } = useAllMachines(isAdmin && !driveId);
+  // SidebarNotice's Retry button wires straight to `onClick`, which React calls
+  // with the click's MouseEvent — SWR's `mutate` takes that as replacement cache
+  // DATA, not "revalidate now", so passing it through directly would corrupt the
+  // machines list instead of refetching it. Wrapped to a genuinely no-arg call,
+  // matching how DiffTab's own SWR-backed Retry does it.
+  const retryDriveMachines = useCallback(() => {
+    void mutateDriveMachines();
+  }, [mutateDriveMachines]);
+  const retryAllMachines = useCallback(() => {
+    void mutateAllMachines();
+  }, [mutateAllMachines]);
 
   const pathname = usePathname() ?? '';
   const selectedMachineId = parseSelectedMachineId(pathname, driveId);

@@ -197,7 +197,14 @@ describe('DevelopmentSidebar', () => {
     expect(screen.getByText(/failed to load machines/i)).toBeDefined();
     await user.click(screen.getByRole('button', { name: /retry/i }));
 
+    // Called with ZERO arguments: the button's onClick hands React's click
+    // MouseEvent to whatever it's wired to, and SWR's `mutate` treats a first
+    // argument as replacement cache DATA rather than "revalidate now" — so a
+    // naive `onRetry={mutate}` would silently corrupt the machines list
+    // instead of refetching it. Pinning the call shape catches that class of
+    // bug even though `toHaveBeenCalledTimes` alone would not.
     expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith();
   });
 
   test('closes the mobile sheet after navigating to a machine, at the sheet breakpoint', async () => {
@@ -358,7 +365,11 @@ describe('DevelopmentSidebar — GLOBAL mode (no driveId)', () => {
     expect(screen.getByText(/failed to load machines/i)).toBeDefined();
     await user.click(screen.getByRole('button', { name: /retry/i }));
 
+    // Same call-shape guard as the drive-scoped retry test: a naive
+    // `onRetry={mutate}` hands React's click MouseEvent to SWR's `mutate` as
+    // replacement cache data instead of revalidating.
     expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith();
   });
 
   test('a failed POLL keeps the tree — it does not replace it with an error', () => {
