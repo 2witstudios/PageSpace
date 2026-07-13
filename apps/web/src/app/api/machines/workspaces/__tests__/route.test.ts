@@ -16,6 +16,7 @@ const {
   mockListWorkspaces,
   mockIsBootstrapped,
   mockBroadcastMachineWorkspaceEvent,
+  mockAuditRequest,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
@@ -29,11 +30,16 @@ const {
   mockListWorkspaces: vi.fn(),
   mockIsBootstrapped: vi.fn(),
   mockBroadcastMachineWorkspaceEvent: vi.fn(),
+  mockAuditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => mockIsAuthError(result),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
 
 vi.mock('@/lib/machines/machine-workspaces-runtime', () => ({
@@ -102,11 +108,15 @@ describe('GET /api/machines/workspaces', () => {
     expect(res.status).toBe(400);
   });
 
-  it('given no view access, returns 403 without listing', async () => {
+  it('given no view access, returns 403 without listing, and audits the denial', async () => {
     mockCanViewMachine.mockResolvedValue(false);
     const res = await GET(new Request('https://x.test/api/machines/workspaces?machineId=t1'));
     expect(res.status).toBe(403);
     expect(mockListWorkspaces).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied', resourceId: 't1' }),
+    );
   });
 
   it('given view access, lists workspaces and reports bootstrap status', async () => {
@@ -138,7 +148,7 @@ describe('POST /api/machines/workspaces', () => {
     expect(mockCreateWorkspace).not.toHaveBeenCalled();
   });
 
-  it('given a fresh create, returns 201 and broadcasts machine-workspace:created', async () => {
+  it('given a fresh create, returns 201, broadcasts machine-workspace:created, and audits data.write', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockCreateWorkspace.mockResolvedValue({ ok: true, created: true, workspace: SAMPLE_RECORD });
     const res = await POST(req({ machineId: 't1', id: 'ws-1', name: 'Workspace 1', columns: [] }));
@@ -150,14 +160,22 @@ describe('POST /api/machines/workspaces', () => {
       'machine-workspace:created',
       expect.objectContaining({ machineId: 't1', id: 'ws-1' }),
     );
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', resourceId: 't1' }),
+    );
   });
 
-  it('given an idempotent replay (already existed), returns 200 and does NOT re-broadcast', async () => {
+  it('given an idempotent replay (already existed), returns 200 and does NOT re-broadcast or re-audit', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockCreateWorkspace.mockResolvedValue({ ok: true, created: false, workspace: SAMPLE_RECORD });
     const res = await POST(req({ machineId: 't1', id: 'ws-1', name: 'Workspace 1', columns: [] }));
     expect(res.status).toBe(200);
     expect(mockBroadcastMachineWorkspaceEvent).not.toHaveBeenCalled();
+    expect(mockAuditRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write' }),
+    );
   });
 
   it('given an invalid payload, maps the denial reason to 400', async () => {
@@ -196,7 +214,7 @@ describe('PATCH /api/machines/workspaces', () => {
     expect(mockUpdateWorkspace).not.toHaveBeenCalled();
   });
 
-  it('given a successful rename, returns 200 and broadcasts only the changed field', async () => {
+  it('given a successful rename, returns 200, broadcasts only the changed field, and audits data.write', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockUpdateWorkspace.mockResolvedValue({ ok: true, workspace: { ...SAMPLE_RECORD, name: 'Renamed' } });
     const res = await PATCH(req({ machineId: 't1', workspaceId: 'ws-1', name: 'Renamed' }));
@@ -208,6 +226,10 @@ describe('PATCH /api/machines/workspaces', () => {
     );
     const payload = mockBroadcastMachineWorkspaceEvent.mock.calls[0][2];
     expect(payload).not.toHaveProperty('columns');
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', resourceId: 't1', details: { workspaceId: 'ws-1', fields: ['name'] } }),
+    );
   });
 
   it('given a not_found workspace, returns 404', async () => {
@@ -237,7 +259,7 @@ describe('DELETE /api/machines/workspaces', () => {
     expect(res.status).toBe(404);
   });
 
-  it('given a successful removal, returns 200 and broadcasts machine-workspace:deleted', async () => {
+  it('given a successful removal, returns 200, broadcasts machine-workspace:deleted, and audits data.delete', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockRemoveWorkspace.mockResolvedValue({ ok: true });
     const res = await DELETE(
@@ -248,6 +270,10 @@ describe('DELETE /api/machines/workspaces', () => {
       machineId: 't1',
       workspaceId: 'ws-1',
     });
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.delete', resourceId: 't1' }),
+    );
   });
 
   it('given no workspaceId, returns 400', async () => {

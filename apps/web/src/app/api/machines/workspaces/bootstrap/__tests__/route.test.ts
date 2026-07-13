@@ -11,6 +11,7 @@ const {
   mockToWorkspaceDTO,
   mockBootstrapWorkspaces,
   mockBroadcastMachineWorkspaceEvent,
+  mockAuditRequest,
 } = vi.hoisted(() => ({
   mockAuthenticateRequest: vi.fn(),
   mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
@@ -19,11 +20,16 @@ const {
   mockToWorkspaceDTO: vi.fn(),
   mockBootstrapWorkspaces: vi.fn(),
   mockBroadcastMachineWorkspaceEvent: vi.fn(),
+  mockAuditRequest: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => mockIsAuthError(result),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
 }));
 
 vi.mock('@/lib/machines/machine-workspaces-runtime', () => ({
@@ -87,14 +93,18 @@ describe('POST /api/machines/workspaces/bootstrap', () => {
     expect(mockBootstrapWorkspaces).not.toHaveBeenCalled();
   });
 
-  it('given no edit access, returns 403 without bootstrapping', async () => {
+  it('given no edit access, returns 403 without bootstrapping, and audits the denial', async () => {
     mockCanAccessMachine.mockResolvedValue(false);
     const res = await POST(req({ machineId: 't1', workspaces: [] }));
     expect(res.status).toBe(403);
     expect(mockBootstrapWorkspaces).not.toHaveBeenCalled();
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'authz.access.denied', resourceId: 't1' }),
+    );
   });
 
-  it('given the FIRST caller for a machine, claims, returns claimed:true, and broadcasts bootstrapped', async () => {
+  it('given the FIRST caller for a machine, claims, returns claimed:true, broadcasts bootstrapped, and audits data.write', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockBootstrapWorkspaces.mockResolvedValue({ ok: true, claimed: true, workspaces: [SAMPLE_RECORD] });
     const res = await POST(
@@ -108,9 +118,13 @@ describe('POST /api/machines/workspaces/bootstrap', () => {
       'machine-workspace:bootstrapped',
       expect.objectContaining({ machineId: 't1' }),
     );
+    expect(mockAuditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', resourceId: 't1' }),
+    );
   });
 
-  it('given a caller that LOSES the claim race, returns claimed:false with the winner\'s list, and does NOT broadcast', async () => {
+  it('given a caller that LOSES the claim race, returns claimed:false with the winner\'s list, and does NOT broadcast or audit a write', async () => {
     mockCanAccessMachine.mockResolvedValue(true);
     mockBootstrapWorkspaces.mockResolvedValue({ ok: true, claimed: false, workspaces: [SAMPLE_RECORD] });
     const res = await POST(
@@ -121,6 +135,10 @@ describe('POST /api/machines/workspaces/bootstrap', () => {
     expect(body.claimed).toBe(false);
     expect(body.workspaces).toEqual([{ id: 'ws-1', name: 'Workspace 1' }]);
     expect(mockBroadcastMachineWorkspaceEvent).not.toHaveBeenCalled();
+    expect(mockAuditRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write' }),
+    );
   });
 
   it('given an invalid entry\'s denial reason, maps it to 400', async () => {

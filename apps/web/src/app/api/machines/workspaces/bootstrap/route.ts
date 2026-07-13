@@ -15,11 +15,13 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { bootstrapWorkspaces, type BootstrapWorkspaceInput } from '@pagespace/lib/services/machines/machine-workspaces';
 import { buildMachineWorkspacesDeps, canAccessMachine, toWorkspaceDTO } from '@/lib/machines/machine-workspaces-runtime';
 import { broadcastMachineWorkspaceEvent } from '@/lib/websocket';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const RESOURCE_TYPE = 'machine';
 
 function scopeFromBody(value: unknown): { projectName?: string; branchName?: string } {
   if (typeof value !== 'object' || value === null) return {};
@@ -72,6 +74,13 @@ export async function POST(request: Request) {
   }
 
   if (!(await canAccessMachine(auth.userId, body.machineId))) {
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      resourceType: RESOURCE_TYPE,
+      resourceId: body.machineId,
+      riskScore: 0.5,
+    });
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
   }
 
@@ -92,6 +101,14 @@ export async function POST(request: Request) {
     await broadcastMachineWorkspaceEvent(body.machineId, 'machine-workspace:bootstrapped', {
       machineId: body.machineId,
       workspaces: result.workspaces.map(toWorkspaceDTO),
+    });
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: RESOURCE_TYPE,
+      resourceId: body.machineId,
+      details: { action: 'workspaces_bootstrapped', workspaceCount: result.workspaces.length },
+      riskScore: 0,
     });
   }
 
