@@ -23,7 +23,6 @@
  * PTY (the realtime bridge), not this pure module.
  */
 export const AGENT_LAUNCH_SPECS = {
-  'pagespace-cli': { command: 'pagespace-cli', args: [] },
   claude: { command: 'claude', args: [] },
   codex: { command: 'codex', args: [] },
   shell: { command: 'shell', args: [] },

@@ -9,7 +9,6 @@ import {
 
 describe('isAgentRuntimeType', () => {
   it('given each first-party agent type, should recognize it', () => {
-    expect(isAgentRuntimeType('pagespace-cli')).toBe(true);
     expect(isAgentRuntimeType('claude')).toBe(true);
     expect(isAgentRuntimeType('codex')).toBe(true);
     expect(isAgentRuntimeType('shell')).toBe(true);
@@ -20,13 +19,13 @@ describe('isAgentRuntimeType', () => {
     expect(isAgentRuntimeType('')).toBe(false);
     expect(isAgentRuntimeType('constructor')).toBe(false);
   });
+
+  it('given the retired pagespace-cli agent type, should reject it as unrecognized (not crash)', () => {
+    expect(isAgentRuntimeType('pagespace-cli')).toBe(false);
+  });
 });
 
 describe('resolveAgentLaunchSpec', () => {
-  it('given pagespace-cli, should resolve its command with no args', () => {
-    expect(resolveAgentLaunchSpec('pagespace-cli')).toEqual({ command: 'pagespace-cli', args: [] });
-  });
-
   it('given claude, should resolve the claude binary', () => {
     expect(resolveAgentLaunchSpec('claude')).toEqual({ command: 'claude', args: [] });
   });
@@ -47,7 +46,11 @@ describe('resolveAgentLaunchSpec', () => {
   });
 
   it('should expose a registry entry for every AgentRuntimeType', () => {
-    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['pagespace-cli', 'claude', 'codex', 'shell']);
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['claude', 'codex', 'shell']);
+  });
+
+  it('should not expose a registry entry for the retired pagespace-cli agent type', () => {
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).not.toContain('pagespace-cli');
   });
 });
 

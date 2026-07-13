@@ -8,6 +8,14 @@ import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspa
 const mockUseMobile = vi.fn<() => boolean>();
 vi.mock('@/hooks/useMobile', () => ({ useMobile: () => mockUseMobile() }));
 
+// jsdom has neither the pointer-capture APIs nor scrollIntoView Radix's Select
+// uses when opening — without these stubs, clicking the agent-type trigger
+// throws instead of rendering its options.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
 // The pane's terminal is an xterm/socket subtree — stub it so what's under test
 // is the LAYOUT the workspace picks, not the stream inside it.
 vi.mock('../XtermTerminal', () => ({
@@ -298,7 +306,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
       },
       expected: {
         spawns: 1,
-        agentType: 'pagespace-cli',
+        agentType: 'claude',
         autoNamed: true,
         bind: [
           'm1',
@@ -308,6 +316,20 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
           'fix the build',
         ],
       },
+    });
+  });
+
+  test('the agent picker offers only claude and codex — no retired pagespace-cli, no internal shell sentinel', async () => {
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByLabelText('Agent type'));
+    const options = screen.getAllByRole('option').map((el) => el.textContent);
+
+    assert({
+      given: 'the empty pane\'s agent picker',
+      should: 'list exactly the user-spawnable agent types, excluding the retired pagespace-cli option and the shell sentinel',
+      actual: options,
+      expected: ['claude', 'codex'],
     });
   });
 

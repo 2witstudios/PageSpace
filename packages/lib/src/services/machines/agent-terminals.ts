@@ -446,7 +446,11 @@ export async function listAgentTerminals({
 }): Promise<{ ok: true; terminals: MachineAgentTerminalRecord[] } | { ok: false; reason: 'invalid_target' | 'project_not_found' | 'branch_not_found' | 'scope_unsupported' }> {
   const scope = await resolveScopeKey({ machineId, projectName, branchName, deps });
   if (!scope.ok) return scope;
-  const terminals = await deps.store.list(scope.scopeKey);
+  const rows = await deps.store.list(scope.scopeKey);
+  // A row whose agentType predates a since-retired AGENT_LAUNCH_SPECS entry (e.g. the
+  // removed 'pagespace-cli') is invalid, not launchable — hide it rather than surface
+  // it as an adoptable session the navigator can't actually resolve or launch.
+  const terminals = rows.filter((row) => isAgentRuntimeType(row.agentType));
   return { ok: true, terminals };
 }
 
