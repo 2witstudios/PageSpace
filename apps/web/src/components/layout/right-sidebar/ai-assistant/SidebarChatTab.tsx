@@ -611,8 +611,13 @@ const SidebarChatTab: React.FC = () => {
   globalIsInitializedRef.current = globalIsInitialized;
   useEffect(() => {
     if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
-    prevSidebarRefreshSignalRef.current = refreshSignal;
+    // The ref is only advanced when the refetch actually runs (see the load-on-select
+    // effects below for the full rationale) — a refreshSignal bump that arrives mid-stream
+    // must be retried once streaming ends, not marked "seen" and dropped. Without this, a
+    // remote event that fires while this surface happens to be streaming for an unrelated
+    // reason would be silently lost if no further remote event bumps refreshSignal again.
     if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
+      prevSidebarRefreshSignalRef.current = refreshSignal;
       loadGlobalMessages(globalConversationId);
     }
   }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
@@ -747,12 +752,20 @@ const SidebarChatTab: React.FC = () => {
   const prevSidebarGlobalMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
-    prevSidebarGlobalMessagesRef.current = globalInitialMessages;
     // Guarded the same way as the refreshSignal effect above (line ~615) — without this, a
     // mount/reload/conversation-switch that lands while this surface's own send is already
     // streaming clobbers the in-progress assistant bubble with a stale DB snapshot that
     // predates the reply.
+    //
+    // The ref is only advanced INSIDE the guard. If the guard blocks (streaming), the ref
+    // stays stale on purpose — every dependency change (including displayIsStreaming
+    // flipping false) re-runs the effect, and while the ref is stale this same
+    // `globalInitialMessages` reference still reads as "changed," so the load is retried
+    // instead of permanently lost. Advancing the ref unconditionally (before the guard) would
+    // mark this reference as seen even though it was never applied, silently stranding the
+    // sidebar on stale/empty history once streaming ends.
     if (!selectedAgent && globalIsInitialized && globalConversationId && !displayIsStreaming) {
+      prevSidebarGlobalMessagesRef.current = globalInitialMessages;
       loadGlobalMessages(globalConversationId);
     }
   }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, displayIsStreaming, loadGlobalMessages]);
@@ -765,11 +778,12 @@ const SidebarChatTab: React.FC = () => {
   const prevSidebarAgentMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
-    prevSidebarAgentMessagesRef.current = agentInitialMessages;
-    // Same guard as the global-mode load-on-select effect above: a mount/reload/agent-switch
-    // that lands mid-stream must not clobber the in-progress assistant bubble with a stale
-    // conversation snapshot.
+    // Same guard as the global-mode load-on-select effect above, and the same ref-advances-
+    // only-on-apply discipline: a mount/reload/agent-switch that lands mid-stream must not
+    // clobber the in-progress assistant bubble, but it also must not be forgotten once the
+    // stream ends — advancing the ref here regardless of the guard would do exactly that.
     if (selectedAgent && !displayIsStreaming) {
+      prevSidebarAgentMessagesRef.current = agentInitialMessages;
       setMessages(agentInitialMessages);
     }
   }, [agentInitialMessages, selectedAgent, displayIsStreaming, setMessages]);

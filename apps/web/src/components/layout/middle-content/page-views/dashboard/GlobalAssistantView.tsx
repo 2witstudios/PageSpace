@@ -745,11 +745,18 @@ const GlobalAssistantView: React.FC = () => {
   const prevRefreshSignalRef = useRef(refreshSignal);
   useEffect(() => {
     if (refreshSignal === prevRefreshSignalRef.current) return;
-    prevRefreshSignalRef.current = refreshSignal;
-    if (!selectedAgent && isInitializedRef.current) {
+    // Guarded on !effectiveIsStreaming for the same reason as the load-on-select effects
+    // below: handlePullUpRefresh calls setGlobalLocalMessages/setAgentMessages directly with
+    // no reconciliation against an in-flight stream, so running it while this surface is
+    // actively streaming would clobber the in-progress assistant bubble with a stale DB
+    // snapshot. The ref is only advanced once the refresh actually runs, so a refreshSignal
+    // bump that arrives mid-stream is retried once streaming ends instead of being marked
+    // "seen" and permanently dropped.
+    if (!selectedAgent && isInitializedRef.current && !effectiveIsStreaming) {
+      prevRefreshSignalRef.current = refreshSignal;
       handlePullUpRefresh();
     }
-  }, [refreshSignal, selectedAgent, handlePullUpRefresh]);
+  }, [refreshSignal, selectedAgent, effectiveIsStreaming, handlePullUpRefresh]);
 
   // Sync streaming status to global context (global mode only)
   useEffect(() => {
@@ -971,12 +978,20 @@ const GlobalAssistantView: React.FC = () => {
   const prevAgentLoadSignalRef = useRef<number | null>(null);
   useEffect(() => {
     if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
-    prevAgentLoadSignalRef.current = agentConversationLoadSignal;
     // Guarded the same way as the global-mode load-on-select effect below: the load-signal
     // indirection already avoids re-firing on every streamed token, but it still fires
     // unconditionally on a fresh mount (seeded to `null`) — so a reload mid-stream needs this
     // guard too, or it clobbers the in-progress bubble with the pre-reply snapshot.
+    //
+    // The ref is only advanced INSIDE the guard, not before it. If a load lands while
+    // effectiveIsStreaming is true, the guard skips applying it — and if the ref had already
+    // been marked "seen" at that point, the pending load would never be retried: the signal
+    // isn't going to change again on its own, so once streaming ends this effect would keep
+    // seeing "no change" and skip forever, stranding the dashboard on stale/empty history.
+    // Leaving the ref stale means the next re-run (streaming flag flipping is itself a
+    // dependency) still sees this signal as unapplied and retries it correctly.
     if (selectedAgent && agentConversationId && !effectiveIsStreaming) {
+      prevAgentLoadSignalRef.current = agentConversationLoadSignal;
       setAgentMessages(agentInitialMessages);
     }
   }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, effectiveIsStreaming, setAgentMessages]);

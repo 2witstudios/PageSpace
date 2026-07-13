@@ -84,6 +84,32 @@ function shouldLoadSidebarGlobalMessages<T>(
   return !selectedAgent && globalIsInitialized && Boolean(globalConversationId) && !displayIsStreaming;
 }
 
+/**
+ * Stateful simulator for the "ref-advances-only-on-apply" discipline used by
+ * every load-on-select / refreshSignal effect in this file (global
+ * load-on-select, agent load-on-select, and the refreshSignal effect). A
+ * CodeRabbit/Codex review on this PR found that the first version of these
+ * fixes advanced the "seen" ref BEFORE checking the streaming guard: when the
+ * guard blocked (streaming), the ref was still marked as seen, so once
+ * streaming ended the effect would keep seeing "no change" on the same
+ * reference and permanently skip the deferred load. This simulator mirrors
+ * the corrected effect body across multiple renders so that retry-after-
+ * guard-lifts behavior can be pinned directly, not just checked as a single
+ * boolean call.
+ */
+function createRefAdvancesOnlyOnApplySimulator<X>() {
+  let prevRef: X | null = null;
+  return {
+    /** Simulates one render/effect run. Returns true if the apply ran. */
+    step(x: X, guardPasses: boolean): boolean {
+      if (x === prevRef) return false;
+      if (!guardPasses) return false;
+      prevRef = x;
+      return true;
+    },
+  };
+}
+
 // ============================================
 // Test Data
 // ============================================
@@ -439,6 +465,58 @@ describe('SidebarChatTab Display Logic', () => {
       expect(
         shouldLoadSidebarGlobalMessages(null, true, 'conv-1', secondConversation, firstConversation, true)
       ).toBe(false);
+    });
+  });
+
+  // ============================================
+  // Ref-advances-only-on-apply regression tests (Codex review on PR #2061)
+  //
+  // Pins the multi-render sequence the single-call boolean tests above can't
+  // express: a load skipped while streaming must be retried once streaming
+  // ends, even though the underlying reference never changed again in the
+  // meantime. This is the actual defect class flagged in review — the fix is
+  // "only advance the ref when the apply runs," applied identically to the
+  // global load-on-select effect (~747), the agent load-on-select effect
+  // (~765), and the pre-existing refreshSignal effect (~612) in this file.
+  // ============================================
+
+  describe('ref-advances-only-on-apply (retry-after-guard-lifts)', () => {
+    it('given the guard blocks (streaming) then later passes with the SAME reference, should apply on the later render instead of being lost', () => {
+      const sim = createRefAdvancesOnlyOnApplySimulator<string[]>();
+      const snapshot = ['a'];
+      expect(sim.step(snapshot, false)).toBe(false); // streaming — blocked
+      expect(sim.step(snapshot, true)).toBe(true); // streaming ended, same reference — must still apply
+    });
+
+    it('given the guard passes immediately, should apply once and not re-apply on a redundant re-render with the same reference', () => {
+      const sim = createRefAdvancesOnlyOnApplySimulator<string[]>();
+      const snapshot = ['a'];
+      expect(sim.step(snapshot, true)).toBe(true);
+      expect(sim.step(snapshot, true)).toBe(false); // already applied — no-op
+    });
+
+    it('given a NEW reference arrives while still blocked, should keep deferring until the guard passes, then apply the latest', () => {
+      const sim = createRefAdvancesOnlyOnApplySimulator<string[]>();
+      const first = ['a'];
+      const second = ['b'];
+      expect(sim.step(first, false)).toBe(false); // streaming — blocked
+      expect(sim.step(second, false)).toBe(false); // still streaming — newer snapshot also deferred
+      expect(sim.step(second, true)).toBe(true); // guard lifts — applies the latest snapshot
+    });
+
+    it('given the buggy pre-fix ordering (ref advances unconditionally), demonstrates the lost-load failure this test suite guards against', () => {
+      // Inlined here (not exported) — this is the shape review flagged, kept only to
+      // document the failure mode the simulator above is designed to prevent.
+      let prevRef: string[] | null = null;
+      const buggyStep = (x: string[], guardPasses: boolean): boolean => {
+        if (x === prevRef) return false;
+        prevRef = x; // <-- advances BEFORE checking the guard: the bug
+        if (!guardPasses) return false;
+        return true;
+      };
+      const snapshot = ['a'];
+      expect(buggyStep(snapshot, false)).toBe(false); // streaming — blocked, but ref already marked "seen"
+      expect(buggyStep(snapshot, true)).toBe(false); // streaming ended — same reference reads as "already seen", load lost
     });
   });
 });
