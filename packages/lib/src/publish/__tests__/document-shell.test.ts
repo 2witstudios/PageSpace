@@ -59,22 +59,72 @@ describe('DOCUMENT_TYPOGRAPHY_CSS', () => {
     });
   });
 
-  it('should scope every rule under .ps-document', () => {
+  it('should scope every rule under .ps-document except page-canvas rules', () => {
+    // :root/body are the deliberate page-canvas exceptions: this stylesheet is
+    // only ever inlined into standalone published documents, and the canvas
+    // must follow the color scheme or dark mode yields light-on-white text.
+    const pageCanvasSelectors = new Set([':root', 'body', 'html']);
     const selectors = DOCUMENT_TYPOGRAPHY_CSS
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/@media[^{]+\{/g, '')
+      .replace(/\([^)]*\)/g, '()')
       .split('}')
       .map((chunk) => chunk.split('{')[0]?.trim())
       .filter((selector): selector is string => Boolean(selector));
     const unscoped = selectors
       .flatMap((selector) => selector.split(','))
       .map((part) => part.trim())
-      .filter((part) => part.length > 0 && !part.startsWith('.ps-document'));
+      .filter(
+        (part) =>
+          part.length > 0 && !part.startsWith('.ps-document') && !pageCanvasSelectors.has(part),
+      );
     assert({
       given: 'every selector in the typography CSS',
-      should: 'start with .ps-document so rules cannot leak into a host page',
+      should: 'start with .ps-document (page-canvas :root/body rules excepted)',
       actual: unscoped,
       expected: [],
+    });
+  });
+
+  it('should give the page canvas a background in both color schemes', () => {
+    const [lightCss, darkCss] = DOCUMENT_TYPOGRAPHY_CSS.split('@media (prefers-color-scheme: dark)');
+    assert({
+      given: 'the page-canvas rules (published pages load no app stylesheet)',
+      should: 'set an explicit light body background and a dark override, not foreground-only',
+      actual:
+        /body\s*\{[^}]*background:\s*#ffffff/s.test(lightCss ?? '') &&
+        /body\s*\{[^}]*background:\s*#0d1117/s.test(darkCss ?? ''),
+      expected: true,
+    });
+  });
+
+  it('should declare color-scheme so UA defaults follow the scheme', () => {
+    assert({
+      given: 'the typography CSS',
+      should: 'declare color-scheme: light dark on :root',
+      actual: /:root\s*\{[^}]*color-scheme:\s*light dark/s.test(DOCUMENT_TYPOGRAPHY_CSS),
+      expected: true,
+    });
+  });
+
+  it('should reset UA margins before applying the document rhythm', () => {
+    const resetIndex = DOCUMENT_TYPOGRAPHY_CSS.indexOf(':where(');
+    const rhythmIndex = DOCUMENT_TYPOGRAPHY_CSS.indexOf('> * + *');
+    const resetBlock = /\.ps-document\s+:where\(([^)]*)\)\s*\{[^}]*margin:\s*0/s.exec(
+      DOCUMENT_TYPOGRAPHY_CSS,
+    );
+    const resetTargets = resetBlock?.[1] ?? '';
+    assert({
+      given: 'standalone output with browser default margins (no Tailwind Preflight)',
+      should: 'zero UA margins on rich-text descendants via a low-specificity :where reset placed before the sibling rhythm',
+      actual:
+        resetIndex !== -1 &&
+        rhythmIndex !== -1 &&
+        resetIndex < rhythmIndex &&
+        ['p', 'blockquote', 'figure', 'ul', 'h2'].every((tag) =>
+          new RegExp(`(^|[,\\s])${tag}([,\\s]|$)`).test(resetTargets),
+        ),
+      expected: true,
     });
   });
 

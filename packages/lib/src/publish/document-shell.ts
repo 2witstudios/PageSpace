@@ -2,12 +2,23 @@ import { escapeHtml } from '../utils/html';
 
 /**
  * Typography for published documents. Published pages carry no app stylesheet
- * (no CSS variables), so colors are hardcoded light values with a
- * prefers-color-scheme dark override. Every rule is scoped under .ps-document
- * so nothing leaks into a host page. Inlined into <style> by the renderer,
- * same pattern as BASELINE_RESET in canvas/render-document.ts.
+ * (no CSS variables, no Tailwind Preflight), so colors are hardcoded light
+ * values with a prefers-color-scheme dark override, and UA element margins
+ * are zeroed via a low-specificity :where reset before the sibling rhythm.
+ * Every rule is scoped under .ps-document except the :root/body page-canvas
+ * rules — this stylesheet is only ever inlined into standalone published
+ * documents, and the canvas must follow the color scheme or dark mode would
+ * render light text on the browser's white default background. Inlined into
+ * <style> by the renderer, same pattern as BASELINE_RESET in
+ * canvas/render-document.ts.
  */
 export const DOCUMENT_TYPOGRAPHY_CSS = `
+:root {
+  color-scheme: light dark;
+}
+body {
+  background: #ffffff;
+}
 .ps-document {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
   max-width: 42rem;
@@ -18,6 +29,9 @@ export const DOCUMENT_TYPOGRAPHY_CSS = `
   overflow-wrap: break-word;
   word-wrap: break-word;
   min-width: 0;
+}
+.ps-document :where(h1, h2, h3, h4, h5, h6, p, ul, ol, li, dl, dd, blockquote, pre, figure, hr, table) {
+  margin: 0;
 }
 .ps-document > * + * {
   margin-top: 0.75em;
@@ -127,6 +141,9 @@ export const DOCUMENT_TYPOGRAPHY_CSS = `
   white-space: nowrap;
 }
 @media (prefers-color-scheme: dark) {
+  body {
+    background: #0d1117;
+  }
   .ps-document {
     color: #e6edf3;
   }
