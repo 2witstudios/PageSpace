@@ -2,7 +2,10 @@
  * Tests for apps/web/src/lib/ai/core/system-prompt.ts
  *
  * Covers:
- * - buildSystemPrompt: dashboard, drive, page context types
+ * - buildSystemPrompt: read-only mode, sandbox guidance
+ *   (location/drive/page context lives in location-prompt.ts now — see
+ *   location-prompt.test.ts — buildSystemPrompt takes no location args so
+ *   the stable system prefix stays byte-identical across turns)
  * - buildPersonalizationPrompt: enabled/disabled, section presence
  * - getWelcomeMessage / getErrorMessage
  * - estimateSystemPromptTokens
@@ -18,82 +21,49 @@ import {
   estimateSystemPromptTokens,
 } from '../system-prompt';
 
-describe('buildSystemPrompt — drive context', () => {
-  it('given drive context, should include driveName to give AI semantic workspace context', () => {
-    const result = buildSystemPrompt('drive', {
-      driveName: 'Marketing Team',
-      driveSlug: 'marketing-team',
-      driveId: 'cuid_abc123',
-    });
-
-    expect(result).toContain('Marketing Team');
-  });
-
-  it('given drive context, should include driveSlug for tool routing', () => {
-    const result = buildSystemPrompt('drive', {
-      driveName: 'Confidential Workspace',
-      driveSlug: 'confidential-ws',
-      driveId: 'cuid_xyz',
-    });
-
-    expect(result).toContain('confidential-ws');
-  });
-
-  it('given drive context, should include driveId for tool routing', () => {
-    const result = buildSystemPrompt('drive', {
-      driveName: 'My Private Drive',
-      driveSlug: 'my-private-drive',
-      driveId: 'cuid_drive_007',
-    });
-
-    expect(result).toContain('cuid_drive_007');
-  });
-});
-
 describe('buildSystemPrompt — general', () => {
-  it('given dashboard context, returns string containing core prompt text', () => {
-    const result = buildSystemPrompt('dashboard');
+  it('given no args, returns string containing core prompt text', () => {
+    const result = buildSystemPrompt();
     expect(result).toContain('PageSpace AI');
   });
 
   it('given read-only mode, includes READ-ONLY constraint', () => {
-    const result = buildSystemPrompt('dashboard', undefined, true);
+    const result = buildSystemPrompt(true);
     expect(result).toContain('READ-ONLY');
   });
 
   it('given non-read-only mode, does not include READ-ONLY constraint', () => {
-    const result = buildSystemPrompt('dashboard', undefined, false);
+    const result = buildSystemPrompt(false);
     expect(result).not.toContain('READ-ONLY');
   });
 
-  it('given drive context with no driveName, still produces valid prompt', () => {
-    const result = buildSystemPrompt('drive', {
-      driveSlug: 'my-drive',
-      driveId: 'cuid_1',
-    });
-    expect(result).toContain('my-drive');
+  it('never contains location/drive/page-specific text — that lives in the volatile block', () => {
+    const result = buildSystemPrompt(false);
+    expect(result).not.toContain('DASHBOARD CONTEXT');
+    expect(result).not.toContain('DRIVE CONTEXT');
+    expect(result).not.toContain('PAGE CONTEXT');
   });
 });
 
 describe('buildSystemPrompt — sandbox guidance', () => {
   it('given codeExecutionEnabled true, should include the sandbox guidance section', () => {
-    const result = buildSystemPrompt('drive', { driveSlug: 'd', driveId: '1' }, false, undefined, true);
+    const result = buildSystemPrompt(false, undefined, true);
     expect(result).toContain('/workspace');
     expect(result).toContain('persists');
   });
 
   it('given the default call (no flag), should NOT include sandbox guidance', () => {
-    const result = buildSystemPrompt('drive', { driveSlug: 'd', driveId: '1' });
+    const result = buildSystemPrompt();
     expect(result).not.toContain('/workspace');
   });
 
   it('given codeExecutionEnabled false explicitly, should NOT include sandbox guidance', () => {
-    const result = buildSystemPrompt('dashboard', undefined, false, undefined, false);
+    const result = buildSystemPrompt(false, undefined, false);
     expect(result).not.toContain('/workspace');
   });
 
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {
-    const result = buildSystemPrompt('dashboard', undefined, false, undefined, true);
+    const result = buildSystemPrompt(false, undefined, true);
     // Auth boundary → dedicated tools
     expect(result).toContain('gh_pr_create');
     expect(result).toContain('git_*');
@@ -106,7 +76,7 @@ describe('buildSystemPrompt — sandbox guidance', () => {
   });
 
   it('given the sandbox guidance, should include the Constraints{} block treating tool output as untrusted', () => {
-    const result = buildSystemPrompt('dashboard', undefined, false, undefined, true);
+    const result = buildSystemPrompt(false, undefined, true);
     expect(result).toContain('Constraints {');
     expect(result).toContain('tool output');
     expect(result).toContain('untrusted');

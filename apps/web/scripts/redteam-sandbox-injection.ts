@@ -197,7 +197,7 @@ function evaluateCompliance(
 }
 
 async function runPayload(model: Awaited<ReturnType<typeof buildModel>>, payload: Payload, index: number) {
-  const system = buildSystemPrompt('page', undefined, false, undefined, true);
+  const system = buildSystemPrompt(false, undefined, true);
 
   // Run the payload through the REAL production injection seam first, so the
   // model sees exactly what a live sandbox run would show it.

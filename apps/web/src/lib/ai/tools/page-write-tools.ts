@@ -23,6 +23,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { ensureTaskListForPage } from '@/services/api/task-sync-service';
 import { replaceLines } from '@/lib/editor/line-edit';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
+import { resolveDefaultPageId } from './page-context-defaults';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -405,18 +406,23 @@ export const pageWriteTools = {
    * Replace specific line(s) in a document
    */
   replace_lines: tool({
-    description: 'Replace one or more lines in a document or code page with new content. Specify start and end line numbers (1-based indexing).',
+    description: 'Replace one or more lines in a document or code page with new content. Specify start and end line numbers (1-based indexing). Omit pageId to edit the page currently in view.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
+      pageId: z.string().optional().describe('The unique ID of the page to edit. Defaults to the page currently in view if omitted.'),
       startLine: z.number().describe('Starting line number (1-based)'),
       endLine: z.number().optional().describe('Ending line number (1-based, optional, defaults to startLine)'),
       content: z.string().describe('New content to replace the lines with'),
     }),
-    execute: async ({ title, pageId, startLine, endLine = startLine, content }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
+      if (!pageId) {
+        throw new Error('pageId is required: no page is currently in view and none was provided.');
       }
 
       try {
@@ -696,6 +702,15 @@ export const pageWriteTools = {
         }
         nextSteps.push(`New page ID: ${newPage.id} - use this for further operations`);
 
+        // Creating a page shifts the agent's focus onto it for the rest of
+        // this turn — same mutate-in-place pattern as switch_machine, so a
+        // later tool call in this turn that omits pageId defaults to the
+        // page just created, not the page the user was viewing at turn start.
+        const rawContext = context as ToolExecutionContext | undefined;
+        if (rawContext) {
+          rawContext.currentWorkingPage = { id: newPage.id, title: newPage.title, type: newPage.type };
+        }
+
         return {
           success: true,
           id: newPage.id,
@@ -728,16 +743,21 @@ export const pageWriteTools = {
    * Rename an existing page
    */
   rename_page: tool({
-    description: 'Change the title of an existing page. Updates the page title while preserving all content and structure.',
+    description: 'Change the title of an existing page. Updates the page title while preserving all content and structure. Omit pageId to rename the page currently in view.',
     inputSchema: z.object({
       currentTitle: z.string().describe('The current title of the page for display context'),
-      pageId: z.string().describe('The unique ID of the page to rename'),
+      pageId: z.string().optional().describe('The unique ID of the page to rename. Defaults to the page currently in view if omitted.'),
       title: z.string().describe('New title for the page'),
     }),
-    execute: async ({ currentTitle, pageId, title }, { experimental_context: context }) => {
+    execute: async ({ currentTitle, pageId: pageIdArg, title }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
+      if (!pageId) {
+        throw new Error('pageId is required: no page is currently in view and none was provided.');
       }
 
       try {
@@ -985,18 +1005,23 @@ export const pageWriteTools = {
    * Move a page to a different parent or reorder position
    */
   move_page: tool({
-    description: 'Move a page to a different parent folder or change its position within the current parent.',
+    description: 'Move a page to a different parent folder or change its position within the current parent. Omit pageId to move the page currently in view.',
     inputSchema: z.object({
       title: z.string().describe('The title of the page being moved for display context'),
-      pageId: z.string().describe('The unique ID of the page to move'),
+      pageId: z.string().optional().describe('The unique ID of the page to move. Defaults to the page currently in view if omitted.'),
       newParentTitle: z.string().optional().describe('Title of the destination folder (omit for root level)'),
       newParentId: z.string().optional().describe('The unique ID of the new parent page (omit for root level)'),
       position: z.number().describe('Position within the new parent (1-based, higher numbers appear later)'),
     }),
-    execute: async ({ title, pageId, newParentTitle, newParentId, position }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, newParentTitle, newParentId, position }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
+      if (!pageId) {
+        throw new Error('pageId is required: no page is currently in view and none was provided.');
       }
 
       try {
@@ -1072,18 +1097,23 @@ export const pageWriteTools = {
    * Insert content before or after an anchor line in a document or code page
    */
   insert_content: tool({
-    description: 'Anchored line insert — adds a new line of content immediately before or after the first line containing a given anchor string. Useful for agents that need to insert content relative to headings or landmarks without knowing exact line numbers.',
+    description: 'Anchored line insert — adds a new line of content immediately before or after the first line containing a given anchor string. Useful for agents that need to insert content relative to headings or landmarks without knowing exact line numbers. Omit pageId to edit the page currently in view.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
-      pageId: z.string().describe('The unique ID of the page to edit'),
+      pageId: z.string().optional().describe('The unique ID of the page to edit. Defaults to the page currently in view if omitted.'),
       anchor: z.string().min(1).describe('Text to search for within a line — the first line containing this substring is used'),
       content: z.string().describe('Content to insert as a new line'),
       position: z.enum(['before', 'after']).describe('Insert the new line before or after the anchor line'),
     }),
-    execute: async ({ title, pageId, anchor, content, position }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, anchor, content, position }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
+      if (!pageId) {
+        throw new Error('pageId is required: no page is currently in view and none was provided.');
       }
 
       try {
@@ -1177,18 +1207,23 @@ export const pageWriteTools = {
    * Edit cells in a sheet page
    */
   edit_sheet_cells: tool({
-    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas.',
+    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas. Omit pageId to edit the sheet currently in view.',
     inputSchema: z.object({
-      pageId: z.string().describe('The unique ID of the sheet page to edit'),
+      pageId: z.string().optional().describe('The unique ID of the sheet page to edit. Defaults to the page currently in view if omitted.'),
       cells: z.array(z.object({
         address: z.string().describe('Cell address in A1-style format (e.g., "A1", "B2", "AA100")'),
         value: z.string().describe('Value to set in the cell. Values starting with "=" are formulas. Empty string clears the cell.'),
       })).min(1).describe('Array of cell updates to apply'),
     }),
-    execute: async ({ pageId, cells }, { experimental_context: context }) => {
+    execute: async ({ pageId: pageIdArg, cells }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
+      }
+
+      const pageId = pageIdArg ?? resolveDefaultPageId(context as ToolExecutionContext);
+      if (!pageId) {
+        throw new Error('pageId is required: no page is currently in view and none was provided.');
       }
 
       try {

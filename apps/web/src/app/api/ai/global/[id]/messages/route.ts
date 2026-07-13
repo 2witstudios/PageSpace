@@ -5,6 +5,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
+import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToGlobalMessage,
@@ -657,25 +658,21 @@ export async function POST(
       });
     }
 
-    // Build system prompt with context
-    const contextType = locationContext?.currentPage ? 'page' :
-                       locationContext?.currentDrive ? 'drive' :
-                       'dashboard';
-
+    // Build system prompt. Note: "current page/drive" is turn-volatile — it's
+    // built separately as `locationPrompt` below and injected via
+    // buildVolatileTurnContext, NOT baked in here, so this string stays
+    // byte-identical across turns regardless of where the user navigates.
     const baseSystemPrompt = buildSystemPrompt(
-      contextType,
-      locationContext ? {
-        driveName: locationContext.currentDrive?.name,
-        driveSlug: locationContext.currentDrive?.slug,
-        driveId: locationContext.currentDrive?.id,
-        pagePath: locationContext.currentPage?.path,
-        pageType: locationContext.currentPage?.type,
-        breadcrumbs: locationContext.breadcrumbs,
-      } : undefined,
       readOnlyMode,
       personalization ?? undefined,
       isCodeExecutionEnabled()
     );
+
+    const locationPrompt = buildLocationTurnPrompt(locationContext ? {
+      currentPage: locationContext.currentPage,
+      currentDrive: locationContext.currentDrive,
+      breadcrumbs: locationContext.breadcrumbs,
+    } : undefined);
 
     // Build timestamp system prompt for temporal awareness (using user's timezone)
     const timestampSystemPrompt = buildTimestampSystemPrompt(userTimezone);
@@ -705,9 +702,10 @@ export async function POST(
 
     // Add global assistant specific instructions (including tool discovery — only this route has tool_search).
     // Stable order: base → TOOL_DISCOVERY → global instructions → drivePrompt → agentAwareness → pageTree → nonCoreToolNames.
-    // Volatile sections (timestamp/mention/command) are NOT concatenated here; they are
+    // Volatile sections (timestamp/location/mention/command) are NOT concatenated here; they are
     // appended to the last user message at assembly time so the system prefix stays
-    // byte-identical across turns and provider prefix caches are not invalidated.
+    // byte-identical across turns and provider prefix caches are not invalidated —
+    // including turns where only the user's current page/drive changed.
     const systemPrompt = baseSystemPrompt + '\n\n' + TOOL_DISCOVERY_PROMPT + `
 
 You are the Global Assistant for PageSpace - accessible from both the dashboard and sidebar.
@@ -722,40 +720,24 @@ CRITICAL NESTING PRINCIPLE:
 • NO RESTRICTIONS on what can contain what - organize based on logical user needs
 • Documents can contain AI chats, channels, folders, and canvas pages
 • AI chats can contain documents, other AI chats, folders, and any page type
-• Channels can contain any page type for organized discussion threads  
+• Channels can contain any page type for organized discussion threads
 • Canvas pages can contain any page type for custom navigation structures
 • Think creatively about nesting - optimize for user workflow, not type conventions
 
-${locationContext ? `
-CONTEXT-AWARE BEHAVIOR:
-• You are currently in: ${locationContext.currentDrive?.name || 'dashboard'} ${locationContext.currentPage ? `> ${locationContext.currentPage.title}` : ''}
-• Default scope: Operations should focus on this location unless user indicates otherwise
-• When user says "here" or "this", they mean the current location
-• Only explore other drives/areas when explicitly mentioned or necessary for the task
-• Start from current context, not from list_drives
-` : `
-DASHBOARD CONTEXT:
-• You are in the dashboard view - focus on cross-workspace tasks and overview
-• Use list_drives when you need to work across multiple workspaces
-• Help with personal productivity and workspace organization
-• create_drive: Use when user explicitly requests new workspace OR when their project clearly doesn't fit existing drives
-• Always check existing drives first via list_drives before suggesting new drive creation
-• Ask for confirmation unless user is explicit about creating new workspace
-`}
-
 SMART EXPLORATION RULES:
-1. When in a drive context - ALWAYS explore it first:
-   - If locationContext includes a drive, ALWAYS use list_pages on that drive when:
+1. When in a drive context (see your current LOCATION context for the driveId) - ALWAYS explore it first:
+   - ALWAYS use list_pages on the current drive when:
      • User asks about the drive, its contents, or what's available
      • User wants to create, write, or modify ANYTHING
      • User mentions something that MAY exist in the drive
      • User asks general questions about content or organization
      • You need to understand the workspace structure
-   - Start with list_pages(driveId: '${locationContext?.currentDrive?.id || 'current-drive-id'}') BEFORE other actions
+   - Start with list_pages on the current drive BEFORE other actions
 2. Context-first approach:
-   - Default scope: Current drive/location is your primary workspace
+   - Default scope: current drive/location (see LOCATION context) is your primary workspace
    - Only explore OTHER drives when explicitly mentioned
    - When user says "here" or "this", they mean current context
+   - If LOCATION context shows no drive, you're in the dashboard — use list_drives when you need to work across multiple workspaces; always check existing drives before suggesting new drive creation
 3. Efficient exploration pattern:
    - FIRST: list_pages with driveId on current drive (if in a drive)
    - THEN: read specific pages as needed
@@ -1153,11 +1135,13 @@ MENTION PROCESSING:
           startTimeMs: startTime,
           logger: loggers.api,
           buildStreamText: (messages) => {
-            // Volatile per-turn data (timestamp/mention/command) is appended
-            // to the last user message so the stable system prefix stays
-            // byte-identical across turns and provider prefix caches survive.
+            // Volatile per-turn data (timestamp/location/mention/command) is
+            // appended to the last user message so the stable system prefix
+            // stays byte-identical across turns and provider prefix caches
+            // survive — including turns where only the user's page changed.
             const turnContext = buildVolatileTurnContext({
               timestampPrompt: timestampSystemPrompt,
+              locationPrompt,
               mentionPrompt: mentionSystemPrompt,
               commandPrompt: commandSystemPrompt,
             });
@@ -1183,6 +1167,15 @@ MENTION PROCESSING:
               aiModel: currentModel,
               conversationId,
               locationContext,
+              // Turn-start snapshot of the agent's working page — tools that
+              // shift focus (e.g. create_page) mutate this in place so later
+              // tool calls in the same turn track the agent's own actions
+              // rather than staying pinned to the turn-start snapshot.
+              currentWorkingPage: locationContext?.currentPage ? {
+                id: locationContext.currentPage.id,
+                title: locationContext.currentPage.title,
+                type: locationContext.currentPage.type,
+              } : undefined,
               modelCapabilities: modelCapabilitiesForTools,
               isAdmin: auth.role === 'admin',
               subscriptionTier: userSubscriptionTier,

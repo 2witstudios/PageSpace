@@ -21,6 +21,7 @@ import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
 import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
 import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
 import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
+import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc } from '@pagespace/db/operators'
@@ -256,43 +257,26 @@ async function handleGlobalPrompt(
         includeExampleMessage: true,
       });
 
-      // Build system prompt for sections display
-      const systemPrompt = buildSystemPrompt(
-        contextType,
-        locationContext?.currentDrive ? {
-          driveName: locationContext.currentDrive.name,
-          driveSlug: locationContext.currentDrive.slug,
-          driveId: locationContext.currentDrive.id,
-          pagePath: locationContext.currentPage?.path,
-          pageType: locationContext.currentPage?.type,
-          breadcrumbs: locationContext.breadcrumbs?.map(b => b.title),
-        } : undefined,
-        isReadOnly
-      );
+      // Build system prompt for sections display. Location is turn-volatile —
+      // shown as its own "Location Context (volatile)" section below, not
+      // baked into this stable system prompt (mirrors production routes).
+      const systemPrompt = buildSystemPrompt(isReadOnly);
 
       // Build inline instructions based on context type
-      let inlineInstructions: string;
-      if (contextType === 'page' && locationContext?.currentPage) {
-        inlineInstructions = buildInlineInstructions({
-          pageTitle: locationContext.currentPage.title,
-          pageType: locationContext.currentPage.type,
-          isTaskLinked: locationContext.currentPage.isTaskLinked,
-          driveName: locationContext.currentDrive?.name,
-          pagePath: locationContext.currentPage.path,
-          driveSlug: locationContext.currentDrive?.slug,
-          driveId: locationContext.currentDrive?.id,
-        });
-      } else {
-        inlineInstructions = buildGlobalAssistantInstructions(
-          locationContext?.currentDrive
-            ? {
-                driveName: locationContext.currentDrive.name,
-                driveSlug: locationContext.currentDrive.slug,
-                driveId: locationContext.currentDrive.id,
-              }
-            : undefined
-        );
-      }
+      const inlineInstructions =
+        contextType === 'page' && locationContext?.currentPage
+          ? buildInlineInstructions()
+          : buildGlobalAssistantInstructions();
+
+      const locationPrompt = buildLocationTurnPrompt(
+        locationContext
+          ? {
+              currentPage: locationContext.currentPage,
+              currentDrive: locationContext.currentDrive,
+              breadcrumbs: locationContext.breadcrumbs?.map(b => b.title),
+            }
+          : undefined
+      );
 
       // Build detailed sections with source annotations for the breakdown view
       const sections: PromptSection[] = [
@@ -307,6 +291,12 @@ async function handleGlobalPrompt(
           content: inlineInstructions,
           source: 'apps/web/src/lib/ai/core/inline-instructions.ts',
           tokens: estimateSystemPromptTokens(inlineInstructions),
+        },
+        {
+          name: 'Location Context (volatile)',
+          content: locationPrompt,
+          source: 'apps/web/src/lib/ai/core/location-prompt.ts',
+          tokens: estimateSystemPromptTokens(locationPrompt),
         },
       ];
 

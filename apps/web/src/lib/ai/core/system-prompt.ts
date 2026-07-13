@@ -5,15 +5,6 @@
  * Replaces the complex 3-role system with simple, trust-the-model approach.
  */
 
-export interface ContextInfo {
-  driveName?: string;
-  driveSlug?: string;
-  driveId?: string;
-  pagePath?: string;
-  pageType?: string;
-  breadcrumbs?: string[];
-}
-
 export interface PersonalizationInfo {
   bio?: string;
   writingStyle?: string;
@@ -135,50 +126,19 @@ export function buildPersonalizationPrompt(personalization?: PersonalizationInfo
 }
 
 /**
- * Build context-specific prompt section
- */
-function buildContextPrompt(
-  contextType: 'dashboard' | 'drive' | 'page',
-  contextInfo?: ContextInfo
-): string {
-  if (!contextInfo) {
-    return `CONTEXT: Operating in ${contextType} mode.`;
-  }
-
-  switch (contextType) {
-    case 'dashboard':
-      return `DASHBOARD CONTEXT:
-• Operating across all workspaces
-• Focus on cross-workspace tasks and personal productivity`;
-
-    case 'drive':
-      return `DRIVE CONTEXT:
-• Current Workspace: "${contextInfo.driveName}" (Slug: ${contextInfo.driveSlug}, ID: ${contextInfo.driveId})
-• When users say "here" or "this workspace", they mean: ${contextInfo.driveSlug}`;
-
-    case 'page':
-      return `PAGE CONTEXT:
-• Location: ${contextInfo.pagePath}
-• Type: ${contextInfo.pageType}
-• Path: ${contextInfo.breadcrumbs?.join(' > ')}
-• When users say "here", they mean this page`;
-
-    default:
-      return `CONTEXT: ${contextType} mode`;
-  }
-}
-
-/**
- * Build a complete system prompt
+ * Build a complete system prompt.
+ *
+ * Deliberately takes no location/drive/page context — that's turn-volatile
+ * data and lives in the volatile turn-context block (see location-prompt.ts
+ * + prompt-assembly.ts), not here, so this string stays byte-identical
+ * across turns regardless of where the user navigates and provider prefix
+ * caches survive.
  */
 export function buildSystemPrompt(
-  contextType: 'dashboard' | 'drive' | 'page',
-  contextInfo?: ContextInfo,
   isReadOnly: boolean = false,
   personalization?: PersonalizationInfo,
   codeExecutionEnabled: boolean = false
 ): string {
-  const contextPrompt = buildContextPrompt(contextType, contextInfo);
   const personalizationPrompt = buildPersonalizationPrompt(personalization);
 
   const sections = [
@@ -190,7 +150,6 @@ export function buildSystemPrompt(
         )
       : CORE_PROMPT,
     personalizationPrompt,
-    contextPrompt,
     BEHAVIOR_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,
     codeExecutionEnabled ? SANDBOX_INSTRUCTIONS : null,

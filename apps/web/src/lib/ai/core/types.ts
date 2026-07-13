@@ -83,6 +83,16 @@ export interface ToolExecutionContext {
   // switched" — callers fall back to the configured machines[0].
   activeMachine?: MachineRef;
 
+  // The page the agent is currently focused on for THIS turn: seeded from the
+  // request's location/page context, then mutated in place by tools that
+  // represent the agent switching focus (e.g. create_page) — same
+  // mutate-in-place pattern as activeMachine above, so later page tool calls
+  // in the same turn default to wherever the agent's own actions left it,
+  // not just the page the user was on when the turn started. Used by
+  // resolveDefaultPageId (page-context-defaults.ts) to default an omitted
+  // `pageId` argument on read/write page tools.
+  currentWorkingPage?: { id: string; title: string; type: string };
+
   // Sprites Platform Alignment 5-2: a stable id for THIS agent turn (one
   // streamText run), lazily stamped once by `resolveSandboxActorContext`
   // (apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts) the first time a

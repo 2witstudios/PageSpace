@@ -24,6 +24,7 @@ import { pageSpaceTools } from './ai-tools';
 import { buildTimestampSystemPrompt } from './timestamp-utils';
 import { buildMentionSystemPrompt } from './mention-processor';
 import { buildVolatileTurnContext } from './prompt-assembly';
+import { buildLocationTurnPrompt } from './location-prompt';
 
 export interface LocationContext {
   currentPage?: {
@@ -114,47 +115,30 @@ export function buildCompleteRequest(
     includeExampleMessage = true,
   } = config;
 
-  // Build the base system prompt
+  // Build the base system prompt. Location is turn-volatile — it's built
+  // separately below as `locationPrompt` and injected via
+  // buildVolatileTurnContext, mirroring production routes exactly.
   const baseSystemPrompt = buildSystemPrompt(
-    contextType,
-    locationContext?.currentDrive
-      ? {
-          driveName: locationContext.currentDrive.name,
-          driveSlug: locationContext.currentDrive.slug,
-          driveId: locationContext.currentDrive.id,
-          pagePath: locationContext.currentPage?.path,
-          pageType: locationContext.currentPage?.type,
-          breadcrumbs: locationContext.breadcrumbs?.map((b) => b.title),
-        }
-      : undefined,
     isReadOnly,
     undefined,
     isCodeExecutionEnabled()
   );
 
+  const locationPrompt = buildLocationTurnPrompt(
+    locationContext
+      ? {
+          currentPage: locationContext.currentPage,
+          currentDrive: locationContext.currentDrive,
+          breadcrumbs: locationContext.breadcrumbs?.map((b) => b.title),
+        }
+      : undefined
+  );
+
   // Build inline instructions based on context type
-  let inlineInstructions: string;
-  if (contextType === 'page' && locationContext?.currentPage) {
-    inlineInstructions = buildInlineInstructions({
-      pageTitle: locationContext.currentPage.title,
-      pageType: locationContext.currentPage.type,
-      isTaskLinked: locationContext.currentPage.isTaskLinked,
-      driveName: locationContext.currentDrive?.name,
-      pagePath: locationContext.currentPage.path,
-      driveSlug: locationContext.currentDrive?.slug,
-      driveId: locationContext.currentDrive?.id,
-    });
-  } else {
-    inlineInstructions = buildGlobalAssistantInstructions(
-      locationContext?.currentDrive
-        ? {
-            driveName: locationContext.currentDrive.name,
-            driveSlug: locationContext.currentDrive.slug,
-            driveId: locationContext.currentDrive.id,
-          }
-        : undefined
-    );
-  }
+  const inlineInstructions =
+    contextType === 'page' && locationContext?.currentPage
+      ? buildInlineInstructions()
+      : buildGlobalAssistantInstructions();
 
   // Apply read-only filtering (same logic as real Global Assistant)
   const allFilteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
@@ -271,6 +255,7 @@ export function buildCompleteRequest(
   // "exactly as it would be sent" contract of this viewer.
   const volatileTurnContext = buildVolatileTurnContext({
     timestampPrompt: buildTimestampSystemPrompt(),
+    locationPrompt,
     mentionPrompt: buildMentionSystemPrompt([
       { id: 'example-page-id', label: 'Example Document', type: 'page' },
     ]),

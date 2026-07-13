@@ -32,7 +32,8 @@ import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
-import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
+import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
+import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { holdForStream } from '@/lib/ai/streams/holdForStream';
@@ -412,136 +413,30 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Location Context Extraction
   // ============================================
+  // This effect drives the UI display only (the composer's location chip).
+  // Message sends must NOT read `locationContext` state here — it can lag a
+  // fast navigate-then-send by one async round trip. Sends call
+  // `buildFreshLocationContext()` (below) instead, which resolves fresh at
+  // send time from the current pathname/drives, same pattern as
+  // AiChatView's `buildFreshPageContext()`.
   useEffect(() => {
-    // Capture the pathname this run is resolving for, so async branches can
-    // bail if the user navigated away before they completed.
-    const activePathname = pathname;
     let ignore = false;
 
-    const resolveDrive = (driveId: string | undefined) => {
-      if (!driveId) return null;
-      const driveData = drives.find(d => d.id === driveId);
-      return driveData
-        ? { id: driveData.id, slug: driveData.slug, name: driveData.name }
-        : null;
-    };
-
-    const fetchPageContext = async (
-      pageId: string,
-      currentDrive: { id: string; slug: string; name: string } | null
-    ) => {
-      try {
-        const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
-        if (!pageResponse.ok) return null;
-        const pageData = (await pageResponse.json()) as { id: string; title: string; type: string };
-
-        // Only prefix the drive slug when we actually have one — channel routes
-        // resolve no drive, so a bare `/${slug}` would bake "/undefined/..." into
-        // the path that gets sent to the AI.
-        const slugPrefix = currentDrive?.slug ? `/${currentDrive.slug}` : '';
-        let path = `${slugPrefix}/${pageData.title}`;
-        try {
-          const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
-          if (breadcrumbsResponse.ok) {
-            const breadcrumbsData = (await breadcrumbsResponse.json()) as Array<{ title: string }>;
-            const pathSegments = breadcrumbsData.map((crumb) => crumb.title);
-            path = `${slugPrefix}/${pathSegments.join('/')}`;
-          }
-        } catch {
-          // Keep the simple path fallback.
-        }
-
-        return {
-          id: pageData.id,
-          title: pageData.title,
-          type: pageData.type,
-          path,
-        };
-      } catch {
-        return null;
-      }
-    };
-
-    const extractLocationContext = async () => {
-      const parsed = parseTabPath(activePathname);
-
-      let label: string | null = null;
-      let currentPage: LocationContext['currentPage'] = null;
-      let currentDrive: LocationContext['currentDrive'] = null;
-
-      try {
-        switch (parsed.type) {
-          // Real page routes — fetch the page so the AI keeps page context.
-          case 'page':
-          case 'channel': {
-            currentDrive = parsed.type === 'page' ? resolveDrive(parsed.driveId) : null;
-            if (parsed.pageId) {
-              currentPage = await fetchPageContext(parsed.pageId, currentDrive);
-            }
-            label = currentPage?.title ?? null;
-            break;
-          }
-
-          // A whole drive — use the drive name from the store.
-          case 'drive': {
-            currentDrive = resolveDrive(parsed.driveId);
-            label = currentDrive?.name ?? null;
-            break;
-          }
-
-          // A specific DM — show the other person's name (DMs are not pages).
-          case 'dm': {
-            if (parsed.conversationId) {
-              try {
-                const res = await fetchWithAuth(`/api/messages/conversations/${parsed.conversationId}`);
-                if (res.ok) {
-                  const data = (await res.json()) as {
-                    conversation?: { otherUser?: { displayName?: string | null; name?: string | null } };
-                  };
-                  const otherUser = data?.conversation?.otherUser;
-                  label = otherUser?.displayName || otherUser?.name || null;
-                }
-              } catch {
-                // Fall through to the generic DM label below.
-              }
-            }
-            if (!label) label = 'Direct Message';
-            break;
-          }
-
-          // Everything else with a known static title (dms, channels, tasks,
-          // calendar, files/drives, activity, drive-scoped variants, …).
-          // 'unknown' routes have no meaningful label (getStaticTabMeta would
-          // echo the raw path), so fall back to the generic prompt.
-          default: {
-            label = parsed.type === 'unknown' ? null : getStaticTabMeta(parsed)?.title ?? null;
-            break;
-          }
-        }
-      } catch {
-        label = null;
-      }
-
+    resolveLocationContext(pathname, drives).then(({ label, locationContext }) => {
       if (ignore) return;
-
-      const breadcrumbs: string[] = [];
-      if (currentDrive) breadcrumbs.push(currentDrive.name);
-      if (currentPage?.path) {
-        breadcrumbs.push(...currentPage.path.split('/').filter(Boolean).slice(1));
-      }
-
       setContextLabel(label);
-      setLocationContext(
-        currentPage || currentDrive ? { currentPage, currentDrive, breadcrumbs } : null
-      );
-    };
-
-    extractLocationContext();
+      setLocationContext(locationContext);
+    });
 
     return () => {
       ignore = true;
     };
   }, [pathname, drives]);
+
+  const buildFreshLocationContext = useCallback(
+    () => resolveLocationContext(pathname, drives).then((r) => r.locationContext),
+    [pathname, drives],
+  );
 
   // ============================================
   // Effects: Global Mode Sync to Context
@@ -787,34 +682,43 @@ const SidebarChatTab: React.FC = () => {
     // Derive isReadOnly from writeMode (inverted)
     const isReadOnly = !writeMode;
 
-    const body = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: agentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          provider: selectedAgent.aiProvider,
-          model: selectedAgent.aiModel,
-          systemPrompt: selectedAgent.systemPrompt,
-          locationContext: locationContext || undefined,
-          enabledTools: selectedAgent.enabledTools,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          locationContext,
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-        });
+    // Start context fetch eagerly — runs in parallel with input clear so the
+    // async wait doesn't delay sendMessage (and the optimistic bubble).
+    const contextPromise = buildFreshLocationContext();
+    const text = input;
+    const sendFiles = files.length > 0 ? files : undefined;
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body }));
     setInput('');
     clearFiles();
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(async () => {
+      const freshLocation = await contextPromise;
+      const body = selectedAgent
+        ? {
+            chatId: selectedAgent.id,
+            conversationId: agentConversationId,
+            isReadOnly,
+            webSearchEnabled,
+            imageGenEnabled,
+            provider: selectedAgent.aiProvider,
+            model: selectedAgent.aiModel,
+            systemPrompt: selectedAgent.systemPrompt,
+            pageContext: locationContextToPageContext(freshLocation),
+            enabledTools: selectedAgent.enabledTools,
+          }
+        : buildGlobalChatRequestBody({
+            conversationId: currentConversationId,
+            isReadOnly,
+            webSearchEnabled,
+            imageGenEnabled,
+            showPageTree,
+            locationContext: freshLocation,
+            selectedProvider: currentProvider,
+            selectedModel: currentModel,
+          });
+      return sendMessage({ text, files: sendFiles }, { body });
+    });
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -825,7 +729,7 @@ const SidebarChatTab: React.FC = () => {
     webSearchEnabled,
     imageGenEnabled,
     showPageTree,
-    locationContext,
+    buildFreshLocationContext,
     currentProvider,
     currentModel,
     sendMessage,
@@ -839,33 +743,36 @@ const SidebarChatTab: React.FC = () => {
     if (!text.trim() || !currentConversationId) return;
 
     const isReadOnly = !writeMode;
-
-    const body = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: agentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          provider: selectedAgent.aiProvider,
-          model: selectedAgent.aiModel,
-          systemPrompt: selectedAgent.systemPrompt,
-          locationContext: locationContext || undefined,
-          enabledTools: selectedAgent.enabledTools,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          locationContext,
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-        });
+    const contextPromise = buildFreshLocationContext();
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage({ text }, { body }));
+    wrapSend(async () => {
+      const freshLocation = await contextPromise;
+      const body = selectedAgent
+        ? {
+            chatId: selectedAgent.id,
+            conversationId: agentConversationId,
+            isReadOnly,
+            webSearchEnabled,
+            imageGenEnabled,
+            provider: selectedAgent.aiProvider,
+            model: selectedAgent.aiModel,
+            systemPrompt: selectedAgent.systemPrompt,
+            pageContext: locationContextToPageContext(freshLocation),
+            enabledTools: selectedAgent.enabledTools,
+          }
+        : buildGlobalChatRequestBody({
+            conversationId: currentConversationId,
+            isReadOnly,
+            webSearchEnabled,
+            imageGenEnabled,
+            showPageTree,
+            locationContext: freshLocation,
+            selectedProvider: currentProvider,
+            selectedModel: currentModel,
+          });
+      return sendMessage({ text }, { body });
+    });
   }, [
     currentConversationId,
     selectedAgent,
@@ -874,15 +781,16 @@ const SidebarChatTab: React.FC = () => {
     webSearchEnabled,
     imageGenEnabled,
     showPageTree,
-    locationContext,
+    buildFreshLocationContext,
     currentProvider,
     currentModel,
     sendMessage,
     wrapSend,
   ]);
 
-  const buildAskUserAnswerBody = useCallback(() => {
+  const buildAskUserAnswerBody = useCallback(async () => {
     const isReadOnly = !writeMode;
+    const freshLocation = await buildFreshLocationContext();
     return selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -893,7 +801,7 @@ const SidebarChatTab: React.FC = () => {
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
-          locationContext: locationContext || undefined,
+          pageContext: locationContextToPageContext(freshLocation),
           enabledTools: selectedAgent.enabledTools,
         }
       : buildGlobalChatRequestBody({
@@ -902,7 +810,7 @@ const SidebarChatTab: React.FC = () => {
           webSearchEnabled,
           imageGenEnabled,
           showPageTree,
-          locationContext,
+          locationContext: freshLocation,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
         });
@@ -913,7 +821,7 @@ const SidebarChatTab: React.FC = () => {
     webSearchEnabled,
     imageGenEnabled,
     showPageTree,
-    locationContext,
+    buildFreshLocationContext,
     currentProvider,
     currentModel,
     currentConversationId,

@@ -18,6 +18,14 @@ export interface VolatileTurnContextInput {
   timestampPrompt: string;
   mentionPrompt: string;
   commandPrompt: string;
+  /**
+   * The user's current page/drive, rebuilt fresh every turn (see
+   * location-prompt.ts). Lives here — not the stable system prompt — so a
+   * turn where only the user's location changed doesn't bust the provider
+   * prompt-cache prefix, and so a long tool-call loop still reflects
+   * wherever the user actually was when they sent this turn's message.
+   */
+  locationPrompt?: string;
 }
 
 // ─── Volatile context assembly ────────────────────────────────────────────────
@@ -33,6 +41,7 @@ export function buildVolatileTurnContext(input: VolatileTurnContextInput): strin
   const parts: string[] = [];
 
   if (input.timestampPrompt.trim()) parts.push(input.timestampPrompt.trim());
+  if (input.locationPrompt?.trim()) parts.push(input.locationPrompt.trim());
   if (input.mentionPrompt.trim()) parts.push(input.mentionPrompt.trim());
   if (input.commandPrompt.trim()) parts.push(input.commandPrompt.trim());
 
