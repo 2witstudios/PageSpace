@@ -290,24 +290,37 @@ export async function propagateClaudeCredential({
         for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
           const content = await rootHandle.readFile({ path });
           if (!content) continue;
-          // Delete any existing file FIRST, so the write below is always a
-          // fresh CREATION rather than an overwrite. `writeFiles`' `mode`
-          // only takes effect at creation (POSIX open()'s mode argument is
-          // ignored once a file already exists) — a refresh on reattach
-          // would otherwise overwrite an ALREADY-EXISTING file and silently
-          // keep whatever permissions it already had. A prior version of
-          // this function wrote first and ran a follow-up `chmod` — but that
-          // left a window where the fresh secret sat at the OLD (possibly
-          // permissive) mode until the chmod resolved, and a slow/stuck
-          // chmod on a flaky Sprite could leave that window open well past
-          // whatever bound the caller waited on (caught in review, twice:
-          // once for a chmod that fails, once for a chmod that never even
-          // returns in time). Deleting first removes the whole class of
-          // problem: there is no "old mode" to inherit, so the requested
-          // `mode: 0o600` is correct from the instant the file exists.
-          // `rm -f` is a no-op when nothing was there yet (fresh spawn).
-          await branchHandle.exec({ cmd: 'rm', args: ['-f', path] });
-          await branchHandle.writeFiles([{ path, content, mode: 0o600 }]);
+          // Write to a TEMP path, then atomically rename it onto the real
+          // destination — never delete-then-write or write-then-chmod
+          // directly against the live path. Both were tried and reverted:
+          // write-then-chmod left a window where the fresh secret sat at
+          // the OLD (possibly permissive) mode until the chmod resolved,
+          // and a slow/stuck chmod could leave that window open past
+          // whatever bound the caller waited on. Delete-then-write closed
+          // THAT window but opened a worse one: if the write that follows
+          // the delete then fails (or the caller's timeout elapses in
+          // between), the branch is left with NO credential at all, even
+          // though it had a perfectly valid one moments before — a
+          // regression on exactly the transient Sprite/FS hiccups this
+          // best-effort path exists to tolerate (caught in review, twice).
+          //
+          // `writeFiles`' `mode` reliably applies to a genuine CREATION —
+          // the temp path never existed before — and `mv` on the same
+          // filesystem is atomic: the destination is either the OLD valid
+          // credential or the NEW one, NEVER wrong-permission or briefly
+          // absent in between. If anything fails before the rename, the
+          // live file at `path` is completely untouched.
+          const tempPath = `${path}.tmp`;
+          await branchHandle.writeFiles([{ path: tempPath, content, mode: 0o600 }]);
+          const move = await branchHandle.exec({ cmd: 'mv', args: [tempPath, path] });
+          if (move.exitCode !== 0) {
+            // Best-effort cleanup of the orphaned temp file (itself already
+            // 0o600, so leaving it behind on a rare failure is a harmless
+            // leftover, not an exposure) — the live file at `path` was never
+            // touched by this attempt either way.
+            await branchHandle.exec({ cmd: 'rm', args: ['-f', tempPath] });
+            throw new Error(`mv ${tempPath} -> ${path} failed: exit ${move.exitCode}`);
+          }
         }
       } catch {
         // best-effort — see doc comment above.

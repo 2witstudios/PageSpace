@@ -4,6 +4,7 @@ import {
   attachBranch,
   killBranch,
   listBranches,
+  propagateClaudeCredential,
   BRANCH_REPO_PATH,
   type MachineBranchesDeps,
   type MachineBranchProjectLookup,
@@ -107,7 +108,22 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
       machineId: state.machineId,
       exec: async (args) => {
         state.execLog.push(args);
-        return execImpl ? execImpl(state, args) : { exitCode: 0, stdout: '', stderr: '' };
+        if (execImpl) return execImpl(state, args);
+        // Default `mv <src> <dst>` semantics (moves the in-memory entry),
+        // so tests can assert the write-to-temp-then-atomic-rename
+        // sequence `propagateClaudeCredential` uses lands the final
+        // content at the REAL path, not just the exec call shape.
+        if (args.cmd === 'mv' && args.args?.[0] !== undefined && args.args[1] !== undefined) {
+          const [src, dst] = args.args;
+          const content = state.files.get(src);
+          if (content !== undefined) {
+            state.files.set(dst, content);
+            state.fileModes.set(dst, state.fileModes.get(src));
+          }
+          state.files.delete(src);
+          state.fileModes.delete(src);
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
       },
       writeFiles: async (files) => {
         for (const f of files) {
@@ -853,13 +869,13 @@ describe('Claude Code credential propagation', () => {
     expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
   });
 
-  it('should delete any existing file before writing the fresh copy, for both the credentials and config files — a fresh CREATION is what makes 0o600 take effect reliably even on a refresh', async () => {
+  it('should write to a temp path then atomically rename it onto the real destination, for both the credentials and config files — a fresh CREATION is what makes 0o600 take effect reliably even on a refresh', async () => {
     // `writeFiles`' `mode` only applies at file CREATION (POSIX open()
     // semantics) — an overwrite of an already-existing file silently keeps
-    // whatever permissions it already had. Deleting first (rather than
-    // writing then chmod-ing after) means every write IS a creation, so
-    // there's no separate step (and no window where the fresh secret sits
-    // at the OLD mode) that could fail or stall independently.
+    // whatever permissions it already had. Writing to a temp path (which
+    // never existed before) makes every write a creation, and `mv` on the
+    // same filesystem is atomic — no separate chmod step, no window where
+    // the destination is at the wrong mode or briefly absent.
     const { host, byId } = makeFakeHost();
     const rootHandle = makeRootHandle({
       '/home/sprite/.claude/.credentials.json': 'secret-token',
@@ -871,18 +887,55 @@ describe('Claude Code credential propagation', () => {
     if (!result.ok) throw new Error('expected ok');
 
     const state = byId.get(result.sandboxId);
-    const rmCalls = state?.execLog.filter((c) => c.cmd === 'rm') ?? [];
-    expect(rmCalls).toEqual([
-      { cmd: 'rm', args: ['-f', '/home/sprite/.claude/.credentials.json'] },
-      { cmd: 'rm', args: ['-f', '/home/sprite/.claude.json'] },
+    const mvCalls = state?.execLog.filter((c) => c.cmd === 'mv') ?? [];
+    expect(mvCalls).toEqual([
+      { cmd: 'mv', args: ['/home/sprite/.claude/.credentials.json.tmp', '/home/sprite/.claude/.credentials.json'] },
+      { cmd: 'mv', args: ['/home/sprite/.claude.json.tmp', '/home/sprite/.claude.json'] },
     ]);
+    // The fake host's `mv` moves the in-memory entry — the final content and
+    // mode must land at the REAL path, with no lingering temp-path entry.
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('secret-token');
     expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
-    expect(state?.fileModes.get('/home/sprite/.claude.json')).toBe(0o600);
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json.tmp')).toBe(false);
   });
 
-  it('given the pre-write rm exec throws (e.g. a transport failure), should not fail the spawn (best-effort)', async () => {
+  it('given the mv exec fails, should leave the EXISTING valid credential at the real path untouched (no window of total absence) and clean up the orphaned temp file', async () => {
+    // The core property this design exists for: a failed rename must never
+    // regress a branch from "has a valid, working credential" to "has
+    // none at all" — that would be a regression on exactly the transient
+    // Sprite/FS hiccups this best-effort path is supposed to tolerate.
+    const { host, byId } = makeFakeHost((state, args) => {
+      if (args.cmd === 'mv') return { exitCode: 1, stdout: '', stderr: 'mv: input/output error' };
+      if (args.cmd === 'rm' && args.args?.[0] === '-f' && args.args[1] !== undefined) {
+        state.files.delete(args.args[1]);
+        state.fileModes.delete(args.args[1]);
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    // Provision a branch Sprite directly and seed it with an existing,
+    // valid credential — as if a prior successful copy already happened.
+    const handle = await host.provision({ name: 'branch-sprite', substrate: { kind: 'sprite' }, options: {} });
+    await handle.writeFiles([{ path: '/home/sprite/.claude/.credentials.json', content: 'still-valid-token', mode: 0o600 }]);
+
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'refreshed-token' });
+    await propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => rootHandle,
+    });
+
+    const state = byId.get(handle.machineId);
+    // The refresh's mv failed — the credential at the real path must be the
+    // one that was there before the failed refresh, not gone.
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('still-valid-token');
+    // The orphaned temp file must have been cleaned up (best-effort).
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json.tmp')).toBe(false);
+  });
+
+  it('given the mv exec throws (e.g. a transport failure), should not fail the spawn (best-effort)', async () => {
     const { host } = makeFakeHost((_state, args) => {
-      if (args.cmd === 'rm') throw new Error('exec transport failure');
+      if (args.cmd === 'mv') throw new Error('exec transport failure');
       return { exitCode: 0, stdout: '', stderr: '' };
     });
     const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
