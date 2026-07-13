@@ -11,7 +11,19 @@
  * Machine's `pages` row, broadcasts a page `updated`/`trashed` event (so other
  * clients and the drive tree don't show a stale name/still-present page — the
  * same events the canonical page routes emit), and soft-deletes the page via
- * `pageRepository.trash`.
+ * the canonical `pageService.trashPage` (descendant cascade-trash, revision
+ * bump + page version, page-trash workflow triggers — exactly what the page
+ * DELETE route does).
+ *
+ * `createDbMachineRefScrub` removes the deleted machineId from every agent
+ * config that references it: AI_CHAT agents' `machines` MachineRef arrays
+ * (written through the canonical `applyPageMutation` so each agent page gets
+ * its own revision bump/version/activity entry, as `pageAgentRepository.
+ * updateAgentConfig` does) and the per-user `global_assistant_config.machines`
+ * blob (same MachineRef shape — migration 0195 rewrote both together). Without
+ * this, a freshly-deleted Machine lingers in agent configs as a dangling ref.
+ * Scrubbed refs are NOT restored when the Machine page is restored — a ref is
+ * the referencing agent's setting, and its owner re-links explicitly.
  *
  * `createMachineSpriteTeardown` tears down ALL the compute a Machine spawned:
  * each branch's OWN Sprite (tracked only in `machine_branches` — a Sprite that
@@ -31,24 +43,21 @@
  * user's configured-repo metadata (killing the Sprites frees the compute; the rows
  * stay for a restore).
  *
- * NOT handled here (deliberate scope — see the PR's flagged architecture decision):
- * this route writes the page via raw `db.update` / `pageRepository.trash` rather
- * than the canonical `applyPageMutation` / `pageService.trashPage` paths, so it does
- * NOT (yet): trash DESCENDANT pages of a Machine (Machine pages are
- * leaf-like in practice), bump the page `revision` / write a page-version / fire
- * page-update|trash workflow triggers, or scrub the deleted `machineId` from
- * AI_CHAT agents' `machines` arrays. Wiring those through the canonical services is
- * a follow-up (the Settings-UI node that exercises these paths is separate, and the
- * surface is behind `CODE_EXECUTION_ENABLED`, OFF). Also not handled: returning 404
- * (vs 403) for an already-deleted machineId. DELETE-permission gating IS enforced
- * (`canDeleteMachine`), matching the canonical page-trash.
+ * NOT handled here (deliberate scope): PATCH (`updateSettings`) still writes the
+ * settings fields via raw `db.update` — a Machine rename/toggle does not bump the
+ * page revision or fire page-update workflow triggers (the DELETE path is now
+ * fully canonical; PATCH canonicalization is a separate follow-up). Also not
+ * handled: returning 404 (vs 403) for an already-deleted machineId.
+ * DELETE-permission gating IS enforced (`canDeleteMachine`), matching the
+ * canonical page-trash — `pageService.trashPage` re-checks it on the canonical
+ * path as well.
  */
 
-import { and, eq } from '@pagespace/db/operators';
+import { and, eq, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
+import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
-import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import {
   createDbMachineSessionStore,
   deriveMachineSessionKey,
@@ -57,12 +66,17 @@ import {
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { isMachinePage } from '@pagespace/lib/content/page-types.config';
+import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { pageService } from '@/services/api/page-service';
+import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { isMachineRef, type MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type {
   MachineSettings,
   MachineSettingsPatch,
   MachineSettingsStore,
   MachineSpriteTeardown,
+  MachineRefScrub,
 } from '@pagespace/lib/services/machines/machine-settings';
 import { getMachineHostForBranches } from './machine-branches-runtime';
 import { canViewMachine, canEditMachine } from './machine-access-runtime';
@@ -115,7 +129,7 @@ async function readSettings(machineId: string): Promise<MachineSettings | null> 
   return toMachineSettings(page);
 }
 
-export function createDbMachineSettingsStore(): MachineSettingsStore {
+export function createDbMachineSettingsStore(actorUserId: string): MachineSettingsStore {
   return {
     getSettings: readSettings,
     async updateSettings(machineId: string, patch: MachineSettingsPatch): Promise<MachineSettings | null> {
@@ -154,15 +168,97 @@ export function createDbMachineSettingsStore(): MachineSettingsStore {
       return toMachineSettings(row);
     },
     async trashPage(machineId: string): Promise<void> {
-      const page = await db.query.pages.findFirst({
-        where: eq(pages.id, machineId),
-        columns: { driveId: true, parentId: true },
+      // The canonical page-trash: descendant cascade, revision bump + page
+      // version, and page-trash workflow triggers, exactly like the page
+      // DELETE route. It re-checks delete permission for `actorUserId` — the
+      // route's canDeleteMachine gate is the same check, so this never flips
+      // an authorized delete to a failure.
+      const result = await pageService.trashPage(machineId, actorUserId, {
+        trashChildren: true,
+        metadata: { source: 'machine_settings' },
       });
-      await pageRepository.trash(machineId);
-      if (page) {
-        await broadcastPageEvent(
-          createPageEventPayload(page.driveId, machineId, 'trashed', { parentId: page.parentId }),
+      if (!result.success) {
+        // deleteMachine treats a trashPage throw as the non-recoverable step
+        // failing — nothing has been torn down yet, so surfacing is correct.
+        throw new Error(`Failed to trash Machine page: ${result.error}`);
+      }
+      await broadcastPageEvent(
+        createPageEventPayload(result.driveId, machineId, 'trashed', {
+          title: result.pageTitle ?? undefined,
+          parentId: result.parentId ?? undefined,
+        }),
+      );
+    },
+  };
+}
+
+/**
+ * Delete-time scrub of MachineRef entries pointing at a deleted Machine. Two
+ * homes hold them (the same pair migration 0195 rewrote): AI_CHAT agent pages'
+ * `machines` jsonb — written through `applyPageMutation` so each touched agent
+ * gets the canonical revision/version/activity treatment — and the per-user
+ * `global_assistant_config.machines` blob (not a page; a direct jsonb rewrite,
+ * filtered element-wise in SQL). Only elements matching the deleted machineId
+ * are removed; every other element (including any malformed one) is preserved
+ * byte-for-byte. Per-agent failures don't stop the sweep — the error is thrown
+ * at the end so `deleteMachine` reports `agentRefsScrubbed: false`.
+ */
+export function createDbMachineRefScrub(actorUserId: string): MachineRefScrub {
+  return {
+    async scrub(machineId: string): Promise<void> {
+      const ref = { kind: 'existing', machineId } satisfies MachineRef;
+      const refJson = JSON.stringify(ref);
+      const refArrayJson = JSON.stringify([ref]);
+
+      const agents = await db
+        .select({ id: pages.id, revision: pages.revision, machines: pages.machines })
+        .from(pages)
+        .where(and(eq(pages.type, 'AI_CHAT'), sql`${pages.machines} @> ${refArrayJson}::jsonb`));
+
+      const actorInfo = agents.length > 0 ? await getActorInfo(actorUserId) : null;
+
+      let failures = 0;
+      for (const agent of agents) {
+        const current = Array.isArray(agent.machines) ? (agent.machines as unknown[]) : [];
+        const filtered = current.filter(
+          (entry) => !(isMachineRef(entry) && entry.kind === 'existing' && entry.machineId === machineId),
         );
+        try {
+          await applyPageMutation({
+            pageId: agent.id,
+            operation: 'agent_config_update',
+            updates: { machines: filtered },
+            updatedFields: ['machines'],
+            expectedRevision: agent.revision,
+            context: {
+              userId: actorUserId,
+              actorEmail: actorInfo?.actorEmail,
+              actorDisplayName: actorInfo?.actorDisplayName ?? undefined,
+              changeGroupType: 'system',
+              resourceType: 'agent',
+              metadata: { cascade: 'machine_delete', machineId },
+            },
+          });
+        } catch {
+          // Keep sweeping — one blocked agent (e.g. a concurrent config save
+          // bumped its revision) must not leave the rest dangling.
+          failures += 1;
+        }
+      }
+
+      await db
+        .update(globalAssistantConfig)
+        .set({
+          machines: sql`(
+            SELECT coalesce(jsonb_agg(elem), '[]'::jsonb)
+            FROM jsonb_array_elements(${globalAssistantConfig.machines}) AS elem
+            WHERE NOT (elem @> ${refJson}::jsonb)
+          )`,
+        })
+        .where(sql`${globalAssistantConfig.machines} @> ${refArrayJson}::jsonb`);
+
+      if (failures > 0) {
+        throw new Error(`Failed to scrub deleted machine ${machineId} from ${failures} agent config(s)`);
       }
     },
   };
