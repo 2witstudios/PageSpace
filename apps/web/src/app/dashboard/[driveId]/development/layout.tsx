@@ -6,10 +6,10 @@ import { Cpu } from 'lucide-react';
 import MachineKeepAliveHost from '@/components/layout/middle-content/MachineKeepAliveHost';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveMachines } from '@/hooks/useDriveMachines';
-import { useMachineWorkspaceStore, selectActiveWorkspace } from '@/stores/machine-workspace/useMachineWorkspaceStore';
-import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
-import { resolvePendingSession } from '@/lib/development/pending-session';
+import { resolvePendingWorkspace } from '@/lib/development/pending-workspace';
 
 /**
  * The Development surface's detail region.
@@ -84,7 +84,7 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
         />
       )}
 
-      <MachineKeepAliveHost driveId={driveId} activePageId={displayedMachineId} machineIds={stickyMachineIds} />
+      <MachineKeepAliveHost driveId={driveId} activePageId={displayedMachineId} machineIds={stickyMachineIds} embedded />
     </div>
   );
 }
@@ -192,36 +192,37 @@ function DetailNotice({ title, description }: { title: string; description?: str
 }
 
 /**
- * Honours a session the user clicked in the sidebar, once the machine it belongs
- * to actually has a workspace to open it into.
+ * Honours a workspace the user clicked in the sidebar, once the machine it
+ * belongs to actually has that workspace to activate.
  *
- * The decision is the pure `resolvePendingSession`; this is the plumbing. It
- * re-evaluates whenever the workspace on screen changes, so an intent that has
- * not converged yet — the pane region has not mounted, or the user is en route —
- * is re-applied as soon as it can be, instead of being silently lost.
+ * The decision is the pure `resolvePendingWorkspace`; this is the plumbing. It
+ * re-evaluates whenever the machine's active workspace changes, so an intent
+ * that has not converged yet — the pane region has not mounted, or the user is
+ * en route — is re-applied as soon as it can be, instead of being silently
+ * lost.
  *
  * Leaving the surface drops any unconverged intent: the store is a module
  * singleton, so an intent left behind here would otherwise still be sitting
- * there on the user's next visit, ready to fire into whatever pane was active.
+ * there on the user's next visit, ready to fire into whatever machine was active.
  */
 function useDrainPendingSession(displayedMachineId: string | null) {
-  const pending = usePendingSessionStore((state) => state.pending);
-  const clearPending = usePendingSessionStore((state) => state.clearPending);
-  const openTerminal = useMachineWorkspaceStore((state) => state.openTerminal);
-  // The machine's ACTIVE workspace — the grid the middle view is actually
-  // showing. A machine now holds many workspaces (each sidebar item owns one),
-  // and the intent converges when the session it names is in the active pane of
-  // the workspace on screen.
-  const workspace = useMachineWorkspaceStore((state) =>
-    pending ? selectActiveWorkspace(pending.machineId)(state) : undefined,
+  const pending = usePendingWorkspaceStore((state) => state.pending);
+  const clearPending = usePendingWorkspaceStore((state) => state.clearPending);
+  const setActiveWorkspace = useMachineWorkspaceStore((state) => state.setActiveWorkspace);
+  // The machine's current `activeWorkspaceId` — undefined until its pane region
+  // has mounted and ensured a workspace set. A machine now holds many
+  // workspaces (each sidebar item owns one), and the intent converges when this
+  // matches the one the user clicked.
+  const activeWorkspaceId = useMachineWorkspaceStore((state) =>
+    pending ? selectMachine(pending.machineId)(state)?.activeWorkspaceId : undefined,
   );
 
   useEffect(() => {
-    const action = resolvePendingSession(pending, displayedMachineId, workspace);
-    if (action.type === 'open') openTerminal(action.machineId, action.scope);
+    const action = resolvePendingWorkspace(pending, displayedMachineId, activeWorkspaceId);
+    if (action.type === 'select') setActiveWorkspace(action.machineId, action.workspaceId);
     // A 'clear' with no pending intent is a no-op, so this cannot loop.
     else if (action.type === 'clear') clearPending();
-  }, [pending, displayedMachineId, workspace, openTerminal, clearPending]);
+  }, [pending, displayedMachineId, activeWorkspaceId, setActiveWorkspace, clearPending]);
 
   useEffect(() => () => clearPending(), [clearPending]);
 }

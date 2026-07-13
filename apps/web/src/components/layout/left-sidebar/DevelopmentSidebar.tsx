@@ -16,25 +16,28 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
 import { useDriveMachines, type DriveMachine } from '@/hooks/useDriveMachines';
-import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
+import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
-import type { OpenTerminalScope } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import MachineTree, { type MachineTreeNode } from '@/components/layout/middle-content/page-views/machine/workspace/MachineTree';
-import SessionLeaves from '@/components/layout/middle-content/page-views/machine/workspace/SessionLeaves';
+import WorkspaceLeaves, { WorkspaceNodeExtras } from '@/components/layout/middle-content/page-views/machine/workspace/WorkspaceLeaves';
 
 /**
  * The Development surface's left sidebar: every Machine in the drive, each
  * expanding into the SAME `MachineTree` the Machine page's Terminal tab uses,
- * with the SAME session leaves hanging off its nodes. The aggregation is the
- * only new part — the tree below each machine is the existing component.
+ * with the SAME workspace-item leaves hanging off its nodes — selecting one
+ * switches the machine's ENTIRE middle view to that workspace's grid. The
+ * aggregation is the only new part — the tree below each machine is the
+ * existing component.
  *
  * It sits above the routed detail pane, so clicking through machines swaps only
  * the pane and the tree keeps its expansion state. The terminals themselves
  * survive because the detail region renders machines through
  * `MachineKeepAliveHost` (see this surface's layout) rather than from the route
  * segment — which remounts, and would otherwise tear down the xterm buffer and
- * socket on every machine switch.
+ * socket on every machine switch. The Terminal tab it lands on renders
+ * `embedded` (see `TerminalTab`), so this sidebar is the ONLY workspace nav
+ * visible — no redundant second tree inside the detail pane.
  */
 export default function DevelopmentSidebar({ className }: SidebarProps) {
   const params = useParams();
@@ -190,8 +193,8 @@ function MachineTreeSection({
 }) {
   const router = useRouter();
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
-  const requestSession = usePendingSessionStore((state) => state.requestSession);
-  const clearPending = usePendingSessionStore((state) => state.clearPending);
+  const requestWorkspace = usePendingWorkspaceStore((state) => state.requestWorkspace);
+  const clearPending = usePendingWorkspaceStore((state) => state.clearPending);
   const focusTerminal = useMachineTabStore((state) => state.focusTerminal);
 
   const navigateToMachine = useCallback(() => {
@@ -200,36 +203,39 @@ function MachineTreeSection({
   }, [router, driveId, machineId, isSheetBreakpoint, setLeftSheetOpen]);
 
   const openMachine = useCallback(() => {
-    // Picking the machine itself (not one of its sessions) says the user wants
-    // this machine as it is — so an older, still-unconverged session intent must
-    // not follow them here and take over the pane.
+    // Picking the machine itself (not one of its workspaces) says the user
+    // wants this machine as it is — so an older, still-unconverged workspace
+    // intent must not follow them here and take over the pane.
     clearPending();
     navigateToMachine();
   }, [clearPending, navigateToMachine]);
 
-  const onOpenTerminal = useCallback(
-    (scope: OpenTerminalScope) => {
+  const onSelectWorkspace = useCallback(
+    (workspaceId: string) => {
       // Bring the machine's Terminal tab forward FIRST. Only that tab mounts the
-      // machine's workspace, so on a machine parked on Code/Diff/Settings the
-      // session would otherwise have nowhere to land — the click would do
-      // nothing at all.
+      // machine's workspace grid, so on a machine parked on Files/Diff/Settings
+      // the click would otherwise have nowhere to land.
       focusTerminal(machineId);
-      // Then record the intent and navigate; the surface's layout opens the
-      // session once that machine's pane region exists. Writing the pane straight
-      // into the workspace store from here would not survive — MachineWorkspace
-      // disposes its workspace on unmount and rebuilds it on mount, destroying
-      // anything authored ahead of it.
-      requestSession(machineId, scope);
+      // Then record the intent and navigate; the surface's layout activates the
+      // workspace once that machine's pane region exists.
+      requestWorkspace(machineId, workspaceId);
       navigateToMachine();
     },
-    [focusTerminal, requestSession, machineId, navigateToMachine],
+    [focusTerminal, requestWorkspace, machineId, navigateToMachine],
   );
 
   const renderNodeChildren = useCallback(
     (node: MachineTreeNode) => (
-      <SessionLeaves machineId={machineId} node={node} onOpenTerminal={onOpenTerminal} />
+      <WorkspaceLeaves machineId={machineId} node={node} onSelectWorkspace={onSelectWorkspace} />
     ),
-    [machineId, onOpenTerminal],
+    [machineId, onSelectWorkspace],
+  );
+
+  const renderNodeExtra = useCallback(
+    (node: MachineTreeNode) => (
+      <WorkspaceNodeExtras machineId={machineId} node={node} onWorkspaceCreated={onSelectWorkspace} />
+    ),
+    [machineId, onSelectWorkspace],
   );
 
   return (
@@ -245,6 +251,7 @@ function MachineTreeSection({
       isNodeSelectable={isMachineNode}
       selectedNode={selected ? MACHINE_NODE : null}
       renderNodeChildren={renderNodeChildren}
+      renderNodeExtra={renderNodeExtra}
     />
   );
 }

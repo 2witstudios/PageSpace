@@ -22,7 +22,16 @@ function tabDouble(name: string) {
   return Double;
 }
 
-vi.mock('./tabs/TerminalTab', () => ({ default: tabDouble('terminal') }));
+/** Every render's props for the Terminal tab double, so `embedded` threading can be asserted. */
+const terminalTabProps: { machineId: string; embedded?: boolean }[] = [];
+const TerminalDouble = tabDouble('terminal');
+
+vi.mock('./tabs/TerminalTab', () => ({
+  default: ({ machineId, embedded }: { machineId: string; embedded?: boolean }) => {
+    terminalTabProps.push({ machineId, embedded });
+    return <TerminalDouble machineId={machineId} />;
+  },
+}));
 vi.mock('./tabs/FilesTab', () => ({ default: tabDouble('files') }));
 vi.mock('./tabs/DiffTab', () => ({ default: tabDouble('diff') }));
 vi.mock('./tabs/SettingsTab', () => ({ default: tabDouble('settings') }));
@@ -56,6 +65,7 @@ describe('MachineView (Machine 4-tab shell)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     lifecycle.length = 0;
+    terminalTabProps.length = 0;
     // The active tab now lives in a module-singleton store, so a test that
     // switches tabs would otherwise leave the next one parked on that tab.
     useMachineTabStore.setState({ tabs: {} });
@@ -96,6 +106,30 @@ describe('MachineView (Machine 4-tab shell)', () => {
       should: 'mount the Files body and unmount the Terminal body (lazy, one at a time)',
       actual: lifecycle,
       expected: ['mount:terminal', 'unmount:terminal', 'mount:files'],
+    });
+  });
+
+  test('standalone (default) leaves the Terminal tab\'s own tree — embedded is unset', () => {
+    asAdmin();
+    render(<MachineView pageId="machine-1" />);
+
+    assert({
+      given: 'MachineView rendered with no embedded prop (the drive view\'s standalone Machine page)',
+      should: 'default embedded to false and pass it through to TerminalTab, which keeps its inner tree',
+      actual: terminalTabProps.at(-1)?.embedded,
+      expected: false,
+    });
+  });
+
+  test('embedded=true threads through to the Terminal tab, which drops its redundant inner tree', () => {
+    asAdmin();
+    render(<MachineView pageId="machine-1" embedded />);
+
+    assert({
+      given: 'MachineView rendered with embedded (the Development surface, via MachineKeepAliveHost)',
+      should: 'pass embedded=true through to TerminalTab',
+      actual: terminalTabProps.at(-1)?.embedded,
+      expected: true,
     });
   });
 

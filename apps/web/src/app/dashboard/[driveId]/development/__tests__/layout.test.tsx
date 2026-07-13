@@ -16,7 +16,7 @@ import { render, screen } from '@testing-library/react';
 const mockUseAuth = vi.fn();
 const mockUseDriveMachines = vi.fn();
 /** Every render of the stubbed keep-alive host, so we can assert on what it was handed. */
-const hostRenders: { activePageId: string | null; machineIds: readonly string[] }[] = [];
+const hostRenders: { activePageId: string | null; machineIds: readonly string[]; embedded?: boolean }[] = [];
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ driveId: 'drive-1' }),
@@ -27,15 +27,15 @@ vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 vi.mock('@/hooks/useDriveMachines', () => ({ useDriveMachines: () => mockUseDriveMachines() }));
 
 vi.mock('@/components/layout/middle-content/MachineKeepAliveHost', () => ({
-  default: (props: { activePageId: string | null; machineIds: readonly string[] }) => {
-    hostRenders.push({ activePageId: props.activePageId, machineIds: props.machineIds });
+  default: (props: { activePageId: string | null; machineIds: readonly string[]; embedded?: boolean }) => {
+    hostRenders.push({ activePageId: props.activePageId, machineIds: props.machineIds, embedded: props.embedded });
     return <div data-testid="keepalive-host" />;
   },
 }));
 
 import DevelopmentLayout from '../layout';
-import { usePendingSessionStore } from '@/stores/development/usePendingSessionStore';
-import { useMachineWorkspaceStore, selectActiveWorkspace, panesOf } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
+import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 const machine = (id: string) => ({ id, title: id, updatedAt: '2026-07-12T00:00:00.000Z' });
 
@@ -49,7 +49,7 @@ const driveMachines = (over: Partial<{ machines: ReturnType<typeof machine>[]; i
 beforeEach(() => {
   vi.clearAllMocks();
   hostRenders.length = 0;
-  usePendingSessionStore.setState({ pending: null });
+  usePendingWorkspaceStore.setState({ pending: null });
   useMachineWorkspaceStore.setState({ machines: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseDriveMachines.mockReturnValue(driveMachines());
@@ -59,7 +59,7 @@ describe('DevelopmentLayout', () => {
   test('hands the selected machine and its drive\'s machines to the keep-alive host', () => {
     render(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
-    expect(hostRenders.at(-1)).toEqual({ activePageId: 'machine-1', machineIds: ['machine-1'] });
+    expect(hostRenders.at(-1)).toEqual({ activePageId: 'machine-1', machineIds: ['machine-1'], embedded: true });
   });
 
   test('settles instead of re-rendering forever', () => {
@@ -144,14 +144,14 @@ describe('DevelopmentLayout', () => {
     expect(screen.getByText(/administrator privileges/i)).toBeDefined();
   });
 
-  test('does not open a session into a machine the host is keeping HIDDEN', () => {
+  test('does not activate a workspace on a machine the host is keeping HIDDEN', () => {
     // The drain must gate on what is DISPLAYED, not on what the URL selects. If a
     // machine is transiently missing from the list the host hides every pane, and
-    // opening a session then mounts an xterm inside a `display:none` container —
-    // fit() measures a zero-sized box and the PTY is created at a bogus geometry,
-    // wrapping its output for the life of the session.
+    // activating a workspace then mounts an xterm inside a `display:none`
+    // container — fit() measures a zero-sized box and the PTY is created at a
+    // bogus geometry, wrapping its output for the life of the session.
     mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [] }));
-    usePendingSessionStore.setState({ pending: { machineId: 'machine-1', scope: { name: 'agent-1' } } });
+    usePendingWorkspaceStore.setState({ pending: { machineId: 'machine-1', workspaceId: 'ws-1' } });
 
     render(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
@@ -160,37 +160,42 @@ describe('DevelopmentLayout', () => {
     expect(useMachineWorkspaceStore.getState().machines['machine-1']).toBeUndefined();
   });
 
-  test('holds a session intent while the list loads, then applies it once the machine is displayed', () => {
+  test('holds a workspace intent while the list loads, then applies it once the machine is displayed', () => {
     // The other half of gating the drain on what's DISPLAYED: holding must not
     // become dropping. An intent for a machine that isn't in the list *yet* waits,
     // and converges as soon as the machine appears — otherwise the fix for the
     // hidden-machine case would have silently broken the ordinary one.
     mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [], isLoading: true }));
-    usePendingSessionStore.setState({ pending: { machineId: 'machine-1', scope: { name: 'agent-1' } } });
+    // Two workspaces so the target ISN'T the one `createWorkspace` leaves active
+    // — otherwise the drain would find it already satisfied without ever
+    // exercising the switch this test is pinning down.
+    const targetWorkspaceId = useMachineWorkspaceStore.getState().createWorkspace('machine-1');
+    useMachineWorkspaceStore.getState().createWorkspace('machine-1');
+    usePendingWorkspaceStore.setState({ pending: { machineId: 'machine-1', workspaceId: targetWorkspaceId } });
     const { rerender } = render(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
     // Held, not dropped.
-    expect(usePendingSessionStore.getState().pending).not.toBeNull();
+    expect(usePendingWorkspaceStore.getState().pending).not.toBeNull();
 
-    // The list arrives, and the machine's pane region has ensured a workspace.
+    // The list arrives, and the machine's pane region has ensured a workspace set.
     mockUseDriveMachines.mockReturnValue(driveMachines({ machines: [machine('machine-1')] }));
-    useMachineWorkspaceStore.getState().ensureMachine('machine-1');
     rerender(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
-    // The session opens in ITS OWN workspace, which becomes the one on screen.
-    const workspace = selectActiveWorkspace('machine-1')(useMachineWorkspaceStore.getState())!;
-    const activePane = panesOf(workspace).find((pane) => pane.id === workspace.activePaneId);
-    expect(activePane?.scope).toMatchObject({ name: 'agent-1' });
+    // The targeted workspace becomes the one on screen, and the intent clears.
+    const machineState = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
+    expect(machineState.activeWorkspaceId).toBe(targetWorkspaceId);
+    expect(usePendingWorkspaceStore.getState().pending).toBeNull();
   });
 
-  test('drops an unconverged session intent when the surface is left', () => {
+  test('drops an unconverged workspace intent when the surface is left', () => {
     // The store is a module singleton: an intent left behind would still be
-    // sitting there on the next visit, ready to fire into whatever pane is active.
-    usePendingSessionStore.setState({ pending: { machineId: 'machine-9', scope: { name: 'agent-1' } } });
+    // sitting there on the next visit, ready to fire into whatever machine is
+    // active.
+    usePendingWorkspaceStore.setState({ pending: { machineId: 'machine-9', workspaceId: 'ws-1' } });
     const { unmount } = render(<DevelopmentLayout>{null}</DevelopmentLayout>);
 
     unmount();
 
-    expect(usePendingSessionStore.getState().pending).toBeNull();
+    expect(usePendingWorkspaceStore.getState().pending).toBeNull();
   });
 });

@@ -28,6 +28,15 @@ interface MachineKeepAliveHostProps {
   /** The currently-active page id (may be any page type, or null). */
   activePageId: string | null;
   /**
+   * Set by the Development surface, whose `machineIds`-driven caller already
+   * shows every mounted `MachineView`'s workspace nav one level up (in
+   * `DevelopmentSidebar`) — passed straight through to `MachineView` so its
+   * Terminal tab skips its own, otherwise-redundant, inner sidebar. Unset (the
+   * drive view's standalone Machine page) keeps it: there, the tree is the
+   * ONLY workspace nav.
+   */
+  embedded?: boolean;
+  /**
    * The drive's machine ids, when the caller already knows them.
    *
    * The drive view doesn't: any page can be active, so it has to ask the page
@@ -59,7 +68,7 @@ interface MachineKeepAliveHostProps {
  * are only ever added to the set while they are the active (visible) page — so
  * every xterm `open()`/`fit()` happens against a real, sized container.
  */
-export default function MachineKeepAliveHost({ driveId, activePageId, machineIds: knownMachineIds }: MachineKeepAliveHostProps) {
+export default function MachineKeepAliveHost({ driveId, activePageId, machineIds: knownMachineIds, embedded = false }: MachineKeepAliveHostProps) {
   // A caller that supplied the machine list needs nothing from the tree, so the
   // tree isn't fetched at all (a null driveId is how usePageTree stays idle).
   const { tree, isLoading } = usePageTree(knownMachineIds ? undefined : driveId);
@@ -130,7 +139,7 @@ export default function MachineKeepAliveHost({ driveId, activePageId, machineIds
             )}
             aria-hidden={!isVisible}
           >
-            <MachineView pageId={id} />
+            <MachineView pageId={id} embedded={embedded} />
           </div>
         );
       })}

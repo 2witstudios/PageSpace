@@ -1,7 +1,8 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
+import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -14,68 +15,26 @@ vi.mock('../workspace/MachineWorkspace', () => ({
 }));
 
 vi.mock('@/hooks/useMachineProjects', () => ({
-  useMachineProjects: (machineId: string | null) => ({
-    projects: machineId ? [{ name: 'my-repo', repoUrl: 'https://github.com/org/my-repo.git', path: '/repo', createdAt: '2026-01-01' }] : [],
-    isLoading: false,
-    addProject: vi.fn(),
-    removeProject: vi.fn(),
-  }),
+  useMachineProjects: () => ({ projects: [], isLoading: false, addProject: vi.fn(), removeProject: vi.fn() }),
 }));
 vi.mock('@/hooks/useMachineBranches', () => ({
-  useMachineBranches: (machineId: string | null) => ({
-    branches: machineId ? [{ branchName: 'main', createdAt: '2026-01-01' }] : [],
-    isLoading: false,
-    addBranch: vi.fn(),
-    removeBranch: vi.fn(),
-  }),
+  useMachineBranches: () => ({ branches: [], isLoading: false, addBranch: vi.fn(), removeBranch: vi.fn() }),
 }));
 vi.mock('@/hooks/useGithubRepos', () => ({
   useGithubRepos: () => ({ repos: [], connected: true, isLoading: false, error: undefined, mutate: vi.fn() }),
 }));
 vi.mock('@/hooks/useIntegrations', () => ({ useProviders: () => ({ providers: [] }) }));
 
-const addAgentTerminal = vi.fn();
-const removeAgentTerminal = vi.fn();
-// Scope-aware: each of the three universal scopes (machine / project / branch)
-// returns a distinctly-named session leaf, so a test can click the leaf at a
-// given scope and assert the exact OpenTerminalScope threaded to openTerminal.
-vi.mock('@/hooks/useAgentTerminals', () => ({
-  useAgentTerminals: (machineId: string | null, projectName?: string | null, branchName?: string | null) => {
-    let name: string | null = null;
-    if (machineId) {
-      if (branchName) name = 'branch-sesh';
-      else if (projectName) name = 'project-sesh';
-      else name = 'machine-sesh';
-    }
-    return {
-      agentTerminals: name ? [{ name, agentType: 'claude', createdAt: '2026-01-01' }] : [],
-      isLoading: false,
-      error: undefined,
-      mutate: vi.fn(),
-      addAgentTerminal,
-      removeAgentTerminal,
-    };
-  },
-}));
-
-const openTerminal = vi.fn();
-vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', () => ({
-  useMachineWorkspaceStore: (selector: (s: { openTerminal: typeof openTerminal }) => unknown) =>
-    selector({ openTerminal }),
-}));
-
 import TerminalTab from './TerminalTab';
 
-/** The row's chevron and its label live in separate buttons (see MachineTree's
- * TreeRow) — find the row by its label text, then click just its chevron. */
-const expandRowFor = async (labelText: string) => {
-  const label = await waitFor(() => screen.getByText(labelText));
-  const row = label.closest('.group') as HTMLElement;
-  await userEvent.click(within(row).getByTestId('expand-chevron'));
-};
+const store = () => useMachineWorkspaceStore.getState();
 
 describe('TerminalTab', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    useMachineWorkspaceStore.setState({ machines: {} });
+  });
 
   test('renders the machine tree sidebar beside the terminal workspace pane', async () => {
     render(<TerminalTab machineId="machine-1" />);
@@ -84,10 +43,9 @@ describe('TerminalTab', () => {
     const workspace = await screen.findByTestId('terminal-workspace');
 
     assert({
-      given: 'the Terminal tab for a machine',
+      given: 'the Terminal tab for a machine, standalone (not embedded)',
       should: 'render both the Machine tree and the workspace pane, scoped to the machineId',
       actual: {
-        // queryByText returns null (not a throw) when absent, so this is a real boolean.
         tree: screen.queryByText('Machine') !== null,
         workspace: workspace.textContent,
       },
@@ -95,49 +53,55 @@ describe('TerminalTab', () => {
     });
   });
 
-  test('clicking a machine-root session opens it with machine scope (no project/branch)', async () => {
+  test('clicking a workspace row switches the machine\'s active workspace', async () => {
     render(<TerminalTab machineId="machine-1" />);
 
-    // The machine root is expanded by default, so its session leaf is visible.
-    const session = await waitFor(() => screen.getByText('machine-sesh'));
-    await userEvent.click(session);
+    // The machine root is expanded by default, so its auto-created first
+    // workspace's row is visible without any expansion click. Creating a
+    // second workspace makes IT the active one (addWorkspace shows what it
+    // creates) — clicking back to the first is the real switch under test.
+    act(() => {
+      store().createWorkspace('machine-1');
+    });
+    const first = await waitFor(() => screen.getByText('Workspace 1'));
+    await userEvent.click(first);
 
+    const machine = selectMachine('machine-1')(store())!;
     assert({
-      given: 'a session leaf under the machine root clicked',
-      should: 'call openTerminal(machineId, machine-scoped scope) — not prop-thread through a parent',
-      actual: openTerminal.mock.calls[0],
-      expected: ['machine-1', { projectName: undefined, branchName: undefined, name: 'machine-sesh' }],
+      given: 'a workspace row clicked while a different workspace was active',
+      should: 'set the clicked workspace as the machine\'s active one',
+      actual: machine.workspaces[machine.activeWorkspaceId].name,
+      expected: 'Workspace 1',
     });
   });
 
-  test('clicking a project-scoped session threads projectName (branch still undefined)', async () => {
+  test('the machine row\'s new-workspace button creates and activates a fresh workspace', async () => {
     render(<TerminalTab machineId="machine-1" />);
 
-    await expandRowFor('my-repo');
-    const session = await waitFor(() => screen.getByText('project-sesh'));
-    await userEvent.click(session);
+    await screen.findByText('Machine');
+    await userEvent.click(screen.getByRole('button', { name: 'New workspace' }));
 
+    const machine = selectMachine('machine-1')(store())!;
     assert({
-      given: 'a session leaf under an expanded project node clicked',
-      should: 'open with projectName set and branchName undefined — scopeFor derives the project scope',
-      actual: openTerminal.mock.calls[0],
-      expected: ['machine-1', { projectName: 'my-repo', branchName: undefined, name: 'project-sesh' }],
+      given: 'the machine row\'s new-workspace trigger clicked',
+      should: 'create a second, now-active workspace at machine scope',
+      actual: {
+        count: Object.keys(machine.workspaces).length,
+        activeScope: machine.workspaces[machine.activeWorkspaceId].scope,
+      },
+      expected: { count: 2, activeScope: {} },
     });
   });
 
-  test('clicking a branch-scoped session threads both projectName and branchName', async () => {
-    render(<TerminalTab machineId="machine-1" />);
+  test('embedded renders only the workspace pane — no inner tree/sidebar', async () => {
+    render(<TerminalTab machineId="machine-1" embedded />);
 
-    await expandRowFor('my-repo');
-    await expandRowFor('main');
-    const session = await waitFor(() => screen.getByText('branch-sesh'));
-    await userEvent.click(session);
-
+    const workspace = await screen.findByTestId('terminal-workspace');
     assert({
-      given: 'a session leaf under an expanded branch node clicked',
-      should: 'open with both projectName and branchName set — scopeFor derives the full branch scope',
-      actual: openTerminal.mock.calls[0],
-      expected: ['machine-1', { projectName: 'my-repo', branchName: 'main', name: 'branch-sesh' }],
+      given: 'the Terminal tab embedded in the Development surface',
+      should: 'render just the active workspace\'s grid, omitting the redundant inner tree',
+      actual: { workspace: workspace.textContent, tree: screen.queryByText('Machine') },
+      expected: { workspace: 'workspace:machine-1', tree: null },
     });
   });
 });

@@ -288,4 +288,48 @@ describe('MachineTree', () => {
       expected: null,
     });
   });
+
+  test('renderNodeExtra injects caller content into a node\'s OWN row, not the child list', async () => {
+    renderTree({
+      renderNodeExtra: (node: MachineTreeNode) =>
+        node.level === 'machine' ? <span data-testid="extra-slot">3 running</span> : null,
+    });
+
+    const machineRow = (await waitFor(() => screen.getByText('Machine'))).closest('.group') as HTMLElement;
+    assert({
+      given: 'a renderNodeExtra slot targeting the machine node',
+      should: 'render the caller-provided content inside the machine row itself',
+      actual: within(machineRow).getByTestId('extra-slot').textContent,
+      expected: '3 running',
+    });
+  });
+
+  test('the de-bloated tree has no "Projects"/"Branches" section headers or empty-state copy', async () => {
+    renderTree();
+
+    await expandRowFor('my-repo');
+    assert({
+      given: 'a tree with a project expanded',
+      should: 'show no structural section headers or empty-state notices — an empty node is just empty',
+      actual: {
+        projectsHeader: screen.queryByText('Projects'),
+        branchesHeader: screen.queryByText('Branches'),
+        noProjectsNotice: screen.queryByText(/no projects yet/i),
+        noBranchesNotice: screen.queryByText(/no branches yet/i),
+      },
+      expected: { projectsHeader: null, branchesHeader: null, noProjectsNotice: null, noBranchesNotice: null },
+    });
+  });
+
+  test('the machine row\'s "add project" trigger is hover-revealed on the row, not a separate header line', async () => {
+    renderTree();
+
+    const machineRow = (await waitFor(() => screen.getByText('Machine'))).closest('.group') as HTMLElement;
+    assert({
+      given: 'the machine row',
+      should: 'offer an "Add project" trigger inside the row itself',
+      actual: within(machineRow).getByTitle('Add project') !== null,
+      expected: true,
+    });
+  });
 });
