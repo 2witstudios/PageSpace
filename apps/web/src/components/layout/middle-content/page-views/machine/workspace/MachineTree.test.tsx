@@ -321,15 +321,27 @@ describe('MachineTree', () => {
     });
   });
 
-  test('the machine row\'s "add project" trigger is hover-revealed on the row, not a separate header line', async () => {
+  test('the machine row\'s single "+" trigger is hover-revealed on the row, not a separate header line', async () => {
     renderTree();
 
     const machineRow = (await waitFor(() => screen.getByText('Machine'))).closest('.group') as HTMLElement;
     assert({
       given: 'the machine row',
-      should: 'offer an "Add project" trigger inside the row itself',
-      actual: within(machineRow).getByTitle('Add project') !== null,
+      should: 'offer exactly one "+" action-palette trigger inside the row itself',
+      actual: within(machineRow).getByTitle('Add…') !== null,
       expected: true,
+    });
+  });
+
+  test('a node offers ONE "+" trigger, not two — the old add-project/add-branch dialog trigger and the new-workspace trigger are unified', async () => {
+    renderTree();
+
+    const machineRow = (await waitFor(() => screen.getByText('Machine'))).closest('.group') as HTMLElement;
+    assert({
+      given: 'the machine row, which used to carry a structural "Add project" trigger AND a separate new-workspace trigger',
+      should: 'render exactly one hover-revealed add trigger',
+      actual: within(machineRow).getAllByTitle('Add…').length,
+      expected: 1,
     });
   });
 
@@ -360,7 +372,7 @@ describe('MachineTree', () => {
   // sidebar must not fire N fetches on mount). Before the `enabled` split,
   // addProject/addBranch shared that same gated key and threw "No active
   // machine"/"No active project" until the row was expanded once.
-  test('"Add project" submits successfully from a COLLAPSED machine row', async () => {
+  test('"Add project" (via the single "+" palette) submits successfully from a COLLAPSED machine row', async () => {
     const user = userEvent.setup();
     vi.mocked(post).mockResolvedValueOnce({
       project: { name: 'new-repo', repoUrl: 'https://github.com/org/new-repo.git', path: '/workspace/projects/new-repo' },
@@ -368,7 +380,8 @@ describe('MachineTree', () => {
     renderTree({ defaultExpanded: false });
 
     // Never expanded — the machine row's chevron is never clicked.
-    await user.click(screen.getByTitle('Add project'));
+    await user.click(screen.getByTitle('Add…'));
+    await user.click(await screen.findByRole('option', { name: 'Add project' }));
     await user.click(await screen.findByRole('button', { name: 'Enter a repo URL manually' }));
     await user.type(screen.getByPlaceholderText('Project name'), 'new-repo');
     await user.type(screen.getByPlaceholderText(/Repo URL/), 'https://github.com/org/new-repo.git');
@@ -377,7 +390,7 @@ describe('MachineTree', () => {
 
     await waitFor(() => {
       assert({
-        given: 'the collapsed machine row\'s hover-revealed "Add project" trigger, used without expanding first',
+        given: 'the collapsed machine row\'s single "+" trigger, used without expanding first',
         should: 'POST the new project — not throw "No active machine"',
         actual: vi.mocked(post).mock.calls[0]?.[0],
         expected: '/api/machines/projects',
@@ -385,7 +398,25 @@ describe('MachineTree', () => {
     });
   });
 
-  test('"Add branch" submits successfully from a COLLAPSED project row', async () => {
+  test('the machine node\'s palette does not offer "Add branch" — that only applies to a project', async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    const machineRow = (await waitFor(() => screen.getByText('Machine'))).closest('.group') as HTMLElement;
+    await user.click(within(machineRow).getByTitle('Add…'));
+
+    assert({
+      given: 'the machine node\'s "+" palette opened',
+      should: 'offer "Add project" but not "Add branch"',
+      actual: {
+        addProject: screen.queryByRole('option', { name: 'Add project' }) !== null,
+        addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
+      },
+      expected: { addProject: true, addBranch: false },
+    });
+  });
+
+  test('"Add branch" (via the single "+" palette) submits successfully from a COLLAPSED project row', async () => {
     const user = userEvent.setup();
     vi.mocked(post).mockResolvedValueOnce({
       branch: { branchName: 'feat-y', resumed: false },
@@ -398,18 +429,61 @@ describe('MachineTree', () => {
     // regression: clicking my-repo's chevron is what sets `expanded=true` on
     // THAT ProjectNode, which is the exact state this test must avoid.
     const projectRow = (await screen.findByText('my-repo')).closest('.group') as HTMLElement;
-    await user.click(within(projectRow).getByTitle('Add branch-terminal'));
+    await user.click(within(projectRow).getByTitle('Add…'));
+    await user.click(await screen.findByRole('option', { name: 'Add branch' }));
     await user.type(screen.getByPlaceholderText('Branch name'), 'feat-y');
     const dialog = screen.getByRole('dialog');
     await user.click(within(dialog).getByRole('button', { name: 'Add branch' }));
 
     await waitFor(() => {
       assert({
-        given: 'the collapsed project row\'s hover-revealed "Add branch" trigger, used without expanding first',
+        given: 'the collapsed project row\'s single "+" trigger, used without expanding first',
         should: 'POST the new branch — not throw "No active project"',
         actual: vi.mocked(post).mock.calls[0]?.[0],
         expected: '/api/machines/branches',
       });
+    });
+  });
+
+  test('the project node\'s palette does not offer "New terminal" when the tree is BARE (no onWorkspaceCreated)', async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    const projectRow = (await screen.findByText('my-repo')).closest('.group') as HTMLElement;
+    await user.click(within(projectRow).getByTitle('Add…'));
+
+    assert({
+      given: 'a bare tree (Diff/Files-tab shape: no onWorkspaceCreated passed) with a project node\'s palette opened',
+      should: 'offer "Add branch" but not "New terminal" — no workspace concept to spawn into',
+      actual: {
+        addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
+        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+      },
+      expected: { addBranch: true, newTerminal: false },
+    });
+  });
+
+  test('a branch row (no add-child action of its own) still offers a "+" trigger once onWorkspaceCreated is wired', async () => {
+    const onWorkspaceCreated = vi.fn();
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <MachineTree machineId={TERMINAL_ID} onWorkspaceCreated={onWorkspaceCreated} />
+      </SWRConfig>,
+    );
+
+    await expandRowFor('my-repo');
+    const branchRow = (await screen.findByText('main')).closest('.group') as HTMLElement;
+    await userEvent.click(within(branchRow).getByTitle('Add…'));
+
+    assert({
+      given: 'a branch row with onWorkspaceCreated wired in',
+      should: 'offer "New terminal" only — a branch has no structural add-child action',
+      actual: {
+        newTerminal: screen.queryByRole('option', { name: 'New terminal' }) !== null,
+        addProject: screen.queryByRole('option', { name: 'Add project' }) !== null,
+        addBranch: screen.queryByRole('option', { name: 'Add branch' }) !== null,
+      },
+      expected: { newTerminal: true, addProject: false, addBranch: false },
     });
   });
 });

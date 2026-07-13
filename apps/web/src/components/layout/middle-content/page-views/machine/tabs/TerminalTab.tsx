@@ -76,11 +76,16 @@ function WorkspaceTree({ machineId, onSelected }: { machineId: string; onSelecte
   );
 
   const renderNodeExtra = useCallback(
-    (node: MachineTreeNode) => (
-      <WorkspaceNodeExtras machineId={machineId} node={node} onWorkspaceCreated={onSelectWorkspace} />
-    ),
-    [machineId, onSelectWorkspace],
+    (node: MachineTreeNode) => <WorkspaceNodeExtras machineId={machineId} node={node} />,
+    [machineId],
   );
 
-  return <MachineTree machineId={machineId} renderNodeChildren={renderNodeChildren} renderNodeExtra={renderNodeExtra} />;
+  return (
+    <MachineTree
+      machineId={machineId}
+      renderNodeChildren={renderNodeChildren}
+      renderNodeExtra={renderNodeExtra}
+      onWorkspaceCreated={onSelectWorkspace}
+    />
+  );
 }

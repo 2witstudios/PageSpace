@@ -35,7 +35,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Plus, TerminalSquare } from 'lucide-react';
+import { TerminalSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
@@ -52,7 +52,7 @@ import { useAgentTerminals } from '@/hooks/useAgentTerminals';
 import { isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import type { MachineTreeNode } from './MachineTree';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
-import RemoveButton, { AddButton } from './RemoveButton';
+import RemoveButton from './RemoveButton';
 
 /** A tree node's scope, minus the session/workspace name it might carry. */
 export function nodeScopeOf(node: MachineTreeNode): MachineNodeScope {
@@ -231,38 +231,32 @@ export default function WorkspaceLeaves({
 }
 
 /**
- * A node's hover-revealed "N running" badge + new-workspace `+` button — the
- * de-bloated replacement for the "Terminals" sub-label and its modal (Sidebar
- * chrome section). Injected via `MachineTree`'s `renderNodeExtra` slot, kept
- * out of `MachineTree` itself: Diff/Files-tab callers reuse the same tree for
- * branch/file navigation and have no workspace to count or create.
+ * A node's hover-revealed "N running" badge — the de-bloated replacement for
+ * the "Terminals" sub-label and its modal (Sidebar chrome section). Injected
+ * via `MachineTree`'s `renderNodeExtra` slot, kept out of `MachineTree`
+ * itself: Diff/Files-tab callers reuse the same tree for branch/file
+ * navigation and have no workspace to count.
+ *
+ * The new-workspace `+` that used to live here has moved into the node row's
+ * single "+" action palette (`NodeActionPalette`, via `MachineTree`'s
+ * `onWorkspaceCreated` prop) — a row previously carried this trigger AND the
+ * structural Add project/Add branch trigger as two separate plus icons.
  */
 export function WorkspaceNodeExtras({
   machineId,
   node,
-  onWorkspaceCreated,
 }: {
   machineId: string;
   node: MachineTreeNode;
-  /** Called with the new workspace's id right after it's created (and made active). */
-  onWorkspaceCreated(workspaceId: string): void;
 }) {
   const scope = nodeScopeOf(node);
   const runningCount = useMachineWorkspaceStore(selectRunningPaneCount(machineId, scope));
-  const createWorkspace = useMachineWorkspaceStore((state) => state.createWorkspace);
+
+  if (runningCount === 0) return null;
 
   return (
-    <span className="flex shrink-0 items-center gap-0.5">
-      {runningCount > 0 && (
-        <span className="rounded bg-muted px-1 py-0.5 text-[10px] tabular-nums text-muted-foreground" title={`${runningCount} running`}>
-          {runningCount} running
-        </span>
-      )}
-      <AddButton
-        onClick={() => onWorkspaceCreated(createWorkspace(machineId, scope))}
-        label="New workspace"
-        icon={<Plus className="mx-auto size-3" />}
-      />
+    <span className="rounded bg-muted px-1 py-0.5 text-[10px] tabular-nums text-muted-foreground" title={`${runningCount} running`}>
+      {runningCount} running
     </span>
   );
 }
