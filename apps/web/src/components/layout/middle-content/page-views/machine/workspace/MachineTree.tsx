@@ -1,50 +1,13 @@
 "use client";
 
 import { useState, type ReactNode } from 'react';
-import { usePathname } from 'next/navigation';
-import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import {
-  ChevronRight,
-  ChevronDown,
-  Cpu,
-  FolderGit2,
-  Github,
-  GitBranch,
-  Plus,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
-import {
-  Command,
-  CommandEmpty,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command';
+import { ChevronRight, ChevronDown, Cpu, FolderGit2, GitBranch } from 'lucide-react';
 import { useMachineProjects } from '@/hooks/useMachineProjects';
 import { useMachineBranches } from '@/hooks/useMachineBranches';
-import { useGithubRepos, type GithubRepo } from '@/hooks/useGithubRepos';
-import { useProviders } from '@/hooks/useIntegrations';
-import { ConnectIntegrationDialog } from '@/components/integrations/ConnectIntegrationDialog';
-import { normalizeProjectName } from '@pagespace/lib/services/machines/project-name';
-import { normalizeBranchName } from '@pagespace/lib/services/machines/branch-name';
 import ConfirmRemoveDialog from './ConfirmRemoveDialog';
 import RemoveButton from './RemoveButton';
+import NodeActionPalette from './NodeActionPalette';
 import { SidebarLoading } from '../tabs/tab-states';
 
 /** A node in the Machine → Project → Branch tree, passed to `onSelectNode` and `renderNodeChildren`. */
@@ -94,6 +57,14 @@ interface MachineTreeProps {
    * have no workspace to count or create, so they simply omit this prop.
    */
   renderNodeExtra?: (node: MachineTreeNode) => ReactNode;
+  /**
+   * When provided, every node's single "+" action palette offers a "New
+   * terminal" action that spawns an agent into a freshly created workspace
+   * at that node's scope, reporting the new workspace's id here. Omit for
+   * trees with no workspace concept (the Diff and Files tabs render this
+   * same tree BARE) — their palette then offers only Add project/Add branch.
+   */
+  onWorkspaceCreated?: (workspaceId: string) => void;
 }
 
 /**
@@ -121,7 +92,7 @@ export function isSameMachineTreeNode(a: MachineTreeNode | null | undefined, b: 
 }
 
 /** Presentation-only Machine → Project → Branch tree, reusable across any tab that needs this navigation shape (Terminal, Diff, …). Has no opinion on what a row click does — callers own that via `onSelectNode`. */
-export default function MachineTree({ machineId, machineLabel, defaultExpanded, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren, renderNodeExtra }: MachineTreeProps) {
+export default function MachineTree({ machineId, machineLabel, defaultExpanded, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren, renderNodeExtra, onWorkspaceCreated }: MachineTreeProps) {
   return (
     <div className="p-1 text-sm">
       <MachineNode
@@ -133,6 +104,7 @@ export default function MachineTree({ machineId, machineLabel, defaultExpanded, 
         selectedNode={selectedNode}
         renderNodeChildren={renderNodeChildren}
         renderNodeExtra={renderNodeExtra}
+        onWorkspaceCreated={onWorkspaceCreated}
       />
     </div>
   );
@@ -227,6 +199,7 @@ interface TreeLevelProps {
   selectedNode?: MachineTreeNode | null;
   renderNodeChildren?: (node: MachineTreeNode) => ReactNode;
   renderNodeExtra?: (node: MachineTreeNode) => ReactNode;
+  onWorkspaceCreated?: (workspaceId: string) => void;
 }
 
 function MachineNode({
@@ -238,10 +211,11 @@ function MachineNode({
   selectedNode,
   renderNodeChildren,
   renderNodeExtra,
+  onWorkspaceCreated,
 }: TreeLevelProps & { machineId: string; machineLabel?: string; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const node: MachineTreeNode = { level: 'machine' };
-  // The row's "Add project" trigger is always mounted (hover-revealed on the
+  // The row's "+" action palette is always mounted (hover-revealed on the
   // row itself, not gated by expansion — see MachineTree's header-ectomy), so
   // `addProject` must work before the row is ever expanded. Only the list
   // FETCH is gated on `expanded`.
@@ -259,7 +233,7 @@ function MachineNode({
         extra={
           <>
             {renderNodeExtra?.(node)}
-            <AddProjectDialog onAdd={addProject} />
+            <NodeActionPalette machineId={machineId} node={node} onAddProject={addProject} onWorkspaceCreated={onWorkspaceCreated} />
           </>
         }
       />
@@ -277,6 +251,7 @@ function MachineNode({
               selectedNode={selectedNode}
               renderNodeChildren={renderNodeChildren}
               renderNodeExtra={renderNodeExtra}
+              onWorkspaceCreated={onWorkspaceCreated}
               onRemoveProject={() => removeProject(project.name)}
             />
           ))}
@@ -294,6 +269,7 @@ function ProjectNode({
   selectedNode,
   renderNodeChildren,
   renderNodeExtra,
+  onWorkspaceCreated,
   onRemoveProject,
 }: TreeLevelProps & {
   machineId: string;
@@ -303,7 +279,7 @@ function ProjectNode({
   const [expanded, setExpanded] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const node: MachineTreeNode = { level: 'project', projectName };
-  // Same reasoning as the machine row's "Add project" trigger above: "Add
+  // Same reasoning as the machine row's "+" action palette above: "Add
   // branch" is always mounted, so `addBranch` must work before the row is
   // ever expanded. Only the list FETCH is gated on `expanded`.
   const { branches, isLoading: branchesLoading, addBranch, removeBranch } = useMachineBranches(machineId, projectName, { enabled: expanded });
@@ -320,7 +296,7 @@ function ProjectNode({
         extra={
           <>
             {renderNodeExtra?.(node)}
-            <AddBranchDialog onAdd={addBranch} />
+            <NodeActionPalette machineId={machineId} node={node} onAddBranch={addBranch} onWorkspaceCreated={onWorkspaceCreated} />
           </>
         }
         onRemove={() => setConfirmingRemove(true)}
@@ -340,6 +316,7 @@ function ProjectNode({
           {branches.map((branch) => (
             <BranchNode
               key={branch.branchName}
+              machineId={machineId}
               projectName={projectName}
               branchName={branch.branchName}
               onSelectNode={onSelectNode}
@@ -347,6 +324,7 @@ function ProjectNode({
               selectedNode={selectedNode}
               renderNodeChildren={renderNodeChildren}
               renderNodeExtra={renderNodeExtra}
+              onWorkspaceCreated={onWorkspaceCreated}
               onRemoveBranch={() => removeBranch(branch.branchName)}
             />
           ))}
@@ -357,6 +335,7 @@ function ProjectNode({
 }
 
 function BranchNode({
+  machineId,
   projectName,
   branchName,
   onSelectNode,
@@ -364,8 +343,10 @@ function BranchNode({
   selectedNode,
   renderNodeChildren,
   renderNodeExtra,
+  onWorkspaceCreated,
   onRemoveBranch,
 }: TreeLevelProps & {
+  machineId: string;
   projectName: string;
   branchName: string;
   onRemoveBranch(): Promise<unknown>;
@@ -384,7 +365,12 @@ function BranchNode({
         selected={isSameMachineTreeNode(node, selectedNode)}
         icon={<GitBranch className="size-3 shrink-0" />}
         label={branchName}
-        extra={renderNodeExtra?.(node)}
+        extra={
+          <>
+            {renderNodeExtra?.(node)}
+            <NodeActionPalette machineId={machineId} node={node} onWorkspaceCreated={onWorkspaceCreated} />
+          </>
+        }
         onRemove={() => setConfirmingRemove(true)}
         removeTitle="Remove branch-terminal"
       />
@@ -397,230 +383,5 @@ function BranchNode({
       />
       {expandable && expanded && <div className="pl-4">{renderNodeChildren?.(node)}</div>}
     </div>
-  );
-}
-
-function GithubRepoPicker({
-  repos,
-  isLoading,
-  error,
-  selectedLabel,
-  onSelect,
-}: {
-  repos: GithubRepo[];
-  isLoading: boolean;
-  error?: Error;
-  selectedLabel?: string;
-  onSelect(repo: GithubRepo): void;
-}) {
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  return (
-    <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-      <PopoverTrigger asChild>
-        <Button type="button" variant="outline" role="combobox" aria-expanded={pickerOpen} className="w-full justify-between font-normal">
-          <span className="flex min-w-0 items-center gap-2">
-            <Github className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className={cn('truncate', !selectedLabel && 'text-muted-foreground')}>
-              {selectedLabel || 'Select a repo…'}
-            </span>
-          </span>
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Search your repos…" />
-          <CommandList onWheel={(e) => e.stopPropagation()}>
-            <CommandEmpty>
-              {error ? `Failed to load repos: ${error.message}` : isLoading ? 'Loading repos…' : 'No repos found.'}
-            </CommandEmpty>
-            {repos.map((repo) => (
-              <CommandItem key={repo.full_name} value={repo.full_name} onSelect={() => { onSelect(repo); setPickerOpen(false); }}>
-                <FolderGit2 className="mr-2 size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate text-sm">{repo.full_name}</span>
-                {repo.private && (
-                  <span className="ml-auto shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">private</span>
-                )}
-              </CommandItem>
-            ))}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** Short project name from a GitHub `full_name` (e.g. "org/my-repo" -> "my-repo"), and the ready-to-clone URL. */
-export function deriveProjectFieldsFromRepo(repo: { full_name: string; clone_url: string }): { name: string; repoUrl: string } {
-  const segments = repo.full_name.split('/');
-  return { name: segments[segments.length - 1] || repo.full_name, repoUrl: repo.clone_url };
-}
-
-/** Hover-revealed trigger chrome shared by the two "add a child node" dialogs
- * (project, branch) — the non-destructive sibling of `RemoveButton`'s reveal
- * pattern, built on `Button` (rather than the plain `AddButton`) because a
- * `DialogTrigger asChild` needs a ref-forwarding child. */
-const ADD_DIALOG_TRIGGER_CLASSNAME =
-  'size-4 opacity-0 hover:bg-accent focus-visible:opacity-100 group-hover:opacity-100';
-
-/** What the user's raw input will actually be saved as, shown live as they
- * type — the client-side half of "normalize-and-accept": `normalize` never
- * rejects, so this is purely informational and never blocks submission. */
-function NamePreview({ value, normalize }: { value: string; normalize(input: string): string }) {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const normalized = normalize(trimmed);
-  if (normalized === trimmed) return null;
-  return (
-    <p className="text-xs text-muted-foreground">
-      Will be saved as <span className="font-mono">{normalized}</span>
-    </p>
-  );
-}
-
-function AddProjectDialog({ onAdd }: { onAdd(name: string, repoUrl: string): Promise<unknown> }) {
-  const pathname = usePathname();
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [repoUrl, setRepoUrl] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [manualMode, setManualMode] = useState(false);
-  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
-
-  const { repos, connected, isLoading: reposLoading, error: reposError, mutate: refetchRepos } = useGithubRepos(open && !manualMode);
-  // Only needed to resolve the github provider for the "Connect GitHub" fallback CTA, so it's gated the same as useGithubRepos rather than fetched on every mount.
-  const { providers } = useProviders(open);
-  const githubProvider = providers.find((p) => p.slug === 'github') ?? null;
-
-  const mode: 'manual' | 'connect' | 'picker' = manualMode ? 'manual' : connected === false ? 'connect' : 'picker';
-
-  const resetAndClose = () => {
-    setOpen(false);
-    setName('');
-    setRepoUrl('');
-    setManualMode(false);
-  };
-
-  const handleSubmit = async () => {
-    setSubmitting(true);
-    try {
-      await onAdd(name.trim(), repoUrl.trim());
-      resetAndClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add project');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleSelectRepo = (repo: GithubRepo) => {
-    const fields = deriveProjectFieldsFromRepo(repo);
-    setName(fields.name);
-    setRepoUrl(fields.repoUrl);
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) resetAndClose(); }}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className={ADD_DIALOG_TRIGGER_CLASSNAME} title="Add project">
-          <Plus className="size-3" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add project</DialogTitle>
-          <DialogDescription>Clone a git repo onto this machine&apos;s persistent filesystem.</DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <div>
-            <Input placeholder="Project name" value={name} onChange={(e) => setName(e.target.value)} />
-            <NamePreview value={name} normalize={normalizeProjectName} />
-          </div>
-
-          {mode === 'manual' && (
-            <Input placeholder="Repo URL (https://github.com/org/repo.git)" value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} />
-          )}
-          {mode === 'connect' && (
-            <Button type="button" variant="outline" onClick={() => setConnectDialogOpen(true)} className="justify-start gap-2 font-normal text-muted-foreground">
-              <Github className="size-3.5 shrink-0" />
-              Connect GitHub to browse your repos
-            </Button>
-          )}
-          {mode === 'picker' && (
-            <GithubRepoPicker repos={repos} isLoading={reposLoading} error={reposError} selectedLabel={name} onSelect={handleSelectRepo} />
-          )}
-
-          <Button
-            type="button"
-            variant="link"
-            size="sm"
-            className="h-auto justify-start p-0 text-xs text-muted-foreground"
-            onClick={() => setManualMode((m) => !m)}
-          >
-            {manualMode ? 'Pick from your GitHub repos instead' : 'Enter a repo URL manually'}
-          </Button>
-        </div>
-        <DialogFooter>
-          <Button onClick={handleSubmit} disabled={submitting || !name.trim() || !repoUrl.trim()}>
-            {submitting ? 'Adding…' : 'Add project'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-      <ConnectIntegrationDialog
-        provider={githubProvider}
-        open={connectDialogOpen}
-        onOpenChange={setConnectDialogOpen}
-        onConnected={() => {
-          setConnectDialogOpen(false);
-          refetchRepos();
-        }}
-        returnUrl={pathname}
-      />
-    </Dialog>
-  );
-}
-
-function AddBranchDialog({ onAdd }: { onAdd(branchName: string): Promise<unknown> }) {
-  const [open, setOpen] = useState(false);
-  const [branchName, setBranchName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const handleSubmit = async () => {
-    setSubmitting(true);
-    try {
-      await onAdd(branchName.trim());
-      setOpen(false);
-      setBranchName('');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add branch');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className={ADD_DIALOG_TRIGGER_CLASSNAME} title="Add branch-terminal">
-          <Plus className="size-3" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Add branch-terminal</DialogTitle>
-          <DialogDescription>Checks out this branch in its own isolated Sprite.</DialogDescription>
-        </DialogHeader>
-        <div>
-          <Input placeholder="Branch name" value={branchName} onChange={(e) => setBranchName(e.target.value)} />
-          <NamePreview value={branchName} normalize={normalizeBranchName} />
-        </div>
-        <DialogFooter>
-          <Button onClick={handleSubmit} disabled={submitting || !branchName.trim()}>
-            {submitting ? 'Spawning…' : 'Add branch'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

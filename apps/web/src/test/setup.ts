@@ -44,6 +44,14 @@ if (typeof window !== 'undefined') {
   }
 }
 
+// jsdom does not implement scrollIntoView. cmdk (the Command/CommandDialog
+// primitives) calls it on the selected item whenever the list's selection
+// moves, including on mount — without this stub every cmdk-based component
+// throws in its mount effect the instant it renders.
+if (typeof window !== 'undefined' && !window.HTMLElement.prototype.scrollIntoView) {
+  window.HTMLElement.prototype.scrollIntoView = () => {};
+}
+
 // jsdom does not implement matchMedia. Provide a permissive default that
 // returns false (i.e. desktop, non-touch) so hooks like useMobile / useTouchDevice
 // can boot during component tests without each test re-stubbing it.

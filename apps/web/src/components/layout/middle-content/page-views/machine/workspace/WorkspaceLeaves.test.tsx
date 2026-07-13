@@ -261,7 +261,7 @@ describe('WorkspaceNodeExtras', () => {
   });
 
   test('shows no running-count badge when nothing is running', () => {
-    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
+    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 
     assert({
       given: 'a machine with no running agents',
@@ -276,7 +276,7 @@ describe('WorkspaceNodeExtras', () => {
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
     store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
 
-    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
+    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 
     assert({
       given: 'one running pane at machine scope',
@@ -286,19 +286,17 @@ describe('WorkspaceNodeExtras', () => {
     });
   });
 
-  test('the new-workspace button creates a workspace at the node\'s scope and reports its id', async () => {
-    const onWorkspaceCreated = vi.fn();
-    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={PROJECT_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
+  // Regression: WorkspaceNodeExtras used to also render a "New workspace" +
+  // trigger — that's now the node row's single "+" action palette
+  // (NodeActionPalette, via MachineTree's onWorkspaceCreated prop) instead.
+  test('renders no add/create trigger of its own — that lives in the node row\'s single "+" palette now', () => {
+    renderLeaves(<WorkspaceNodeExtras machineId="m1" node={MACHINE_NODE} />);
 
-    await userEvent.click(screen.getByRole('button', { name: 'New workspace' }));
-
-    const machine = selectMachine('m1')(store())!;
-    const created = machine.workspaces[machine.activeWorkspaceId];
     assert({
-      given: 'the new-workspace button clicked on a project node',
-      should: 'create a workspace scoped to that project and report its id',
-      actual: { scope: created.scope, reportedId: onWorkspaceCreated.mock.calls[0]?.[0] },
-      expected: { scope: { projectName: 'app' }, reportedId: created.id },
+      given: 'WorkspaceNodeExtras rendered standalone',
+      should: 'expose no button — it is a read-only badge',
+      actual: screen.queryByRole('button'),
+      expected: null,
     });
   });
 });
