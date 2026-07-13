@@ -1027,6 +1027,11 @@
       "import": "./dist/notifications/types.js",
       "require": "./dist/notifications/types.js"
     },
+    "./notifications/derive-badge-count": {
+      "types": "./dist/notifications/derive-badge-count.d.ts",
+      "import": "./dist/notifications/derive-badge-count.js",
+      "require": "./dist/notifications/derive-badge-count.js"
+    },
     "./notifications/guards": {
       "types": "./dist/notifications/guards.d.ts",
       "import": "./dist/notifications/guards.js",
@@ -2051,6 +2056,9 @@
       ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
+      ],
+      "notifications/derive-badge-count": [
+        "./dist/notifications/derive-badge-count.d.ts"
       ],
       "notifications/guards": [
         "./dist/notifications/guards.d.ts"
