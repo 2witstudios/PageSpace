@@ -210,9 +210,15 @@ async function cloneAndCheckoutBranch({
 /**
  * Copy Claude Code's OAuth credential (and config, if present) from the root
  * Machine's Sprite into a branch-terminal's freshly provisioned/attached one.
- * Each file is copied independently and skipped when absent on the root
- * Sprite — most commonly because the user hasn't run `claude` there yet — so
- * a branch-terminal always ends up usable even with no credential to copy.
+ * Each file is handled independently: absent on the root Sprite — most
+ * commonly because the user hasn't run `claude` there yet — copies nothing
+ * (a branch-terminal always ends up usable even with no credential to copy);
+ * absent on the root Sprite when it WAS present before (an explicit `claude
+ * logout`, or manual removal) actively REMOVES any stale copy already on the
+ * branch Sprite, rather than leaving it silently authenticated after the
+ * source was cleared. Since this refresh runs on every reattach specifically
+ * to keep rotated credentials in sync, a revocation on the root is exactly
+ * the kind of change that sync must also propagate (caught in review).
  *
  * Best-effort: any failure (root Sprite unreachable mid-copy, etc.) is
  * swallowed rather than failing the spawn/attach it's called from. A branch
@@ -240,7 +246,14 @@ export async function propagateClaudeCredential({
 
     for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
       const content = await rootHandle.readFile({ path });
-      if (!content) continue;
+      if (!content) {
+        // The root's own file is gone — most commonly an explicit `claude
+        // logout` (or manual removal) — which must propagate as a
+        // revocation to any branch Sprite that received a copy, not leave a
+        // stale one behind. `rm -f` is a no-op when nothing was ever copied.
+        await branchHandle.exec({ cmd: 'rm', args: ['-f', path] });
+        continue;
+      }
       // Both restricted 0o600 — the credentials file is the OAuth secret
       // itself, and the config file can carry account/org metadata, so
       // neither belongs world-readable in the branch Sprite's home dir.
