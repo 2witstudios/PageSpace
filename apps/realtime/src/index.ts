@@ -20,6 +20,7 @@ import {
   acquireMachineSession,
   createDbMachineSessionStore,
   deriveMachineSessionKey,
+  findLiveMachineSandboxId,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
@@ -45,6 +46,7 @@ import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
+import { propagateClaudeCredential } from '@pagespace/lib/services/machines/machine-branches';
 import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import {
@@ -268,6 +270,35 @@ async function resolveAgentTerminalSandbox({
       // scope). A branch-scope target never acquires, so this is its one and only
       // read.
       getSprite: (sandboxId) => sdk.getSprite(sandboxId),
+      // Refresh the branch Sprite's Claude Code credential from the root
+      // Machine's own Sprite (see `propagateClaudeCredential`'s doc comment on
+      // `machine-branches.ts`) — this IS the branch's actual attach path for
+      // opening/reattaching its agent terminal, unlike `spawnBranch`/
+      // `attachBranch`, which this bridge never calls. `resolveMachineSandbox`
+      // only invokes this for branch-scope targets. Shares this connect's
+      // handle cache (`sdk`), so re-reading the ALREADY-fetched branch Sprite
+      // costs nothing; only the root Sprite's read is a genuinely new call.
+      refreshBranchCredential: async ({ machineId: rootMachineId, sandboxId }) => {
+        try {
+          const rawClient = createSpritesSandboxClient({ sdk });
+          const host = createSpriteMachineHost({ sdk, client: rawClient });
+          const branchHandle = await host.attach({ machineId: sandboxId });
+          if (!branchHandle) return;
+          await propagateClaudeCredential({
+            machineId: rootMachineId,
+            branchHandle,
+            resolveRootMachineHandle: async (mid) => {
+              const rootSandboxId = await findLiveMachineSandboxId(mid);
+              if (!rootSandboxId) return null;
+              return host.attach({ machineId: rootSandboxId });
+            },
+          });
+        } catch {
+          // Best-effort — a credential refresh must never block or fail
+          // opening the PTY itself (see `ResolveMachineSandboxDeps.
+          // refreshBranchCredential`'s doc comment).
+        }
+      },
     },
   );
 }

@@ -439,6 +439,34 @@ export async function acquireMachineSession(
 }
 
 /**
+ * Read-only: the `sandboxId` of a page's LIVE machine_session, or `null` if
+ * it has none yet. Unlike `acquireMachineSession`, this never re-authorizes,
+ * provisions, or touches a Sprite — a bare-`pageId` read, the same
+ * precedented direct query `machine-storage-billing.ts` uses. For callers
+ * that only need to know WHERE (if anywhere) a page's Sprite already lives —
+ * e.g. propagating state from the root Machine's Sprite into some other
+ * Sprite (`machine-branches.ts`'s `propagateClaudeCredential`, and the
+ * realtime branch-scope PTY resolution that also refreshes it) — never to
+ * acquire or resume one themselves.
+ *
+ * Lazily resolves the db client, schema table, and `eq` operator so callers
+ * that don't exercise this path (most tests) never load the DB module graph.
+ */
+export async function findLiveMachineSandboxId(pageId: string): Promise<string | null> {
+  const [{ db }, { eq }, { machineSessions }] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/machine-sessions'),
+  ]);
+  const [row] = await db
+    .select({ sandboxId: machineSessions.sandboxId })
+    .from(machineSessions)
+    .where(eq(machineSessions.pageId, pageId))
+    .limit(1);
+  return row?.sandboxId ?? null;
+}
+
+/**
  * Production DB-backed implementation of MachineSessionStore.
  * Lazily resolves the db client, schema table, and `eq` operator so callers
  * that inject a fake (in tests) never load the DB module graph.

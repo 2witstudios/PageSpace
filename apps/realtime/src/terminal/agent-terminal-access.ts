@@ -90,6 +90,21 @@ export interface ResolveMachineSandboxDeps {
    * `sdk.getSprite`, not three.
    */
   getSprite: (sandboxId: string) => Promise<SpriteInstanceLike>;
+  /**
+   * BRANCH-scope only (never machine/project — those run ON the root
+   * Sprite, which already has its own credential): refresh the branch
+   * Sprite's Claude Code credential from the root Machine's Sprite before
+   * handing back a fresh PTY resolution. This is the actual attach path a
+   * user's branch agent terminal goes through — `spawnBranch`/`attachBranch`
+   * (`machine-branches.ts`) only cover branch creation and the navigator's
+   * explicit attach API, neither of which this realtime PTY bridge calls.
+   *
+   * Optional so tests that don't exercise branch scope (or don't care about
+   * credential propagation) can omit it. MUST be best-effort on the
+   * implementation side — swallow its own failures — since a credential
+   * refresh must never block or fail opening the PTY itself.
+   */
+  refreshBranchCredential?: (args: { machineId: string; sandboxId: string }) => Promise<void>;
 }
 
 export type ResolveMachineSandboxResult =
@@ -130,6 +145,17 @@ export async function resolveMachineSandbox(
     sprite = await deps.getSprite(resolved.sandboxId);
   } catch {
     return { ok: false, reason: 'provision_failed', sandboxId: resolved.sandboxId };
+  }
+
+  if (target.branchName !== undefined && deps.refreshBranchCredential) {
+    try {
+      await deps.refreshBranchCredential({ machineId: target.machineId, sandboxId: resolved.sandboxId });
+    } catch {
+      // Best-effort by contract (see the doc comment on
+      // `ResolveMachineSandboxDeps.refreshBranchCredential`) — defense in
+      // depth here too, so an implementation that forgets to swallow its own
+      // errors still never fails opening the PTY over a credential hiccup.
+    }
   }
 
   return {

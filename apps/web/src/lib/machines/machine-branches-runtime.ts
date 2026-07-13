@@ -18,10 +18,9 @@ import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { getSandboxSessionSecret, findLiveMachineSandboxId } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
@@ -124,22 +123,17 @@ export async function canViewMachine(actorUserId: string, machineId: string): Pr
 /**
  * Live handle to the ROOT Machine's own persistent Sprite (the one
  * `machine_sessions` tracks for its page), never a branch-terminal's own.
- * Reads the session row directly by `pageId` — the same precedented
- * bare-pageId query `machine-storage-billing.ts` uses — rather than going
- * through `acquireMachineSession`'s full re-authz + provision-fresh flow:
- * this only ever needs read access to an EXISTING session, gracefully
- * returning `null` (never provisioning) when the root Machine has none yet.
+ * Read-only — never goes through `acquireMachineSession`'s full re-authz +
+ * provision-fresh flow, since this only ever needs read access to an
+ * EXISTING session, gracefully returning `null` (never provisioning) when
+ * the root Machine has none yet.
  */
 export async function resolveRootMachineHandle(machineId: string): Promise<MachineHandle | null> {
-  const [row] = await db
-    .select({ sandboxId: machineSessions.sandboxId })
-    .from(machineSessions)
-    .where(eq(machineSessions.pageId, machineId))
-    .limit(1);
-  if (!row) return null;
+  const sandboxId = await findLiveMachineSandboxId(machineId);
+  if (!sandboxId) return null;
 
   const host = await getMachineHost();
-  return host.attach({ machineId: row.sandboxId });
+  return host.attach({ machineId: sandboxId });
 }
 
 export function buildMachineBranchesDeps(): MachineBranchesDeps {

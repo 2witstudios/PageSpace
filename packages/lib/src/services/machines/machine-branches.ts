@@ -217,8 +217,15 @@ async function cloneAndCheckoutBranch({
  * Best-effort: any failure (root Sprite unreachable mid-copy, etc.) is
  * swallowed rather than failing the spawn/attach it's called from. A branch
  * without the credential still works, it just needs its own `claude` login.
+ *
+ * Exported for reuse by the realtime agent-terminal PTY bridge
+ * (`apps/realtime/src/index.ts`'s `resolveAgentTerminalSandbox`), which is
+ * the OTHER place a branch's Sprite gets attached to for real use (opening or
+ * reattaching to its Claude agent terminal) — `spawnBranch`/`attachBranch`
+ * alone only cover branch creation and the navigator's explicit attach API,
+ * neither of which the realtime PTY path calls.
  */
-async function propagateClaudeCredential({
+export async function propagateClaudeCredential({
   machineId,
   branchHandle,
   resolveRootMachineHandle,
