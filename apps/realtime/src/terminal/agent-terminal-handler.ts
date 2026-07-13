@@ -548,6 +548,12 @@ export function buildAgentTerminalHandlers({
     session.outputFn = () => {};
     session.closedFn = () => {};
     sessionMap.detach(socketKey(connectionId));
+    // No viewer is left watching this PTY: stop the shell's watchdog reconnect
+    // loop (sprites-shell.ts's `planWatchdogResponse`) so an idle detached
+    // terminal stops waking the Sprite every ~45s for nobody. This only quiets
+    // OUR exec connection — an agent still running inside the shell keeps
+    // running, exactly as it already does across the 30-min idle reap below.
+    session.command.setViewerAttached(false);
     session.idleTimer = setTimeout(() => {
       session.releaseSlot();
       session.command.kill();
@@ -576,6 +582,10 @@ export function buildAgentTerminalHandlers({
     session.viewerUserId = viewerUserId;
     session.outputFn = (data) => socket.emit('agent-terminal:output', { data, connectionId });
     session.closedFn = (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId });
+    // A viewer is back: let the shell reattach lazily if its watchdog went quiet
+    // while detached (sprites-shell.ts's `setViewerAttached`) — a no-op when the
+    // connection never actually dropped, since output is already flowing.
+    session.command.setViewerAttached(true);
     sessionMap.reattach(sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
