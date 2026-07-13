@@ -311,7 +311,12 @@ describe('DevelopmentSidebar', () => {
 
     const workspaceId = Object.keys(selectMachine('machine-1')(useMachineWorkspaceStore.getState())!.workspaces)[0];
 
-    expect(useMachineTabStore.getState().tabs['machine-1']).toBe('terminal');
+    // The row's click is deferred (so a double-click-to-rename doesn't also
+    // navigate) and cancelled only if a second click follows — see
+    // WorkspaceLeaves.tsx's `pendingSelectTimer`.
+    await waitFor(() => {
+      expect(useMachineTabStore.getState().tabs['machine-1']).toBe('terminal');
+    });
     expect(usePendingWorkspaceStore.getState().pending).toEqual({ machineId: 'machine-1', workspaceId });
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });

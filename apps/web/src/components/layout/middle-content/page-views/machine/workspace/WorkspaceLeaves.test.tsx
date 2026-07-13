@@ -71,12 +71,34 @@ describe('WorkspaceLeaves', () => {
     await userEvent.click(row);
 
     const workspaceId = Object.keys(selectMachine('m1')(store())!.workspaces)[0];
-    assert({
-      given: 'a workspace row clicked',
-      should: 'call onSelectWorkspace with the workspace id',
-      actual: onSelectWorkspace.mock.calls[0]?.[0],
-      expected: workspaceId,
+    await waitFor(() => {
+      assert({
+        given: 'a workspace row clicked',
+        should: 'call onSelectWorkspace with the workspace id',
+        actual: onSelectWorkspace.mock.calls[0]?.[0],
+        expected: workspaceId,
+      });
     });
+  });
+
+  // Regression: a browser fires BOTH `click` events of a double-click before
+  // `dblclick` — a bare onClick would call onSelectWorkspace on the way to
+  // renaming, which in the real caller (DevelopmentSidebar) navigates. The
+  // first click's onSelectWorkspace must be deferred and cancelled by the
+  // second click that starts the rename.
+  test('double-clicking a workspace name to rename it does NOT also call onSelectWorkspace', async () => {
+    store().ensureMachine('m1');
+    const onSelectWorkspace = vi.fn();
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={onSelectWorkspace} />);
+
+    const row = await screen.findByText('Workspace 1');
+    await userEvent.dblClick(row);
+
+    expect(screen.getByLabelText('Rename workspace Workspace 1')).toBeDefined();
+    // Give the (now-cancelled) deferred single-click timer a chance to fire
+    // if the cancellation didn't actually work.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(onSelectWorkspace).not.toHaveBeenCalled();
   });
 
   test('the active workspace is marked aria-current; an inactive sibling is not', async () => {

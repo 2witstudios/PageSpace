@@ -100,6 +100,18 @@ export default function WorkspaceLeaves({
   // when a fresh rename starts, so a stale `true` can never suppress a later,
   // legitimate blur-to-commit.
   const skipNextBlur = useRef(false);
+  // A browser fires BOTH `click` events of a double-click before `dblclick` —
+  // so a bare `onClick={() => onSelectWorkspace(...)}` selects the workspace
+  // (running whatever side effects the caller's `onSelectWorkspace` has, e.g.
+  // DevelopmentSidebar's navigates to the machine) on the way to renaming it,
+  // not just on an intentional single click. Deferring the first click and
+  // cancelling it if a second one (i.e. a double-click) follows within the
+  // window is the standard single/double-click disambiguation for exactly
+  // this conflict.
+  const pendingSelectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (pendingSelectTimer.current) clearTimeout(pendingSelectTimer.current);
+  }, []);
 
   const scope = nodeScopeOf(node);
   // Every pane in a workspace runs in the WORKSPACE's own node scope (see
@@ -138,6 +150,24 @@ export default function WorkspaceLeaves({
     skipNextBlur.current = false;
     setRenamingId(workspace.id);
     setDraftName(workspace.name);
+  };
+
+  // Deferred so a double-click's first `click` doesn't select the workspace
+  // on its way to renaming it (see `pendingSelectTimer`'s doc above).
+  const handleRowClick = (workspaceId: string) => {
+    if (pendingSelectTimer.current) clearTimeout(pendingSelectTimer.current);
+    pendingSelectTimer.current = setTimeout(() => {
+      pendingSelectTimer.current = null;
+      onSelectWorkspace(workspaceId);
+    }, 250);
+  };
+
+  const handleRowDoubleClick = (workspace: { id: string; name: string }) => {
+    if (pendingSelectTimer.current) {
+      clearTimeout(pendingSelectTimer.current);
+      pendingSelectTimer.current = null;
+    }
+    startRename(workspace);
   };
 
   const commitRename = (workspaceId: string, currentName: string) => {
@@ -210,8 +240,8 @@ export default function WorkspaceLeaves({
           ) : (
             <button
               type="button"
-              onClick={() => onSelectWorkspace(workspace.id)}
-              onDoubleClick={() => startRename(workspace)}
+              onClick={() => handleRowClick(workspace.id)}
+              onDoubleClick={() => handleRowDoubleClick(workspace)}
               aria-current={workspace.id === machine.activeWorkspaceId ? 'true' : undefined}
               className="flex flex-1 items-center gap-1 text-left"
             >
