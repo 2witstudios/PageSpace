@@ -16,6 +16,10 @@ const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
 const mockUseParams = vi.fn<() => { driveId?: string }>(() => ({ driveId: 'drive-1' }));
 const mockUsePathname = vi.fn(() => '/dashboard/drive-1/development');
+// Defaults to desktop width (matches the real hook's jsdom default — see
+// test/setup.ts). Individual tests flip this to exercise the sheet-breakpoint
+// (narrow-viewport) branch without needing a real matchMedia listener.
+const mockUseBreakpoint = vi.fn(() => false);
 
 vi.mock('next/navigation', () => ({
   useParams: () => mockUseParams(),
@@ -24,6 +28,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
+vi.mock('@/hooks/useBreakpoint', () => ({ useBreakpoint: () => mockUseBreakpoint() }));
 
 // Spied, not just stubbed: a null/disabled key is HOW the sidebar refuses to
 // fetch for a non-admin, so the argument is the security property — asserting
@@ -89,6 +94,7 @@ import DevelopmentSidebar from '../DevelopmentSidebar';
 import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
 import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useLayoutStore } from '@/stores/useLayoutStore';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -96,9 +102,11 @@ beforeEach(() => {
   usePendingWorkspaceStore.setState({ pending: null });
   useMachineTabStore.setState({ tabs: {} });
   useMachineWorkspaceStore.setState({ machines: {} });
+  useLayoutStore.setState({ leftSheetOpen: false });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/development');
+  mockUseBreakpoint.mockReturnValue(false);
 });
 
 describe('DevelopmentSidebar', () => {
@@ -143,6 +151,75 @@ describe('DevelopmentSidebar', () => {
 
     expect(screen.getByText('Dev box')).toBeDefined();
     expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('an initial (cold) load shows a distinct loading state, not the empty notice', () => {
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: true,
+      error: undefined,
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/loading machines/i)).toBeDefined();
+    expect(screen.queryByText(/no machines in this drive/i)).toBeNull();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('a genuinely empty drive shows the empty notice, not "failed"', () => {
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: false,
+      error: undefined,
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/no machines in this drive yet/i)).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('a failed INITIAL load (nothing to fall back on) offers a retry that revalidates', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn();
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: false,
+      error: new Error('network down'),
+      mutate,
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/failed to load machines/i)).toBeDefined();
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  test('closes the mobile sheet after navigating to a machine, at the sheet breakpoint', async () => {
+    const user = userEvent.setup();
+    mockUseBreakpoint.mockReturnValue(true);
+    useLayoutStore.setState({ leftSheetOpen: true });
+
+    render(<DevelopmentSidebar />);
+    await user.click(await screen.findByText('Dev box'));
+
+    expect(useLayoutStore.getState().leftSheetOpen).toBe(false);
+  });
+
+  test('leaves the sheet alone at desktop width', async () => {
+    const user = userEvent.setup();
+    mockUseBreakpoint.mockReturnValue(false);
+    useLayoutStore.setState({ leftSheetOpen: true });
+
+    render(<DevelopmentSidebar />);
+    await user.click(await screen.findByText('Dev box'));
+
+    expect(useLayoutStore.getState().leftSheetOpen).toBe(true);
   });
 
   test('says nothing about admin rights until auth has resolved', () => {
@@ -259,6 +336,29 @@ describe('DevelopmentSidebar — GLOBAL mode (no driveId)', () => {
     render(<DevelopmentSidebar />);
 
     expect(screen.getByText(/no machines across your drives/i)).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('an initial (cold) load shows a distinct loading state, not the empty notice', () => {
+    mockUseAllMachines.mockReturnValueOnce({ drives: [], isLoading: true, error: undefined, mutate: vi.fn() });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/loading machines/i)).toBeDefined();
+    expect(screen.queryByText(/no machines across your drives/i)).toBeNull();
+  });
+
+  test('a failed INITIAL load offers a retry that revalidates the global list', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn();
+    mockUseAllMachines.mockReturnValueOnce({ drives: [], isLoading: false, error: new Error('boom'), mutate });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/failed to load machines/i)).toBeDefined();
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+
+    expect(mutate).toHaveBeenCalledTimes(1);
   });
 
   test('a failed POLL keeps the tree — it does not replace it with an error', () => {
