@@ -85,7 +85,7 @@ export default function WorkspaceLeaves({
   const machine = useMachineWorkspaceStore(selectMachine(machineId));
   // Identity/layout-affecting actions push to the server (#2048); local-only
   // UI state (which row is being renamed, which is pending removal) stays here.
-  const { removeWorkspace, closePane, openTerminal, renameWorkspace } = useSyncedWorkspaceActions(machineId);
+  const { removeWorkspace, closePanes, openTerminal, renameWorkspace } = useSyncedWorkspaceActions(machineId);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
@@ -246,7 +246,7 @@ export default function WorkspaceLeaves({
           // instead of dropping the (unchanged) workspace, or it would linger
           // bound to the agent names just killed above.
           if (workspacesOf(machine).length <= 1) {
-            pendingRunningPaneIds.forEach((paneId) => closePane(pendingRemove, paneId));
+            closePanes(pendingRemove, pendingRunningPaneIds);
           } else {
             removeWorkspace(pendingRemove);
           }

@@ -228,10 +228,24 @@ async function pushNewWorkspace(machineId: string, workspaceId: string): Promise
     .catch(() => {});
 }
 
+/** Which of this workspace's server-visible fields a given local action actually
+ * changed — {@link pushWorkspaceUpdate} sends only these, so a PATCH racing a
+ * DIFFERENT browser's concurrent edit to the OTHER field can't clobber it with
+ * a stale copy (see that function's doc for the concrete two-browser scenario). */
+type ChangedFields = { name?: true; columns?: true };
+
 /** For a workspace that MIGHT already exist server-side (any layout/rename change
  * after creation): PATCH first, falling back to POST-create on a 404 — a brand
  * new workspace materialized via `openTerminal`'s "existing session, new pane"
  * branch has never gone through `createWorkspace`'s own POST.
+ *
+ * `changed` restricts the PATCH body to the field(s) this specific action
+ * touched. The route (and `updateWorkspace`) already support a true partial
+ * update — name-only, columns-only, or both — precisely so this can avoid
+ * sending the field it did NOT touch: if it always sent both, a rename in one
+ * browser racing a pane split in another (each reading its OWN possibly-stale
+ * copy of the field it didn't mean to change) would have the later PATCH
+ * silently revert the earlier one's change.
  *
  * Calls `fetchWithAuth` directly (rather than the higher-level `patch()`
  * helper) specifically to read the real HTTP status code: `patch()`/`post()`
@@ -241,7 +255,7 @@ async function pushNewWorkspace(machineId: string, workspaceId: string): Promise
  * `json.error || json.message || text` construction — fragile to either
  * changing out from under this call site. A raw 404 status check has no such
  * coupling. */
-async function pushWorkspaceUpdate(machineId: string, workspaceId: string): Promise<void> {
+async function pushWorkspaceUpdate(machineId: string, workspaceId: string, changed: ChangedFields): Promise<void> {
   const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
   if (!workspace) return;
   const columns = toWireColumns(workspace.columns);
@@ -250,11 +264,18 @@ async function pushWorkspaceUpdate(machineId: string, workspaceId: string): Prom
     const response = await fetchWithAuth('/api/machines/workspaces', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ machineId, workspaceId, name: workspace.name, columns }),
+      body: JSON.stringify({
+        machineId,
+        workspaceId,
+        ...(changed.name ? { name: workspace.name } : {}),
+        ...(changed.columns ? { columns } : {}),
+      }),
     });
     if (response.ok) return;
     if (response.status !== 404) return;
-    // Not found server-side yet — create it.
+    // Not found server-side yet — create it. This IS a brand-new row, so the
+    // full current snapshot is sent regardless of `changed` — there is no
+    // narrower "what changed" for a row that doesn't exist yet.
   } catch {
     // Network failure or similar — swallow. The local grid already reflects
     // the user's action, and the next successful push (this browser's own,
@@ -317,23 +338,35 @@ export function useSyncedWorkspaceActions(machineId: string) {
     },
     renameWorkspace(workspaceId: string, name: string): void {
       renameWorkspaceLocal(machineId, workspaceId, name);
-      void pushWorkspaceUpdate(machineId, workspaceId);
+      void pushWorkspaceUpdate(machineId, workspaceId, { name: true });
     },
     splitRight(workspaceId: string, fromPaneId: string): void {
       splitRightLocal(machineId, workspaceId, fromPaneId);
-      void pushWorkspaceUpdate(machineId, workspaceId);
+      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
     splitDown(workspaceId: string, fromPaneId: string): void {
       splitDownLocal(machineId, workspaceId, fromPaneId);
-      void pushWorkspaceUpdate(machineId, workspaceId);
+      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
     closePane(workspaceId: string, paneId: string): void {
       closePaneLocal(machineId, workspaceId, paneId);
-      void pushWorkspaceUpdate(machineId, workspaceId);
+      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
+    },
+    /** Closes several panes of the SAME workspace as one push, not one PATCH per
+     * pane — e.g. emptying every running pane when removing the machine's only
+     * remaining workspace. `closePane` in a loop would fire N independent
+     * fire-and-forget PATCHes with no ordering guarantee: a slower EARLIER
+     * request resolving after a later one could leave the server's layout at
+     * an intermediate (still-bound-to-a-just-killed-agent) state instead of
+     * the final fully-emptied one. Applying every local close first, then
+     * pushing once, means the single PATCH always carries the final result. */
+    closePanes(workspaceId: string, paneIds: string[]): void {
+      paneIds.forEach((paneId) => closePaneLocal(machineId, workspaceId, paneId));
+      if (paneIds.length > 0) void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
     bindPaneTerminal(workspaceId: string, paneId: string, scope: OpenTerminalScope, pendingPrompt?: string): boolean {
       const bound = bindPaneTerminalLocal(machineId, workspaceId, paneId, scope, pendingPrompt);
-      if (bound) void pushWorkspaceUpdate(machineId, workspaceId);
+      if (bound) void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
       return bound;
     },
     /** `openTerminal` can materialize a new workspace, relocate an existing
@@ -345,7 +378,7 @@ export function useSyncedWorkspaceActions(machineId: string) {
       const machine = useMachineWorkspaceStore.getState().machines[machineId];
       if (!machine) return;
       const home = workspaceShowing(machine, scope) ?? machine.workspaces[sessionWorkspaceId(scope)];
-      if (home) void pushWorkspaceUpdate(machineId, home.id);
+      if (home) void pushWorkspaceUpdate(machineId, home.id, { columns: true });
     },
   }), [
     machineId,

@@ -347,4 +347,77 @@ describe('useSyncedWorkspaceActions', () => {
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
     expect(mockPost).not.toHaveBeenCalled();
   });
+
+  // Regression (Codex P2): the route (and `updateWorkspace`) support a true
+  // partial PATCH — name-only, columns-only, or both. Sending BOTH fields on
+  // every layout-only action would let a rename in one browser (which never
+  // touched columns) get raced by a split in another browser whose local
+  // copy of `name` is still stale — the split's PATCH would silently revert
+  // the rename. Sending only the field this action actually changed closes
+  // that hole.
+  it('splitRight PATCHes columns only — the rename it never touched is not sent', async () => {
+    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
+
+    const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
+    act(() => {
+      result.current.splitRight(workspace.id, workspace.activePaneId);
+    });
+
+    await waitFor(() => {
+      const [, options] = mockFetchWithAuth.mock.calls.find(([, opts]) => opts?.method === 'PATCH') ?? [];
+      const body = JSON.parse((options as { body: string }).body);
+      expect(body).toHaveProperty('columns');
+      expect(body).not.toHaveProperty('name');
+    });
+  });
+
+  // Regression (Codex P2): closing N panes one at a time (e.g. emptying every
+  // running pane when removing the machine's only workspace) used to fire N
+  // independent fire-and-forget PATCHes with no ordering guarantee — a slower
+  // EARLIER request resolving after a later one could leave the server at an
+  // intermediate state. `closePanes` applies every local close first, then
+  // pushes exactly once, so only the final result ever reaches the server.
+  it('closePanes closes every pane locally, then PATCHes exactly once with the final layout', async () => {
+    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+    useMachineWorkspaceStore.getState().splitRight(MACHINE_ID, workspace.id, workspace.activePaneId);
+    const withSplit = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+    const paneIds = withSplit.columns.flatMap((column) => column.panes.map((pane) => pane.id));
+    expect(paneIds).toHaveLength(2);
+
+    const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
+    act(() => {
+      result.current.closePanes(workspace.id, paneIds);
+    });
+
+    const final = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+    expect(final.columns.flatMap((column) => column.panes)).toHaveLength(1);
+
+    await waitFor(() => {
+      const patchCalls = mockFetchWithAuth.mock.calls.filter(([, opts]) => opts?.method === 'PATCH');
+      expect(patchCalls).toHaveLength(1);
+      const body = JSON.parse(patchCalls[0][1].body);
+      expect(body.columns.flatMap((column: { panes: unknown[] }) => column.panes)).toHaveLength(1);
+    });
+  });
+
+  it("renameWorkspace PATCHes name only — the layout it never touched is not sent", async () => {
+    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
+
+    const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
+    act(() => {
+      result.current.renameWorkspace(workspace.id, 'Renamed');
+    });
+
+    await waitFor(() => {
+      const [, options] = mockFetchWithAuth.mock.calls.find(([, opts]) => opts?.method === 'PATCH') ?? [];
+      const body = JSON.parse((options as { body: string }).body);
+      expect(body).toMatchObject({ name: 'Renamed' });
+      expect(body).not.toHaveProperty('columns');
+    });
+  });
 });
