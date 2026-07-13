@@ -687,6 +687,7 @@ describe('Claude Code credential propagation', () => {
         throw new Error('not used');
       },
       listStreams: async () => [],
+      killSession: async () => {},
     };
   }
 
