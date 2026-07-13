@@ -207,6 +207,34 @@ describe('DevelopmentSidebar', () => {
     expect(mutate).toHaveBeenCalledWith();
   });
 
+  test('a retry IN FLIGHT shows the loading state, not a rerun of the stale error', () => {
+    // SWR sets `isLoading` back to `true` on revalidation whenever cached data
+    // is still `undefined` — exactly what a failed fetch leaves behind — while
+    // `error` stays at its stale, pre-retry value until the new attempt
+    // settles. Both are true at once mid-retry, so the guard chain order
+    // matters: loading must win, or clicking Retry looks like it did nothing.
+    const staleError = new Error('network down');
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: false,
+      error: staleError,
+      mutate: vi.fn(),
+    });
+    const { rerender } = render(<DevelopmentSidebar />);
+    expect(screen.getByText(/failed to load machines/i)).toBeDefined();
+
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: true,
+      error: staleError,
+      mutate: vi.fn(),
+    });
+    rerender(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/loading machines/i)).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
   test('closes the mobile sheet after navigating to a machine, at the sheet breakpoint', async () => {
     const user = userEvent.setup();
     mockUseBreakpoint.mockReturnValue(true);

@@ -151,16 +151,22 @@ export default function DevelopmentSidebar({ className }: SidebarProps) {
 
 /**
  * The one ordering-sensitive guard chain both list bodies need, shared so a
- * future fix to the ordering (e.g. why error is checked ahead of loading, or
- * loading ahead of empty) only has to be made once. Returns the notice to
+ * future fix to the ordering (e.g. why loading is checked ahead of error, or
+ * error ahead of empty) only has to be made once. Returns the notice to
  * show, or `null` when the caller should render its actual list.
  *
  * Order matters: auth-pending and non-admin come first so a cold load or a
- * refused user never sees "Failed"/"empty" wording instead. Error is checked
- * ahead of loading and empty because SWR reports `isLoading: false` with no
- * data on its error path — indistinguishable from "genuinely empty" unless
- * error is checked first — but only when there's nothing to show yet: a
- * background poll's error must not tear down a list the caller already has.
+ * refused user never sees "Failed"/"empty" wording instead. Loading is
+ * checked ahead of error so that a Retry click — which sets `isLoading` back
+ * to `true` (SWR does this whenever cached `data` is still `undefined`,
+ * exactly the "nothing loaded yet" state a failed fetch leaves behind) while
+ * `error` stays at its stale, pre-retry value until the new attempt settles —
+ * shows the loading state and not a rerun of the same "Failed" text with no
+ * visible reaction to the click. Error is then checked ahead of empty because
+ * SWR reports `isLoading: false` with no data on its error path —
+ * indistinguishable from "genuinely empty" unless error is checked first —
+ * but only when there's nothing to show yet: a background poll's error must
+ * not tear down a list the caller already has.
  *
  * Built on the Machine page's shared `SidebarLoading`/`SidebarNotice`
  * vocabulary (see `tab-states.tsx`) rather than a bespoke notice, so this
@@ -189,6 +195,7 @@ function resolveListNotice({
   // Same wording MachineView uses, so the surface and the page refuse a
   // non-admin identically.
   if (!isAdmin) return <SidebarNotice title="Machine access requires administrator privileges" />;
+  if (isLoading) return <SidebarLoading message="Loading machines…" />;
   if (hasError && isEmpty) {
     return (
       <SidebarNotice
@@ -200,7 +207,6 @@ function resolveListNotice({
       />
     );
   }
-  if (isLoading) return <SidebarLoading message="Loading machines…" />;
   if (isEmpty) return <SidebarNotice title={emptyTitle} />;
   return null;
 }
