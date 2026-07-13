@@ -25,17 +25,18 @@
  * Scrubbed refs are NOT restored when the Machine page is restored — a ref is
  * the referencing agent's setting, and its owner re-links explicitly.
  *
- * `createMachineSpriteTeardown` tears down ALL the compute a Machine spawned:
- * each branch's OWN Sprite (tracked only in `machine_branches` — a Sprite that
- * goes idle simply hibernates on its own, it is never destroyed automatically,
- * so a Machine delete that skipped these would leak live microVMs), then the
- * Machine's own persistent Sprite (resolved the same way
- * the shell/session layer does: derive the `machine_sessions` key from (tenant,
- * drive, page), look up its `sandboxId`, kill through the `MachineHost` seam).
- * Everything runs inside `teardown()` so any host error surfaces AFTER the page is
- * trashed, landing in `deleteMachine`'s recoverable path. Only the Machine's OWN
- * Sprite kill governs `spriteTornDown`; branch kills and the tracking-row removal
- * are best-effort so they never invert that flag.
+ * `createMachineSpriteTeardown` tears down ALL the compute the delete hides:
+ * every MACHINE page in the trashed subtree (the cascade-trash hides nested
+ * Machines too, so skipping them would leak live microVMs behind hidden pages),
+ * and per machine, each branch's OWN Sprite (tracked only in `machine_branches`
+ * — a Sprite that goes idle simply hibernates on its own, it is never destroyed
+ * automatically), then that Machine's own persistent Sprite (resolved the same
+ * way the shell/session layer does: derive the `machine_sessions` key from
+ * (tenant, drive, page), look up its `sandboxId`, kill through the `MachineHost`
+ * seam). Everything runs inside `teardown()` so any host error surfaces AFTER
+ * the page is trashed, landing in `deleteMachine`'s recoverable path. Only
+ * own-Sprite kill failures govern `spriteTornDown`; branch kills and the
+ * tracking-row removal are best-effort so they never invert that flag.
  *
  * The Machine's dependent metadata ROWS (`machine_projects` / `machine_branches` /
  * `machine_agent_terminals`) are intentionally left in place — they FK-cascade on
@@ -53,7 +54,7 @@
  * path as well.
  */
 
-import { and, eq, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
@@ -211,7 +212,12 @@ export function createDbMachineRefScrub(actorUserId: string): MachineRefScrub {
       const refArrayJson = JSON.stringify([ref]);
 
       const agents = await db
-        .select({ id: pages.id, revision: pages.revision, machines: pages.machines })
+        .select({
+          id: pages.id,
+          revision: pages.revision,
+          machines: pages.machines,
+          machineAccess: pages.machineAccess,
+        })
         .from(pages)
         .where(and(eq(pages.type, 'AI_CHAT'), sql`${pages.machines} @> ${refArrayJson}::jsonb`));
 
@@ -223,12 +229,18 @@ export function createDbMachineRefScrub(actorUserId: string): MachineRefScrub {
         const filtered = current.filter(
           (entry) => !(isMachineRef(entry) && entry.kind === 'existing' && entry.machineId === machineId),
         );
+        // When the scrub empties the list, machine access must be disabled too:
+        // `resolveConfiguredMachines` treats machineAccess=true + machines=[] as
+        // "fall back to {kind:'own'}", so leaving access on would silently
+        // repoint the agent at a DIFFERENT machine instead of removing the one
+        // it had. The agent's owner re-enables (and re-links) explicitly.
+        const disableAccess = filtered.length === 0 && agent.machineAccess;
         try {
           await applyPageMutation({
             pageId: agent.id,
             operation: 'agent_config_update',
-            updates: { machines: filtered },
-            updatedFields: ['machines'],
+            updates: disableAccess ? { machines: filtered, machineAccess: false } : { machines: filtered },
+            updatedFields: disableAccess ? ['machines', 'machineAccess'] : ['machines'],
             expectedRevision: agent.revision,
             context: {
               userId: actorUserId,
@@ -246,6 +258,11 @@ export function createDbMachineRefScrub(actorUserId: string): MachineRefScrub {
         }
       }
 
+      // Both SET expressions read the OLD row, so the machineAccess CASE and
+      // the machines rewrite see the same pre-update list: when removing the
+      // ref empties it, access flips off in the same statement — same reason
+      // as the agent path (`resolveGlobalConfiguredMachines` falls back to
+      // {kind:'own'} and would auto-provision the user's personal Machine).
       await db
         .update(globalAssistantConfig)
         .set({
@@ -254,6 +271,11 @@ export function createDbMachineRefScrub(actorUserId: string): MachineRefScrub {
             FROM jsonb_array_elements(${globalAssistantConfig.machines}) AS elem
             WHERE NOT (elem @> ${refJson}::jsonb)
           )`,
+          machineAccess: sql`CASE WHEN NOT EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(${globalAssistantConfig.machines}) AS elem
+            WHERE NOT (elem @> ${refJson}::jsonb)
+          ) THEN false ELSE ${globalAssistantConfig.machineAccess} END`,
         })
         .where(sql`${globalAssistantConfig.machines} @> ${refArrayJson}::jsonb`);
 
@@ -265,68 +287,113 @@ export function createDbMachineRefScrub(actorUserId: string): MachineRefScrub {
 }
 
 /**
- * Tears down all the Sprites a Machine spawned. See the module doc: branch
- * Sprites (never destroyed automatically — only hibernated on idle) are killed
- * best-effort first, then the Machine's own Sprite whose kill governs
- * `spriteTornDown`; the tracking-row removal is best-effort so a post-kill DB
- * error can't falsely report the Sprite as still alive.
+ * Tears down the Sprites of ONE Machine page: branch Sprites (never destroyed
+ * automatically — only hibernated on idle) are killed best-effort first, then
+ * the Machine's own Sprite, whose kill failure throws; the tracking-row
+ * removal is best-effort so a post-kill DB error can't falsely report the
+ * Sprite as still alive.
+ */
+async function teardownOneMachine(machineId: string): Promise<void> {
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, machineId),
+    columns: { driveId: true },
+  });
+  if (!page) return;
+
+  const branchRows = await db
+    .select({ sandboxId: machineBranches.sandboxId })
+    .from(machineBranches)
+    .where(eq(machineBranches.machineId, machineId));
+
+  const drive = await db.query.drives.findFirst({
+    where: eq(drives.id, page.driveId),
+    columns: { ownerId: true },
+  });
+  const sessionKey = drive
+    ? deriveMachineSessionKey({
+        tenantId: drive.ownerId,
+        driveId: page.driveId,
+        pageId: machineId,
+        secret: getSandboxSessionSecret(),
+      })
+    : null;
+  const sessionStore = await createDbMachineSessionStore();
+  const session = sessionKey ? await sessionStore.findBySessionKey(sessionKey) : null;
+
+  if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
+
+  const host = await getMachineHostForBranches();
+
+  // Branch Sprites: best-effort. A failure leaves a microVM the hard-purge
+  // cascade won't reclaim (rows are kept), but it must not fail the delete or
+  // invert spriteTornDown — the branch row stays so a retry can find it.
+  for (const branch of branchRows) {
+    try {
+      await host.kill({ machineId: branch.sandboxId });
+    } catch {
+      // Best-effort; leave the row for a later retry.
+    }
+  }
+
+  // The Machine's OWN Sprite. THIS kill's failure propagates — if it throws,
+  // deleteMachine reports spriteTornDown=false. The tracking-row removal is
+  // best-effort so a remove failure AFTER a successful kill doesn't invert the
+  // flag into falsely reporting the Sprite as still alive.
+  if (session && sessionKey) {
+    await host.kill({ machineId: session.sandboxId });
+    try {
+      await sessionStore.remove(sessionKey);
+    } catch {
+      // Sprite is dead; a stale machine_sessions row is harmless (the reaper
+      // or a re-provision under the same key reclaims it).
+    }
+  }
+}
+
+/**
+ * Collects the ids of every MACHINE-typed page strictly BELOW the given page.
+ * Nothing prevents nesting a Machine under another Machine (page creation only
+ * validates that the parent exists), and the delete's cascade-trash hides the
+ * whole subtree — so the teardown must free the compute of every Machine in it,
+ * not just the root. Runs AFTER the trash, so it must not filter on isTrashed.
+ */
+async function collectDescendantMachineIds(rootId: string): Promise<string[]> {
+  const machineIds: string[] = [];
+  let frontier = [rootId];
+  while (frontier.length > 0) {
+    const children = await db
+      .select({ id: pages.id, type: pages.type })
+      .from(pages)
+      .where(inArray(pages.parentId, frontier));
+    frontier = children.map((child) => child.id);
+    machineIds.push(
+      ...children.filter((child) => isMachinePage(child.type as PageType)).map((child) => child.id),
+    );
+  }
+  return machineIds;
+}
+
+/**
+ * Tears down all the Sprites a Machine delete hides: every Machine page in the
+ * trashed subtree (descendants first, the deleted root last), each via
+ * `teardownOneMachine`. Every machine is ATTEMPTED even when an earlier one
+ * fails; any own-Sprite kill failure is rethrown at the end so `deleteMachine`
+ * reports `spriteTornDown: false` (the recoverable orphaned-Sprite state).
  */
 export function createMachineSpriteTeardown(): MachineSpriteTeardown {
   return {
     async teardown(machineId: string): Promise<void> {
-      const page = await db.query.pages.findFirst({
-        where: eq(pages.id, machineId),
-        columns: { driveId: true },
-      });
-      if (!page) return;
-
-      const branchRows = await db
-        .select({ sandboxId: machineBranches.sandboxId })
-        .from(machineBranches)
-        .where(eq(machineBranches.machineId, machineId));
-
-      const drive = await db.query.drives.findFirst({
-        where: eq(drives.id, page.driveId),
-        columns: { ownerId: true },
-      });
-      const sessionKey = drive
-        ? deriveMachineSessionKey({
-            tenantId: drive.ownerId,
-            driveId: page.driveId,
-            pageId: machineId,
-            secret: getSandboxSessionSecret(),
-          })
-        : null;
-      const sessionStore = await createDbMachineSessionStore();
-      const session = sessionKey ? await sessionStore.findBySessionKey(sessionKey) : null;
-
-      if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
-
-      const host = await getMachineHostForBranches();
-
-      // Branch Sprites: best-effort. A failure leaves a microVM the hard-purge
-      // cascade won't reclaim (rows are kept), but it must not fail the delete or
-      // invert spriteTornDown — the branch row stays so a retry can find it.
-      for (const branch of branchRows) {
+      const descendants = await collectDescendantMachineIds(machineId);
+      let failures = 0;
+      for (const id of [...descendants, machineId]) {
         try {
-          await host.kill({ machineId: branch.sandboxId });
+          await teardownOneMachine(id);
         } catch {
-          // Best-effort; leave the row for a later retry.
+          failures += 1;
         }
       }
-
-      // The Machine's OWN Sprite. THIS kill governs spriteTornDown — if it throws,
-      // deleteMachine reports spriteTornDown=false. The tracking-row removal is
-      // best-effort so a remove failure AFTER a successful kill doesn't invert the
-      // flag into falsely reporting the Sprite as still alive.
-      if (session && sessionKey) {
-        await host.kill({ machineId: session.sandboxId });
-        try {
-          await sessionStore.remove(sessionKey);
-        } catch {
-          // Sprite is dead; a stale machine_sessions row is harmless (the reaper
-          // or a re-provision under the same key reclaims it).
-        }
+      if (failures > 0) {
+        throw new Error(`Sprite teardown failed for ${failures} machine(s) under ${machineId}`);
       }
     },
   };
