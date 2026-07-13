@@ -20,6 +20,14 @@ import { pages } from './core';
  * with a stale local copy. This table is the single source of truth for
  * that distinction, checked independently of how many workspace rows exist
  * right now.
+ *
+ * `bootstrappedByUserId` is audit-only (who happened to win the race) and
+ * deliberately does NOT cascade the row's deletion: this row's very
+ * EXISTENCE is the load-bearing invariant (see above), so if the winning
+ * user's account is later deleted (offboarding, GDPR erasure), the claim
+ * must survive them — an `ON DELETE CASCADE` here would un-claim the
+ * machine and reopen exactly the duplicate-bootstrap race this table
+ * exists to close. Nullable + `set null` instead.
  */
 export const machineWorkspaceBootstraps = pgTable('machine_workspace_bootstraps', {
   machineId: text('machineId')
@@ -27,8 +35,7 @@ export const machineWorkspaceBootstraps = pgTable('machine_workspace_bootstraps'
     .references(() => pages.id, { onDelete: 'cascade' }),
 
   bootstrappedByUserId: text('bootstrappedByUserId')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
+    .references(() => users.id, { onDelete: 'set null' }),
 
   bootstrappedAt: timestamp('bootstrappedAt', { mode: 'date' }).defaultNow().notNull(),
 });

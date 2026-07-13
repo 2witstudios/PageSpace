@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
+import { mutate } from 'swr';
 import { createMockSocket } from '@/test/socket-mocks';
 
 const { mockFetchWithAuth, mockPost, mockPatch, mockDel } = vi.hoisted(() => ({
@@ -119,6 +120,89 @@ describe('useMachineWorkspaceSync', () => {
     expect(workspacesOf(machine).some((w) => w.id === 'ws-intruder')).toBe(false);
   });
 
+  it('given a rename-only machine-workspace:updated event for a workspace ALREADY known locally, merges the name and keeps its columns', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      jsonResponse({
+        bootstrapped: true,
+        workspaces: [{ id: 'ws-a', name: 'A', scope: {}, columns: [{ id: 'col-a', panes: [{ id: 'pane-a', scope: null }] }] }],
+      }),
+    );
+
+    renderHook(() => useMachineWorkspaceSync('m-update-known'));
+    await waitFor(() => {
+      const machine = selectMachine('m-update-known')(useMachineWorkspaceStore.getState());
+      expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-a']);
+    });
+
+    act(() => {
+      mockSocket.current!._trigger('machine-workspace:updated', {
+        machineId: 'm-update-known',
+        workspaceId: 'ws-a',
+        name: 'Renamed elsewhere',
+        // columns omitted — a rename-only broadcast.
+      });
+    });
+
+    const machine = selectMachine('m-update-known')(useMachineWorkspaceStore.getState());
+    const workspace = workspacesOf(machine).find((w) => w.id === 'ws-a');
+    expect(workspace?.name).toBe('Renamed elsewhere');
+    expect(workspace?.columns).toEqual([{ id: 'col-a', panes: [{ id: 'pane-a', scope: null }] }]);
+  });
+
+  it('given a rename-only machine-workspace:updated event for a workspace UNKNOWN locally, ignores it rather than planting a zero-column entry', async () => {
+    renderHook(() => useMachineWorkspaceSync('m-update-unknown'));
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+
+    act(() => {
+      mockSocket.current!._trigger('machine-workspace:updated', {
+        machineId: 'm-update-unknown',
+        workspaceId: 'ws-never-seen',
+        name: 'Renamed elsewhere',
+        // columns omitted, and this browser has never seen ws-never-seen.
+      });
+    });
+
+    const machine = selectMachine('m-update-unknown')(useMachineWorkspaceStore.getState());
+    expect(workspacesOf(machine).some((w) => w.id === 'ws-never-seen')).toBe(false);
+  });
+
+  it('given a SECOND SWR revalidation after the initial hydrate, does NOT re-run the full-list replace (a pending local-only create must survive)', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      jsonResponse({
+        bootstrapped: true,
+        workspaces: [{ id: 'ws-a', name: 'A', scope: {}, columns: [{ id: 'col-a', panes: [{ id: 'pane-a', scope: null }] }] }],
+      }),
+    );
+
+    renderHook(() => useMachineWorkspaceSync('m-revalidate'));
+    await waitFor(() => {
+      const machine = selectMachine('m-revalidate')(useMachineWorkspaceStore.getState());
+      expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-a']);
+    });
+
+    // A local-only workspace appears (its own create POST is still in flight,
+    // e.g. behind a slow CSRF round trip) — mergeServerWorkspaces would drop
+    // this as an unpublished straggler if the full-list hydrate ran again.
+    act(() => {
+      useMachineWorkspaceStore.getState().createWorkspace('m-revalidate');
+    });
+    const beforeRevalidate = workspacesOf(selectMachine('m-revalidate')(useMachineWorkspaceStore.getState()));
+    expect(beforeRevalidate).toHaveLength(2);
+
+    // Simulate a background SWR revalidation (e.g. reconnect) returning the
+    // SAME stale server list (it still doesn't know about the pending create).
+    await act(async () => {
+      await mutate(
+        '/api/machines/workspaces?machineId=m-revalidate',
+        { bootstrapped: true, workspaces: [{ id: 'ws-a', name: 'A (revalidated)', scope: {}, columns: [{ id: 'col-a', panes: [{ id: 'pane-a', scope: null }] }] }] },
+        { revalidate: false },
+      );
+    });
+
+    const afterRevalidate = workspacesOf(selectMachine('m-revalidate')(useMachineWorkspaceStore.getState()));
+    expect(afterRevalidate).toHaveLength(2);
+  });
+
   it('given a machine-workspace:deleted event for this machine, removes the workspace', async () => {
     mockFetchWithAuth.mockResolvedValue(
       jsonResponse({
@@ -163,6 +247,34 @@ describe('useSyncedWorkspaceActions', () => {
     );
   });
 
+  it('createWorkspace that LOSES the first-writer-wins race adopts the winner\'s row instead of keeping its own diverged local state', async () => {
+    // The server echoes back a DIFFERENT name/columns than what this browser
+    // POSTed, with `created: false` — simulating another browser having
+    // already materialized this exact (client-derived) id first.
+    mockPost.mockImplementation(async (_url: string, body: { id: string }) => ({
+      created: false,
+      workspace: {
+        id: body.id,
+        name: "winner's name",
+        scope: {},
+        columns: [{ id: 'col-winner', panes: [{ id: 'pane-winner', scope: null }] }],
+      },
+    }));
+
+    const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
+    let id = '';
+    act(() => {
+      id = result.current.createWorkspace();
+    });
+
+    await waitFor(() => {
+      const machine = selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState());
+      const adopted = machine?.workspaces[id];
+      expect(adopted?.name).toBe("winner's name");
+      expect(adopted?.columns).toEqual([{ id: 'col-winner', panes: [{ id: 'pane-winner', scope: null }] }]);
+    });
+  });
+
   it('removeWorkspace removes locally, then DELETEs it', () => {
     useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
     const machine = selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState())!;
@@ -184,31 +296,55 @@ describe('useSyncedWorkspaceActions', () => {
     void machine;
   });
 
-  it('splitRight PATCHes the resulting layout; on a 404 it falls back to POST-create', async () => {
+  it('splitRight PATCHes the resulting layout via fetchWithAuth; on a real 404 status it falls back to POST-create', async () => {
     useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
-    mockPatch.mockRejectedValueOnce(new Error('not_found'));
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) });
 
     const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
     act(() => {
       result.current.splitRight(workspace.id, workspace.activePaneId);
     });
 
-    await waitFor(() => expect(mockPatch).toHaveBeenCalledWith('/api/machines/workspaces', expect.objectContaining({ workspaceId: workspace.id })));
+    await waitFor(() =>
+      expect(mockFetchWithAuth).toHaveBeenCalledWith(
+        '/api/machines/workspaces',
+        expect.objectContaining({ method: 'PATCH', body: expect.stringContaining(workspace.id) }),
+      ),
+    );
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/machines/workspaces', expect.objectContaining({ id: workspace.id })));
   });
 
-  it('splitRight does NOT fall back to POST when the PATCH fails for a reason OTHER than not_found', async () => {
+  it('splitRight does NOT fall back to POST when the PATCH fails for a status OTHER than 404 — a real HTTP status check, not string-matching the error text', async () => {
     useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
-    mockPatch.mockRejectedValueOnce(new Error('network down'));
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'error' }) });
 
     const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
     act(() => {
       result.current.splitRight(workspace.id, workspace.activePaneId);
     });
 
-    await waitFor(() => expect(mockPatch).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(mockFetchWithAuth).toHaveBeenCalledWith(
+        '/api/machines/workspaces',
+        expect.objectContaining({ method: 'PATCH' }),
+      ),
+    );
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('splitRight does NOT fall back to POST when the PATCH succeeds', async () => {
+    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
+
+    const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
+    act(() => {
+      result.current.splitRight(workspace.id, workspace.activePaneId);
+    });
+
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
     expect(mockPost).not.toHaveBeenCalled();
   });
 });

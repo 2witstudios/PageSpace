@@ -41,6 +41,11 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 const mockUseAuth = vi.fn();
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 
+const mockUseMachineWorkspaceSync = vi.fn();
+vi.mock('@/hooks/useMachineWorkspaceSync', () => ({
+  useMachineWorkspaceSync: (machineId: string | null) => mockUseMachineWorkspaceSync(machineId),
+}));
+
 // motion.div → a plain div so the shell renders synchronously in jsdom.
 // Strip the animation-only props (initial/animate/exit/transition) so they
 // don't leak onto the DOM node and trigger React unknown-prop warnings.
@@ -142,6 +147,33 @@ describe('MachineView (Machine 4-tab shell)', () => {
       should: 'show the admin-only notice and mount no tab bodies',
       actual: { notice: !!screen.queryByText(/requires administrator privileges/i), lifecycle },
       expected: { notice: true, lifecycle: [] },
+    });
+  });
+
+  // Regression (CodeRabbit): a non-admin viewer never sees the tabs
+  // useMachineWorkspaceSync exists for, so it must not fetch the workspace
+  // list or join the socket room on their behalf.
+  test('non-admin users pass null to useMachineWorkspaceSync — no workspace fetch/socket join on their behalf', () => {
+    mockUseAuth.mockReturnValue({ user: { role: 'user' } });
+    render(<MachineView pageId="machine-1" />);
+
+    assert({
+      given: 'a non-admin user',
+      should: 'call useMachineWorkspaceSync with null rather than skipping the hook call (rules of hooks)',
+      actual: mockUseMachineWorkspaceSync.mock.calls.at(-1)?.[0],
+      expected: null,
+    });
+  });
+
+  test('admin users pass the real pageId to useMachineWorkspaceSync', () => {
+    asAdmin();
+    render(<MachineView pageId="machine-1" />);
+
+    assert({
+      given: 'an admin user',
+      should: 'call useMachineWorkspaceSync with the machine\'s own pageId',
+      actual: mockUseMachineWorkspaceSync.mock.calls.at(-1)?.[0],
+      expected: 'machine-1',
     });
   });
 });

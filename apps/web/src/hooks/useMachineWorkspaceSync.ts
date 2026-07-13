@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef } from 'react';
 import useSWR from 'swr';
-import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
 import { usePageSocketRoom } from './usePageSocketRoom';
 import {
@@ -68,32 +68,54 @@ function toWireColumns(columns: TerminalColumnState[]) {
  * `machine-workspaces.ts`'s module doc for the claim/race design this relies
  * on), and keeps the store reconciled with live `machine-workspace:*`
  * broadcasts. Returns nothing — like `usePagePresence`, it's a side-effect hook.
+ *
+ * `machineId` is nullable so a caller can mount this unconditionally (React's
+ * rules of hooks forbid calling it only for admins) while still skipping all
+ * network/socket work for a non-admin viewer, who never sees the Terminal
+ * tab this exists for — pass `null` rather than gating the call itself.
  */
-export function useMachineWorkspaceSync(machineId: string): void {
+export function useMachineWorkspaceSync(machineId: string | null): void {
   const ensureMachine = useMachineWorkspaceStore((state) => state.ensureMachine);
   const hydrateFromServer = useMachineWorkspaceStore((state) => state.hydrateFromServer);
   const applyServerUpsert = useMachineWorkspaceStore((state) => state.applyServerUpsert);
   const applyServerDelete = useMachineWorkspaceStore((state) => state.applyServerDelete);
 
   const socket = useSocket();
-  usePageSocketRoom(machineId);
+  usePageSocketRoom(machineId ?? undefined);
 
   // Guards against retrying the bootstrap POST on every SWR revalidation once
   // this browser has already tried it for this machine — not against the
   // cross-browser race, which the server's claim table (not this ref) resolves.
   const bootstrapAttempted = useRef(false);
 
+  // `hydrateFromServer` is a FULL-LIST replace that deliberately drops any
+  // local-only workspace not in the server's list (see `mergeServerWorkspaces`'s
+  // doc — correct for a one-time initial hydrate, wrong for a background
+  // refresh). SWR's `data` can change more than once for the SAME machine —
+  // `revalidateOnReconnect` defaults true, so a brief network drop refetches —
+  // and re-running the full-replace on a LATER revalidation would silently
+  // wipe a workspace this browser just created locally whose own create
+  // request hasn't round-tripped (and broadcast) yet. So this only ever runs
+  // ONCE per mount; every subsequent change to the store comes from the socket
+  // subscription below. Safe as a plain ref (not reset on `machineId` change)
+  // because this hook is mounted once per machine at `MachineView`, which
+  // `MachineKeepAliveHost` keeps as one distinct component instance per
+  // machine rather than reusing one instance across different machineIds.
+  const hydratedOnce = useRef(false);
+
   useEffect(() => {
+    if (!machineId) return;
     ensureMachine(machineId);
   }, [machineId, ensureMachine]);
 
-  const key = `/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}`;
+  const key = machineId ? `/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}` : null;
   const { data } = useSWR<WorkspaceListResponse>(key, fetcher, { revalidateOnFocus: false });
 
   useEffect(() => {
-    if (!data) return;
+    if (!machineId || !data || hydratedOnce.current) return;
 
     if (data.bootstrapped) {
+      hydratedOnce.current = true;
       hydrateFromServer(machineId, data.workspaces);
       return;
     }
@@ -110,7 +132,10 @@ export function useMachineWorkspaceSync(machineId: string): void {
     }));
 
     post<BootstrapResponse>('/api/machines/workspaces/bootstrap', { machineId, workspaces: payload })
-      .then((res) => hydrateFromServer(machineId, res.workspaces))
+      .then((res) => {
+        hydratedOnce.current = true;
+        hydrateFromServer(machineId, res.workspaces);
+      })
       .catch(() => {
         // Retry on the next data change (e.g. a manual refresh) rather than
         // leaving this machine permanently un-bootstrapped over a transient failure.
@@ -119,11 +144,14 @@ export function useMachineWorkspaceSync(machineId: string): void {
   }, [machineId, data, hydrateFromServer]);
 
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || !machineId) return;
+    // Narrowed copy for the closures below — a `string | null` parameter
+    // doesn't stay narrowed inside nested function expressions.
+    const mid = machineId;
 
     const onCreated = (payload: ServerWorkspaceDTO & { machineId: string }) => {
-      if (payload.machineId !== machineId) return;
-      applyServerUpsert(machineId, payload);
+      if (payload.machineId !== mid) return;
+      applyServerUpsert(mid, payload);
     };
     const onUpdated = (payload: {
       machineId: string;
@@ -131,24 +159,34 @@ export function useMachineWorkspaceSync(machineId: string): void {
       name?: string;
       columns?: TerminalColumnState[];
     }) => {
-      if (payload.machineId !== machineId) return;
+      if (payload.machineId !== mid) return;
       // `updated` only carries whichever of name/columns actually changed —
-      // fill in the rest from what this browser already has for it.
-      const current = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[payload.workspaceId];
-      applyServerUpsert(machineId, {
+      // fill in the rest from what this browser already has for it. It NEVER
+      // carries `scope` (immutable, so the PATCH route never re-sends it), so
+      // an `updated` event can only ever be applied to a workspace this
+      // browser already knows about — there is no safe default for `scope`
+      // (defaulting to machine-scope would misfile a project/branch-scoped
+      // workspace under the wrong sidebar node) nor for missing name/columns
+      // (defaulting to `''`/`[]` would plant a broken, zero-pane entry). If
+      // this browser hasn't hydrated the workspace yet (e.g. it missed the
+      // `created` broadcast on a reconnect), skip and wait for a `created`
+      // event or the next full hydration to introduce it correctly.
+      const current = useMachineWorkspaceStore.getState().machines[mid]?.workspaces[payload.workspaceId];
+      if (!current) return;
+      applyServerUpsert(mid, {
         id: payload.workspaceId,
-        name: payload.name ?? current?.name ?? '',
-        scope: current?.scope ?? {},
-        columns: payload.columns ?? current?.columns ?? [],
+        name: payload.name ?? current.name,
+        scope: current.scope,
+        columns: payload.columns ?? current.columns,
       });
     };
     const onDeleted = (payload: { machineId: string; workspaceId: string }) => {
-      if (payload.machineId !== machineId) return;
-      applyServerDelete(machineId, payload.workspaceId);
+      if (payload.machineId !== mid) return;
+      applyServerDelete(mid, payload.workspaceId);
     };
     const onBootstrapped = (payload: { machineId: string; workspaces: ServerWorkspaceDTO[] }) => {
-      if (payload.machineId !== machineId) return;
-      hydrateFromServer(machineId, payload.workspaces);
+      if (payload.machineId !== mid) return;
+      hydrateFromServer(mid, payload.workspaces);
     };
 
     socket.on('machine-workspace:created', onCreated);
@@ -164,45 +202,73 @@ export function useMachineWorkspaceSync(machineId: string): void {
   }, [socket, machineId, applyServerUpsert, applyServerDelete, hydrateFromServer]);
 }
 
+interface CreateWorkspaceResponse {
+  created: boolean;
+  workspace: ServerWorkspaceDTO;
+}
+
 async function pushNewWorkspace(machineId: string, workspaceId: string): Promise<void> {
   const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
   if (!workspace) return;
-  await post('/api/machines/workspaces', {
+  await post<CreateWorkspaceResponse>('/api/machines/workspaces', {
     machineId,
     id: workspace.id,
     name: workspace.name,
     scope: workspace.scope,
     columns: toWireColumns(workspace.columns),
-  }).catch(() => {});
+  })
+    .then((res) => {
+      // Lost the first-writer-wins race (another browser materialized the
+      // same client-derived id first, e.g. two tabs opening the same session)
+      // — the API's contract is that the loser adopts the winner's row, not
+      // its own payload. Without this, this browser would keep showing its
+      // own diverged local layout forever instead of the shared canonical one.
+      if (!res.created) useMachineWorkspaceStore.getState().applyServerUpsert(machineId, res.workspace);
+    })
+    .catch(() => {});
 }
 
 /** For a workspace that MIGHT already exist server-side (any layout/rename change
  * after creation): PATCH first, falling back to POST-create on a 404 — a brand
  * new workspace materialized via `openTerminal`'s "existing session, new pane"
- * branch has never gone through `createWorkspace`'s own POST. */
+ * branch has never gone through `createWorkspace`'s own POST.
+ *
+ * Calls `fetchWithAuth` directly (rather than the higher-level `patch()`
+ * helper) specifically to read the real HTTP status code: `patch()`/`post()`
+ * go through `fetchJSON`, which throws a plain `Error` with no status
+ * attached, so branching on `error.message === 'not_found'` would couple this
+ * to the exact JSON body shape `{error: 'not_found'}` and `fetchJSON`'s
+ * `json.error || json.message || text` construction — fragile to either
+ * changing out from under this call site. A raw 404 status check has no such
+ * coupling. */
 async function pushWorkspaceUpdate(machineId: string, workspaceId: string): Promise<void> {
   const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
   if (!workspace) return;
   const columns = toWireColumns(workspace.columns);
 
   try {
-    await patch('/api/machines/workspaces', { machineId, workspaceId, name: workspace.name, columns });
-  } catch (error) {
-    // Not found server-side yet — create it. `updateWorkspace`'s route returns
-    // `{error: 'not_found', reason: 'not_found'}` on a 404, which `auth-fetch.ts`
-    // surfaces as an Error whose message IS that reason string. Any OTHER
-    // failure (network blip, 500) is swallowed here: the local grid already
-    // reflects the user's action, and the next successful push (this browser's
-    // own, or a broadcast from elsewhere) reconciles the server.
-    if (!(error instanceof Error) || error.message !== 'not_found') return;
-    await post('/api/machines/workspaces', {
-      machineId,
-      id: workspace.id,
-      name: workspace.name,
-      scope: workspace.scope,
-      columns,
-    }).catch(() => {});
+    const response = await fetchWithAuth('/api/machines/workspaces', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ machineId, workspaceId, name: workspace.name, columns }),
+    });
+    if (response.ok) return;
+    if (response.status !== 404) return;
+    // Not found server-side yet — create it.
+  } catch {
+    // Network failure or similar — swallow. The local grid already reflects
+    // the user's action, and the next successful push (this browser's own,
+    // or a broadcast from elsewhere) reconciles the server.
+    return;
   }
+
+  await post('/api/machines/workspaces', {
+    machineId,
+    id: workspace.id,
+    name: workspace.name,
+    scope: workspace.scope,
+    columns,
+  }).catch(() => {});
 }
 
 function pushRemoval(machineId: string, workspaceId: string): void {

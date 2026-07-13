@@ -58,14 +58,17 @@ const TAB_TRIGGERS: { value: MachineTabValue; label: string; icon: React.Element
  * the one true per-machine root that survives Terminal-tab unmount/remount
  * (Radix `TabsContent` unmounts inactive tabs; this component doesn't), so the
  * socket room join / server hydration / bootstrap race only happen once per
- * machine, not once per Terminal-tab activation (#2048).
+ * machine, not once per Terminal-tab activation (#2048). Passed `null` for a
+ * non-admin viewer (rather than skipping the call, which rules of hooks
+ * forbid) — they never see the tabs this hook exists for, so there's no
+ * reason to fetch the workspace list or join the socket room on their behalf.
  */
 const MachineView = ({ pageId, embedded = false }: MachineViewProps) => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const activeTab = useMachineTabStore((state) => state.tabs[pageId] ?? DEFAULT_MACHINE_TAB);
   const setTab = useMachineTabStore((state) => state.setTab);
-  useMachineWorkspaceSync(pageId);
+  useMachineWorkspaceSync(isAdmin ? pageId : null);
 
   return (
     <motion.div

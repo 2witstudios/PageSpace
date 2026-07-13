@@ -1,5 +1,5 @@
-import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { describe, test, beforeEach, vi, expect } from 'vitest';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 import type { ReactElement } from 'react';
@@ -22,6 +22,15 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 
+// `pushWorkspaceUpdate` (useMachineWorkspaceSync) PATCHes via `fetchWithAuth`
+// directly rather than the `patch()` helper, to read the real HTTP status
+// code — see that file's doc comment. These tests assert on the PATCH calls
+// made through the shared `fetchWithAuth` mock.
+const patchCallsTo = (url: string) =>
+  vi.mocked(fetchWithAuth).mock.calls.filter(
+    ([calledUrl, options]) => calledUrl === url && (options as RequestInit | undefined)?.method === 'PATCH',
+  );
+
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
 
@@ -36,6 +45,7 @@ const renderLeaves = (ui: ReactElement) =>
 
 describe('WorkspaceLeaves', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     window.localStorage.clear();
     useMachineWorkspaceStore.setState({ machines: {} });
   });
@@ -256,10 +266,119 @@ describe('WorkspaceLeaves', () => {
       });
     });
   });
+
+  describe('inline rename', () => {
+    test('double-clicking a workspace name opens an editable input, pre-filled with its current name', async () => {
+      store().ensureMachine('m1');
+      renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+      const row = await screen.findByText('Workspace 1');
+      await userEvent.dblClick(row);
+
+      const input = screen.getByLabelText('Rename workspace Workspace 1') as HTMLInputElement;
+      assert({
+        given: 'a workspace name double-clicked',
+        should: 'show an input pre-filled with the current name',
+        actual: input.value,
+        expected: 'Workspace 1',
+      });
+    });
+
+    test('Enter commits the new name and pushes it to the server', async () => {
+      store().ensureMachine('m1');
+      const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+      renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+      await userEvent.dblClick(await screen.findByText('Workspace 1'));
+      const input = screen.getByLabelText('Rename workspace Workspace 1');
+      await userEvent.clear(input);
+      await userEvent.type(input, 'Renamed{Enter}');
+
+      await waitFor(() => {
+        assert({
+          given: 'a new name typed and Enter pressed',
+          should: 'commit the rename locally and PATCH it to the server',
+          actual: {
+            name: selectMachine('m1')(store())!.workspaces[workspaceId].name,
+            stillEditing: screen.queryByLabelText(/Rename workspace/) !== null,
+          },
+          expected: { name: 'Renamed', stillEditing: false },
+        });
+      });
+      const [, options] = patchCallsTo('/api/machines/workspaces')[0] ?? [];
+      expect(JSON.parse((options as RequestInit).body as string)).toMatchObject({
+        machineId: 'm1',
+        workspaceId,
+        name: 'Renamed',
+      });
+    });
+
+    test('Escape cancels without saving the draft', async () => {
+      store().ensureMachine('m1');
+      const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+      renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+      await userEvent.dblClick(await screen.findByText('Workspace 1'));
+      const input = screen.getByLabelText('Rename workspace Workspace 1');
+      await userEvent.clear(input);
+      await userEvent.type(input, 'Abandoned draft{Escape}');
+
+      assert({
+        given: 'a draft typed then Escape pressed',
+        should: 'discard the draft and leave the original name untouched',
+        actual: selectMachine('m1')(store())!.workspaces[workspaceId].name,
+        expected: 'Workspace 1',
+      });
+      expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(0);
+    });
+
+    // Regression (CodeRabbit): in Chromium, unmounting the still-focused
+    // input (which Escape/Enter both do, by closing the editor) can itself
+    // fire a native `blur` event. Without a skip-next-blur guard, that blur
+    // would re-enter the commit path — resurrecting the cancelled draft after
+    // Escape, or firing a redundant second commit after Enter.
+    test('a blur event firing immediately after Escape does not resurrect the cancelled draft', async () => {
+      store().ensureMachine('m1');
+      const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+      renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+      await userEvent.dblClick(await screen.findByText('Workspace 1'));
+      const input = screen.getByLabelText('Rename workspace Workspace 1') as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'Abandoned draft');
+      fireEvent.keyDown(input, { key: 'Escape' });
+      // Simulate the browser firing a native blur as a side effect of the
+      // input unmounting right after Escape closed the editor.
+      fireEvent.blur(input);
+
+      assert({
+        given: "Escape followed by a blur event on the now-unmounted input",
+        should: 'still leave the original name untouched — the blur must not re-commit the cancelled draft',
+        actual: selectMachine('m1')(store())!.workspaces[workspaceId].name,
+        expected: 'Workspace 1',
+      });
+      expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(0);
+    });
+
+    test('a blur event firing immediately after Enter does not fire a redundant second commit', async () => {
+      store().ensureMachine('m1');
+      renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+      await userEvent.dblClick(await screen.findByText('Workspace 1'));
+      const input = screen.getByLabelText('Rename workspace Workspace 1') as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'Renamed');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      fireEvent.blur(input);
+
+      await waitFor(() => expect(patchCallsTo('/api/machines/workspaces')).toHaveLength(1));
+    });
+  });
 });
 
 describe('WorkspaceNodeExtras', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     window.localStorage.clear();
     useMachineWorkspaceStore.setState({ machines: {} });
   });

@@ -34,7 +34,7 @@
  * removing a workspace is the only stop path now) can't be stopped either.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -89,6 +89,15 @@ export default function WorkspaceLeaves({
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  // Escape/Enter close the input by setting `renamingId` to null, which
+  // unmounts it — and in Chromium, unmounting a still-focused element can
+  // itself fire a NATIVE blur event that reaches `onBlur` below. Without this
+  // guard, Escape's blur would re-commit the very draft the user just
+  // cancelled, and Enter's would fire a redundant second commit. Set right
+  // before closing, consumed (and reset) by the next `onBlur`; also reset
+  // when a fresh rename starts, so a stale `true` can never suppress a later,
+  // legitimate blur-to-commit.
+  const skipNextBlur = useRef(false);
 
   const scope = nodeScopeOf(node);
   // Every pane in a workspace runs in the WORKSPACE's own node scope (see
@@ -124,6 +133,7 @@ export default function WorkspaceLeaves({
   };
 
   const startRename = (workspace: { id: string; name: string }) => {
+    skipNextBlur.current = false;
     setRenamingId(workspace.id);
     setDraftName(workspace.name);
   };
@@ -132,6 +142,24 @@ export default function WorkspaceLeaves({
     const trimmed = draftName.trim();
     if (trimmed && trimmed !== currentName) renameWorkspace(workspaceId, trimmed);
     setRenamingId(null);
+  };
+
+  const cancelRename = () => {
+    skipNextBlur.current = true;
+    setRenamingId(null);
+  };
+
+  const commitRenameViaKey = (workspaceId: string, currentName: string) => {
+    skipNextBlur.current = true;
+    commitRename(workspaceId, currentName);
+  };
+
+  const commitRenameViaBlur = (workspaceId: string, currentName: string) => {
+    if (skipNextBlur.current) {
+      skipNextBlur.current = false;
+      return;
+    }
+    commitRename(workspaceId, currentName);
   };
 
   return (
@@ -151,14 +179,14 @@ export default function WorkspaceLeaves({
                 autoFocus
                 value={draftName}
                 onChange={(e) => setDraftName(e.target.value)}
-                onBlur={() => commitRename(workspace.id, workspace.name)}
+                onBlur={() => commitRenameViaBlur(workspace.id, workspace.name)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    commitRename(workspace.id, workspace.name);
+                    commitRenameViaKey(workspace.id, workspace.name);
                   } else if (e.key === 'Escape') {
                     e.preventDefault();
-                    setRenamingId(null);
+                    cancelRename();
                   }
                 }}
                 aria-label={`Rename workspace ${workspace.name}`}

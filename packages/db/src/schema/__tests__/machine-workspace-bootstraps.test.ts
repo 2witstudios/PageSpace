@@ -25,8 +25,12 @@ describe('Machine Workspace Bootstraps Schema', () => {
       expect(columns.machineId.dataType).toBe('string');
     });
 
-    it('has bootstrappedByUserId as not null (audit only)', () => {
-      expect(columns.bootstrappedByUserId.notNull).toBe(true);
+    // Regression (CodeRabbit): nullable + `set null`, NOT `notNull` + cascade —
+    // this row's mere EXISTENCE is the load-bearing invariant (it closes the
+    // duplicate-bootstrap race), so deleting the winning user's account must
+    // never cascade-delete the claim itself. See the schema file's doc comment.
+    it('has bootstrappedByUserId as nullable (audit only, survives user deletion)', () => {
+      expect(columns.bootstrappedByUserId.notNull).toBe(false);
     });
 
     it('has bootstrappedAt with a default', () => {
@@ -36,12 +40,14 @@ describe('Machine Workspace Bootstraps Schema', () => {
   });
 
   describe('foreign keys', () => {
-    it('references pages and users, both cascading on delete', () => {
+    it('cascades on machineId (page deletion) but only set-nulls on bootstrappedByUserId (user deletion)', () => {
       const { foreignKeys } = getTableConfig(machineWorkspaceBootstraps);
       expect(foreignKeys).toHaveLength(2);
-      for (const fk of foreignKeys) {
-        expect(fk.onDelete).toBe('cascade');
-      }
+      const byColumn = new Map(
+        foreignKeys.map((fk) => [fk.reference().columns[0].name, fk.onDelete]),
+      );
+      expect(byColumn.get('machineId')).toBe('cascade');
+      expect(byColumn.get('bootstrappedByUserId')).toBe('set null');
     });
   });
 
