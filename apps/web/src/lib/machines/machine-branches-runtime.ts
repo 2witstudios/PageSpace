@@ -16,11 +16,11 @@
 
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { decideFullEgressEnablement, isContainmentVerified } from '@pagespace/lib/services/sandbox/containment';
-import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { getSandboxSessionSecret, findLiveMachineSandboxId } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
@@ -29,7 +29,7 @@ import { defaultBuildEnv } from '@pagespace/lib/services/sandbox/tool-runners';
 import { resolveGitHubTokenForSandbox } from '@pagespace/lib/services/sandbox/github-token';
 import { isMachinePage } from '@pagespace/lib/content/page-types.config';
 import type { PageType } from '@pagespace/lib/utils/enums';
-import type { MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
+import type { MachineHandle, MachineHost } from '@pagespace/lib/services/sandbox/machine-host';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
@@ -120,6 +120,43 @@ export async function canViewMachine(actorUserId: string, machineId: string): Pr
   return canUserViewPage(actorUserId, machineId);
 }
 
+/**
+ * Live handle to the ROOT Machine's own persistent Sprite (the one
+ * `machine_sessions` tracks for its page), never a branch-terminal's own.
+ * Read-only — never goes through `acquireMachineSession`'s full re-authz +
+ * provision-fresh flow, since this only ever needs read access to an
+ * EXISTING session, gracefully returning `null` (never provisioning) when
+ * the root Machine has none yet.
+ *
+ * Resolves the page's CURRENT driveId/owner and derives the exact session
+ * key from it — not a bare-`pageId` lookup (see `findLiveMachineSandboxId`'s
+ * doc comment): a page moved between drives can leave its OLD drive's
+ * session row behind, and a bare-`pageId` read could return that STALE row,
+ * handing back a credential that was never this page's current owner's to
+ * give out.
+ */
+export async function resolveRootMachineHandle(machineId: string): Promise<MachineHandle | null> {
+  const page = await findMachinePage(machineId);
+  if (!page) return null;
+
+  const driveRow = await db.query.drives.findFirst({
+    where: eq(drives.id, page.driveId),
+    columns: { ownerId: true },
+  });
+  if (!driveRow) return null;
+
+  const sandboxId = await findLiveMachineSandboxId({
+    tenantId: driveRow.ownerId,
+    driveId: page.driveId,
+    pageId: machineId,
+    secret: getSandboxSessionSecret(),
+  });
+  if (!sandboxId) return null;
+
+  const host = await getMachineHost();
+  return host.attach({ machineId: sandboxId });
+}
+
 export function buildMachineBranchesDeps(): MachineBranchesDeps {
   return {
     store: {
@@ -151,6 +188,7 @@ export function buildMachineBranchesDeps(): MachineBranchesDeps {
         containment: isContainmentVerified() ? { contained: true } : null,
       }),
     resolveGitHubToken: (userId) => resolveGitHubTokenForSandbox({ userId, db }),
+    resolveRootMachineHandle,
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
       releaseSlot: releaseCodeExecutionSlot,

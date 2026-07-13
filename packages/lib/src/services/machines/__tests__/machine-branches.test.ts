@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   spawnBranch,
   attachBranch,
   killBranch,
   listBranches,
+  propagateClaudeCredential,
   BRANCH_REPO_PATH,
   type MachineBranchesDeps,
   type MachineBranchProjectLookup,
@@ -84,6 +85,7 @@ interface SpriteState {
   machineId: string;
   execLog: RunCommandArgs[];
   files: Map<string, string>;
+  fileModes: Map<string, number | undefined>;
 }
 
 /**
@@ -106,10 +108,28 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
       machineId: state.machineId,
       exec: async (args) => {
         state.execLog.push(args);
-        return execImpl ? execImpl(state, args) : { exitCode: 0, stdout: '', stderr: '' };
+        if (execImpl) return execImpl(state, args);
+        // Default `mv <src> <dst>` semantics (moves the in-memory entry),
+        // so tests can assert the write-to-temp-then-atomic-rename
+        // sequence `propagateClaudeCredential` uses lands the final
+        // content at the REAL path, not just the exec call shape.
+        if (args.cmd === 'mv' && args.args?.[0] !== undefined && args.args[1] !== undefined) {
+          const [src, dst] = args.args;
+          const content = state.files.get(src);
+          if (content !== undefined) {
+            state.files.set(dst, content);
+            state.fileModes.set(dst, state.fileModes.get(src));
+          }
+          state.files.delete(src);
+          state.fileModes.delete(src);
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
       },
       writeFiles: async (files) => {
-        for (const f of files) state.files.set(f.path, String(f.content));
+        for (const f of files) {
+          state.files.set(f.path, String(f.content));
+          state.fileModes.set(f.path, f.mode);
+        }
       },
       readFile: async ({ path }) => {
         const content = state.files.get(path);
@@ -130,7 +150,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
       let state = byName.get(name);
       if (!state) {
         counter += 1;
-        state = { machineId: `sbx-${counter}`, execLog: [], files: new Map() };
+        state = { machineId: `sbx-${counter}`, execLog: [], files: new Map(), fileModes: new Map() };
         byName.set(name, state);
         byId.set(state.machineId, state);
       }
@@ -167,6 +187,7 @@ function makeDeps(overrides: Partial<MachineBranchesDeps> = {}, storeSeed: Machi
     secret: SECRET,
     checkFullEgressEnablement: async () => ({ ok: true }),
     resolveGitHubToken: async () => 'ghp_secret_token',
+    resolveRootMachineHandle: async () => null,
     quota: { acquireSlot: () => true, releaseSlot: () => {} },
     buildEnv: () => ({ NODE_ENV: 'test' }),
     audit: async (input) => {
@@ -592,6 +613,8 @@ describe('spawnBranch — isolation between two branches of one project', () => 
   });
 });
 
+const noRootHandle = async () => null;
+
 describe('attachBranch', () => {
   it('given an existing, live branch, should reattach to its Sprite', async () => {
     const { host } = makeFakeHost();
@@ -599,7 +622,14 @@ describe('attachBranch', () => {
     const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
     if (!spawned.ok) throw new Error('expected ok');
 
-    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: noRootHandle,
+    });
     expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId, branchName: 'main' });
   });
 
@@ -621,6 +651,7 @@ describe('attachBranch', () => {
       branchName: 'My Cool Feature',
       store,
       host,
+      resolveRootMachineHandle: noRootHandle,
     });
     expect(result).toEqual({ ok: true, sandboxId: spawned.sandboxId, branchName: 'my-cool-feature' });
   });
@@ -628,7 +659,14 @@ describe('attachBranch', () => {
   it('given no tracked branch, should return not_found', async () => {
     const { host } = makeFakeHost();
     const { store } = makeDeps({ host });
-    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'nope', store, host });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'nope',
+      store,
+      host,
+      resolveRootMachineHandle: noRootHandle,
+    });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
   });
 
@@ -640,8 +678,445 @@ describe('attachBranch', () => {
 
     await host.kill({ machineId: spawned.sandboxId });
 
-    const result = await attachBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', store, host });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: noRootHandle,
+    });
     expect(result).toEqual({ ok: false, reason: 'vanished' });
+  });
+});
+
+describe('Claude Code credential propagation', () => {
+  /** A fake root Machine's Sprite pre-seeded with the given files, standing in for `resolveRootMachineHandle`. */
+  function makeRootHandle(files: Record<string, string>): MachineHandle {
+    return {
+      machineId: 'root-sbx',
+      exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      writeFiles: async () => {},
+      readFile: async ({ path }) => (path in files ? Buffer.from(files[path]!) : null),
+      createCheckpoint: async () => {},
+      stream: async () => {
+        throw new Error('not used');
+      },
+      listStreams: async () => [],
+      killSession: async () => {},
+    };
+  }
+
+  it('given the root Machine has a live Claude credential, should copy it into a freshly spawned branch Sprite', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('secret-token');
+  });
+
+  it('given the root Machine also has a Claude config file, should copy that too', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.get('/home/sprite/.claude.json')).toBe('{"theme":"dark"}');
+  });
+
+  it('given the root Machine has no live session, should skip the copy without failing the spawn', async () => {
+    const { host, byId } = makeFakeHost();
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => null });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
+  });
+
+  it('given the root Machine is live but has never logged into Claude Code, should skip the copy without failing the spawn', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({});
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.files.has('/home/sprite/.claude/.credentials.json')).toBe(false);
+  });
+
+  it('given resolving the root handle throws, should not fail the spawn', async () => {
+    const { host } = makeFakeHost();
+    const { deps } = makeDeps({
+      host,
+      resolveRootMachineHandle: async () => {
+        throw new Error('root Sprite unreachable');
+      },
+    });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a refreshed credential on reattach (existing, live branch-terminal), should re-copy rather than only copying once at first spawn', async () => {
+    const { host } = makeFakeHost();
+    let currentToken = 'first-token';
+    const rootHandle = () => makeRootHandle({ '/home/sprite/.claude/.credentials.json': currentToken });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle() });
+
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!first.ok) throw new Error('expected ok');
+
+    currentToken = 'refreshed-token';
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(second).toMatchObject({ ok: true, resumed: true });
+    if (!second.ok) throw new Error('expected ok');
+
+    const state = (await host.attach({ machineId: second.sandboxId }));
+    expect((await state?.readFile({ path: '/home/sprite/.claude/.credentials.json' }))?.toString('utf8')).toBe(
+      'refreshed-token',
+    );
+  });
+
+  it('given the root read later comes back empty (e.g. a `claude logout`, OR simply a transient root-Sprite read failure), should NOT delete the branch\'s existing valid credential', async () => {
+    // `readFile` maps EVERY read failure to the same `null` a missing file
+    // produces (see the doc comment on `propagateClaudeCredential`) — an
+    // empty read is NOT reliable evidence of a real logout, so deleting on
+    // it would risk destroying a perfectly valid, working branch credential
+    // on a transient hiccup. Tried deleting on this signal and reverted it
+    // (see review history) — this test guards against reintroducing it.
+    const { host, byId } = makeFakeHost();
+    let rootFiles: Record<string, string> = { '/home/sprite/.claude/.credentials.json': 'first-token' };
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => makeRootHandle(rootFiles) });
+
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!first.ok) throw new Error('expected ok');
+    expect(byId.get(first.sandboxId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('first-token');
+
+    // The root read now comes back empty (logout, or just a transient blip —
+    // indistinguishable from here).
+    rootFiles = {};
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(second).toMatchObject({ ok: true, resumed: true });
+    if (!second.ok) throw new Error('expected ok');
+
+    expect(byId.get(second.sandboxId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('first-token');
+  });
+
+  it('given the root Machine has never had a credential, should skip the copy without ever touching the branch Sprite\'s exec log', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({});
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.execLog.filter((c) => c.cmd === 'rm' || c.cmd === 'chmod')).toEqual([]);
+  });
+
+  it('should also propagate the credential on attachBranch (not only spawnBranch)', async () => {
+    const { host } = makeFakeHost();
+    const { deps, store } = makeDeps({ host });
+    const spawned = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!spawned.ok) throw new Error('expected ok');
+
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'attach-time-token' });
+    const result = await attachBranch({
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      store,
+      host,
+      resolveRootMachineHandle: async () => rootHandle,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected ok');
+
+    const handle = await host.attach({ machineId: result.sandboxId });
+    expect((await handle?.readFile({ path: '/home/sprite/.claude/.credentials.json' }))?.toString('utf8')).toBe(
+      'attach-time-token',
+    );
+  });
+
+  it('should write the credential file with restrictive (0o600) permissions', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
+  });
+
+  it('should write to a temp path then atomically rename it onto the real destination, for both the credentials and config files — a fresh CREATION is what makes 0o600 take effect reliably even on a refresh', async () => {
+    // `writeFiles`' `mode` only applies at file CREATION (POSIX open()
+    // semantics) — an overwrite of an already-existing file silently keeps
+    // whatever permissions it already had. Writing to a temp path (which
+    // never existed before) makes every write a creation, and `mv` on the
+    // same filesystem is atomic — no separate chmod step, no window where
+    // the destination is at the wrong mode or briefly absent.
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({
+      '/home/sprite/.claude/.credentials.json': 'secret-token',
+      '/home/sprite/.claude.json': '{"theme":"dark"}',
+    });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    // The temp path is generation-suffixed (not a fixed name — see doc
+    // comment on why) and cleared BEFORE each write too — writing to an
+    // already-existing temp path would silently keep whatever mode it
+    // already had.
+    const tempPathPattern = /^\/home\/sprite\/\.claude(\/\.credentials\.json|\.json)\.tmp\.[a-z0-9]+$/;
+    const rmCalls = state?.execLog.filter((c) => c.cmd === 'rm') ?? [];
+    expect(rmCalls).toHaveLength(2);
+    for (const call of rmCalls) {
+      expect(call.args?.[0]).toBe('-f');
+      expect(call.args?.[1]).toMatch(tempPathPattern);
+    }
+    const mvCalls = state?.execLog.filter((c) => c.cmd === 'mv') ?? [];
+    expect(mvCalls).toHaveLength(2);
+    expect(mvCalls[0]?.args?.[0]).toMatch(tempPathPattern);
+    expect(mvCalls[0]?.args?.[1]).toBe('/home/sprite/.claude/.credentials.json');
+    expect(mvCalls[1]?.args?.[0]).toMatch(tempPathPattern);
+    expect(mvCalls[1]?.args?.[1]).toBe('/home/sprite/.claude.json');
+    // The fake host's `mv` moves the in-memory entry — the final content and
+    // mode must land at the REAL path, with no lingering temp-path entry.
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('secret-token');
+    expect(state?.fileModes.get('/home/sprite/.claude/.credentials.json')).toBe(0o600);
+    expect([...(state?.files.keys() ?? [])].some((k) => tempPathPattern.test(k))).toBe(false);
+  });
+
+  it('should pass a bounded timeoutMs on every housekeeping rm/mv exec — the Sprite runner only installs its SIGKILL timer when one is supplied, so a call with none is unbounded at the transport level', async () => {
+    const { host, byId } = makeFakeHost();
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!result.ok) throw new Error('expected ok');
+
+    const state = byId.get(result.sandboxId);
+    const housekeepingCalls = state?.execLog.filter((c) => c.cmd === 'rm' || c.cmd === 'mv') ?? [];
+    expect(housekeepingCalls.length).toBeGreaterThan(0);
+    for (const call of housekeepingCalls) {
+      expect(call.timeoutMs).toBeGreaterThan(0);
+      expect(call.maxBytes).toBeGreaterThan(0);
+    }
+  });
+
+  it('given an overlapping call reads an OLDER credential and then stalls, should skip its own mv once a NEWER call has already landed — never clobbering the newer credential', async () => {
+    // `withTimeout` deliberately does not cancel a slow call's underlying
+    // work — it keeps running in the background. Without the generation
+    // check, that stalled call finishing LATER with stale data would
+    // overwrite a newer, already-landed credential from a faster call that
+    // started after it.
+    const { host, byId } = makeFakeHost();
+    const handle = await host.provision({ name: 'branch-sprite-race', substrate: { kind: 'sprite' }, options: {} });
+
+    // Call A: reads an OLD token, but its root resolution stays pending
+    // until manually released — simulating a stall on a flaky root Sprite.
+    let releaseA!: () => void;
+    const aRootReady = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const callA = propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => {
+        await aRootReady;
+        return makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'old-token' });
+      },
+    });
+
+    // Call B starts after A and finishes normally with a NEWER (rotated)
+    // token, while A is still stalled.
+    const rootHandleB = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'rotated-token' });
+    await propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => rootHandleB,
+    });
+    expect(byId.get(handle.machineId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('rotated-token');
+
+    // Now let A's stalled resolution proceed — it should detect a newer
+    // generation already landed and skip its own mv rather than clobber it.
+    releaseA();
+    await callA;
+
+    expect(byId.get(handle.machineId)?.files.get('/home/sprite/.claude/.credentials.json')).toBe('rotated-token');
+  });
+
+  it('given the mv exec fails, should leave the EXISTING valid credential at the real path untouched (no window of total absence) and clean up the orphaned temp file', async () => {
+    // The core property this design exists for: a failed rename must never
+    // regress a branch from "has a valid, working credential" to "has
+    // none at all" — that would be a regression on exactly the transient
+    // Sprite/FS hiccups this best-effort path is supposed to tolerate.
+    const { host, byId } = makeFakeHost((state, args) => {
+      if (args.cmd === 'mv') return { exitCode: 1, stdout: '', stderr: 'mv: input/output error' };
+      if (args.cmd === 'rm' && args.args?.[0] === '-f' && args.args[1] !== undefined) {
+        state.files.delete(args.args[1]);
+        state.fileModes.delete(args.args[1]);
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    // Provision a branch Sprite directly and seed it with an existing,
+    // valid credential — as if a prior successful copy already happened.
+    const handle = await host.provision({ name: 'branch-sprite', substrate: { kind: 'sprite' }, options: {} });
+    await handle.writeFiles([{ path: '/home/sprite/.claude/.credentials.json', content: 'still-valid-token', mode: 0o600 }]);
+
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'refreshed-token' });
+    await propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => rootHandle,
+    });
+
+    const state = byId.get(handle.machineId);
+    // The refresh's mv failed — the credential at the real path must be the
+    // one that was there before the failed refresh, not gone.
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('still-valid-token');
+    // The orphaned (generation-suffixed) temp file must have been cleaned
+    // up (best-effort).
+    const tempPathPattern = /^\/home\/sprite\/\.claude\/\.credentials\.json\.tmp\.[a-z0-9]+$/;
+    expect([...(state?.files.keys() ?? [])].some((k) => tempPathPattern.test(k))).toBe(false);
+  });
+
+  it('given the temp-clearing rm exec fails (non-zero exit), should abort BEFORE writing rather than assume the temp path is clear, and should leave any existing valid credential untouched', async () => {
+    // If the clear itself fails, the temp path might still hold a stale
+    // file — writing to it anyway would risk an OVERWRITE (not a creation),
+    // silently keeping the stale file's permissions, which the subsequent
+    // mv would then promote onto the real credential. Aborting before the
+    // write is what prevents that (caught in review).
+    const { host, byId } = makeFakeHost((_state, args) => {
+      if (args.cmd === 'rm') return { exitCode: 1, stdout: '', stderr: 'rm: permission denied' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    const handle = await host.provision({ name: 'branch-sprite', substrate: { kind: 'sprite' }, options: {} });
+    await handle.writeFiles([{ path: '/home/sprite/.claude/.credentials.json', content: 'still-valid-token', mode: 0o600 }]);
+
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'refreshed-token' });
+    await propagateClaudeCredential({
+      machineId: TERMINAL_ID,
+      branchHandle: handle,
+      resolveRootMachineHandle: async () => rootHandle,
+    });
+
+    const state = byId.get(handle.machineId);
+    // Never reached writeFiles/mv for the temp path — the existing valid
+    // credential at the real path must be untouched.
+    expect(state?.files.get('/home/sprite/.claude/.credentials.json')).toBe('still-valid-token');
+    expect(state?.execLog.some((c) => c.cmd === 'mv')).toBe(false);
+  });
+
+  it('given the mv exec throws (e.g. a transport failure), should not fail the spawn (best-effort)', async () => {
+    const { host } = makeFakeHost((_state, args) => {
+      if (args.cmd === 'mv') throw new Error('exec transport failure');
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const rootHandle = makeRootHandle({ '/home/sprite/.claude/.credentials.json': 'secret-token' });
+    const { deps } = makeDeps({ host, resolveRootMachineHandle: async () => rootHandle });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given resolveRootMachineHandle never settles (e.g. a stuck root Sprite), should still return once the bound elapses rather than hanging indefinitely', async () => {
+    vi.useFakeTimers();
+    try {
+      const { host } = makeFakeHost();
+      const { deps } = makeDeps({
+        host,
+        resolveRootMachineHandle: () => new Promise<MachineHandle | null>(() => {}),
+      });
+
+      const pending = spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await pending;
+
+      expect(result.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Concurrency safety: the row MUST be persisted before the credential copy's
+  // extra I/O runs — see review (chatgpt-codex-connector, P2). Doing the copy
+  // first would widen the window between "clone succeeded" and "row
+  // persisted", during which a concurrent racer's `reconcileProvisionCollision`
+  // (running because ITS OWN clone failed against this same shared,
+  // name-keyed Sprite) would find no matching row yet, conclude the shared
+  // Sprite is its own redundant one, and kill it out from under the winner —
+  // which is still mid-copy and about to persist that exact sandboxId.
+  // ---------------------------------------------------------------------------
+
+  it('given a brand-new branch, should persist the row BEFORE copying the credential (not after)', async () => {
+    const { host } = makeFakeHost();
+    let sawRowAtCopyTime: unknown;
+    const { deps, store } = makeDeps({
+      host,
+      resolveRootMachineHandle: async (mid) => {
+        // If the row isn't there yet when the copy starts, a concurrent
+        // racer's reconcile step could kill this call's freshly-provisioned
+        // Sprite before it ever gets to persist its own row.
+        sawRowAtCopyTime = await store.findByName(mid, PROJECT_NAME, 'main');
+        return null;
+      },
+    });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    expect(result.ok).toBe(true);
+    expect(sawRowAtCopyTime).toMatchObject({ branchName: 'main', projectName: PROJECT_NAME });
+  });
+
+  it('given a re-provision of a vanished branch, should persist the updated sandboxId BEFORE copying the credential (not after)', async () => {
+    const { host } = makeFakeHost();
+    const { deps, store } = makeDeps({ host, resolveRootMachineHandle: async () => null });
+
+    const first = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+    if (!first.ok) throw new Error('expected ok');
+    await host.kill({ machineId: first.sandboxId });
+
+    let sawSandboxIdAtCopyTime: string | undefined;
+    const deps2: MachineBranchesDeps = {
+      ...deps,
+      resolveRootMachineHandle: async (mid) => {
+        const row = await store.findByName(mid, PROJECT_NAME, 'main');
+        sawSandboxIdAtCopyTime = row?.sandboxId;
+        return null;
+      },
+    };
+
+    const second = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps: deps2 });
+    expect(second).toMatchObject({ ok: true, resumed: false });
+    if (!second.ok) throw new Error('expected ok');
+    expect(sawSandboxIdAtCopyTime).toBe(second.sandboxId);
   });
 });
 

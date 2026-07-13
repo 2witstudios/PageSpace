@@ -439,6 +439,46 @@ export async function acquireMachineSession(
 }
 
 /**
+ * Read-only: the `sandboxId` of a page's LIVE machine_session, or `null` if
+ * it has none yet. Unlike `acquireMachineSession`, this never re-authorizes,
+ * provisions, or touches a Sprite. For callers that only need to know WHERE
+ * (if anywhere) a page's Sprite already lives — e.g. propagating state from
+ * the root Machine's Sprite into some other Sprite (`machine-branches.ts`'s
+ * `propagateClaudeCredential`, and the realtime branch-scope PTY resolution
+ * that also refreshes it) — never to acquire or resume one themselves.
+ *
+ * Resolves the CURRENT session key (`deriveMachineSessionKey`) and queries by
+ * it — the table's own unique constraint — rather than a bare `pageId`
+ * (caught in review, P1): `sessionKey` namespaces by tenant + drive + page, so
+ * a page moved between drives can leave its OLD drive's session row behind
+ * (a drive move has no reason to touch `machine_sessions`, and the old row
+ * only disappears once that session tears down on its own). A bare-`pageId`
+ * lookup with no ordering could then non-deterministically return that STALE
+ * row — whose Sprite may belong to a different owner/tenant context entirely
+ * — and hand back state (here, a Claude Code credential) that was never that
+ * page's current owner's to give out. Deriving the exact expected key first
+ * makes the lookup exact by construction: it resolves the CURRENT session or
+ * nothing, never a stale one from a prior drive.
+ *
+ * Lazily resolves the db client, schema table, and `eq` operator so callers
+ * that don't exercise this path (most tests) never load the DB module graph.
+ */
+export async function findLiveMachineSandboxId(input: MachineSessionKeyInput): Promise<string | null> {
+  const sessionKey = deriveMachineSessionKey(input);
+  const [{ db }, { eq }, { machineSessions }] = await Promise.all([
+    import('@pagespace/db/db'),
+    import('@pagespace/db/operators'),
+    import('@pagespace/db/schema/machine-sessions'),
+  ]);
+  const [row] = await db
+    .select({ sandboxId: machineSessions.sandboxId })
+    .from(machineSessions)
+    .where(eq(machineSessions.sessionKey, sessionKey))
+    .limit(1);
+  return row?.sandboxId ?? null;
+}
+
+/**
  * Production DB-backed implementation of MachineSessionStore.
  * Lazily resolves the db client, schema table, and `eq` operator so callers
  * that inject a fake (in tests) never load the DB module graph.
