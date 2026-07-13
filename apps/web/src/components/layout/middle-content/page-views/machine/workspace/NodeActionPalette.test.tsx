@@ -162,6 +162,45 @@ describe('NodeActionPalette', () => {
     });
   });
 
+  // Regression: submit() used to call onSpawned(workspaceId) unconditionally,
+  // even if the user backed out (Escape/backdrop) while the addAgentTerminal
+  // network call was still in flight. A late-resolving spawn would then still
+  // report "success" to a caller no longer listening — in DevelopmentSidebar
+  // that meant navigating the user to a workspace they explicitly cancelled.
+  test('cancelling "New terminal" (Escape) while the spawn is in flight never reports success once it resolves', async () => {
+    let resolveSpawn: (value: unknown) => void = () => {};
+    vi.mocked(post).mockImplementationOnce(() => new Promise((resolve) => { resolveSpawn = resolve; }));
+    const onWorkspaceCreated = vi.fn();
+    renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={onWorkspaceCreated} />);
+
+    const user = await openPalette();
+    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
+    await user.click(screen.getByRole('button', { name: 'Spawn agent' }));
+
+    // Still awaiting the network — back out before it resolves.
+    await user.keyboard('{Escape}');
+    await waitFor(() => {
+      assert({
+        given: 'Escape pressed while a "New terminal" spawn is awaiting the network',
+        should: 'close the palette immediately rather than wait for the in-flight spawn',
+        actual: screen.queryByRole('dialog'),
+        expected: null,
+      });
+    });
+
+    resolveSpawn({ agentTerminal: { name: 'claude-late', agentType: 'claude', resumed: false } });
+    // Let the now-resolved promise chain (addAgentTerminal -> cancelledRef
+    // check -> removeAgentTerminal cleanup) finish draining.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert({
+      given: 'the spawn resolving AFTER the user cancelled it',
+      should: 'never call onWorkspaceCreated for a spawn the user backed out of',
+      actual: onWorkspaceCreated.mock.calls.length,
+      expected: 0,
+    });
+  });
+
   test('"New terminal" offers shell, claude, and codex — not pagespace-cli — with shell first/default', async () => {
     renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
 

@@ -247,6 +247,14 @@ function TerminalSpawnForm({
   const [prompt, setPrompt] = useState('');
   const [spawning, setSpawning] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  // Backs out of an in-flight spawn cleanly: the palette can close (Escape,
+  // backdrop click) while `submit` is still awaiting the network. Without
+  // this, a spawn that resolves after the user backed out would still call
+  // `onSpawned` — reporting success to a caller that isn't listening for it
+  // anymore (e.g. DevelopmentSidebar would still navigate to the Terminal tab
+  // for a spawn the user explicitly cancelled).
+  const cancelledRef = useRef(false);
+  useEffect(() => () => { cancelledRef.current = true; }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => promptRef.current?.focus(), 50);
@@ -255,8 +263,18 @@ function TerminalSpawnForm({
 
   const submit = async () => {
     setSpawning(true);
+    // May end up set even on a path that throws before assignment finishes —
+    // tracked outside the try so the catch below knows whether there's a
+    // session to clean up, regardless of which step failed.
+    let created: Awaited<ReturnType<typeof addAgentTerminal>> | undefined;
     try {
-      const created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
+      created = await addAgentTerminal(autoSessionName(agentType, freshNameSuffix()), agentType);
+
+      if (cancelledRef.current) {
+        if (!created.resumed) await removeAgentTerminal(created.name).catch(() => {});
+        return;
+      }
+
       const workspaceId = createWorkspace(machineId, scope);
       const workspace = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
       const bound = workspace
@@ -268,13 +286,29 @@ function TerminalSpawnForm({
             created.resumed ? undefined : prompt.trim() || undefined,
           )
         : false;
-      if (!bound && !created.resumed) {
-        await removeAgentTerminal(created.name).catch(() => {});
+
+      if (!bound) {
+        // The pane went away (or never existed) before the bind landed. Take
+        // back only what THIS call created — a resumed session may already be
+        // open in someone else's pane — and report failure, not success.
+        if (!created.resumed) await removeAgentTerminal(created.name).catch(() => {});
+        toast.error('Failed to spawn agent');
+        setSpawning(false);
+        return;
       }
+
       onSpawned(workspaceId);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
-      setSpawning(false);
+      // `created` may be set even though we're here (e.g. createWorkspace
+      // itself threw) — clean up a session that was made but never
+      // successfully handed off, the same guard as the `!bound` path above.
+      if (created && !created.resumed) {
+        await removeAgentTerminal(created.name).catch(() => {});
+      }
+      if (!cancelledRef.current) {
+        toast.error(err instanceof Error ? err.message : 'Failed to spawn agent');
+        setSpawning(false);
+      }
     }
   };
 

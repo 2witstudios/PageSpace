@@ -91,7 +91,22 @@ export function isSameMachineTreeNode(a: MachineTreeNode | null | undefined, b: 
   return a != null && b != null && nodeKey(a) === nodeKey(b);
 }
 
-/** Presentation-only Machine → Project → Branch tree, reusable across any tab that needs this navigation shape (Terminal, Diff, …). Has no opinion on what a row click does — callers own that via `onSelectNode`. */
+/**
+ * Machine → Project → Branch tree, reusable across any tab that needs this
+ * navigation shape (Terminal, Diff, …). Has no opinion on what a row CLICK
+ * does — callers own that via `onSelectNode` — and no opinion on workspaces:
+ * the "N running" badge and the workspace-item leaves under an expanded node
+ * are entirely caller-owned too, via `renderNodeExtra`/`renderNodeChildren`.
+ *
+ * It does own one thing directly: every row's single "+" action palette
+ * (`NodeActionPalette`), because "Add project"/"Add branch" are structural to
+ * THIS tree (backed by `useMachineProjects`/`useMachineBranches`, called
+ * here) — that part predates this file's workspace-agnosticism and was never
+ * caller-injected. "New terminal" rides along in the same palette rather than
+ * getting a second `+`, so it's real when `onWorkspaceCreated` is passed and
+ * simply absent (the palette then offers only Add project/Add branch) for
+ * the Diff/Files tabs that render this tree bare.
+ */
 export default function MachineTree({ machineId, machineLabel, defaultExpanded, onSelectNode, isNodeSelectable, selectedNode, renderNodeChildren, renderNodeExtra, onWorkspaceCreated }: MachineTreeProps) {
   return (
     <div className="p-1 text-sm">
