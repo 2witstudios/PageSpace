@@ -34,6 +34,7 @@ import type { SandboxActorContext, SandboxQuotaDeps } from '../sandbox/tool-runn
 import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from '../sandbox/execution-policy';
 import type { ExecutableSandbox } from '../sandbox/sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../sandbox/audit';
+import { isValidId } from '../../validators/id-validators';
 import { resolveProjectClonePath, isValidRepoUrl, normalizeProjectName } from './project-paths';
 import { isUniqueViolation, type MachineProjectStore, type MachineProjectRecord } from './machine-projects-store';
 
@@ -65,19 +66,29 @@ export function planAddProject({
   repoUrl: string;
   existingNames: string[];
   projectId: string;
-}): { ok: true; name: string; projectId: string; path: string } | { ok: false; reason: AddProjectDenialReason } {
+}): { ok: true; name: string; path: string } | { ok: false; reason: AddProjectDenialReason } {
   if (!isValidRepoUrl(repoUrl)) return { ok: false, reason: 'invalid_repo_url' };
+
+  // A malformed row id is a WIRING fault (`newProjectId` misbound to a
+  // non-cuid2 generator), not user input — throw loudly rather than mislabel
+  // every add on the instance as the USER's `invalid_name` (a 400 blaming a
+  // name that is actually fine).
+  if (!isValidId(projectId)) {
+    throw new Error(
+      `planAddProject: projectId ${JSON.stringify(projectId)} is not a valid cuid2 row id — check the newProjectId dep`,
+    );
+  }
 
   const normalized = normalizeProjectName(name);
   const path = resolveProjectClonePath(normalized, projectId);
   // Unreachable given the normalizer's invariant (its output always satisfies
-  // `isValidProjectName`) and a well-formed id; kept as the second confinement
-  // gate, so a regression in the normalizer, the id generator, or
-  // `resolvePathWithinSync` fails closed HERE rather than escaping PROJECTS_ROOT.
+  // `isValidProjectName`) and the id gate above; kept as the second confinement
+  // gate, so a regression in the normalizer or `resolvePathWithinSync` fails
+  // closed HERE rather than escaping PROJECTS_ROOT.
   if (!path) return { ok: false, reason: 'invalid_name' };
 
   if (existingNames.includes(normalized)) return { ok: false, reason: 'duplicate_name' };
-  return { ok: true, name: normalized, projectId, path };
+  return { ok: true, name: normalized, path };
 }
 
 export interface MachineActorContext {
@@ -189,12 +200,8 @@ export async function addProject({
   if (!deps.isEnabled()) return { ok: false, reason: 'kill_switch_off' };
 
   const existing = await deps.store.list(machineId);
-  const plan = planAddProject({
-    name,
-    repoUrl,
-    existingNames: existing.map((p) => p.name),
-    projectId: deps.newProjectId(),
-  });
+  const projectId = deps.newProjectId();
+  const plan = planAddProject({ name, repoUrl, existingNames: existing.map((p) => p.name), projectId });
   if (!plan.ok) return plan;
 
   const ctx = buildCtx(machineId, actor);
@@ -208,6 +215,13 @@ export async function addProject({
   });
 
   if (!result.success) {
+    // A clone that never returned an exit code (timeout, transport error) can
+    // still have left a partial checkout. Under per-row paths that orphan is
+    // PERMANENT if not removed here — no row will ever point at it and no
+    // retry reuses this id — unlike the old shared by-name directory, which
+    // the next same-name attempt reclaimed. Same id-scoped cleanup as below:
+    // this directory is ours alone.
+    await safeRemoveDirectory(machineId, plan.path, deps);
     return { ok: false, reason: 'clone_failed', detail: result.error };
   }
   if (result.exitCode !== 0) {
@@ -222,7 +236,7 @@ export async function addProject({
 
   try {
     const project = await deps.store.create({
-      id: plan.projectId,
+      id: projectId,
       ownerId: actor.userId,
       machineId,
       // The normalized name — never the raw text the caller typed. Persisting
@@ -239,10 +253,18 @@ export async function addProject({
       // even though paths no longer are): our clone SUCCEEDED into our own
       // per-row directory, but no row will ever point at it — remove it, or it
       // lingers as an unreachable orphan. Still id-scoped: this is our
-      // directory, never the winner's.
+      // directory, never the winner's. The loser paying for a full clone
+      // before losing is the accepted price of never sharing a directory —
+      // reserving the name before the clone was tried and reverted (see the
+      // planAddProject doc).
       await safeRemoveDirectory(machineId, plan.path, deps);
       return { ok: false, reason: 'duplicate_name' };
     }
+    // Deliberately NO directory cleanup here: unlike the unique violation
+    // above (the insert definitively did not happen), a generic store error is
+    // AMBIGUOUS — the insert may have committed with only the ack lost, and
+    // `rm -rf` would then delete a LIVE row's checkout, the exact data loss
+    // this module exists to prevent. A leaked directory is the safer failure.
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 }

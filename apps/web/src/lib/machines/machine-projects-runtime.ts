@@ -144,8 +144,7 @@ export function buildMachineProjectsDeps({ actorUserId }: { actorUserId: string 
     },
     isEnabled: isCodeExecutionEnabled,
     now: () => new Date(),
-    // Same generator as the schema's id default — generated up front so the
-    // per-row clone path and the row share one id (see MachineProjectsDeps).
+    // See MachineProjectsDeps.newProjectId for why this is generated up front.
     newProjectId: createId,
     acquireMachineSandbox: async (machineId): Promise<MachineAcquireResult> => {
       const page = await db.query.pages.findFirst({

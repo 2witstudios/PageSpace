@@ -20,6 +20,20 @@ const actor = {
   tier: 'pro' as const,
 };
 
+function makeRecord(overrides: Partial<MachineProjectRecord> = {}): MachineProjectRecord {
+  return {
+    id: 'p1',
+    ownerId: 'user-1',
+    machineId: TERMINAL_ID,
+    name: 'my-repo',
+    repoUrl: 'https://github.com/o/r.git',
+    path: `${PROJECTS_ROOT}/my-repo-p1`,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
 function makeStore(seed: MachineProjectRecord[] = []) {
   // Keyed by row id — the (machineId, name) uniqueness is enforced by scan in
   // `create`, mirroring the DB's unique index vs primary key split.
@@ -113,7 +127,6 @@ describe('planAddProject', () => {
     ).toEqual({
       ok: true,
       name: 'my-repo',
-      projectId: 'id1',
       path: `${PROJECTS_ROOT}/my-repo-id1`,
     });
   });
@@ -141,7 +154,6 @@ describe('planAddProject', () => {
     ).toEqual({
       ok: true,
       name: 'my-cool-feature',
-      projectId: 'id1',
       path: `${PROJECTS_ROOT}/my-cool-feature-id1`,
     });
   });
@@ -152,15 +164,24 @@ describe('planAddProject', () => {
     ).toEqual({
       ok: true,
       name: 'etc',
-      projectId: 'id1',
       path: `${PROJECTS_ROOT}/etc-id1`,
     });
   });
 
-  it('given a malformed row id, should fail closed as invalid_name — the id feeds an rm -rf argument', () => {
-    expect(
+  it('given a malformed row id, should THROW — a bad id is a wiring fault, not user input to blame as invalid_name', () => {
+    expect(() =>
       planAddProject({ name: 'my-repo', repoUrl: 'https://github.com/o/r.git', existingNames: [], projectId: '../up' }),
-    ).toEqual({ ok: false, reason: 'invalid_name' });
+    ).toThrow(/newProjectId/);
+    expect(() =>
+      planAddProject({
+        name: 'my-repo',
+        repoUrl: 'https://github.com/o/r.git',
+        existingNames: [],
+        // A UUID — valid-looking to a future refactor, but not the cuid2 the
+        // path scheme (and the rm -rf confinement) is built around.
+        projectId: '123e4567-e89b-42d3-a456-426614174000',
+      }),
+    ).toThrow(/newProjectId/);
   });
 
   it('given a name that normalizes onto an existing project, should reject as duplicate', () => {
@@ -257,16 +278,7 @@ describe('addProject', () => {
   it('given a duplicate project name already tracked, should reject before cloning', async () => {
     // A LEGACY name-based path on the seeded row on purpose: the duplicate
     // check is by NAME, so pre-per-row-path rows still block a same-name add.
-    const existing: MachineProjectRecord = {
-      id: 'p1',
-      ownerId: 'user-1',
-      machineId: TERMINAL_ID,
-      name: 'my-repo',
-      repoUrl: 'https://github.com/o/r.git',
-      path: `${PROJECTS_ROOT}/my-repo`,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
+    const existing = makeRecord({ path: `${PROJECTS_ROOT}/my-repo` });
     const { deps, runCommandCalls } = makeDeps({}, [existing]);
     const result = await addProject({
       machineId: TERMINAL_ID,
@@ -303,6 +315,35 @@ describe('addProject', () => {
     expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
     // The id-suffixed path THIS operation owns — never a shared by-name one.
     expect(rmTargets).toEqual([`${PROJECTS_ROOT}/bad-repo-id1`]);
+    expect(await store.list(TERMINAL_ID)).toEqual([]);
+  });
+
+  it('given the clone times out / throws (no exit code at all), should still clean up its own per-row directory', async () => {
+    // Under per-row paths an uncleaned partial clone is PERMANENT garbage (no
+    // row points at it, no retry reuses the id) — the old shared by-name dir
+    // was reclaimed by the next attempt, this one never is.
+    const rmTargets: string[] = [];
+    const sandbox: ExecutableSandbox = {
+      sandboxId: 'sbx-1',
+      runCommand: async (opts) => {
+        if (opts.cmd === 'git') throw new Error('deadline exceeded');
+        if (opts.cmd === 'rm') { rmTargets.push(opts.args?.[1] ?? ''); return { exitCode: 0, stdout: '', stderr: '' }; }
+        throw new Error(`unexpected cmd ${opts.cmd}`);
+      },
+      writeFiles: async () => {},
+      readFileToBuffer: async () => null,
+      createCheckpoint: async () => {},
+    };
+    const { deps, store } = makeDeps({ reconnect: async () => sandbox });
+    const result = await addProject({
+      machineId: TERMINAL_ID,
+      actor,
+      name: 'big-repo',
+      repoUrl: 'https://github.com/o/big.git',
+      deps,
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'clone_failed' });
+    expect(rmTargets).toEqual([`${PROJECTS_ROOT}/big-repo-id1`]);
     expect(await store.list(TERMINAL_ID)).toEqual([]);
   });
 
@@ -358,17 +399,14 @@ describe('addProject', () => {
 
 describe('listProjects', () => {
   it('given projects on a machine, should list only that machine\'s projects', async () => {
-    const other: MachineProjectRecord = {
-      id: 'p-other',
+    const other = makeRecord({
+      id: 'pother',
       ownerId: 'user-2',
       machineId: 'terminal-2',
       name: 'other-repo',
-      repoUrl: 'https://github.com/o/other.git',
-      path: `${PROJECTS_ROOT}/other-repo`,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
-    const mine: MachineProjectRecord = { ...other, id: 'p-mine', ownerId: 'user-1', machineId: TERMINAL_ID, name: 'mine' };
+      path: `${PROJECTS_ROOT}/other-repo-pother`,
+    });
+    const mine = makeRecord({ id: 'pmine', name: 'mine', path: `${PROJECTS_ROOT}/mine-pmine` });
     const { store } = makeStore([other, mine]);
     const result = await listProjects({ machineId: TERMINAL_ID, store });
     expect(result).toEqual([mine]);
@@ -396,16 +434,7 @@ describe('removeProject', () => {
   });
 
   it('given an existing project, should rm -rf ONLY that row\'s own directory and delete the row BY ID', async () => {
-    const existing: MachineProjectRecord = {
-      id: 'p1',
-      ownerId: 'user-1',
-      machineId: TERMINAL_ID,
-      name: 'my-repo',
-      repoUrl: 'https://github.com/o/r.git',
-      path: `${PROJECTS_ROOT}/my-repo-p1`,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
+    const existing = makeRecord();
     const { deps, store, removeCalls, runCommandCalls } = makeDeps({}, [existing]);
     const result = await removeProject({ machineId: TERMINAL_ID, name: 'my-repo', deps });
     expect(result).toEqual({ ok: true });
@@ -421,16 +450,12 @@ describe('removeProject', () => {
     // Back-compat: rows created before per-row clone paths persisted
     // `PROJECTS_ROOT/<name>`. Removal reads the row's stored path, so they
     // keep resolving with no migration.
-    const legacy: MachineProjectRecord = {
+    const legacy = makeRecord({
       id: 'legacyid',
-      ownerId: 'user-1',
-      machineId: TERMINAL_ID,
       name: 'old-repo',
       repoUrl: 'https://github.com/o/old.git',
       path: `${PROJECTS_ROOT}/old-repo`,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
+    });
     const { deps, store, removeCalls, runCommandCalls } = makeDeps({}, [legacy]);
     const result = await removeProject({ machineId: TERMINAL_ID, name: 'old-repo', deps });
     expect(result).toEqual({ ok: true });
@@ -447,16 +472,7 @@ describe('removeProject', () => {
   });
 
   it('given the sandbox is unreachable during cleanup, should still remove the tracking row (best-effort cleanup)', async () => {
-    const existing: MachineProjectRecord = {
-      id: 'p1',
-      ownerId: 'user-1',
-      machineId: TERMINAL_ID,
-      name: 'my-repo',
-      repoUrl: 'https://github.com/o/r.git',
-      path: `${PROJECTS_ROOT}/my-repo`,
-      createdAt: NOW,
-      updatedAt: NOW,
-    };
+    const existing = makeRecord();
     const { deps, store } = makeDeps(
       { acquireMachineSandbox: async () => ({ ok: false, reason: 'error' }) },
       [existing],

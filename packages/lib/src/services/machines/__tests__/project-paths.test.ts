@@ -106,6 +106,10 @@ describe('resolveProjectClonePath', () => {
     expect(resolveProjectClonePath('my-repo', '../escape')).toBeNull();
     expect(resolveProjectClonePath('my-repo', 'a/b')).toBeNull();
     expect(resolveProjectClonePath('my-repo', 'a b')).toBeNull();
+    // The shared cuid2 predicate is stricter than "path-safe": ids the
+    // generator can never emit (uppercase, UUIDs) fail closed too.
+    expect(resolveProjectClonePath('my-repo', 'NOTACUID')).toBeNull();
+    expect(resolveProjectClonePath('my-repo', '123e4567-e89b-42d3-a456-426614174000')).toBeNull();
   });
 
   it('given a max-length name, should truncate the NAME (never the id) to fit the directory cap', () => {
@@ -116,6 +120,13 @@ describe('resolveProjectClonePath', () => {
     expect(dirName.length).toBeLessThanOrEqual(100);
     expect(dirName.endsWith(`-${ID}`)).toBe(true);
     expect(isValidProjectName(dirName)).toBe(true);
+  });
+
+  it('given a truncation cut that lands on a separator, should trim it rather than emit "x.-id"', () => {
+    // 75 chars fit beside a 24-char id; make char 75 a dot so the cut exposes it.
+    const name = `${'a'.repeat(74)}.${'b'.repeat(10)}`;
+    const path = resolveProjectClonePath(name, ID);
+    expect(path).toBe(`${PROJECTS_ROOT}/${'a'.repeat(74)}-${ID}`);
   });
 
   it.each(GNARLY_INPUTS)('given normalized %j, should resolve to a confined per-row path', (input) => {
