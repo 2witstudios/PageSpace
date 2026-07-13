@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderPublishedPage } from '../render-published';
+import { renderPublishedPage, renderPublishedDocument, renderPublishedCode, renderPublishedSheet } from '../render-published';
 
 describe('renderPublishedPage', () => {
   it('given any input, should return a full HTML document', () => {
@@ -159,5 +159,106 @@ describe('renderPublishedPage — SEO + social passthrough', () => {
     const out = renderPublishedPage({ html: '<p>x</p>', pageUrl });
     expect(out).toContain('prefers-color-scheme');
     expect(out).toContain('pagespace-theme');
+  });
+});
+
+describe('renderPublishedDocument', () => {
+  it('given HTML content, should return a full document with typography and no theme bridge', () => {
+    const out = renderPublishedDocument({ html: '<p>hello</p>', title: 'My Doc' });
+    expect(out.startsWith('<!doctype html>')).toBe(true);
+    expect(out).toContain('ps-document');
+    expect(out).toContain('<p>hello</p>');
+    expect(out).not.toContain('pagespace-theme');
+  });
+
+  it('should apply the document CSP (script-src none)', () => {
+    const out = renderPublishedDocument({ html: '<p>x</p>', title: 'Doc' });
+    expect(out).toContain("script-src 'none'");
+  });
+
+  it('given a raw <script>, should strip it (documents never run author scripts)', () => {
+    const out = renderPublishedDocument({
+      html: '<p>x</p><script>alert(1)</script>',
+      title: 'Doc',
+    });
+    expect(out).not.toContain('<script>alert(1)</script>');
+  });
+
+  it('given a non-HTTPS assetBaseUrl, should reject it (same allowedAssetHosts plumbing as renderPublishedPage)', () => {
+    expect(() => renderPublishedDocument({
+      html: '<p>x</p>',
+      title: 'Doc',
+      assetBaseUrl: 'http://cdn.example.com',
+    })).toThrow(/HTTPS/i);
+  });
+
+  it('given pageUrl, should emit SEO tags (same head assembly as canvas)', () => {
+    const out = renderPublishedDocument({
+      html: '<p>x</p>',
+      title: 'Doc',
+      pageUrl: 'https://acme.pagespace.site/doc',
+    });
+    expect(out).toContain('<link rel="canonical" href="https://acme.pagespace.site/doc">');
+  });
+
+  it('given no title, should default to Untitled', () => {
+    const out = renderPublishedDocument({ html: '<p>x</p>' });
+    expect(out).toContain('<title>Untitled</title>');
+  });
+});
+
+describe('renderPublishedCode', () => {
+  it('given a code string, should escape and wrap it in <pre><code>', () => {
+    const out = renderPublishedCode({ code: '<script>alert(1)</script>', title: 'main.ts' });
+    expect(out).toContain('<pre><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></pre>');
+    expect(out).not.toContain('<script>alert(1)</script>');
+  });
+
+  it('should apply the document CSP (script-src none)', () => {
+    const out = renderPublishedCode({ code: 'const x = 1;', title: 'main.ts' });
+    expect(out).toContain("script-src 'none'");
+  });
+
+  it('given pageUrl, should emit SEO tags', () => {
+    const out = renderPublishedCode({
+      code: 'const x = 1;',
+      title: 'main.ts',
+      pageUrl: 'https://acme.pagespace.site/main-ts',
+    });
+    expect(out).toContain('<link rel="canonical" href="https://acme.pagespace.site/main-ts">');
+  });
+
+  it('given no title, should default to Untitled', () => {
+    const out = renderPublishedCode({ code: 'const x = 1;' });
+    expect(out).toContain('<title>Untitled</title>');
+  });
+});
+
+describe('renderPublishedSheet', () => {
+  it('given serialized sheet content, should render an HTML table', () => {
+    const out = renderPublishedSheet({
+      serializedContent: JSON.stringify({ cells: { A1: 'hi' } }),
+      title: 'My Sheet',
+    });
+    expect(out).toContain('<table>');
+    expect(out).toContain('hi');
+  });
+
+  it('given empty sheet content, should render the empty-state message', () => {
+    const out = renderPublishedSheet({
+      serializedContent: JSON.stringify({ cells: {} }),
+      title: 'My Sheet',
+    });
+    expect(out).toContain('This sheet is empty.');
+  });
+
+  it('should apply the document CSP (script-src none)', () => {
+    const out = renderPublishedSheet({ serializedContent: JSON.stringify({ cells: {} }), title: 'Sheet' });
+    expect(out).toContain("script-src 'none'");
+  });
+
+  it('given no title, should default to Untitled', () => {
+    const out = renderPublishedSheet({ serializedContent: JSON.stringify({ cells: {} }) });
+    expect(out).toContain('<title>Untitled</title>');
   });
 });

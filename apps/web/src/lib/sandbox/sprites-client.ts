@@ -13,6 +13,7 @@
 import { SpritesClient } from '@fly/sprites';
 import {
   createSpritesSandboxClient,
+  withKillSession,
   resolveSpritesToken,
   type SpritesSdk,
   type SpriteInstanceLike,
@@ -33,9 +34,10 @@ async function getSpritesSDK(): Promise<SpritesSdk> {
   if (cachedSdk) return cachedSdk;
   const client = new SpritesClient(resolveSpritesToken());
   cachedSdk = {
-    getSprite: (name) => client.getSprite(name) as unknown as Promise<SpriteInstanceLike>,
-    createSprite: (name, config) =>
-      client.createSprite(name, config) as unknown as Promise<SpriteInstanceLike>,
+    // withKillSession bolts the REST kill-session method onto the raw SDK
+    // instance — see its doc (sprites.ts) for why the SDK needs this at all.
+    getSprite: async (name) => withKillSession(await client.getSprite(name)) as unknown as SpriteInstanceLike,
+    createSprite: async (name, config) => withKillSession(await client.createSprite(name, config)) as unknown as SpriteInstanceLike,
     deleteSprite: (name) => client.deleteSprite(name),
   };
   return cachedSdk;

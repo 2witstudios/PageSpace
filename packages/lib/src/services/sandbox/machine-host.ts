@@ -107,6 +107,21 @@ export interface MachineHandle {
   stream(args: MachineStreamOptions): Promise<MachineStream>;
   listStreams(): Promise<MachineStreamSessionInfo[]>;
   /**
+   * Terminate a specific interactive-stream session server-side, by id —
+   * reaches a session regardless of whether the caller currently holds a live
+   * `MachineStream` to it (unlike `MachineStream.kill()`, a signal delivered
+   * over that stream's own transport, which reaches nothing once the
+   * transport is closed or was never opened). This is what a genuine
+   * termination (an explicit kill request, or the detached-idle reap) must
+   * call — see `apps/realtime/src/terminal/sprites-shell.ts`'s
+   * `planTeardown`.
+   *
+   * MUST be idempotent: killing an id the machine no longer recognizes
+   * (already dead, or never existed) resolves successfully rather than
+   * rejecting.
+   */
+  killSession(sessionId: string): Promise<void>;
+  /**
    * Create a filesystem checkpoint tagged with `comment` (Sprites Platform
    * Alignment 5-2) — see `sprite-machine-host.ts` for the (today, only)
    * implementation. Required: `MachineHost` has exactly one backend

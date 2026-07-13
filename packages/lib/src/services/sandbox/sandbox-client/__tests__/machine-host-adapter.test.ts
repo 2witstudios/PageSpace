@@ -17,6 +17,7 @@ function fakeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
       throw new Error('not used by this adapter');
     },
     listStreams: async () => [],
+    killSession: async () => {},
     ...over,
   };
 }

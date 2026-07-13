@@ -6,12 +6,16 @@ import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { validatePublishSubdomain, normalizeSubdomain } from '@pagespace/lib/validators/subdomain';
 import { db } from '@pagespace/db/db';
-import { eq, and, ne } from '@pagespace/db/operators';
+import { eq, and, ne, inArray } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { resolvePublishedMeta } from '@pagespace/lib/canvas/resolve-published-meta';
-import { renderPublishedPage } from './render-published';
+import { isPublishablePageType, getPublishablePageTypes } from '@pagespace/lib/content/page-types.config';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { neutralizeDashboardLinks } from '@pagespace/lib/publish/neutralize-dashboard-links';
+import { marked } from 'marked';
+import { renderPublishedPage, renderPublishedDocument, renderPublishedCode, renderPublishedSheet } from './render-published';
 import {
   buildPublishedKey,
   putPublishedArtifact,
@@ -22,7 +26,7 @@ import {
   isPublishConfigured,
   getPublishAssetBaseUrl,
 } from './published-storage';
-import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta } from './asset-pipeline';
+import { rewriteCanvasAssets, rewriteInterPageLinksForDrive, extractAndStripOgMeta, type OgMeta } from './asset-pipeline';
 import { buildRobotsTxt, buildSitemapXml, buildNotFoundHtml, resolveFaviconTags } from '@pagespace/lib/canvas/site-files';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } from './custom-domain-mirror';
@@ -107,12 +111,101 @@ export interface PublishCanvasPageResult {
   path: string;
   /** True when this page is the drive's home page (also mirrored to the root). */
   isHomePage: boolean;
+  /**
+   * Effective author SEO overrides as persisted (after merging `input`'s
+   * partial overrides with whatever was already stored). Callers that resolve
+   * `ogImageUrl` from an uploaded file id should read it back from here rather
+   * than caching their own request payload — the request may carry a blank
+   * placeholder for a value the server just resolved to a real CDN URL.
+   */
+  title: string | null;
+  description: string | null;
+  ogImageUrl: string | null;
+  noindex: boolean;
+}
+
+/** Final SEO/head fields threaded into whichever type-specific renderer `preparePublishContent` selects. */
+interface PublishRenderArgs {
+  title?: string;
+  assetBaseUrl?: string;
+  faviconHref?: string;
+  faviconBaseUrl?: string;
+  pageUrl?: string;
+  ogImageUrl?: string;
+  ogDescription?: string;
+  description?: string;
+  robots?: string;
+  formActionOrigin?: string;
+}
+
+interface PreparedPublishContent {
+  /** Meta the author embedded in the page body (canvas/document only — empty for CODE/SHEET). */
+  meta: OgMeta;
+  /** Text used as the last-resort source for a derived meta description. */
+  body: string;
+  /** Renders the final standalone document once SEO fields are resolved. */
+  render: (args: PublishRenderArgs) => string;
 }
 
 /**
- * Core canvas publishing logic shared by the per-page publish route and the drive
- * home-page auto-publish. Handles subdomain resolution, asset rewriting, OG meta,
- * S3 artifact upload, and published_pages DB upsert.
+ * Per-page-type content pipeline shared by `publishCanvasPage` and
+ * `renderNotFoundPageHtml`. CANVAS and DOCUMENT content is HTML: assets and
+ * inter-page links are rewritten and embedded OG meta is extracted from it
+ * (DOCUMENT additionally converts markdown and neutralizes leftover dashboard
+ * links). CODE and SHEET content is not HTML (a raw code string / serialized
+ * sheet JSON) — it carries no embedded meta and needs none of the HTML
+ * rewriting steps, so it passes straight to its renderer.
+ */
+async function preparePublishContent(params: {
+  type: PageType;
+  content: string | null;
+  contentMode: 'html' | 'markdown';
+  driveId: string;
+  subdomain: string;
+  homePageId: string | null;
+  currentPageId: string;
+  currentPath: string;
+  actingUserId: string;
+}): Promise<PreparedPublishContent> {
+  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId } = params;
+
+  switch (type) {
+    case PageType.CANVAS: {
+      const { html: assetHtml } = await rewriteCanvasAssets({ html: content ?? '', userId: actingUserId, db });
+      const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
+        html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
+      });
+      const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
+      return { meta, body: bodyHtml, render: (args) => renderPublishedPage({ html: bodyHtml, ...args }) };
+    }
+    case PageType.DOCUMENT: {
+      const rawHtml = contentMode === 'markdown' ? await marked.parse(content ?? '') : (content ?? '');
+      const { html: assetHtml } = await rewriteCanvasAssets({ html: rawHtml, userId: actingUserId, db });
+      const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
+        html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
+      });
+      const neutralizedHtml = neutralizeDashboardLinks(rewrittenHtml);
+      const { meta, html: bodyHtml } = extractAndStripOgMeta(neutralizedHtml);
+      return { meta, body: bodyHtml, render: (args) => renderPublishedDocument({ html: bodyHtml, ...args }) };
+    }
+    case PageType.CODE:
+      // `body` (not the rendered `code`) feeds deriveDescription's fallback
+      // meta description when the author sets none — raw source isn't prose,
+      // and deriveDescription's HTML-tag stripping (`/<[^>]+>/g`) would mangle
+      // generics/comparisons in it, so leave it empty like SHEET's non-prose
+      // content (an empty derived description, same accepted tradeoff).
+      return { meta: {}, body: '', render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
+    case PageType.SHEET:
+      return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: content ?? '', ...args }) };
+    default:
+      throw new PublishError(`Cannot publish page type: ${type}`, 400);
+  }
+}
+
+/**
+ * Core publishing logic shared by the per-page publish route and the drive
+ * home-page auto-publish. Handles subdomain resolution, per-type content
+ * rendering, OG meta, S3 artifact upload, and published_pages DB upsert.
  *
  * Auth and permission checks are the caller's responsibility.
  */
@@ -120,19 +213,19 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   const { pageId, driveId, userId } = input;
 
   // ------------------------------------------------------------------
-  // 1. Load page (must be canvas)
+  // 1. Load page (must be a publishable type)
   // ------------------------------------------------------------------
   const page = await db.query.pages.findFirst({
     where: eq(pages.id, pageId),
-    columns: { id: true, type: true, title: true, content: true, driveId: true },
+    columns: { id: true, type: true, title: true, content: true, contentMode: true, driveId: true },
   });
 
   if (!page) {
     throw new PublishError('Page not found', 404);
   }
 
-  if (page.type !== 'CANVAS') {
-    throw new PublishError('Only canvas pages can be published', 400);
+  if (!isPublishablePageType(page.type as PageType)) {
+    throw new PublishError('This page type cannot be published', 400);
   }
 
   // The page must actually live in the drive whose subdomain we are about to
@@ -188,22 +281,23 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
       : normalizePublishPath(input.path) || pageId;
 
   // ------------------------------------------------------------------
-  // 4. Rewrite assets + extract OG meta
+  // 4. Per-type content pipeline: rewrite assets/links + extract embedded meta
   // ------------------------------------------------------------------
-  const { html: assetHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId, db });
-  // Rewrite page→page links to their public published URLs so navigation between
-  // published pages works on the subdomain site (drive-scoped; unpublished /
-  // out-of-drive targets are left unchanged).
-  const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
-    html: assetHtml,
+  // Rewriting page→page links to their public published URLs makes navigation
+  // between published pages work on the subdomain site (drive-scoped;
+  // unpublished / out-of-drive targets are left unchanged).
+  const prepared = await preparePublishContent({
+    type: page.type as PageType,
+    content: page.content,
+    contentMode: page.contentMode,
     driveId,
     subdomain,
     homePageId: drive.homePageId,
     currentPageId: pageId,
     currentPath: path,
-    db,
+    actingUserId: userId,
   });
-  const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
+  const { meta, body: bodyHtml } = prepared;
   const assetBaseUrl = getPublishAssetBaseUrl();
 
   // ------------------------------------------------------------------
@@ -276,8 +370,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     );
   }
 
-  const html = renderPublishedPage({
-    html: bodyHtml,
+  const html = prepared.render({
     title: resolvedMeta.title,
     assetBaseUrl,
     faviconHref: favicon.faviconHref,
@@ -392,7 +485,16 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
   // copies the branded link visitors should land on. This is the same canonical
   // host baked into the rendered HTML above — `rootUrl`/`publishedUrl`.
   const responseUrl = isHomePage ? rootUrl : publishedUrl;
-  return { url: responseUrl, subdomain, path, isHomePage };
+  return {
+    url: responseUrl,
+    subdomain,
+    path,
+    isHomePage,
+    title: effectiveTitle,
+    description: effectiveDescription,
+    ogImageUrl: effectiveOgImageUrl,
+    noindex: effectiveNoindex,
+  };
 }
 
 /**
@@ -572,28 +674,28 @@ async function renderNotFoundPageHtml(params: {
         eq(pages.id, pageId),
         eq(pages.driveId, driveId),
         eq(pages.isTrashed, false),
-        eq(pages.type, 'CANVAS'),
+        inArray(pages.type, getPublishablePageTypes()),
       ),
-      columns: { title: true, content: true },
+      columns: { type: true, title: true, content: true, contentMode: true },
     });
     if (!page) return null;
 
-    const { html: assetHtml } = await rewriteCanvasAssets({ html: page.content ?? '', userId: ownerId, db });
-    const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
-      html: assetHtml,
+    const prepared = await preparePublishContent({
+      type: page.type as PageType,
+      content: page.content,
+      contentMode: page.contentMode,
       driveId,
       subdomain,
       homePageId,
       currentPageId: pageId,
       currentPath: '',
-      db,
+      actingUserId: ownerId,
     });
-    const { meta, html: bodyHtml } = extractAndStripOgMeta(rewrittenHtml);
+    const { meta } = prepared;
     const favicon = resolveFaviconTags(meta.faviconHref, publishFaviconUrl, FAVICON_BASE_URL);
     const formActionOrigin = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL;
 
-    return renderPublishedPage({
-      html: bodyHtml,
+    return prepared.render({
       // Same precedence as a normal publish (resolvePublishedMeta): the
       // page's own code-authored meta wins over its internal page title.
       title: meta.ogTitle || meta.title || page.title || 'Page not found',

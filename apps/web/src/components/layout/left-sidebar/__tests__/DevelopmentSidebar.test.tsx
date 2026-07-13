@@ -9,13 +9,17 @@
  * and navigate.
  */
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
 const mockUseParams = vi.fn<() => { driveId?: string }>(() => ({ driveId: 'drive-1' }));
 const mockUsePathname = vi.fn(() => '/dashboard/drive-1/development');
+// Defaults to desktop width (matches the real hook's jsdom default — see
+// test/setup.ts). Individual tests flip this to exercise the sheet-breakpoint
+// (narrow-viewport) branch without needing a real matchMedia listener.
+const mockUseBreakpoint = vi.fn(() => false);
 
 vi.mock('next/navigation', () => ({
   useParams: () => mockUseParams(),
@@ -24,6 +28,7 @@ vi.mock('next/navigation', () => ({
 }));
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
+vi.mock('@/hooks/useBreakpoint', () => ({ useBreakpoint: () => mockUseBreakpoint() }));
 
 // Spied, not just stubbed: a null/disabled key is HOW the sidebar refuses to
 // fetch for a non-admin, so the argument is the security property — asserting
@@ -79,6 +84,12 @@ vi.mock('@/hooks/useGithubRepos', () => ({
 }));
 vi.mock('@/hooks/useIntegrations', () => ({ useProviders: () => ({ providers: [] }) }));
 
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: vi.fn(async () => new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 })),
+  post: vi.fn(async () => ({ agentTerminal: { name: 'claude-a1b2c3', agentType: 'claude', resumed: false } })),
+  del: vi.fn(async () => new Response(null, { status: 204 })),
+}));
+
 // Sidebar chrome that isn't under test.
 vi.mock('@/components/layout/navbar/DriveSwitcher', () => ({ default: () => <div /> }));
 vi.mock('../PrimaryNavigation', () => ({ default: () => <div /> }));
@@ -89,6 +100,7 @@ import DevelopmentSidebar from '../DevelopmentSidebar';
 import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { useMachineTabStore } from '@/stores/machine-workspace/useMachineTabStore';
 import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import { useLayoutStore } from '@/stores/useLayoutStore';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -96,9 +108,11 @@ beforeEach(() => {
   usePendingWorkspaceStore.setState({ pending: null });
   useMachineTabStore.setState({ tabs: {} });
   useMachineWorkspaceStore.setState({ machines: {} });
+  useLayoutStore.setState({ leftSheetOpen: false });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
   mockUseParams.mockReturnValue({ driveId: 'drive-1' });
   mockUsePathname.mockReturnValue('/dashboard/drive-1/development');
+  mockUseBreakpoint.mockReturnValue(false);
 });
 
 describe('DevelopmentSidebar', () => {
@@ -145,6 +159,110 @@ describe('DevelopmentSidebar', () => {
     expect(screen.queryByText(/failed to load machines/i)).toBeNull();
   });
 
+  test('an initial (cold) load shows a distinct loading state, not the empty notice', () => {
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: true,
+      error: undefined,
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/loading machines/i)).toBeDefined();
+    expect(screen.queryByText(/no machines in this drive/i)).toBeNull();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('a genuinely empty drive shows the empty notice, not "failed"', () => {
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: false,
+      error: undefined,
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/no machines in this drive yet/i)).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('a failed INITIAL load (nothing to fall back on) offers a retry that revalidates', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn();
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: false,
+      error: new Error('network down'),
+      mutate,
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/failed to load machines/i)).toBeDefined();
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+
+    // Called with ZERO arguments: the button's onClick hands React's click
+    // MouseEvent to whatever it's wired to, and SWR's `mutate` treats a first
+    // argument as replacement cache DATA rather than "revalidate now" — so a
+    // naive `onRetry={mutate}` would silently corrupt the machines list
+    // instead of refetching it. Pinning the call shape catches that class of
+    // bug even though `toHaveBeenCalledTimes` alone would not.
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith();
+  });
+
+  test('a retry IN FLIGHT shows the loading state, not a rerun of the stale error', () => {
+    // SWR sets `isLoading` back to `true` on revalidation whenever cached data
+    // is still `undefined` — exactly what a failed fetch leaves behind — while
+    // `error` stays at its stale, pre-retry value until the new attempt
+    // settles. Both are true at once mid-retry, so the guard chain order
+    // matters: loading must win, or clicking Retry looks like it did nothing.
+    const staleError = new Error('network down');
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: false,
+      error: staleError,
+      mutate: vi.fn(),
+    });
+    const { rerender } = render(<DevelopmentSidebar />);
+    expect(screen.getByText(/failed to load machines/i)).toBeDefined();
+
+    mockUseDriveMachines.mockReturnValueOnce({
+      machines: [],
+      isLoading: true,
+      error: staleError,
+      mutate: vi.fn(),
+    });
+    rerender(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/loading machines/i)).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('closes the mobile sheet after navigating to a machine, at the sheet breakpoint', async () => {
+    const user = userEvent.setup();
+    mockUseBreakpoint.mockReturnValue(true);
+    useLayoutStore.setState({ leftSheetOpen: true });
+
+    render(<DevelopmentSidebar />);
+    await user.click(await screen.findByText('Dev box'));
+
+    expect(useLayoutStore.getState().leftSheetOpen).toBe(false);
+  });
+
+  test('leaves the sheet alone at desktop width', async () => {
+    const user = userEvent.setup();
+    mockUseBreakpoint.mockReturnValue(false);
+    useLayoutStore.setState({ leftSheetOpen: true });
+
+    render(<DevelopmentSidebar />);
+    await user.click(await screen.findByText('Dev box'));
+
+    expect(useLayoutStore.getState().leftSheetOpen).toBe(true);
+  });
+
   test('says nothing about admin rights until auth has resolved', () => {
     // `role` isn't persisted across a reload, so an early refusal would flash at
     // a real admin on every cold load.
@@ -173,19 +291,23 @@ describe('DevelopmentSidebar', () => {
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });
 
-  test('the machine row\'s new-workspace trigger creates a workspace and drives the same click flow', async () => {
+  test('the machine row\'s single "+" palette spawns a new terminal and drives the same click flow', async () => {
     const user = userEvent.setup();
     render(<DevelopmentSidebar />);
 
-    await user.click(await screen.findByRole('button', { name: 'New workspace' }));
+    await user.click(await screen.findByTitle('Add…'));
+    await user.click(await screen.findByRole('option', { name: 'New terminal' }));
+    await user.click(await screen.findByRole('button', { name: 'Spawn agent' }));
 
-    const machine = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
-    expect(Object.keys(machine.workspaces).length).toBe(2);
-    expect(usePendingWorkspaceStore.getState().pending).toEqual({
-      machineId: 'machine-1',
-      workspaceId: machine.activeWorkspaceId,
+    await waitFor(() => {
+      const machine = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
+      expect(Object.keys(machine.workspaces).length).toBe(2);
+      expect(usePendingWorkspaceStore.getState().pending).toEqual({
+        machineId: 'machine-1',
+        workspaceId: machine.activeWorkspaceId,
+      });
+      expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
     });
-    expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
   });
 
   test('clicking the machine itself drops a stale workspace intent', async () => {
@@ -259,6 +381,33 @@ describe('DevelopmentSidebar — GLOBAL mode (no driveId)', () => {
     render(<DevelopmentSidebar />);
 
     expect(screen.getByText(/no machines across your drives/i)).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('an initial (cold) load shows a distinct loading state, not the empty notice', () => {
+    mockUseAllMachines.mockReturnValueOnce({ drives: [], isLoading: true, error: undefined, mutate: vi.fn() });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/loading machines/i)).toBeDefined();
+    expect(screen.queryByText(/no machines across your drives/i)).toBeNull();
+  });
+
+  test('a failed INITIAL load offers a retry that revalidates the global list', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn();
+    mockUseAllMachines.mockReturnValueOnce({ drives: [], isLoading: false, error: new Error('boom'), mutate });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/failed to load machines/i)).toBeDefined();
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+
+    // Same call-shape guard as the drive-scoped retry test: a naive
+    // `onRetry={mutate}` hands React's click MouseEvent to SWR's `mutate` as
+    // replacement cache data instead of revalidating.
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledWith();
   });
 
   test('a failed POLL keeps the tree — it does not replace it with an error', () => {

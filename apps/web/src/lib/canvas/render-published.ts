@@ -1,6 +1,9 @@
 import 'server-only';
 
 import { renderCanvasDocument } from '@pagespace/lib/canvas/render-document';
+import { renderDocumentPage } from '@pagespace/lib/publish/render-document-page';
+import { renderCodePage } from '@pagespace/lib/publish/render-code-page';
+import { renderSheetPage } from '@pagespace/lib/publish/render-sheet-page';
 import { getPublicAssetHost } from './published-storage';
 
 /**
@@ -51,4 +54,67 @@ export function renderPublishedPage(input: RenderPublishedPageInput): string {
   const { assetBaseUrl, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, ...rest } = input;
   const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
   return renderCanvasDocument({ ...rest, allowedAssetHosts, faviconBaseUrl, faviconHref, pageUrl, ogImageUrl, ogDescription, lang, description, robots, injectThemeBridge: true });
+}
+
+/**
+ * SEO/head fields shared by the non-canvas published-document renderers below.
+ * Same semantics as the matching fields on `RenderPublishedPageInput` — see
+ * `RenderCanvasDocumentInput` for the full doc comments.
+ */
+interface PublishedDocumentHeadInput {
+  /** Defaults to "Untitled" when omitted/blank — matches `renderPublishedPage`. */
+  title?: string;
+  assetBaseUrl?: string;
+  faviconBaseUrl?: string;
+  faviconHref?: string;
+  pageUrl?: string;
+  ogImageUrl?: string;
+  ogDescription?: string;
+  lang?: string;
+  description?: string;
+  robots?: string;
+}
+
+export interface RenderPublishedDocumentInput extends PublishedDocumentHeadInput {
+  html: string;
+}
+
+/**
+ * Server-side renderer for published DOCUMENT pages. Thin wrapper over
+ * `renderDocumentPage` (shared with the DOCUMENT static renderer) plumbing
+ * `assetBaseUrl` through to `allowedAssetHosts` exactly like `renderPublishedPage`.
+ */
+export function renderPublishedDocument(input: RenderPublishedDocumentInput): string {
+  const { assetBaseUrl, title, ...rest } = input;
+  const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
+  return renderDocumentPage({ ...rest, title: title?.trim() || 'Untitled', allowedAssetHosts });
+}
+
+export interface RenderPublishedCodeInput extends PublishedDocumentHeadInput {
+  code: string;
+}
+
+/**
+ * Server-side renderer for published CODE pages. Thin wrapper over
+ * `renderCodePage` — see `renderPublishedDocument` above.
+ */
+export function renderPublishedCode(input: RenderPublishedCodeInput): string {
+  const { assetBaseUrl, title, ...rest } = input;
+  const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
+  return renderCodePage({ ...rest, title: title?.trim() || 'Untitled', allowedAssetHosts });
+}
+
+export interface RenderPublishedSheetInput extends PublishedDocumentHeadInput {
+  serializedContent: unknown;
+  hasHeaders?: boolean;
+}
+
+/**
+ * Server-side renderer for published SHEET pages. Thin wrapper over
+ * `renderSheetPage` — see `renderPublishedDocument` above.
+ */
+export function renderPublishedSheet(input: RenderPublishedSheetInput): string {
+  const { assetBaseUrl, title, ...rest } = input;
+  const allowedAssetHosts = assetBaseUrl ? [getPublicAssetHost(assetBaseUrl)] : [];
+  return renderSheetPage({ ...rest, title: title?.trim() || 'Untitled', allowedAssetHosts });
 }

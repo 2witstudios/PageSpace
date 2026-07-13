@@ -313,6 +313,25 @@ export interface SpriteInstanceLike {
    */
   createCheckpoint(comment?: string): Promise<SpriteCheckpointStreamLike>;
   destroy(): Promise<void>;
+  /**
+   * Terminate a specific exec session server-side via `POST
+   * /v1/sprites/{name}/exec/{session_id}/kill` (sprites.dev/api) — see
+   * {@link killSpriteSession} for the driver. Unlike `SpriteCommandLike.kill()`
+   * (a signal delivered over that command's OWN WebSocket, which reaches the
+   * remote process only while that socket happens to be open — see
+   * `sprite-machine-host.ts`'s note on the private, unreachable
+   * `WSCommand.close()`), this reaches a session regardless of whether we hold
+   * a live connection to it: a detachable TTY session has
+   * `max_run_after_disconnect: 0` and keeps running server-side long after its
+   * client socket has dropped, which is exactly the case a stale local `kill()`
+   * silently no-ops on.
+   *
+   * MUST be idempotent: killing an id the Sprite no longer recognizes (already
+   * dead, or never existed) resolves successfully rather than rejecting, so a
+   * caller never surfaces a user-visible failure for a session that is already
+   * gone — see {@link killSpriteSession}.
+   */
+  killSession(sessionId: string): Promise<void>;
 }
 
 /** The injectable Sprites SDK statics. Defaults to the real `@fly/sprites`. */
@@ -724,6 +743,178 @@ export function checkpointStreamErrorMessage(message: SpriteCheckpointStreamMess
  * review finding, PR #2025).
  */
 const CHECKPOINT_TIMEOUT_MS = 10_000;
+
+/**
+ * The HTTP credentials `killSpriteSession` needs — deliberately narrow (not
+ * the whole `SpritesClient`) so production wiring (`apps/web/.../sprites-client.ts`,
+ * `apps/realtime/.../realtime-sprites-client.ts`) can pass the real client's
+ * public `baseURL`/`token` fields without this module importing `@fly/sprites`
+ * (it stays a pure-logic/type-safe-wrapper module — see the file header).
+ */
+export interface SpriteSessionKillTransport {
+  baseURL: string;
+  token: string;
+  /** Injected so a test can assert the exact request without a real network call. Defaults to the global `fetch`. */
+  fetchImpl?: typeof fetch;
+  /** Injected so a test can assert the retry schedule without real wall-clock waits. Defaults to the real timer. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Wall-clock cap on `killSpriteSession` (the request plus draining its
+ * response stream — see below). A bare `fetch` has no timeout of its own, and
+ * every other network call this driver makes is bounded (filesystem ops via
+ * `withTimeout`, checkpoints via `CHECKPOINT_TIMEOUT_MS`), so an unbounded
+ * kill call would be the one exception that can hang a caller forever against
+ * a stalled connection.
+ */
+const KILL_SESSION_TIMEOUT_MS = 10_000;
+
+/**
+ * Pure: does this line of the kill endpoint's NDJSON progress stream report a
+ * failure? Returns the failure text for a `{"type":"error",...}` line, or
+ * undefined for every other documented event (`signal`/`timeout`/`exited`/
+ * `killed`/`complete`) and for a blank or unparseable line — a malformed
+ * progress line must never mask an otherwise-successful kill.
+ */
+export function killSessionStreamErrorMessage(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  let event: unknown;
+  try {
+    event = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (typeof event !== 'object' || event === null) return undefined;
+  const { type, message } = event as { type?: unknown; message?: unknown };
+  if (type !== 'error') return undefined;
+  return typeof message === 'string' && message.length > 0 ? message : 'session kill reported an error';
+}
+
+/**
+ * One attempt at the documented Sprites REST endpoint the `@fly/sprites` SDK
+ * (rc37) does not wrap: `POST /v1/sprites/{name}/exec/{session_id}/kill`
+ * (sprites.dev/api/sprites/exec#kill-exec-session — NOT
+ * `.../exec/sessions/{id}/kill`; the extra `sessions/` segment 404s against
+ * the real API). `Sprite` exposes `attachSession`/`createSession`/`kill()`
+ * (a per-command WebSocket signal) but no session-kill-by-id, so this hits the
+ * endpoint directly — `baseURL` and `token` are public `readonly` fields on the
+ * real `SpritesClient`, reachable off any `Sprite` instance's own `.client`.
+ *
+ * A success response is `200` with a STREAMING NDJSON body (`signal` ->
+ * `exited`/`killed` -> `complete`, or a `type: 'error'` line if the signal
+ * could not actually be delivered) — the HTTP status alone does not confirm
+ * the session was killed, only that the request was accepted. So a `200` is
+ * drained and checked line-by-line via {@link killSessionStreamErrorMessage};
+ * only a stream with no `error` line resolves.
+ *
+ * Requests `?signal=SIGKILL` explicitly. The endpoint defaults to `SIGTERM`
+ * when `signal` is omitted, but every caller of this driver is replacing an
+ * old `SpriteCommandLike.kill('SIGKILL')` WebSocket signal — a graceful-only
+ * SIGTERM would let a process that traps/ignores TERM survive the call while
+ * this function still reports success, so the row/session bookkeeping gets
+ * removed out from under a still-live, still-billable session.
+ *
+ * `404`/`410` means the Sprite no longer recognizes this session id (the
+ * documented response for a missing session/sprite) — that IS success, not a
+ * failure: the caller's whole reason for calling is "make sure this session
+ * is dead," and it already is. Idempotent by construction, so a kill racing
+ * (or arriving after) another kill, a natural process exit, or a Sprite-level
+ * destroy never surfaces a user-visible error. Any other non-2xx response, or
+ * an `error` line inside a 200 stream, is a genuine failure and rejects.
+ */
+async function attemptKillSpriteSession(
+  { baseURL, token, fetchImpl = fetch }: SpriteSessionKillTransport,
+  spriteName: string,
+  sessionId: string,
+): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KILL_SESSION_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(
+      `${baseURL}/v1/sprites/${encodeURIComponent(spriteName)}/exec/${encodeURIComponent(sessionId)}/kill?signal=SIGKILL`,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` }, signal: controller.signal },
+    );
+    if (!response.ok) {
+      if (response.status === 404 || response.status === 410) return;
+      throw new Error(`Sprite session kill failed: ${response.status} ${response.statusText}`);
+    }
+    const body = await response.text();
+    for (const line of body.split('\n')) {
+      const errorMessage = killSessionStreamErrorMessage(line);
+      if (errorMessage !== undefined) {
+        throw new Error(`Sprite session kill reported an error: ${errorMessage}`);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * {@link attemptKillSpriteSession}, retried up to `MAX_EXEC_ATTEMPTS` times
+ * with the same linear backoff `withWakeRetry` uses (`wakeRetryDelayMs`).
+ *
+ * Deliberately retries on ANY failure, not just a structurally-detected
+ * pre-open drop the way the exec/spawn paths in this file do. Those paths
+ * must retry ONLY a provable pre-open failure, because re-running a
+ * side-effecting command after an ambiguous one risks running it twice. A
+ * kill has no such hazard — it is idempotent by construction (see the
+ * `404`/`410` handling above) — so repeating it after ANY failure, including
+ * the exact cold-Sprite wake-on-request connection drop the exec paths guard
+ * against (docs.sprites.dev/concepts/lifecycle: there is no wake API, so this
+ * REST call may itself be what wakes a hibernating Sprite), costs nothing and
+ * only improves the odds a genuine termination actually lands. This is the
+ * caller-visible guarantee: `killAgentTerminal`'s `MachineHandle.killSession`
+ * and `PtyShell.kill`'s fire-and-forget REST call both inherit it for free,
+ * without either needing its own retry logic.
+ */
+export async function killSpriteSession(
+  transport: SpriteSessionKillTransport,
+  spriteName: string,
+  sessionId: string,
+): Promise<void> {
+  const { sleep = delay } = transport;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_EXEC_ATTEMPTS; attempt += 1) {
+    try {
+      await attemptKillSpriteSession(transport, spriteName, sessionId);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= MAX_EXEC_ATTEMPTS) break;
+      await sleep(wakeRetryDelayMs(attempt));
+    }
+  }
+  throw lastError;
+}
+
+/**
+ * Bolt `killSession` onto a raw SDK `Sprite`-shaped instance, so it satisfies
+ * `SpriteInstanceLike` — see {@link killSpriteSession}'s doc for why the SDK
+ * needs this at all. Shared by BOTH production `SpritesSdk` factories
+ * (`apps/web/src/lib/sandbox/sprites-client.ts`,
+ * `apps/realtime/src/terminal/realtime-sprites-client.ts`) — this used to be
+ * defined twice, near-verbatim, one per app boundary. Duck-typed (not
+ * `import type { Sprite } from '@fly/sprites'`) so this module never imports
+ * the ESM-only SDK (see the file header); a real `Sprite` instance already
+ * satisfies this shape structurally, and `client.baseURL`/`client.token` are
+ * public `readonly` fields on the real `SpritesClient`.
+ *
+ * Mutates and returns `sprite` (via `Object.assign`) rather than building a
+ * fresh wrapper object, so every OTHER method the caller already relies on
+ * (`spawn`, `createSession`, `attachSession`, `filesystem`, …) keeps working
+ * untouched — this only ever ADDS the one method the SDK is missing.
+ */
+export function withKillSession<T extends { name: string; client: { baseURL: string; token: string } }>(
+  sprite: T,
+): T & { killSession: (sessionId: string) => Promise<void> } {
+  return Object.assign(sprite, {
+    killSession: (sessionId: string) =>
+      killSpriteSession({ baseURL: sprite.client.baseURL, token: sprite.client.token }, sprite.name, sessionId),
+  });
+}
 
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {

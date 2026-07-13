@@ -5,6 +5,7 @@ import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
+import { useIosBadgeSync } from "@/hooks/useIosBadgeSync";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -136,6 +137,9 @@ function Layout({ children }: LayoutProps) {
 
   // Show native OS notifications for new notifications when the desktop app is unfocused
   useDesktopNotifications();
+
+  // Keep the native iOS app-icon badge in sync with the unread count (reactive SSOT projection)
+  useIosBadgeSync();
 
   // Monitor performance
   usePerformanceMonitor();
