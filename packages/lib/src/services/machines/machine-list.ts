@@ -23,6 +23,22 @@ export interface MachineListDeps {
   canUserViewPage: (userId: string, pageId: string) => Promise<boolean>;
 }
 
+export interface DriveSummary {
+  id: string;
+  name: string;
+}
+
+export interface DriveMachineGroup {
+  driveId: string;
+  driveName: string;
+  machines: MachinePageSummary[];
+}
+
+export interface GlobalMachineListDeps extends MachineListDeps {
+  /** Every drive `actorUserId` can access (owned, member, or page-permission), non-trashed. */
+  findAccessibleDrives: (actorUserId: string) => Promise<DriveSummary[]>;
+}
+
 /**
  * The Machine pages in `driveId` that `actorUserId` may view, in scan order.
  *
@@ -48,4 +64,40 @@ export async function listMachinesInDrive(
     candidates.map((machine) => deps.canUserViewPage(actorUserId, machine.id)),
   );
   return candidates.filter((_, index) => visibility[index]);
+}
+
+/**
+ * The Machine pages `actorUserId` may view, across every drive they can access,
+ * grouped by drive — the Development surface's GLOBAL (driveless) command
+ * center. Each drive's group runs through the exact same `listMachinesInDrive`
+ * a per-drive request would, so the guarantee is identical: an admin who lacks
+ * access to a drive never sees it here, and a Machine withheld from them by a
+ * page-level grant never appears even within a drive they can otherwise see.
+ *
+ * A drive with no VISIBLE machines (none exist, every one is withheld, or the
+ * scan itself failed) is dropped from the result rather than returned as an
+ * empty group — an empty drive header would just be noise in the aggregated
+ * list. A failing drive is deliberately treated the same as a withheld one
+ * rather than failing the whole request: `listMachinesInDrive`'s own
+ * `canUserViewPage` check already swallows per-page DB errors as "hide it"
+ * (see its doc comment), so one drive's scan failing and taking down every
+ * OTHER accessible drive's list would be a worse, inconsistent failure mode —
+ * a transient blip in one drive shouldn't blank the whole global surface.
+ */
+export async function listMachinesAcrossDrives(
+  deps: GlobalMachineListDeps,
+  actorUserId: string,
+): Promise<DriveMachineGroup[]> {
+  const drives = await deps.findAccessibleDrives(actorUserId);
+  const settled = await Promise.allSettled(
+    drives.map(async (drive): Promise<DriveMachineGroup> => ({
+      driveId: drive.id,
+      driveName: drive.name,
+      machines: await listMachinesInDrive(deps, actorUserId, drive.id),
+    })),
+  );
+  const groups = settled
+    .filter((result): result is PromiseFulfilledResult<DriveMachineGroup> => result.status === 'fulfilled')
+    .map((result) => result.value);
+  return groups.filter((group) => group.machines.length > 0);
 }

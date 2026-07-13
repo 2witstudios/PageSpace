@@ -44,8 +44,13 @@ function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: Return
  */
 const viewer = (connectionId: string, socketId = 'sock1') => `${socketId}\u0000${connectionId}`;
 
-function makeShell(): PtyShell & { write: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; kill: ReturnType<typeof vi.fn> } {
-  return { write: vi.fn(), resize: vi.fn(), kill: vi.fn() };
+function makeShell(): PtyShell & {
+  write: ReturnType<typeof vi.fn>;
+  resize: ReturnType<typeof vi.fn>;
+  kill: ReturnType<typeof vi.fn>;
+  setViewerAttached: ReturnType<typeof vi.fn>;
+} {
+  return { write: vi.fn(), resize: vi.fn(), kill: vi.fn(), setViewerAttached: vi.fn() };
 }
 
 function makeSprite(sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }> = []) {
@@ -603,6 +608,9 @@ describe('buildAgentTerminalHandlers', () => {
       // the LIVE session's own reservation.
       expect(reattachAuth.releaseSlot).not.toHaveBeenCalled();
       expect(reconnectSocket.emit).toHaveBeenCalledWith('agent-terminal:ready', expect.objectContaining({ scrollback: expect.any(String) }));
+      // The tab-back fast path tells the shell a viewer is attached again, so it
+      // can reattach lazily if its watchdog went quiet while detached (leaf 3-2).
+      expect(shell.setViewerAttached).toHaveBeenCalledWith(true);
     });
 
     it('given no live session, should follow the cold path and resolve the sandbox', async () => {
@@ -1058,6 +1066,14 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
       expect(shell.kill).not.toHaveBeenCalled();
+    });
+
+    it('given a disconnect, should signal the shell that no viewer is attached (leaf 3-2: stops the watchdog reconnect loop)', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect();
+
+      expect(shell.setViewerAttached).toHaveBeenCalledWith(false);
     });
 
     it('given the idle timeout elapses, should HAND BACK the concurrency slot as well as killing the shell', async () => {

@@ -14,19 +14,21 @@ import userEvent from '@testing-library/user-event';
 
 const mockPush = vi.fn();
 const mockUseAuth = vi.fn();
+const mockUseParams = vi.fn<() => { driveId?: string }>(() => ({ driveId: 'drive-1' }));
+const mockUsePathname = vi.fn(() => '/dashboard/drive-1/development');
 
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ driveId: 'drive-1' }),
-  usePathname: () => '/dashboard/drive-1/development',
+  useParams: () => mockUseParams(),
+  usePathname: () => mockUsePathname(),
   useRouter: () => ({ push: mockPush }),
 }));
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => mockUseAuth() }));
 
-// Spied, not just stubbed: a null driveId is HOW the sidebar refuses to fetch for
-// a non-admin, so the argument is the security property — asserting only that no
-// machine renders would still pass if the gate were dropped, since the refusal
-// notice short-circuits the list anyway.
+// Spied, not just stubbed: a null/disabled key is HOW the sidebar refuses to
+// fetch for a non-admin, so the argument is the security property — asserting
+// only that no machine renders would still pass if the gate were dropped,
+// since the refusal notice short-circuits the list anyway.
 interface DriveMachinesResult {
   machines: { id: string; title: string; updatedAt: string }[];
   isLoading: boolean;
@@ -43,8 +45,27 @@ const mockUseDriveMachines = vi.fn(
   }),
 );
 
+interface AllMachinesResult {
+  drives: { driveId: string; driveName: string; machines: { id: string; title: string; updatedAt: string }[] }[];
+  isLoading: boolean;
+  error: Error | undefined;
+  mutate: () => void;
+}
+
+const mockUseAllMachines = vi.fn(
+  (enabled: boolean): AllMachinesResult => ({
+    drives: enabled
+      ? [{ driveId: 'drive-1', driveName: 'Alpha', machines: [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }] }]
+      : [],
+    isLoading: false,
+    error: undefined,
+    mutate: vi.fn(),
+  }),
+);
+
 vi.mock('@/hooks/useDriveMachines', () => ({
   useDriveMachines: (driveId: string | null) => mockUseDriveMachines(driveId),
+  useAllMachines: (enabled: boolean) => mockUseAllMachines(enabled),
 }));
 
 vi.mock('@/hooks/useMachineProjects', () => ({
@@ -76,6 +97,8 @@ beforeEach(() => {
   useMachineTabStore.setState({ tabs: {} });
   useMachineWorkspaceStore.setState({ machines: {} });
   mockUseAuth.mockReturnValue({ user: { role: 'admin' }, isLoading: false });
+  mockUseParams.mockReturnValue({ driveId: 'drive-1' });
+  mockUsePathname.mockReturnValue('/dashboard/drive-1/development');
 });
 
 describe('DevelopmentSidebar', () => {
@@ -178,5 +201,86 @@ describe('DevelopmentSidebar', () => {
 
     expect(usePendingWorkspaceStore.getState().pending).toBeNull();
     expect(mockPush).toHaveBeenCalledWith('/dashboard/drive-1/development/machine-1');
+  });
+});
+
+describe('DevelopmentSidebar — GLOBAL mode (no driveId)', () => {
+  beforeEach(() => {
+    mockUseParams.mockReturnValue({});
+    mockUsePathname.mockReturnValue('/dashboard/development');
+  });
+
+  test('lists machines grouped by drive for an admin', async () => {
+    render(<DevelopmentSidebar />);
+
+    expect(await screen.findByText('Alpha')).toBeDefined();
+    expect(await screen.findByText('Dev box')).toBeDefined();
+  });
+
+  test('fetches the global list, not any single drive\'s', () => {
+    render(<DevelopmentSidebar />);
+
+    expect(mockUseAllMachines).toHaveBeenCalledWith(true);
+    expect(mockUseDriveMachines).toHaveBeenCalledWith(null);
+  });
+
+  test('refuses a non-admin, and asks the API for no machines on their behalf', () => {
+    mockUseAuth.mockReturnValue({ user: { role: 'user' }, isLoading: false });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/administrator privileges/i)).toBeDefined();
+    expect(screen.queryByText('Dev box')).toBeNull();
+    expect(mockUseAllMachines).toHaveBeenCalledWith(false);
+  });
+
+  test('renders multiple drive groups, each with its own machines', async () => {
+    mockUseAllMachines.mockReturnValueOnce({
+      drives: [
+        { driveId: 'drive-1', driveName: 'Alpha', machines: [{ id: 'machine-1', title: 'Box One', updatedAt: '2026-07-12T00:00:00.000Z' }] },
+        { driveId: 'drive-2', driveName: 'Beta', machines: [{ id: 'machine-2', title: 'Box Two', updatedAt: '2026-07-12T00:00:00.000Z' }] },
+      ],
+      isLoading: false,
+      error: undefined,
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(await screen.findByText('Alpha')).toBeDefined();
+    expect(screen.getByText('Beta')).toBeDefined();
+    expect(screen.getByText('Box One')).toBeDefined();
+    expect(screen.getByText('Box Two')).toBeDefined();
+  });
+
+  test('an empty global list shows a notice, not an error', () => {
+    mockUseAllMachines.mockReturnValueOnce({ drives: [], isLoading: false, error: undefined, mutate: vi.fn() });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText(/no machines across your drives/i)).toBeDefined();
+  });
+
+  test('a failed POLL keeps the tree — it does not replace it with an error', () => {
+    mockUseAllMachines.mockReturnValueOnce({
+      drives: [{ driveId: 'drive-1', driveName: 'Alpha', machines: [{ id: 'machine-1', title: 'Dev box', updatedAt: '2026-07-12T00:00:00.000Z' }] }],
+      isLoading: false,
+      error: new Error('blip'),
+      mutate: vi.fn(),
+    });
+
+    render(<DevelopmentSidebar />);
+
+    expect(screen.getByText('Dev box')).toBeDefined();
+    expect(screen.queryByText(/failed to load machines/i)).toBeNull();
+  });
+
+  test('clicking a machine routes into the GLOBAL detail path, not the drive-scoped one', async () => {
+    const user = userEvent.setup();
+    render(<DevelopmentSidebar />);
+
+    await user.click(await screen.findByText('Dev box'));
+
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/development/machine-1');
   });
 });

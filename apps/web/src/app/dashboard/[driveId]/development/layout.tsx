@@ -1,15 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import { useParams, usePathname } from 'next/navigation';
-import { Cpu } from 'lucide-react';
 import MachineKeepAliveHost from '@/components/layout/middle-content/MachineKeepAliveHost';
 import { useAuth } from '@/hooks/useAuth';
 import { useDriveMachines } from '@/hooks/useDriveMachines';
-import { useMachineWorkspaceStore, selectMachine } from '@/stores/machine-workspace/useMachineWorkspaceStore';
-import { usePendingWorkspaceStore } from '@/stores/development/usePendingWorkspaceStore';
 import { parseSelectedMachineId } from '@/lib/development/development-route';
-import { resolvePendingWorkspace } from '@/lib/development/pending-workspace';
+import { useStickyMachineIds } from '@/lib/development/use-sticky-machine-ids';
+import { useDrainPendingSession } from '@/lib/development/use-drain-pending-session';
+import { DetailState } from '@/lib/development/DetailState';
+import { resolveDisplayedMachine } from '@/lib/development/displayed-machine';
 
 /**
  * The Development surface's detail region.
@@ -42,31 +41,15 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
   // the host's source of truth for what counts as a machine (its `machineIds`
   // prop): the surface must not disagree with itself about which machines exist.
   const { machines, isLoading, error } = useDriveMachines(isAdmin ? driveId ?? null : null);
+  // Add-only within this drive; resets if the drive changes (see the hook's
+  // doc comment) — a PTY stream must not outlive its drive context.
   const stickyMachineIds = useStickyMachineIds(machines, driveId);
 
-  // Two different questions, two different answers — conflating them is what made
-  // an earlier version both kill live terminals AND never report a deleted one.
-  //
-  // "Does this machine still exist?" is answered by the LATEST fetch: a machine
-  // that's gone must stop being shown, or "Machine not found" is unreachable.
-  // "Which machines may stay mounted?" is answered by the STICKY set, because a
-  // machine can drop out of a fetch without being deleted (see below) and
-  // unmounting it would disconnect a running terminal.
-  //
-  // So a machine that vanishes stops being *displayed* immediately, while its
-  // terminal stays warm (hidden) until the LRU ages it out. A fetch blip
-  // therefore costs the user a notice, never a dead session — and the notice IS
-  // transient, because `useDriveMachines` polls (without that, a single blip
-  // would hide a live machine for the rest of the session, and both ways out —
-  // reload, or leave and return — unmount this host and kill every warm
-  // terminal).
-  const isKnownMachine = selectedMachineId !== null && machines.some((m) => m.id === selectedMachineId);
-  // What the host actually DISPLAYS — not merely what the URL selects. The drain
-  // must gate on this same value: opening a session into a machine the host is
-  // keeping hidden would mount an xterm inside a `display:none` container, where
-  // `fit()` measures a zero-sized box and the PTY is created at a bogus geometry
-  // — wrapping its output for the life of the session.
-  const displayedMachineId = isKnownMachine ? selectedMachineId : null;
+  // The notice IS transient when a machine vanishes, because `useDriveMachines`
+  // polls (without that, a single blip would hide a live machine for the rest
+  // of the session, and both ways out — reload, or leave and return — unmount
+  // this host and kill every warm terminal).
+  const { isKnownMachine, displayedMachineId } = resolveDisplayedMachine(machines, selectedMachineId);
 
   useDrainPendingSession(displayedMachineId);
 
@@ -87,142 +70,4 @@ export default function DevelopmentLayout({ children }: { children: React.ReactN
       <MachineKeepAliveHost driveId={driveId} activePageId={displayedMachineId} machineIds={stickyMachineIds} embedded />
     </div>
   );
-}
-
-/**
- * Every machine id seen in this drive — the set the host is allowed to keep
- * MOUNTED. Add-only, and only within a drive.
- *
- * The host unmounts (and so DISCONNECTS) anything missing from this set. But a
- * machine can drop out of `/api/machines` without having been deleted: the
- * per-page permission check swallows DB errors and reports "cannot view", so a
- * transient hiccup silently omits a live machine. Evicting on that would kill a
- * running terminal — the exact failure this list was introduced to prevent.
- *
- * Being add-only doesn't strand a deleted machine on screen: what is DISPLAYED
- * is decided by the latest fetch (see `isKnownMachine`), so a deleted machine
- * stops being shown at once and merely lingers, hidden, until the bounded LRU
- * ages it out. Changing drive resets the set — that eviction is deliberate, since
- * a PTY stream must not outlive its drive context.
- */
-function useStickyMachineIds(machines: { id: string }[], driveId: string | undefined): string[] {
-  // Keyed on the fetched ids (not the array identity — SWR hands back a fresh
-  // array on every revalidation) and the drive. Derived with the same
-  // "adjust state during render" pattern MachineKeepAliveHost uses for its LRU:
-  // the key guards the re-render, and state (unlike a ref) is discarded if a
-  // concurrent render is abandoned, so an interrupted navigation can't leave a
-  // machine set behind that was never committed.
-  const key = `${driveId ?? ''}\u0000${machines.map((machine) => machine.id).join('|')}`;
-  const [sticky, setSticky] = useState<{ key: string; driveId: string | undefined; ids: string[] }>({
-    key: '',
-    driveId,
-    ids: [],
-  });
-
-  if (sticky.key !== key) {
-    const ids = sticky.driveId === driveId ? [...sticky.ids] : [];
-    for (const machine of machines) {
-      if (!ids.includes(machine.id)) ids.push(machine.id);
-    }
-    setSticky({ key, driveId, ids });
-    return ids;
-  }
-
-  return sticky.ids;
-}
-
-/**
- * What the detail pane shows when the machine itself can't be. Rendered UNDER
- * the keep-alive host (which is `absolute inset-0 z-10` and opaque), so a state
- * here is covered the moment the machine actually mounts. Without it, every one
- * of these cases is an unexplained blank region — the route renders null and the
- * host declines to mount.
- */
-function DetailState({
-  authLoading,
-  isAdmin,
-  isLoading,
-  error,
-  isKnownMachine,
-}: {
-  authLoading: boolean;
-  isAdmin: boolean;
-  isLoading: boolean;
-  error: Error | undefined;
-  isKnownMachine: boolean;
-}) {
-  // `role` isn't persisted across a reload, so on every cold load it is briefly
-  // unknown. Refusing the user in that window would flash "you're not an admin"
-  // at an admin refreshing the page — the same gate the sidebar applies.
-  if (authLoading) return <DetailNotice title="Opening machine…" />;
-  if (!isAdmin) return <DetailNotice title="Machine access requires administrator privileges" />;
-  // Ahead of "not found", because a failed fetch leaves `machines` empty with
-  // isLoading false — indistinguishable from "this machine doesn't exist" unless
-  // the error is checked first. But only when the machine ISN'T known: the list
-  // polls, and SWR keeps the last good data while setting `error` on a failed
-  // revalidation, so a blip must not blank out a machine we can still show.
-  if (error && !isKnownMachine) {
-    return (
-      <DetailNotice title="Failed to load machines" description="Check your connection and try again." />
-    );
-  }
-  if (isLoading) return <DetailNotice title="Opening machine…" />;
-  if (!isKnownMachine) {
-    return (
-      <DetailNotice
-        title="Machine not found"
-        description="It may have been deleted, or you may not have access to it."
-      />
-    );
-  }
-  // The machine exists and the host is mounting it — it will paint over this.
-  return <DetailNotice title="Opening machine…" />;
-}
-
-function DetailNotice({ title, description }: { title: string; description?: string }) {
-  return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-      <Cpu className="size-10 text-muted-foreground" />
-      <div>
-        <h2 className="text-lg font-semibold">{title}</h2>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Honours a workspace the user clicked in the sidebar, once the machine it
- * belongs to actually has that workspace to activate.
- *
- * The decision is the pure `resolvePendingWorkspace`; this is the plumbing. It
- * re-evaluates whenever the machine's active workspace changes, so an intent
- * that has not converged yet — the pane region has not mounted, or the user is
- * en route — is re-applied as soon as it can be, instead of being silently
- * lost.
- *
- * Leaving the surface drops any unconverged intent: the store is a module
- * singleton, so an intent left behind here would otherwise still be sitting
- * there on the user's next visit, ready to fire into whatever machine was active.
- */
-function useDrainPendingSession(displayedMachineId: string | null) {
-  const pending = usePendingWorkspaceStore((state) => state.pending);
-  const clearPending = usePendingWorkspaceStore((state) => state.clearPending);
-  const setActiveWorkspace = useMachineWorkspaceStore((state) => state.setActiveWorkspace);
-  // The machine's current `activeWorkspaceId` — undefined until its pane region
-  // has mounted and ensured a workspace set. A machine now holds many
-  // workspaces (each sidebar item owns one), and the intent converges when this
-  // matches the one the user clicked.
-  const activeWorkspaceId = useMachineWorkspaceStore((state) =>
-    pending ? selectMachine(pending.machineId)(state)?.activeWorkspaceId : undefined,
-  );
-
-  useEffect(() => {
-    const action = resolvePendingWorkspace(pending, displayedMachineId, activeWorkspaceId);
-    if (action.type === 'select') setActiveWorkspace(action.machineId, action.workspaceId);
-    // A 'clear' with no pending intent is a no-op, so this cannot loop.
-    else if (action.type === 'clear') clearPending();
-  }, [pending, displayedMachineId, activeWorkspaceId, setActiveWorkspace, clearPending]);
-
-  useEffect(() => () => clearPending(), [clearPending]);
 }
