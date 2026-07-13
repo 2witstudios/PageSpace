@@ -181,6 +181,113 @@ describe('neutralizeDashboardLinks', () => {
     });
   });
 
+  it('ignores an href-lookalike inside another attribute quoted value (false positive)', () => {
+    const html = '<a title="a > b, see href=/dashboard/d/x" href="/pricing">go</a>';
+    assert({
+      given: 'a live /pricing anchor whose title text merely mentions href=/dashboard/…',
+      should: 'leave it byte-identical instead of destroying the link',
+      actual: neutralizeDashboardLinks(html),
+      expected: html,
+    });
+  });
+
+  it('finds the real dashboard href despite an href-lookalike in an earlier attribute (false negative)', () => {
+    assert({
+      given: 'a dashboard anchor whose title contains a decoy href=https://… before the real href',
+      should: 'neutralize using the real href attribute',
+      actual: neutralizeDashboardLinks(
+        '<a title="old href=https://example.com" href="/dashboard/d/p">@Page</a>',
+      ),
+      expected: '<span>@Page</span>',
+    });
+  });
+
+  it('does not fabricate mention attributes from text inside another attribute value', () => {
+    assert({
+      given: 'a dashboard anchor whose title text contains data-page-id=fake',
+      should: 'emit a span without the fabricated attribute',
+      actual: neutralizeDashboardLinks(
+        '<a href="/dashboard/d/p" title="x > data-page-id=fake">@P</a>',
+      ),
+      expected: '<span>@P</span>',
+    });
+  });
+
+  it('leaves a tag with a bare quote in attribute-name position unchanged', () => {
+    // A browser's tokenizer ends this tag at the first '>' (quotes only open a
+    // value after '='), so matching past it would delete rendered text.
+    const html = '<a href="/dashboard/d/p" "x > y">text</a>';
+    assert({
+      given: 'an anchor with a stray quoted token where an attribute name belongs',
+      should: 'leave the region byte-identical',
+      actual: neutralizeDashboardLinks(html),
+      expected: html,
+    });
+  });
+
+  it('never lets an unclosed attribute quote swallow content across tags', () => {
+    const html =
+      "<a href='/dashboard/d/p' title='broken>middle</a><p>It's here>tail</a>";
+    assert({
+      given: 'an unclosed quote that could pair with an apostrophe in later text',
+      should: 'leave the whole region byte-identical instead of deleting elements',
+      actual: neutralizeDashboardLinks(html),
+      expected: html,
+    });
+  });
+
+  it('does not steal the closing tag of the next anchor for a self-closed dashboard anchor', () => {
+    const html = '<a href="/dashboard/d/p"/>gap <a href="#f">f</a>';
+    assert({
+      given: 'a self-closed dashboard anchor followed by a valid fragment anchor',
+      should: 'leave everything byte-identical rather than unbalancing the markup',
+      actual: neutralizeDashboardLinks(html),
+      expected: html,
+    });
+  });
+
+  it('neutralizes a dashboard anchor nested inside an unclosed non-dashboard anchor', () => {
+    assert({
+      given: 'an unclosed /pricing anchor followed by a well-formed dashboard anchor',
+      should: 'still neutralize the dashboard anchor',
+      actual: neutralizeDashboardLinks(
+        '<a href="/pricing">keep <a href="/dashboard/d/p">dead</a>',
+      ),
+      expected: '<a href="/pricing">keep <span>dead</span>',
+    });
+  });
+
+  it('trims whitespace padding from the href before classifying', () => {
+    assert({
+      given: 'a dashboard href padded with whitespace (browsers strip URL attribute padding)',
+      should: 'still neutralize it',
+      actual: neutralizeDashboardLinks('<a href=" /dashboard/d/p">x</a>'),
+      expected: '<span>x</span>',
+    });
+  });
+
+  it('handles an unquoted dashboard href', () => {
+    assert({
+      given: 'an anchor whose href value is unquoted',
+      should: 'neutralize it',
+      actual: neutralizeDashboardLinks('<a href=/dashboard/d/p>x</a>'),
+      expected: '<span>x</span>',
+    });
+  });
+
+  it('stays fast on pathological unclosed-anchor input', () => {
+    const html = '<a href="/dashboard/d/p">x'.repeat(40_000);
+    const start = performance.now();
+    neutralizeDashboardLinks(html);
+    const elapsed = performance.now() - start;
+    assert({
+      given: '~1MB of repeated dashboard anchor openings with no closing tags',
+      should: 'complete in linear time (well under a second)',
+      actual: elapsed < 1000,
+      expected: true,
+    });
+  });
+
   it('leaves an unclosed dashboard anchor unchanged without throwing', () => {
     const html = '<p><a href="/dashboard/d/p">never closed</p>';
     assert({
