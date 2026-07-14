@@ -84,6 +84,7 @@ export async function GET(request: Request) {
         displayName: aiStreamSessions.displayName,
         browserSessionId: aiStreamSessions.browserSessionId,
         parts: aiStreamSessions.parts,
+        rawPartsCount: aiStreamSessions.rawPartsCount,
         startedAt: aiStreamSessions.startedAt,
         lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
       })
@@ -113,6 +114,9 @@ export async function GET(request: Request) {
         // client render mid-stream content immediately, without waiting on
         // (or depending on) the originator process's live multicast.
         parts: s.parts ?? [],
+        // See rawPartsCount's docblock on the schema (packages/db/src/schema/ai-streams.ts)
+        // for why this is NOT the same as parts.length.
+        rawPartsCount: s.rawPartsCount,
         triggeredBy: {
           userId: s.userId,
           displayName: s.displayName,
