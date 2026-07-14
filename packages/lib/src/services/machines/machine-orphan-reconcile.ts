@@ -209,10 +209,21 @@ export async function reconcileOrphanSprites(
         // sandboxId. The next run retries it.
         failed += 1;
         if (row.kind === 'reclaim') {
-          // Record the failure ON the outbox row, so a Sprite that cannot be
-          // killed surfaces as a growing attempt count instead of being retried
-          // silently forever.
-          await deps.noteReclaimFailure({ sandboxId: row.sandboxId, error: killed.error });
+          // Record the failure ON the outbox row, so a Sprite that cannot be killed
+          // surfaces as a growing attempt count instead of being retried silently
+          // forever. Isolated: if this bookkeeping write ITSELF fails, the row has
+          // already been counted as failed, and letting it throw to the outer catch
+          // would count it twice AND lose the kill error we actually came here to
+          // report. The Sprite is retried next run either way.
+          try {
+            await deps.noteReclaimFailure({ sandboxId: row.sandboxId, error: killed.error });
+          } catch (noteError) {
+            loggers.ai.error(
+              'Failed to record an orphan sprite kill failure against its outbox row',
+              noteError instanceof Error ? noteError : new Error(String(noteError)),
+              { sandboxId: row.sandboxId },
+            );
+          }
         }
         loggers.ai.error(
           'Orphan sprite teardown failed; leaving pointer for retry',

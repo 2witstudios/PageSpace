@@ -60,8 +60,15 @@ function owningPageStillTrashed(pageIdColumn: typeof machineSessions.pageId | ty
  *
  * A capped run is LOGGED (see the cron route's `capped` flag) — a silent
  * truncation would read as "nothing left to reclaim" while Sprites kept billing.
+ * Each query asks for one row MORE than it will process, because a result of
+ * exactly {@link MAX_CANDIDATES_PER_TABLE} proves nothing about whether a
+ * further candidate exists — reporting `capped` off that would cry wolf on every
+ * exactly-full sweep.
  */
 export const MAX_CANDIDATES_PER_TABLE = 200;
+
+/** Fetch one past the cap purely to learn whether a backlog remains; it is never processed. */
+const LOOKAHEAD = MAX_CANDIDATES_PER_TABLE + 1;
 
 export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   async listOrphanCandidates(): Promise<{ rows: OrphanRow[]; capped: boolean }> {
@@ -78,7 +85,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         })
         .from(machineSpriteReclaims)
         .orderBy(asc(machineSpriteReclaims.recordedAt))
-        .limit(MAX_CANDIDATES_PER_TABLE),
+        .limit(LOOKAHEAD),
       db
         .select({
           pageId: machineSessions.pageId,
@@ -104,7 +111,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         // Oldest-trashed first: the longest-billing orphans go first, and a
         // capped run can never starve a row indefinitely.
         .orderBy(asc(pages.trashedAt))
-        .limit(MAX_CANDIDATES_PER_TABLE),
+        .limit(LOOKAHEAD),
       db
         .select({
           pageId: machineBranches.machineId,
@@ -127,23 +134,24 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
           ),
         )
         .orderBy(asc(pages.trashedAt))
-        .limit(MAX_CANDIDATES_PER_TABLE),
+        .limit(LOOKAHEAD),
     ]);
 
     return {
       rows: [
         // Outbox first: these Sprites have NO pointer left anywhere else, so they
         // are the ones that bill forever if this run does not get to them.
-        ...reclaimRows.map((row): OrphanRow => ({ kind: 'reclaim', ...row })),
-        ...sessionRows.map((row): OrphanRow => ({ kind: 'session', ...row })),
-        ...branchRows.map((row): OrphanRow => ({ kind: 'branch', ...row })),
+        ...reclaimRows.slice(0, MAX_CANDIDATES_PER_TABLE).map((row): OrphanRow => ({ kind: 'reclaim', ...row })),
+        ...sessionRows.slice(0, MAX_CANDIDATES_PER_TABLE).map((row): OrphanRow => ({ kind: 'session', ...row })),
+        ...branchRows.slice(0, MAX_CANDIDATES_PER_TABLE).map((row): OrphanRow => ({ kind: 'branch', ...row })),
       ],
-      // Any source hitting its cap means a backlog remains — report it rather
-      // than letting a partial sweep look like a clean one.
+      // The lookahead row is what makes this honest: a source that came back
+      // exactly full might have had nothing more to give, and reporting a backlog
+      // off that would cry wolf every time. Only a row BEYOND the cap proves one.
       capped:
-        reclaimRows.length >= MAX_CANDIDATES_PER_TABLE ||
-        sessionRows.length >= MAX_CANDIDATES_PER_TABLE ||
-        branchRows.length >= MAX_CANDIDATES_PER_TABLE,
+        reclaimRows.length > MAX_CANDIDATES_PER_TABLE ||
+        sessionRows.length > MAX_CANDIDATES_PER_TABLE ||
+        branchRows.length > MAX_CANDIDATES_PER_TABLE,
     };
   },
 

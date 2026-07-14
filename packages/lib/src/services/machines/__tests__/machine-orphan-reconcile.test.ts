@@ -83,6 +83,25 @@ describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose page is
     expect(isStillTrashed).not.toHaveBeenCalled();
   });
 
+  it('counts a row ONCE when even the failure-bookkeeping write fails', async () => {
+    // The kill failed AND the attempt-count write failed. The row must still be a
+    // single failure — letting the bookkeeping error reach the outer catch would
+    // count it twice and lose the kill error we actually needed to report. The
+    // Sprite is retried next run regardless.
+    const { deps, releasedReclaims } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
+      killSprite: async () => ({ ok: false, error: new Error('sprite unreachable') }),
+      noteReclaimFailure: async () => {
+        throw new Error('db write failed');
+      },
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 0, failed: 1 });
+    expect(releasedReclaims).toEqual([]); // and the pointer survives
+  });
+
   it('KEEPS the outbox row when the kill fails, recording the failure — it is the last pointer in existence', async () => {
     const { deps, releasedReclaims, notedFailures } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
