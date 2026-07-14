@@ -11,6 +11,11 @@ import {
 } from '@/lib/ai/core/stream-multicast-registry';
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
+import {
+  mergeConsecutiveTextParts,
+  capPartsToByteBudget,
+  CHECKPOINT_MAX_SERIALIZED_BYTES,
+} from '@/lib/ai/core/checkpoint-serialize';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -255,13 +260,24 @@ export const createStreamLifecycle = async (
   // its own final write — otherwise a slow periodic write could resolve AFTER
   // finish()'s write and clobber the final parts with a stale snapshot.
   let persistInFlight: Promise<void> | null = null;
+  // One warning per stream, not one per checkpoint — a reply that stays over the cap for its
+  // whole remaining run would otherwise log on every tick.
+  let hasWarnedSizeCap = false;
 
   const persistBufferedParts = (parts: UIMessagePart[]): Promise<void> => {
+    const { parts: shaped, wasCapped } = capPartsToByteBudget(mergeConsecutiveTextParts(parts));
+    if (wasCapped && !hasWarnedSizeCap) {
+      hasWarnedSizeCap = true;
+      loggers.ai.warn('stream-lifecycle: parts snapshot exceeded serialized size cap, truncating oldest parts', {
+        messageId,
+        maxBytes: CHECKPOINT_MAX_SERIALIZED_BYTES,
+      });
+    }
     const attempt = (async () => {
       try {
         await db
           .update(aiStreamSessions)
-          .set({ parts, lastHeartbeatAt: new Date() })
+          .set({ parts: shaped, lastHeartbeatAt: new Date() })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
         loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {
