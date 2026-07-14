@@ -1,7 +1,11 @@
 import { useEffect, useRef } from 'react';
 import type { UIMessage } from 'ai';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
-import { planOwnStreamMirror, type OwnStreamMirrorStatus } from '@/lib/ai/streams/planOwnStreamMirror';
+import {
+  planOwnStreamMirror,
+  isOwnStreamMirrorActive,
+  type OwnStreamMirrorStatus,
+} from '@/lib/ai/streams/planOwnStreamMirror';
 
 // TRANSITIONAL — see the Deletion covenant (pagespace kw69qhfck96jpssdk6w2xtbp):
 // this hook exists only because useChat remains the transport until
@@ -73,7 +77,20 @@ export const useOwnStreamMirror = ({
       else store.removeStream(op.messageId);
     }
 
-    mirroredIdRef.current = ownAssistantMessage?.id;
+    // NOT `ownAssistantMessage?.id` unconditionally: useChat typically
+    // retains the completed assistant message in local history after a
+    // stream finishes, so that id would still be defined here even though
+    // nothing is mirrored anymore (planOwnStreamMirror just emitted
+    // removeStream for it, or emitted nothing because it was already
+    // cleared). Using the same isOwnStreamMirrorActive definition
+    // planOwnStreamMirror itself uses is what makes this the source of
+    // truth for "did we actually mirror this id" rather than "does a
+    // message with this id still exist somewhere in caller state" — a
+    // continuation/regenerate reusing that same completed id (a real SDK
+    // behavior pinned in sdkServerIdAdoption.test.ts) would otherwise look
+    // like "already mirrored" against a store entry that had already been
+    // removed, and silently never get re-mirrored.
+    mirroredIdRef.current = isOwnStreamMirrorActive(status, ownAssistantMessage) ? ownAssistantMessage?.id : undefined;
     // Deliberately depend on ownAssistantMessage's id/parts and triggeredBy's
     // fields rather than the objects themselves: a caller building these from
     // useChat's live message will construct a fresh `{id, parts}` wrapper on

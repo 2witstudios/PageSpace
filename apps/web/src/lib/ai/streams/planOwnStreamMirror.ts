@@ -40,6 +40,25 @@ export type OwnStreamMirrorOp =
   | { type: 'removeStream'; messageId: string };
 
 /**
+ * Whether the own tab currently has a live stream to mirror. `useChat`
+ * typically retains the completed assistant message in local history after
+ * a stream finishes, so `ownAssistantMessage !== undefined` alone is NOT a
+ * reliable activity signal — `status` must also be submitted/streaming.
+ * Exported (not just an internal check) so `useOwnStreamMirror` can use the
+ * exact same definition when deciding whether to clear its `mirroredIdRef`
+ * — computing that from `ownAssistantMessage?.id` alone previously left the
+ * ref pointing at a completed stream's id, which then made a continuation
+ * request reusing that same server-issued id (a real SDK behavior this PR
+ * pins in `sdkServerIdAdoption.test.ts`) silently fail to re-mirror, since
+ * `planOwnStreamMirror` saw a matching `mirroredMessageId` and skipped
+ * `addStream` against a store entry that had already been removed.
+ */
+export const isOwnStreamMirrorActive = (
+  status: OwnStreamMirrorStatus,
+  ownAssistantMessage: { id: string; parts: UIMessagePart[] } | undefined,
+): boolean => (status === 'submitted' || status === 'streaming') && ownAssistantMessage !== undefined;
+
+/**
  * Computes the idempotent `usePendingStreamsStore` ops needed to mirror the
  * own tab's actively-streaming assistant message. Pure — the caller (
  * `useOwnStreamMirror`) applies the returned ops via the store's own
@@ -49,8 +68,7 @@ export type OwnStreamMirrorOp =
  * an absent id.
  */
 export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamMirrorOp[] => {
-  const isActive =
-    (input.status === 'submitted' || input.status === 'streaming') && input.ownAssistantMessage !== undefined;
+  const isActive = isOwnStreamMirrorActive(input.status, input.ownAssistantMessage);
 
   if (!isActive) {
     return input.mirroredMessageId !== undefined

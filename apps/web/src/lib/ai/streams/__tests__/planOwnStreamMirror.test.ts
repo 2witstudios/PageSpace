@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planOwnStreamMirror } from '../planOwnStreamMirror';
+import { planOwnStreamMirror, isOwnStreamMirrorActive } from '../planOwnStreamMirror';
 
 const BASE = {
   pageId: 'page-1',
@@ -115,5 +115,27 @@ describe('planOwnStreamMirror', () => {
       mirroredMessageId: 'a1',
     };
     expect(planOwnStreamMirror(input)).toEqual(planOwnStreamMirror(input));
+  });
+});
+
+describe('isOwnStreamMirrorActive', () => {
+  it('given status streaming with an assistant message, should be active', () => {
+    expect(isOwnStreamMirrorActive('streaming', { id: 'a1', parts: [] })).toBe(true);
+  });
+
+  it('given status submitted with an assistant message, should be active', () => {
+    expect(isOwnStreamMirrorActive('submitted', { id: 'a1', parts: [] })).toBe(true);
+  });
+
+  it('given status streaming with no assistant message yet, should NOT be active', () => {
+    expect(isOwnStreamMirrorActive('streaming', undefined)).toBe(false);
+  });
+
+  it('given status ready even with an assistant message still present (useChat retains completed history), should NOT be active — this is the exact case that caused the mirroredId staleness bug', () => {
+    expect(isOwnStreamMirrorActive('ready', { id: 'a1', parts: [text('done')] })).toBe(false);
+  });
+
+  it('given status error with an assistant message present, should NOT be active', () => {
+    expect(isOwnStreamMirrorActive('error', { id: 'a1', parts: [] })).toBe(false);
   });
 });
