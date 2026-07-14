@@ -200,6 +200,12 @@ const GlobalAssistantView: React.FC = () => {
   // Populated after useAgentChannelMultiplayer runs (called further down); used
   // in tryRecover via ref so the callback doesn't depend on hook ordering.
   const rejoinAgentStreamRef = useRef<() => void>(() => {});
+  // Whether the LAST /active-streams probe actually reached the server and answered.
+  //
+  // tryRecover returns false for two semantically opposite outcomes — "the server says nothing is
+  // live" and "the probe never got an answer" — and the resume path must not treat silence as an
+  // answer. See the regenerate gate in useAppStateRecovery below.
+  const probeAnsweredRef = useRef(false);
   // The conversation currently on screen, mirrored on every render. Read after an await to
   // decide whether a response that just resolved is still wanted.
   //
@@ -611,10 +617,14 @@ const GlobalAssistantView: React.FC = () => {
     if (!channelId) return false;
 
     // Step 1: live stream check
+    probeAnsweredRef.current = false;
     try {
       const res = await fetchWithAuth(
         `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
       );
+      // Reachability, recorded separately from the verdict: only a 2xx means the server actually
+      // TOLD us what is live. A throw or a non-ok leaves us knowing nothing.
+      probeAnsweredRef.current = res.ok;
       if (res.ok) {
         const data = (await res.json()) as {
           streams?: Array<{
@@ -851,22 +861,37 @@ const GlobalAssistantView: React.FC = () => {
       rawStop();
       if (await tryRecover()) return;
 
-      // Nothing live on the server, and nothing persisted for this turn. Deliberately NOT a DB
-      // refresh — that is unsafe here (the probe may simply have failed, in which case a stream
-      // could still be live and the DB snapshot, which cannot contain an unpersisted reply, would
-      // erase the in-progress bubble; or the DB is behind our local state, where it would erase
-      // the user's own prompt).
+      // tryRecover came up empty — but that means one of two OPPOSITE things, and only one of them
+      // is an answer:
       //
-      // Regenerate instead — the same fallback useStreamRecovery applies when its probe comes up
-      // empty on a network error. It is needed BECAUSE of the stop above: aborting the fetch
-      // settles useChat at `ready` with no `error`, and useStreamRecovery only fires on
-      // `status === 'error'`. Without this, a turn whose POST died on the background transition
-      // (a radio drop right then is common) would find no stream, no reply, and no error — and
-      // the user's prompt would sit unanswered forever.
+      //   "the server says nothing is live"  → the run died; regenerating is the recovery.
+      //   "the probe never reached the server" → we know NOTHING; a run may well still be live.
       //
-      // Gated on a turn actually having been in flight, so an ordinary resume on an idle
-      // conversation can never fire a spurious generation.
-      if (hadTurnInFlight) await handleRetry();
+      // The first request after a foreground is the one most likely to fail (cold radio), so on
+      // this path the second case is common. Re-probe a couple of times before concluding: the
+      // radio comes back well inside a few seconds.
+      for (let attempt = 1; !probeAnsweredRef.current && attempt <= 2; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+        if (await tryRecover()) return;
+      }
+
+      // Regenerate ONLY on an answered probe, and only if a turn of ours really was in flight.
+      //
+      // The regenerate is needed BECAUSE of the stop above: aborting the fetch settles useChat at
+      // `ready` with NO `error`, and useStreamRecovery only fires on `status === 'error'`. Without
+      // it, a turn whose POST died on the background transition would find no stream, no reply and
+      // no error, and the user's prompt would sit unanswered forever.
+      //
+      // But regenerating on SILENCE would be far worse than doing nothing. Every generation start
+      // calls takeOverConversationStreams, so a regenerate issued while the run is in fact still
+      // live does not race it — it ABORTS it. We would kill a healthy, possibly nearly-finished
+      // generation, re-run any write tools it had already executed, bill the discarded tokens, and
+      // strand its partial in the DB. Silence is not an answer.
+      //
+      // Doing nothing there is safe: the stop released this channel's `consuming` mark, so a live
+      // run is picked up by the socket-reconnect bootstrap once the network returns, and a dead one
+      // leaves the user their prompt and the retry action on it.
+      if (hadTurnInFlight && probeAnsweredRef.current) await handleRetry();
     }, [
       effectiveIsStreaming,
       selectedAgent,
