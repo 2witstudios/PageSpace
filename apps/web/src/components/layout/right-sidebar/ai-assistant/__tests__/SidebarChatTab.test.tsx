@@ -133,8 +133,12 @@ function isOwnStreamForConversation(
 /**
  * Mirrors `resumeEnabled` — the `enabled` gate passed to useAppStateRecovery.
  *
- * Deliberately takes NO streaming argument. The gate must be a callback (evaluated at
- * fire time, on resume) and must gate on user-editing only. See the regression test below.
+ * Deliberately takes NO streaming argument, which is the whole point. The gate used to be a
+ * render-time boolean folding in `!isStreaming`; iOS freezes JS the moment the app backgrounds,
+ * so the value that gated the resume was whatever was true when the app went away — streaming —
+ * and recovery was disabled in exactly the case it was written for. The gate must be a callback
+ * (evaluated at fire time) considering only the conversation and user-editing; the streaming
+ * decision belongs to resolveResumeAction.
  */
 function resumeEnabled(currentConversationId: string | null, isAnyEditing: boolean): boolean {
   return currentConversationId !== null && !isAnyEditing;
@@ -145,27 +149,33 @@ function resumeEnabled(currentConversationId: string | null, isAnyEditing: boole
  * mirrored — it calls the real `resolveResumeAction`, so this pins the wiring against the
  * real policy.
  *
- * The order is the point: stop → refresh → rejoin. The refresh is awaited BEFORE the rejoin
- * so that no DB request is outstanding when the rejoined stream completes; see the
- * ordering tests below.
+ * The critical property: on the rejoin path we stop the local fetch and hand off to
+ * `tryRecover` (the /active-streams-first probe), and we DO NOT touch the DB unless
+ * tryRecover comes back empty. A blind DB refresh while a run is still generating would
+ * write a snapshot with no assistant message over the in-progress bubble.
+ *
+ * `recovered` models tryRecover's return: true = it rejoined a live stream or refetched a
+ * persisted reply; false = nothing live, nothing persisted.
  */
-type ResumeEffect = 'stop' | 'rejoin-agent' | 'rejoin-global' | 'refresh';
+type ResumeEffect = 'stop' | 'try-recover' | 'refresh';
 
 function planResume({
   native,
   isStreaming,
-  selectedAgent,
+  recovered = false,
 }: {
   native: boolean;
   isStreaming: boolean;
-  selectedAgent: { id: string } | null;
+  recovered?: boolean;
 }): ResumeEffect[] {
   const action = resolveResumeAction({ native, isStreaming });
   if (action === 'noop') return [];
   if (action !== 'rejoin-and-refresh') return ['refresh'];
-  // `stop` is local-only — it clears useChat state so the refresh and rejoin write cleanly.
-  // It does NOT signal the server; the run keeps generating and is rejoined below.
-  return ['stop', 'refresh', selectedAgent ? 'rejoin-agent' : 'rejoin-global'];
+  // `stop` is local-only — it clears useChat state and releases the channel's `consuming`
+  // mark so the rejoin's bootstrap will attach. It does NOT signal the server; the run keeps
+  // generating and stays rejoinable.
+  if (recovered) return ['stop', 'try-recover'];
+  return ['stop', 'try-recover', 'refresh'];
 }
 
 // ============================================
@@ -615,65 +625,53 @@ describe('SidebarChatTab Display Logic', () => {
         expect(resumeEnabled('conv-A', true)).toBe(false);
       });
 
-      it('given the gate signature, streaming must not be an input at all', () => {
-        // THE REGRESSION. The gate used to be a render-time boolean that folded in
-        // `!isStreaming`. iOS freezes JS the moment the app backgrounds, so the value
-        // that gated the resume was whatever was true when the app went away — i.e.
-        // streaming — which disabled recovery in exactly the case it was written for.
-        // The streaming decision belongs to resolveResumeAction, evaluated at fire time;
-        // the gate must only ever consider the conversation and user-editing. Pinned on
-        // arity so a third `isStreaming` parameter cannot be reintroduced silently.
-        expect(resumeEnabled.length).toBe(2);
-      });
     });
 
     describe('planResume (the onResume body)', () => {
-      it('given native mid-stream (the orphaned-stream bug), should stop the local fetch, refresh, then rejoin the global stream', () => {
-        expect(planResume({ native: true, isStreaming: true, selectedAgent: null })).toEqual([
+      it('given native mid-stream and a live stream to rejoin, should stop the local fetch and hand off to tryRecover — and NOT touch the DB', () => {
+        // THE KEY INVARIANT. The reply is not persisted until the run completes, so a DB
+        // snapshot taken while the stream is still generating contains no assistant message.
+        // Writing it would wipe the in-progress bubble. tryRecover asks /active-streams first
+        // and rejoins; the DB is never read on this path.
+        expect(planResume({ native: true, isStreaming: true, recovered: true })).toEqual([
           'stop',
-          'refresh',
-          'rejoin-global',
+          'try-recover',
         ]);
       });
 
-      it('given native mid-stream with an agent selected, should rejoin the AGENT stream', () => {
-        expect(planResume({ native: true, isStreaming: true, selectedAgent: mockAgent })).toEqual([
+      it('given native and tryRecover finds nothing live or persisted, should fall back to a DB refresh', () => {
+        expect(planResume({ native: true, isStreaming: true, recovered: false })).toEqual([
           'stop',
+          'try-recover',
           'refresh',
-          'rejoin-agent',
         ]);
       });
 
-      it('given native, should await the refresh BEFORE the rejoin — never after it', () => {
-        // Order is the fix for a reply-wiping race. The reply is not persisted until the run
-        // completes, so a refresh issued alongside a live stream returns a snapshot with no
-        // assistant message. Fired AFTER the rejoin, that request could still be in flight when
-        // the rejoined stream completed — landing last and overwriting the just-completed reply
-        // with the pre-reply snapshot.
-        const plan = planResume({ native: true, isStreaming: true, selectedAgent: mockAgent });
-        expect(plan.indexOf('refresh')).toBeLessThan(plan.indexOf('rejoin-agent'));
-        expect(plan.indexOf('stop')).toBeLessThan(plan.indexOf('refresh'));
+      it('given native, should always stop BEFORE recovering', () => {
+        // The stop is local-only, but it is what ends the dead response body and so releases
+        // the channel's `consuming` mark. Without that, the rejoin's bootstrap classifies the
+        // stream as one we are already reading off the POST body and skips attaching it — the
+        // rejoin would silently do nothing.
+        const plan = planResume({ native: true, isStreaming: true, recovered: true });
+        expect(plan.indexOf('stop')).toBeLessThan(plan.indexOf('try-recover'));
       });
 
-      it('given native and NOT streaming, should still stop and rejoin — the recovery is deterministic, not flag-gated', () => {
+      it('given native and NOT streaming, should still stop and probe — the recovery is deterministic, not flag-gated', () => {
         // The local fetch is dead after backgrounding regardless of what useChat still
-        // reports, so native always rejoins. /active-streams is the authoritative answer
+        // reports, so native always probes. /active-streams is the authoritative answer
         // on whether a stream is actually live; no client flag gates the rejoin.
-        expect(planResume({ native: true, isStreaming: false, selectedAgent: null })).toEqual([
+        expect(planResume({ native: true, isStreaming: false, recovered: true })).toEqual([
           'stop',
-          'refresh',
-          'rejoin-global',
+          'try-recover',
         ]);
       });
 
       it('given web with a live fetch, should do nothing — the fetch survives a tab switch and must not be clobbered', () => {
-        expect(planResume({ native: false, isStreaming: true, selectedAgent: null })).toEqual([]);
+        expect(planResume({ native: false, isStreaming: true })).toEqual([]);
       });
 
-      it('given web with no live fetch, should refresh only (no stop, no rejoin)', () => {
-        expect(planResume({ native: false, isStreaming: false, selectedAgent: mockAgent })).toEqual([
-          'refresh',
-        ]);
+      it('given web with no live fetch, should refresh only (no stop, no probe)', () => {
+        expect(planResume({ native: false, isStreaming: false })).toEqual(['refresh']);
       });
     });
   });

@@ -628,59 +628,6 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, loadGlobalMessages]);
 
-  // App state recovery — deterministic stream rejoin on mobile.
-  //
-  // The `enabled` gate MUST be a callback, not a render-time boolean: iOS freezes JS the
-  // moment the app backgrounds, so a boolean captured at render is whatever was true when
-  // the app went away. That is how this path was dead in exactly the case it was written
-  // for — `!isStreaming` was false (streaming), and the recovery hook was gated off.
-  //
-  // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh'
-  // (the local fetch is dead after backgrounding).
-  //
-  // ORDER IS LOAD-BEARING: stop → await refresh → rejoin.
-  //
-  // The refresh must be AWAITED BEFORE the rejoin, not fired after it. The reply is not
-  // persisted until the run completes, so a refresh issued alongside a live stream returns a
-  // snapshot with no assistant message. If that request were still in flight when the rejoined
-  // stream completed, its response would land last and overwrite the freshly-completed reply
-  // with the pre-reply snapshot. Awaiting the refresh first means no DB request is ever
-  // outstanding when the stream completes: the refresh catches a run that finished while
-  // backgrounded, and the rejoin then attaches to one that is still live.
-  const resumeEnabled = useCallback(
-    () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
-    [currentConversationId],
-  );
-
-  useAppStateRecovery({
-    onResume: useCallback(async () => {
-      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
-      if (action === 'noop') return;
-      if (action !== 'rejoin-and-refresh') {
-        await handleAppResume();
-        return;
-      }
-      // `stop` is the local-only useChat stop; it does NOT signal the server (that is
-      // done separately via abortActiveStreamByMessageId). We only clear the local
-      // streaming state so the refresh and rejoin can write cleanly.
-      stop();
-      await handleAppResume();
-      if (selectedAgent) {
-        rejoinAgentStream();
-      } else {
-        rejoinGlobalStream();
-      }
-    }, [
-      displayIsStreaming,
-      stop,
-      selectedAgent,
-      rejoinAgentStream,
-      rejoinGlobalStream,
-      handleAppResume,
-    ]),
-    enabled: resumeEnabled,
-  });
-
   // Clean up stream tracking on unmount or conversation change.
   //
   // Keyed by `sidebarChatId` — THE KEY THIS SURFACE ACTUALLY REGISTERED. It used to clear the bare
@@ -1026,6 +973,52 @@ const SidebarChatTab: React.FC = () => {
 
   // Auto-retry on network errors — rejoin-first, regenerate only as last resort
   useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2, tryRecover });
+
+  // App state recovery — deterministic stream rejoin on mobile.
+  //
+  // Placed HERE, below tryRecover, rather than up with the other effects: it delegates to
+  // tryRecover, and a resume callback declared above it would close over a temporal-dead-zone
+  // binding.
+  //
+  // The `enabled` gate MUST be a callback, not a render-time boolean: iOS freezes JS the moment
+  // the app backgrounds, so a boolean captured at render is whatever was true when the app went
+  // away. That is how this path was dead in exactly the case it was written for — `!isStreaming`
+  // was false (streaming), and the recovery hook was gated off.
+  //
+  // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh' (the
+  // local fetch is dead after backgrounding) — and then delegates to `tryRecover`, the same
+  // rejoin-first probe useStreamRecovery uses on a network error, because a background/foreground
+  // cycle IS a network error on iOS, just one we are told about. Do NOT blind-refresh from the DB
+  // here: the reply is not persisted until the run completes, so while a stream is still live a DB
+  // snapshot contains no assistant message and writing it would wipe the in-progress bubble.
+  // tryRecover asks /active-streams first — the server's authoritative answer — and only touches
+  // the DB when nothing is live:
+  //
+  //   live stream        → rejoin it, no DB read at all
+  //   already persisted  → refetch the completed reply (the stream finished while backgrounded)
+  //   neither            → falls through to handleAppResume
+  const resumeEnabled = useCallback(
+    () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
+    [currentConversationId],
+  );
+
+  useAppStateRecovery({
+    onResume: useCallback(async () => {
+      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
+      if (action === 'noop') return;
+      if (action === 'rejoin-and-refresh') {
+        // Local-only useChat stop. It does NOT signal the server (that is done separately via
+        // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
+        // also ends the dead response body, which releases this channel's `consuming` mark —
+        // without that the rejoin's bootstrap would classify the stream as one we are already
+        // reading off the POST and skip attaching it.
+        stop();
+        if (await tryRecover()) return;
+      }
+      await handleAppResume();
+    }, [displayIsStreaming, stop, tryRecover, handleAppResume]),
+    enabled: resumeEnabled,
+  });
 
   // Adapter for AgentSelector (converts SidebarAgentInfo to AgentInfo shape)
   const handleSelectAgent = useCallback((agent: SidebarAgentInfo | null) => {

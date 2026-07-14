@@ -708,20 +708,22 @@ const GlobalAssistantView: React.FC = () => {
   ]);
 
   // Pull-up / resume refresh: check for messages this surface missed (real-time may have failed,
-  // or the app was backgrounded).
+  // or the app was backgrounded and no live stream was found to rejoin).
   //
-  // This runs DURING an active own stream on the resume path (see useAppStateRecovery below:
-  // native resume rejoins the live server stream and then refreshes). A raw
-  // `setMessages(serverMessages)` would clobber the in-progress assistant bubble with a snapshot
-  // that predates the reply — the reply is not persisted until the run completes. So this funnels
-  // through the same two guards as the authoritative loaders elsewhere in the app
-  // (AiChatView.loadMessagesForConversation, SidebarChatTab.loadGlobalMessages):
+  // Carries the two guards the authoritative loaders elsewhere in the app use
+  // (AiChatView.loadMessagesForConversation, SidebarChatTab.loadGlobalMessages), because a
+  // message load that lands late can otherwise overwrite state it knows nothing about:
   //
   //   1. shouldApplyLoadedMessages, against the LIVE conversation (currentConversationIdRef) —
   //      drop the response if the user switched conversation or agent while the fetch was in
   //      flight, so it cannot clobber the conversation they moved to.
-  //   2. mergeServerAndPending — re-attach the in-flight own stream's bubble, which by definition
-  //      is absent from the DB snapshot while the run is still generating.
+  //   2. mergeServerAndPending — keep a bootstrap-restored stream's in-flight bubble, which is
+  //      absent from the DB snapshot until the run persists its reply.
+  //
+  // Note this is NOT the mid-stream write path: the resume handler below reaches this only when
+  // /active-streams reported nothing live to rejoin. Guard 2 covers a stream restored into the
+  // pending store by a bootstrap (after a refresh mid-stream) — an OWN stream being read off the
+  // POST body is deliberately never in that store, so it is not what this protects.
   const handlePullUpRefresh = useCallback(async () => {
     const conversationId = currentConversationId;
     if (!conversationId) return;
@@ -781,17 +783,16 @@ const GlobalAssistantView: React.FC = () => {
   // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh'
   // (the local fetch is dead after backgrounding).
   //
-  // ORDER IS LOAD-BEARING: stop → await refresh → rejoin.
+  // It then delegates to `tryRecover`, the same rejoin-first probe useStreamRecovery uses on a
+  // network error — because a background/foreground cycle IS a network error on iOS, just one we
+  // are told about. Do NOT blind-refresh from the DB here: the reply is not persisted until the
+  // run completes, so while a stream is still live a DB snapshot contains no assistant message
+  // and writing it would wipe the in-progress bubble. `tryRecover` asks /active-streams first —
+  // the server's authoritative answer — and only touches the DB when nothing is live:
   //
-  // The refresh must be AWAITED BEFORE the rejoin, not fired after it. The reply is not
-  // persisted until the run completes, so a refresh issued alongside a live stream returns a
-  // snapshot with no assistant message. If that request were still in flight when the rejoined
-  // stream completed, its response would land last and overwrite the freshly-completed reply
-  // with the pre-reply snapshot — and in agent mode nothing would heal it (there is no
-  // completion-triggered refetch there), leaving the reply invisible until the user reselects
-  // the conversation. Awaiting the refresh first means no DB request is ever outstanding when
-  // the stream completes: the refresh catches a run that finished while backgrounded, and the
-  // rejoin then attaches to one that is still live.
+  //   live stream        → rejoin it, no DB read at all
+  //   already persisted  → refetch the completed reply (the stream finished while backgrounded)
+  //   neither            → falls through to handlePullUpRefresh below
   const resumeEnabled = useCallback(
     () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
     [currentConversationId],
@@ -801,29 +802,17 @@ const GlobalAssistantView: React.FC = () => {
     onResume: useCallback(async () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
       if (action === 'noop') return;
-      if (action !== 'rejoin-and-refresh') {
-        await handlePullUpRefresh();
-        return;
+      if (action === 'rejoin-and-refresh') {
+        // Local-only useChat stop. It does NOT signal the server (that is done separately via
+        // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
+        // also ends the dead response body, which releases this channel's `consuming` mark —
+        // without that the rejoin's bootstrap would classify the stream as one we are already
+        // reading off the POST and skip attaching it.
+        rawStop();
+        if (await tryRecover()) return;
       }
-      // rawStop is the local-only useChat stop; it does NOT signal the server (that is
-      // done separately via abortActiveStreamByMessageId). We only clear the local
-      // streaming state so the refresh and rejoin can write cleanly.
-      rawStop();
       await handlePullUpRefresh();
-      // Agent rejoin goes through the ref: useAgentChannelMultiplayer is called further
-      // down, so the callback would otherwise close over a temporal-dead-zone binding.
-      if (selectedAgent) {
-        rejoinAgentStreamRef.current();
-      } else {
-        rejoinGlobalStream();
-      }
-    }, [
-      effectiveIsStreaming,
-      selectedAgent,
-      rawStop,
-      rejoinGlobalStream,
-      handlePullUpRefresh,
-    ]),
+    }, [effectiveIsStreaming, rawStop, tryRecover, handlePullUpRefresh]),
     enabled: resumeEnabled,
   });
 
