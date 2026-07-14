@@ -110,6 +110,25 @@ function createRefAdvancesOnlyOnApplySimulator<X>() {
   };
 }
 
+/**
+ * Mirrors `isOwnStreamForCurrentConversation` in SidebarChatTab.tsx: whether MY OWN local
+ * useChat is producing live content for the conversation about to be loaded/refreshed.
+ *
+ * Found via proactive review (not a reviewer comment): the raw `isStreaming`/`displayIsStreaming`
+ * flag belongs to a stable-id useChat instance that keeps reporting true across a conversation
+ * switch, for the OLD conversation's still-in-flight request — switching conversations does not
+ * abort it. Comparing against `heldStreamConvId` (latched to the conversation the stream actually
+ * started in) is the only way to tell whether a currently-true streaming flag actually belongs to
+ * the conversation now being loaded, or to one the user has already left.
+ */
+function isOwnStreamForConversation(
+  isStreaming: boolean,
+  heldStreamConvId: string | null,
+  targetConversationId: string | null,
+): boolean {
+  return isStreaming && heldStreamConvId === targetConversationId;
+}
+
 // ============================================
 // Test Data
 // ============================================
@@ -503,20 +522,43 @@ describe('SidebarChatTab Display Logic', () => {
       expect(sim.step(second, false)).toBe(false); // still streaming — newer snapshot also deferred
       expect(sim.step(second, true)).toBe(true); // guard lifts — applies the latest snapshot
     });
+  });
 
-    it('given the buggy pre-fix ordering (ref advances unconditionally), demonstrates the lost-load failure this test suite guards against', () => {
-      // Inlined here (not exported) — this is the shape review flagged, kept only to
-      // document the failure mode the simulator above is designed to prevent.
-      let prevRef: string[] | null = null;
-      const buggyStep = (x: string[], guardPasses: boolean): boolean => {
-        if (x === prevRef) return false;
-        prevRef = x; // <-- advances BEFORE checking the guard: the bug
-        if (!guardPasses) return false;
-        return true;
-      };
-      const snapshot = ['a'];
-      expect(buggyStep(snapshot, false)).toBe(false); // streaming — blocked, but ref already marked "seen"
-      expect(buggyStep(snapshot, true)).toBe(false); // streaming ended — same reference reads as "already seen", load lost
+  // ============================================
+  // isOwnStreamForConversation regression tests
+  //
+  // Found via proactive review, not a reviewer comment: the load-on-select/refresh effects
+  // originally guarded on the raw `displayIsStreaming` flag, which reflects a stable-id useChat
+  // instance that keeps reporting "streaming" across a conversation switch — for the OLD
+  // conversation's still-in-flight request, not the one now being loaded. Switching
+  // conversations does not abort an in-flight send (documented at length in both this file and
+  // GlobalAssistantView.tsx). Guarding on the raw flag would strand a newly-selected, idle
+  // conversation behind an unrelated stream still running in a conversation the user already
+  // left, until that unrelated stream happened to finish.
+  // ============================================
+
+  describe('isOwnStreamForConversation (conversation-scoped streaming guard)', () => {
+    it('given streaming and the held stream conversation matches the target, should report true (blocks the load — correct, this IS the conversation being clobbered)', () => {
+      expect(isOwnStreamForConversation(true, 'conv-A', 'conv-A')).toBe(true);
+    });
+
+    it('given streaming but the held stream conversation is a DIFFERENT one than the target, should report false (does not block — the target conversation has no stream of its own)', () => {
+      expect(isOwnStreamForConversation(true, 'conv-A', 'conv-B')).toBe(false);
+    });
+
+    it('given not streaming at all, should report false regardless of conversation ids', () => {
+      expect(isOwnStreamForConversation(false, 'conv-A', 'conv-A')).toBe(false);
+    });
+
+    it('given no stream has ever started (held id is null) and not streaming, should report false', () => {
+      expect(isOwnStreamForConversation(false, null, 'conv-A')).toBe(false);
+    });
+
+    it('given the exact regression scenario — send in conv-A, switch to idle conv-B while A keeps streaming — the load-on-select guard for conv-B must NOT be blocked', () => {
+      // isStreaming stays true (stable useChat id survives the switch); heldStreamConvId is
+      // latched to 'conv-A' (where the stream actually started); the surface has moved to 'conv-B'.
+      const blocked = isOwnStreamForConversation(true, 'conv-A', 'conv-B');
+      expect(blocked).toBe(false);
     });
   });
 });

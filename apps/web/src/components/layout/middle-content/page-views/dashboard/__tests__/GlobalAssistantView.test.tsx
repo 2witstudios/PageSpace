@@ -16,15 +16,20 @@
 import { describe, it, expect } from 'vitest';
 
 /**
- * Mirrors the global-mode load-on-select effect (~line 1008-1023):
- * `if (selectedAgent) return; if (globalInitialMessages === prevRef) return; if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return; prevRef = globalInitialMessages; setGlobalLocalMessages(globalInitialMessages);`
+ * Mirrors the global-mode load-on-select effect (~line 1019-1044):
+ * `if (selectedAgent) return; if (globalInitialMessages === prevRef) return; if (!globalIsInitialized || !globalConversationId || isOwnGlobalStreamForCurrentConversation) return; prevRef = globalInitialMessages; setGlobalLocalMessages(globalInitialMessages);`
  *
  * The prevRef/dedup check is load-bearing (CodeRabbit review on this PR): without it, this
- * effect re-fires on EVERY effectiveIsStreaming transition, including the streaming -> not
- * -streaming edge at the end of an ordinary send. `globalInitialMessages` is not refreshed for a
- * fresh own completion (GlobalChatContext's onStreamComplete deliberately no-ops for that case),
- * so re-firing without the dedup would reapply the stale pre-send snapshot and wipe the
- * just-completed reply straight back out of the surface's own useChat state.
+ * effect re-fires on EVERY isOwnGlobalStreamForCurrentConversation transition, including the
+ * streaming -> not-streaming edge at the end of an ordinary send. `globalInitialMessages` is not
+ * refreshed for a fresh own completion (GlobalChatContext's onStreamComplete deliberately
+ * no-ops for that case), so re-firing without the dedup would reapply the stale pre-send
+ * snapshot and wipe the just-completed reply straight back out of the surface's own useChat
+ * state.
+ *
+ * The guard is `isOwnGlobalStreamForCurrentConversation`, not the broader `effectiveIsStreaming`
+ * (found via proactive review, not a reviewer comment) — see `isOwnStreamForConversation` below
+ * for why the raw flag is wrong here.
  */
 function shouldApplyGlobalLocalMessages<T>(
   selectedAgent: { id: string } | null,
@@ -32,39 +37,58 @@ function shouldApplyGlobalLocalMessages<T>(
   globalConversationId: string | null,
   globalInitialMessages: T[],
   prevGlobalInitialMessages: T[] | null,
-  effectiveIsStreaming: boolean,
+  isOwnGlobalStreamForCurrentConversation: boolean,
 ): boolean {
   if (selectedAgent) return false;
   if (globalInitialMessages === prevGlobalInitialMessages) return false;
-  if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return false;
+  if (!globalIsInitialized || !globalConversationId || isOwnGlobalStreamForCurrentConversation) return false;
   return true;
 }
 
 /**
- * Mirrors the agent-mode load-signal effect (~line 972-981):
- * `if (selectedAgent && agentConversationId && !effectiveIsStreaming) setAgentMessages(...)`
+ * Mirrors the agent-mode load-signal effect (~line 993-1017):
+ * `if (selectedAgent && agentConversationId && !isOwnAgentStreamForCurrentConversation) setAgentMessages(...)`
  */
 function shouldApplyAgentMessagesOnLoadSignal(
   selectedAgent: { id: string } | null,
   agentConversationId: string | null,
-  effectiveIsStreaming: boolean,
+  isOwnAgentStreamForCurrentConversation: boolean,
 ): boolean {
-  return Boolean(selectedAgent) && Boolean(agentConversationId) && !effectiveIsStreaming;
+  return Boolean(selectedAgent) && Boolean(agentConversationId) && !isOwnAgentStreamForCurrentConversation;
 }
 
 /**
- * Mirrors the refreshSignal effect (~line 745-757): remote events (reconnect,
+ * Mirrors the refreshSignal effect (~line 758-772): remote events (reconnect,
  * cross-tab edit/delete) bump refreshSignal, and this surface reacts by
  * calling handlePullUpRefresh — but only in global mode, and (as of this PR)
- * only while not actively streaming, since handlePullUpRefresh overwrites
- * local messages with no reconciliation against an in-flight stream.
+ * only while this conversation isn't the one MY OWN stream is running against,
+ * since handlePullUpRefresh overwrites local messages with no reconciliation
+ * against an in-flight stream.
  */
 function shouldHandlePullUpRefresh(
   selectedAgent: { id: string } | null,
   isInitialized: boolean,
-  effectiveIsStreaming: boolean,
+  isOwnGlobalStreamForCurrentConversation: boolean,
 ): boolean {
-  return !selectedAgent && isInitialized && !effectiveIsStreaming;
+  return !selectedAgent && isInitialized && !isOwnGlobalStreamForCurrentConversation;
+}
+
+/**
+ * Mirrors `isOwnAgentStreamForCurrentConversation`/`isOwnGlobalStreamForCurrentConversation` in
+ * GlobalAssistantView.tsx (identical shape to SidebarChatTab.tsx's `isOwnStreamForConversation`,
+ * see that file for the full rationale): whether MY OWN local Chat is producing live content for
+ * the conversation about to be loaded/refreshed. `agentStatus`/`globalStatus` belong to a
+ * stable-id useChat instance that keeps reporting streaming across a conversation switch, for
+ * the OLD conversation's still-in-flight request — comparing against the held stream-start id
+ * (streamConvIdRef/globalStreamConvIdRef) is the only way to tell whether a currently-true
+ * streaming flag actually belongs to the conversation now being loaded.
+ */
+function isOwnStreamForConversation(
+  isStreamingNow: boolean,
+  heldStreamConvId: string | null,
+  targetConversationId: string | null,
+): boolean {
+  return isStreamingNow && heldStreamConvId === targetConversationId;
 }
 
 /**
@@ -224,6 +248,38 @@ describe('GlobalAssistantView load-on-select effects', () => {
       expect(sim.step(1, false)).toBe(false); // streaming — blocked
       expect(sim.step(2, false)).toBe(false); // still streaming — newer signal also deferred
       expect(sim.step(2, true)).toBe(true); // guard lifts — applies the latest signal
+    });
+  });
+
+  // ============================================
+  // isOwnStreamForConversation regression tests
+  //
+  // Found via proactive review, not a reviewer comment: the load-on-select/refresh effects
+  // originally guarded on the raw effectiveIsStreaming flag, which reflects a stable-id useChat
+  // instance that keeps reporting "streaming" across a conversation/agent switch — for the OLD
+  // conversation's still-in-flight request, not the one now being loaded. Switching
+  // conversations mid-stream does not abort the running POST (documented at length elsewhere in
+  // this file, e.g. the streamConvIdRef/globalStreamConvIdRef comments). Guarding on the raw
+  // flag would strand a newly-selected, idle conversation behind an unrelated stream still
+  // running in a conversation the user already left, until that unrelated stream finished.
+  // ============================================
+
+  describe('isOwnStreamForConversation (conversation-scoped streaming guard)', () => {
+    it('given streaming and the held stream conversation matches the target, should report true (blocks — this IS the conversation being clobbered)', () => {
+      expect(isOwnStreamForConversation(true, 'conv-A', 'conv-A')).toBe(true);
+    });
+
+    it('given streaming but the held stream conversation is a DIFFERENT one than the target, should report false (does not block)', () => {
+      expect(isOwnStreamForConversation(true, 'conv-A', 'conv-B')).toBe(false);
+    });
+
+    it('given not streaming at all, should report false regardless of conversation ids', () => {
+      expect(isOwnStreamForConversation(false, 'conv-A', 'conv-A')).toBe(false);
+    });
+
+    it('given the exact regression scenario — sending in conv-A (or agent conversation A), then switching to idle conv-B while A keeps streaming — the load-on-select guard for conv-B must NOT be blocked', () => {
+      const blocked = isOwnStreamForConversation(true, 'conv-A', 'conv-B');
+      expect(blocked).toBe(false);
     });
   });
 });

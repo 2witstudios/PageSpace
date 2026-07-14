@@ -281,6 +281,20 @@ const SidebarChatTab: React.FC = () => {
   // Derived State
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+  // The conversation the CURRENT stream belongs to, held from when it starts. The surface moves
+  // independently of the stream — switching conversation mid-stream does NOT abort the POST — so
+  // the abort must name the conversation the generation is actually running on. Moved up here
+  // (out of its original spot further down, next to heldStreamMsgIdRef) because the load-on-select
+  // effects below also need it: `isStreaming` reflects a stable-id useChat instance that keeps
+  // running across a conversation switch, so it cannot answer "is MY OWN stream for the
+  // conversation I'm about to load" on its own — only comparing against the conversation the
+  // stream actually started in (this ref) can.
+  const heldStreamConvIdRef = useRef<string | null>(null);
+  heldStreamConvIdRef.current = holdForStream({
+    current: heldStreamConvIdRef.current,
+    isStreaming,
+    liveValue: currentConversationId,
+  });
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
   // Identity can be 'ready' (isInitialized true) while messages for the
   // conversation just switched to are still in flight — decoupled from
@@ -291,6 +305,16 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
     : (isStreaming || contextIsStreaming);
+  // Whether MY OWN local useChat is currently producing live content for the conversation I'm
+  // about to load/refresh — narrower than displayIsStreaming, which also includes
+  // dashboardIsStreaming/contextIsStreaming (other, already conversation-scoped, streams this
+  // surface merely displays a Stop button for). `isStreaming`'s Chat instance has a stable id
+  // per surface, so it keeps reporting true across a conversation switch for the OLD
+  // conversation's still-in-flight request — comparing against `heldStreamConvIdRef` (latched
+  // when the stream started) is the only way to know whether that live stream actually belongs
+  // to the conversation now being loaded. Used by the load-on-select/refresh effects below so a
+  // switch to an idle conversation isn't blocked by an unrelated stream still running elsewhere.
+  const isOwnStreamForCurrentConversation = isStreaming && heldStreamConvIdRef.current === currentConversationId;
 
   // ============================================
   // Remote Streams (multiplayer rendering)
@@ -616,11 +640,17 @@ const SidebarChatTab: React.FC = () => {
     // must be retried once streaming ends, not marked "seen" and dropped. Without this, a
     // remote event that fires while this surface happens to be streaming for an unrelated
     // reason would be silently lost if no further remote event bumps refreshSignal again.
-    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
+    //
+    // Guarded on `isOwnStreamForCurrentConversation`, NOT the broader `displayIsStreaming` —
+    // switching to a different global conversation does not abort an in-flight send in the old
+    // one (stable useChat id), so displayIsStreaming can stay true for a conversation that is no
+    // longer the one being loaded. Blocking on that would strand this refetch behind an
+    // unrelated stream in a conversation the user already left.
+    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !isOwnStreamForCurrentConversation) {
       prevSidebarRefreshSignalRef.current = refreshSignal;
       loadGlobalMessages(globalConversationId);
     }
-  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
+  }, [refreshSignal, selectedAgent, globalConversationId, isOwnStreamForCurrentConversation, loadGlobalMessages]);
 
   // ============================================
   // Effects: UI State
@@ -752,23 +782,29 @@ const SidebarChatTab: React.FC = () => {
   const prevSidebarGlobalMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
-    // Guarded the same way as the refreshSignal effect above (line ~615) — without this, a
+    // Guarded the same way as the refreshSignal effect above — without this, a
     // mount/reload/conversation-switch that lands while this surface's own send is already
     // streaming clobbers the in-progress assistant bubble with a stale DB snapshot that
     // predates the reply.
     //
+    // `isOwnStreamForCurrentConversation`, not the broader `displayIsStreaming`: a conversation
+    // switch does not abort an in-flight send in the conversation just left (stable useChat id),
+    // so displayIsStreaming can stay true there while `globalConversationId` has already moved
+    // on to an idle conversation — blocking on it would strand the newly-selected conversation
+    // behind an unrelated stream.
+    //
     // The ref is only advanced INSIDE the guard. If the guard blocks (streaming), the ref
-    // stays stale on purpose — every dependency change (including displayIsStreaming
+    // stays stale on purpose — every dependency change (including isOwnStreamForCurrentConversation
     // flipping false) re-runs the effect, and while the ref is stale this same
     // `globalInitialMessages` reference still reads as "changed," so the load is retried
     // instead of permanently lost. Advancing the ref unconditionally (before the guard) would
     // mark this reference as seen even though it was never applied, silently stranding the
     // sidebar on stale/empty history once streaming ends.
-    if (!selectedAgent && globalIsInitialized && globalConversationId && !displayIsStreaming) {
+    if (!selectedAgent && globalIsInitialized && globalConversationId && !isOwnStreamForCurrentConversation) {
       prevSidebarGlobalMessagesRef.current = globalInitialMessages;
       loadGlobalMessages(globalConversationId);
     }
-  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, displayIsStreaming, loadGlobalMessages]);
+  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, isOwnStreamForCurrentConversation, loadGlobalMessages]);
 
   // Load-on-select guarantee for agent mode: with a stable useChat id, the
   // sidebar's agent Chat instance is never recreated on conversation switch,
@@ -778,15 +814,17 @@ const SidebarChatTab: React.FC = () => {
   const prevSidebarAgentMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
-    // Same guard as the global-mode load-on-select effect above, and the same ref-advances-
-    // only-on-apply discipline: a mount/reload/agent-switch that lands mid-stream must not
-    // clobber the in-progress assistant bubble, but it also must not be forgotten once the
-    // stream ends — advancing the ref here regardless of the guard would do exactly that.
-    if (selectedAgent && !displayIsStreaming) {
+    // Same guard as the global-mode load-on-select effect above (conversation-scoped, not the
+    // broader displayIsStreaming — switching agent conversations doesn't abort the old one's
+    // in-flight send either), and the same ref-advances-only-on-apply discipline: a
+    // mount/reload/agent-switch that lands mid-stream must not clobber the in-progress
+    // assistant bubble, but it also must not be forgotten once the stream ends — advancing the
+    // ref here regardless of the guard would do exactly that.
+    if (selectedAgent && !isOwnStreamForCurrentConversation) {
       prevSidebarAgentMessagesRef.current = agentInitialMessages;
       setMessages(agentInitialMessages);
     }
-  }, [agentInitialMessages, selectedAgent, displayIsStreaming, setMessages]);
+  }, [agentInitialMessages, selectedAgent, isOwnStreamForCurrentConversation, setMessages]);
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -992,15 +1030,6 @@ const SidebarChatTab: React.FC = () => {
   // Stop abort a message that finished minutes ago while the real generation kept running and
   // kept billing — on every turn after the first.
   const isActuallyStreaming = status === 'streaming';
-  // The conversation the CURRENT stream belongs to, held from when it starts. The surface moves
-  // independently of the stream — switching conversation mid-stream does NOT abort the POST — so
-  // the abort must name the conversation the generation is actually running on.
-  const heldStreamConvIdRef = useRef<string | null>(null);
-  heldStreamConvIdRef.current = holdForStream({
-    current: heldStreamConvIdRef.current,
-    isStreaming,
-    liveValue: currentConversationId,
-  });
   const heldStreamMsgIdRef = useRef<string | null>(null);
   heldStreamMsgIdRef.current = holdForStream({
     current: heldStreamMsgIdRef.current,
