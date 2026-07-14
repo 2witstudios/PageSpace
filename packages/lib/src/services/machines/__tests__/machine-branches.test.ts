@@ -75,6 +75,18 @@ function makeStore(seed: MachineBranchRecord[] = []) {
     remove: async (machineId, projectName, branchName) => {
       rows.delete(key(machineId, projectName, branchName));
     },
+    removeIfSandbox: async ({ id, sandboxId }) => {
+      // Mirrors the real store: a row whose sandboxId has changed under us now
+      // points at a LIVE replacement Sprite — deleting it would orphan that VM.
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId) return false;
+          rows.delete(k);
+          return true;
+        }
+      }
+      return false;
+    },
   };
   return { store, rows };
 }

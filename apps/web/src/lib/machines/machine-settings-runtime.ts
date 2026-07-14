@@ -52,10 +52,17 @@
  * so a row outliving its Sprite would bill storage for a destroyed VM. A restore
  * simply provisions a fresh Sprite under the same derived session key.
  *
- * Either way, a Sprite we still believe is LIVE under a TRASHED page (a
- * `machine_sessions` row that still exists; a `machine_branches` row still
- * unstamped) is the pending-teardown signal the orphan reconciler
- * (`machine-orphan-reconcile.ts`) reclaims on.
+ * Before any kill, the teardown stamps `teardownRequestedAt` on the rows it is
+ * about to destroy. That INTENT — not the page's trashed state — is what
+ * licenses the orphan reconciler (`machine-orphan-reconcile.ts`) to finish the
+ * job if a kill here fails or this process dies mid-teardown. It has to be
+ * recorded, because a kill is an irreversible DESTROY while a trash is not: the
+ * generic page-trash paths (`pageService.trashPage`, bulk delete, folder
+ * cascade-trash) hide a MACHINE page WITHOUT tearing anything down, and those
+ * Sprites must survive for a restore. So "trashed + a Sprite we still believe is
+ * LIVE + a teardown was requested" is the reclaim signal — and it is written
+ * first, deliberately, so a crash before the kill leaves the row reclaimable
+ * rather than stranded.
  *
  * NOT handled here (deliberate scope): PATCH (`updateSettings`) still writes the
  * settings fields via raw `db.update` — a Machine rename/toggle does not bump the
@@ -72,6 +79,7 @@ import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import {
   createDbMachineSessionStore,
   deriveMachineSessionKey,
@@ -338,6 +346,32 @@ async function teardownOneMachine(machineId: string): Promise<void> {
 
   if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
 
+  // Record the INTENT to destroy, BEFORE any kill — this is what licenses the
+  // orphan reconciler to finish the job if a kill below fails (or if this process
+  // dies mid-teardown). Without it, a failed kill is indistinguishable from a
+  // Machine someone merely dragged to the trash, whose Sprite must NOT be
+  // destroyed (a trash is reversible; a kill is not). Written first precisely so
+  // a crash between here and the kill leaves the row RECLAIMABLE rather than
+  // stranded. See `machine-orphan-reconcile.ts`'s tier 1.
+  const teardownRequestedAt = new Date();
+  if (session && sessionKey) {
+    await db
+      .update(machineSessions)
+      .set({ teardownRequestedAt })
+      .where(eq(machineSessions.sessionKey, sessionKey));
+  }
+  if (branchRows.length > 0) {
+    await db
+      .update(machineBranches)
+      .set({ teardownRequestedAt })
+      .where(
+        inArray(
+          machineBranches.id,
+          branchRows.map((branch) => branch.id),
+        ),
+      );
+  }
+
   const host = await getMachineHostForBranches();
 
   // Branch Sprites: best-effort. A failure must not fail the delete or invert
@@ -373,10 +407,16 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   if (session && sessionKey) {
     await host.kill({ machineId: session.sandboxId });
     try {
-      await sessionStore.remove(sessionKey);
+      // CAS on sandboxId — NEVER a key-only delete. `sessionKey` is deterministic
+      // per (tenant, drive, page) and `save` UPSERTS on it, so between the kill
+      // above and this delete a concurrent `acquireMachineSession` can provision a
+      // REPLACEMENT Sprite into this very row. Deleting by key alone would destroy
+      // the pointer to that brand-new, LIVE Sprite — leaving it billing forever
+      // with nothing, not even the orphan reconciler, able to find it.
+      await sessionStore.removeIfSandbox({ sessionKey, sandboxId: session.sandboxId });
     } catch {
-      // Sprite is dead; a stale machine_sessions row is harmless (the reaper
-      // or a re-provision under the same key reclaims it).
+      // Sprite is dead; a stale machine_sessions row is harmless (the orphan
+      // reconciler, or a re-provision under the same key, reclaims it).
     }
   }
 }

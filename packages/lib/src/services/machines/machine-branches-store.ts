@@ -64,6 +64,19 @@ export interface MachineBranchStore {
    */
   updateSandboxId(input: { id: string; previousSandboxId: string; sandboxId: string; now: Date }): Promise<boolean>;
   remove(machineId: string, projectName: string, branchName: string): Promise<void>;
+  /**
+   * Compare-and-swap removal by row id: deletes ONLY if the row still points at
+   * `sandboxId`.
+   *
+   * Use this — never the name-keyed `remove` — after killing a branch's Sprite.
+   * `spawnBranch` re-provisions a vanished branch under the SAME (machineId,
+   * projectName, branchName) identity, so between the kill and the delete a
+   * concurrent spawn can write a REPLACEMENT Sprite into this very row. A
+   * name-keyed delete would then destroy the pointer to that brand-new, LIVE
+   * Sprite, leaving it billing forever with nothing — not even the orphan
+   * reconciler — able to find it.
+   */
+  removeIfSandbox(input: { id: string; sandboxId: string }): Promise<boolean>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -147,6 +160,14 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
             eq(machineBranches.branchName, branchName),
           ),
         );
+    },
+
+    async removeIfSandbox({ id, sandboxId }) {
+      const deleted = await db
+        .delete(machineBranches)
+        .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, sandboxId)))
+        .returning({ id: machineBranches.id });
+      return deleted.length > 0;
     },
   };
 }

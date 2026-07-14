@@ -13,9 +13,32 @@
  * for a trashed page. We found exactly one of these in production — a `pgs-sbx-…`
  * Sprite stuck `running`, unreferenced by any live page, quietly billing RAM.
  *
- * THE PENDING-TEARDOWN SIGNAL — "a Sprite we still believe is LIVE, under a
- * page that is trashed" — is expressed differently per table, because the two
- * rows mean different things:
+ * WHAT MAKES A SPRITE RECLAIMABLE — and, just as important, what does NOT.
+ *
+ * A `host.kill` is an IRREVERSIBLE DESTROY: the VM's whole filesystem (repos,
+ * uncommitted work, installed packages, credentials) is gone, with no undo. So
+ * "the owning page is trashed" is NOT, on its own, a licence to kill. Trashing
+ * is REVERSIBLE, and `pageService.trashPage` — the generic page DELETE, the bulk
+ * delete, and the cascade-trash of any ancestor folder — trashes a MACHINE page
+ * with NO teardown at all. Its Sprite simply hibernates, and a restore is
+ * expected to hand back a Machine with its disk intact. A reconciler keyed on
+ * `isTrashed` alone would quietly wipe the disk of every Machine anyone ever
+ * dragged to the trash. Hence two tiers, and a row is a candidate only if it
+ * matches one of them:
+ *
+ *   1. TEARDOWN WAS REQUESTED (`teardownRequestedAt IS NOT NULL`) — `deleteMachine`
+ *      ran and meant to destroy this Sprite; its kill is the one that failed.
+ *      This is the orphan we are hunting, and it is reclaimed on the next tick.
+ *
+ *   2. THE PAGE IS PAST THE HARD-PURGE CUTOFF — nobody ever asked for a teardown,
+ *      but the page is now beyond the trash-retention window, so it is about to
+ *      be erased for good. Its Sprite must die with it: the tracking row
+ *      FK-cascades off `pages.id`, so letting the purge take the page first would
+ *      strand a live, billing VM with no pointer to it, forever. Killing here is
+ *      safe precisely because the page is already past the point of restore.
+ *
+ * THE PENDING-TEARDOWN SIGNAL — "a Sprite we still believe is LIVE" — is then
+ * expressed differently per table, because the two rows mean different things:
  *
  *   • `machine_sessions`: the row IS the live-Sprite pointer and nothing else.
  *     It is deleted on a confirmed kill (`teardownOneMachine`), and the storage
@@ -30,11 +53,10 @@
  *     agent terminals with it, on a REVERSIBLE soft-delete. So teardown STAMPS
  *     `spriteTornDownAt` and keeps the row. Signal = `spriteTornDownAt IS NULL`.
  *
- * Restores are safe, and safe against a RACE with this cron. A restore flips
- * `pages.isTrashed` back to false, so a restored Machine stops being a candidate
- * on the next run — but a restore that commits mid-run, after the candidate list
- * was read, would otherwise still get its live Sprite killed (destroying the VM's
- * filesystem). Two guards, both required:
+ * Restores are safe. A restore flips `pages.isTrashed` back to false, so a
+ * restored Machine stops being a candidate on the next run — and under tier 1 the
+ * Sprite is already dead anyway (that is what `deleteMachine` asked for). Against
+ * a restore that commits MID-RUN, after the candidate list was read, two guards:
  *   1. `isStillTrashed` is re-read immediately BEFORE the kill, so a restore that
  *      landed since listing skips the row entirely (counted as `skipped`).
  *   2. `releaseSessionRow`/`markBranchTornDown` are COMPARE-AND-SWAP writes,
@@ -65,16 +87,18 @@
 import { loggers } from '../../logging/logger-config';
 
 /**
- * A Sprite we still believe is live, whose owning Machine page is trashed — i.e.
- * a teardown that never confirmed. Discriminated by the table it came from: the
- * two are released by different keys, and mean different things (see module doc).
+ * A Sprite we still believe is live, whose owning Machine page is trashed AND
+ * which is reclaimable under one of the two tiers above — i.e. a teardown that
+ * never confirmed, or a page that is past the point of restore. Discriminated by
+ * the table it came from: the two are released by different keys, and mean
+ * different things (see module doc).
  */
 export type OrphanRow =
   | { kind: 'session'; pageId: string; sessionKey: string; sandboxId: string }
   | { kind: 'branch'; pageId: string; id: string; sandboxId: string };
 
 export interface ReconcileOrphanSpritesDeps {
-  /** Every `machine_sessions` row, and every NOT-yet-torn-down `machine_branches` row, whose owning page is trashed (see module doc on the two signals). */
+  /** Every Sprite believed live under a trashed page that ALSO satisfies one of the two reclaim tiers — teardown requested, or page past the hard-purge cutoff (see module doc; keying on `isTrashed` alone would destroy the disk of every merely-trashed Machine). */
   listOrphanCandidates: () => Promise<OrphanRow[]>;
   /** Fresh re-read of the owning page's trash state, immediately before the kill — a restore that landed since listing must not have its live Sprite destroyed. */
   isStillTrashed: (pageId: string) => Promise<boolean>;

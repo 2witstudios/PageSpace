@@ -4,12 +4,15 @@
  * real `machine_sessions` / `machine_branches` tables and the Sprite
  * `MachineHost`. Mirrors `machine-storage-billing.ts`'s default-deps pattern.
  *
- * The candidate query is the design: join each tracking table to `pages` and
- * keep the rows whose owning page `isTrashed` — a `machine_sessions` row (which
- * exists only while we believe its Sprite is live) or a `machine_branches` row
- * whose `spriteTornDownAt` is still NULL (that row outlives its Sprite on
- * purpose — it is re-creatable config). See `machine-orphan-reconcile.ts`'s
- * module doc for why the two signals differ.
+ * The candidate query is the design. Join each tracking table to `pages`, keep
+ * the rows whose owning page `isTrashed` AND whose Sprite we still believe is
+ * live — a `machine_sessions` row (which exists only while we believe that) or a
+ * `machine_branches` row whose `spriteTornDownAt` is still NULL (that row
+ * outlives its Sprite on purpose — it is re-creatable config) — AND which is
+ * reclaimable at all: either a teardown was REQUESTED, or the page is past the
+ * hard-purge cutoff. That last condition is the one that stops this cron from
+ * irreversibly destroying the disk of every Machine a user merely dragged to the
+ * trash. See `machine-orphan-reconcile.ts`'s module doc.
  *
  * Both release writes are COMPARE-AND-SWAPs against (page still trashed,
  * sandboxId unchanged). A restore or a concurrent re-provision that commits
@@ -18,7 +21,7 @@
  * it permanently.
  */
 
-import { and, eq, exists, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, exists, isNotNull, isNull, lt, or, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
@@ -27,6 +30,7 @@ import type {
   OrphanRow,
   ReconcileOrphanSpritesDeps,
 } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
+import { trashPurgeCutoff } from '@pagespace/lib/repositories/page-repository';
 import { getMachineHostForBranches } from './machine-branches-runtime';
 
 /** The owning page is still trashed — the precondition every release write is conditional on. */
@@ -41,6 +45,17 @@ function owningPageStillTrashed(pageIdColumn: typeof machineSessions.pageId | ty
 
 export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   async listOrphanCandidates(): Promise<OrphanRow[]> {
+    // A kill is an irreversible DESTROY, so "the page is trashed" is never enough
+    // on its own — trashing is reversible, and the generic page-trash paths tear
+    // down nothing. A row is reclaimable only under one of the two tiers (see
+    // `machine-orphan-reconcile.ts`): a teardown was REQUESTED, or the page is
+    // past the point of restore and about to be erased anyway.
+    const purgeCutoff = trashPurgeCutoff();
+    const reclaimable = (
+      teardownRequestedAt: typeof machineSessions.teardownRequestedAt | typeof machineBranches.teardownRequestedAt,
+    ) =>
+      or(isNotNull(teardownRequestedAt), lt(pages.trashedAt, purgeCutoff));
+
     const [sessionRows, branchRows] = await Promise.all([
       db
         .select({
@@ -50,7 +65,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         })
         .from(machineSessions)
         .innerJoin(pages, eq(machineSessions.pageId, pages.id))
-        .where(eq(pages.isTrashed, true)),
+        .where(and(eq(pages.isTrashed, true), reclaimable(machineSessions.teardownRequestedAt))),
       db
         .select({
           pageId: machineBranches.machineId,
@@ -61,7 +76,13 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         .innerJoin(pages, eq(machineBranches.machineId, pages.id))
         // spriteTornDownAt IS NULL — an already-reclaimed branch row is pure
         // config now, not a live Sprite, so it is not a candidate.
-        .where(and(eq(pages.isTrashed, true), isNull(machineBranches.spriteTornDownAt))),
+        .where(
+          and(
+            eq(pages.isTrashed, true),
+            isNull(machineBranches.spriteTornDownAt),
+            reclaimable(machineBranches.teardownRequestedAt),
+          ),
+        ),
     ]);
 
     return [

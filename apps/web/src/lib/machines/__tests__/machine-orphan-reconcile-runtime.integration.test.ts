@@ -36,7 +36,13 @@ const DRIVE_ID = 'orphan-rt-drive';
 const TRASHED_MACHINE = 'orphan-rt-trashed';
 const LIVE_MACHINE = 'orphan-rt-live';
 const STAMPED_MACHINE = 'orphan-rt-stamped';
-const ALL_PAGES = [TRASHED_MACHINE, LIVE_MACHINE, STAMPED_MACHINE];
+/** Merely dragged to the trash — nobody asked for a teardown. Its disk must survive. */
+const SOFT_TRASHED_MACHINE = 'orphan-rt-soft-trashed';
+/** Same, but now past the hard-purge cutoff — about to be erased, so its Sprite must go. */
+const EXPIRED_MACHINE = 'orphan-rt-expired';
+const ALL_PAGES = [TRASHED_MACHINE, LIVE_MACHINE, STAMPED_MACHINE, SOFT_TRASHED_MACHINE, EXPIRED_MACHINE];
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 let dbAvailable = false;
 
@@ -60,16 +66,24 @@ async function seed() {
       driveId: DRIVE_ID,
       position: index,
       isTrashed: id !== LIVE_MACHINE,
-      trashedAt: id === LIVE_MACHINE ? null : new Date(),
+      trashedAt:
+        id === LIVE_MACHINE
+          ? null
+          : // Past the 30-day retention window → beyond restore, about to be erased.
+            id === EXPIRED_MACHINE
+            ? new Date(Date.now() - 40 * DAY_MS)
+            : new Date(),
     })),
   );
 
-  // Trashed machine: own Sprite + a branch Sprite, neither confirmed dead.
+  // Trashed machine whose teardown was REQUESTED (deleteMachine ran) but whose
+  // kills never confirmed: own Sprite + a branch Sprite. The orphan we hunt.
   await db.insert(machineSessions).values({
     sessionKey: `${TRASHED_MACHINE}-key`,
     pageId: TRASHED_MACHINE,
     userId: USER_ID,
     sandboxId: 'sbx-trashed-session',
+    teardownRequestedAt: new Date(),
   });
   await db.insert(machineBranches).values({
     ownerId: USER_ID,
@@ -78,6 +92,35 @@ async function seed() {
     branchName: 'feature',
     sessionKey: `${TRASHED_MACHINE}-branch-key`,
     sandboxId: 'sbx-trashed-branch',
+    teardownRequestedAt: new Date(),
+  });
+
+  // Merely trashed from the page tree — NO teardown was ever requested, and the
+  // trash is reversible. Killing this Sprite would irreversibly wipe a disk the
+  // user expects to get back on restore.
+  await db.insert(machineSessions).values({
+    sessionKey: `${SOFT_TRASHED_MACHINE}-key`,
+    pageId: SOFT_TRASHED_MACHINE,
+    userId: USER_ID,
+    sandboxId: 'sbx-soft-trashed',
+  });
+  await db.insert(machineBranches).values({
+    ownerId: USER_ID,
+    machineId: SOFT_TRASHED_MACHINE,
+    projectName: 'repo',
+    branchName: 'wip',
+    sessionKey: `${SOFT_TRASHED_MACHINE}-branch-key`,
+    sandboxId: 'sbx-soft-trashed-branch',
+  });
+
+  // Same shape, but trashed 40 days ago: past the purge cutoff, so it is beyond
+  // restore and about to be erased. Its Sprite MUST be reclaimed, or the purge
+  // cascade would strand a live, billing VM with no pointer to it.
+  await db.insert(machineSessions).values({
+    sessionKey: `${EXPIRED_MACHINE}-key`,
+    pageId: EXPIRED_MACHINE,
+    userId: USER_ID,
+    sandboxId: 'sbx-expired',
   });
 
   // LIVE machine: not trashed — its Sprites must never be candidates.
@@ -144,14 +187,44 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
     const candidates = await deps.listOrphanCandidates();
     const mine = candidates.filter((row) => ALL_PAGES.includes(row.pageId));
 
-    // The trashed machine's own Sprite and its unstamped branch Sprite — and
-    // nothing from the live machine, nothing already stamped.
-    expect(mine.map((row) => row.sandboxId).sort()).toEqual(['sbx-trashed-branch', 'sbx-trashed-session']);
+    // Tier 1 (teardown requested): the trashed machine's own Sprite and its
+    // unstamped branch Sprite. Tier 2 (past the purge cutoff): the expired
+    // machine's Sprite. NOT the live machine's, NOT an already-stamped row, and —
+    // critically — NOT the merely-trashed machine's, whose disk must survive for
+    // a restore.
+    expect(mine.map((row) => row.sandboxId).sort()).toEqual([
+      'sbx-expired',
+      'sbx-trashed-branch',
+      'sbx-trashed-session',
+    ]);
     expect(mine.find((row) => row.kind === 'session')).toMatchObject({
       pageId: TRASHED_MACHINE,
       sessionKey: `${TRASHED_MACHINE}-key`,
     });
     expect(mine.find((row) => row.kind === 'branch')).toMatchObject({ pageId: TRASHED_MACHINE });
+  });
+
+  it('NEVER reclaims a Machine that was merely trashed — a kill is irreversible, a trash is not', async () => {
+    if (!dbAvailable) return;
+    // pageService.trashPage (the generic page DELETE, bulk delete, and folder
+    // cascade-trash) hides a MACHINE page with NO teardown. Its Sprite just
+    // hibernates, and a restore is expected to hand back the disk intact. A
+    // reconciler keyed on isTrashed alone would wipe it within 30 minutes.
+    const candidates = await deps.listOrphanCandidates();
+    const sandboxIds = candidates.map((row) => row.sandboxId);
+
+    expect(sandboxIds).not.toContain('sbx-soft-trashed');
+    expect(sandboxIds).not.toContain('sbx-soft-trashed-branch');
+  });
+
+  it('DOES reclaim a never-torn-down Sprite once its page is past the hard-purge cutoff', async () => {
+    if (!dbAvailable) return;
+    // At that point the page is beyond restore and the purge is about to erase
+    // it — and the purge cascades the tracking row away, so a Sprite left alive
+    // here would bill forever with nothing able to find it.
+    const candidates = await deps.listOrphanCandidates();
+
+    expect(candidates.map((row) => row.sandboxId)).toContain('sbx-expired');
   });
 });
 

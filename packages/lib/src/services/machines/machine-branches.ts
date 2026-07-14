@@ -719,6 +719,13 @@ export async function killBranch({
     return { ok: false, reason: 'error' };
   }
 
-  await store.remove(machineId, projectName, branchName);
+  // CAS on sandboxId, NOT a name-keyed delete: `spawnBranch` re-provisions a
+  // vanished branch under this same (machine, project, branch) identity, so a
+  // concurrent spawn can write a REPLACEMENT Sprite into this row between our
+  // kill above and this delete. Deleting by name would then destroy the pointer
+  // to that brand-new, LIVE Sprite — leaving it billing forever, invisible even
+  // to the orphan reconciler. Losing the CAS is the correct outcome: the winner's
+  // Sprite is live and tracked, and the one we killed was already redundant.
+  await store.removeIfSandbox({ id: existing.id, sandboxId: existing.sandboxId });
   return { ok: true };
 }

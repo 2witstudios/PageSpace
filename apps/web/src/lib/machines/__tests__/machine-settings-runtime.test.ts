@@ -33,6 +33,7 @@ const {
   mockFindDrive,
   mockSessionFind,
   mockSessionRemove,
+  mockSessionRemoveIfSandbox,
   mockHostKill,
 } = vi.hoisted(() => ({
   mockTrashPage: vi.fn(),
@@ -50,6 +51,7 @@ const {
   mockFindDrive: vi.fn(),
   mockSessionFind: vi.fn(),
   mockSessionRemove: vi.fn(),
+  mockSessionRemoveIfSandbox: vi.fn(),
   mockHostKill: vi.fn(),
 }));
 
@@ -97,6 +99,7 @@ vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', () => ({
   createDbMachineSessionStore: vi.fn(async () => ({
     findBySessionKey: (...args: unknown[]) => mockSessionFind(...args),
     remove: (...args: unknown[]) => mockSessionRemove(...args),
+    removeIfSandbox: (...args: unknown[]) => mockSessionRemoveIfSandbox(...args),
   })),
   deriveMachineSessionKey: vi.fn((input: { pageId: string }) => `key-${input.pageId}`),
   getSandboxSessionSecret: vi.fn(() => 'secret'),
@@ -330,7 +333,31 @@ describe('createMachineSpriteTeardown().teardown', () => {
       { machineId: 'sb-branch' },
       { machineId: `own-key-${MACHINE}` },
     ]);
-    expect(mockSessionRemove).toHaveBeenCalledWith(`key-${MACHINE}`);
+    // CAS on sandboxId — a key-only delete could destroy the pointer to a
+    // replacement Sprite a concurrent acquire just provisioned into this row.
+    expect(mockSessionRemoveIfSandbox).toHaveBeenCalledWith({
+      sessionKey: `key-${MACHINE}`,
+      sandboxId: `own-key-${MACHINE}`,
+    });
+  });
+
+  it('records teardown INTENT before any kill, so a failed kill is reclaimable by the reconciler', async () => {
+    // Without this, a failed kill is indistinguishable from a Machine someone
+    // merely dragged to the trash — whose Sprite must NOT be destroyed (a trash
+    // is reversible; a kill is not). Written BEFORE the kill so a crash
+    // mid-teardown leaves the row reclaimable rather than stranded.
+    const setCallsBeforeFirstKill: unknown[] = [];
+    mockHostKill.mockImplementation(async () => {
+      setCallsBeforeFirstKill.push(...mockUpdateSet.mock.calls.map((c) => c[0]));
+      mockHostKill.mockImplementation(async () => {});
+    });
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([{ id: 'branch-row-1', sandboxId: 'sb-branch' }]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(setCallsBeforeFirstKill).toContainEqual({ teardownRequestedAt: expect.any(Date) });
   });
 
   it('STAMPS the branch row on a confirmed kill rather than deleting it', async () => {

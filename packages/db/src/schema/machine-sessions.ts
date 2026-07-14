@@ -59,6 +59,26 @@ export const machineSessions = pgTable('machine_sessions', {
 
   lastActiveAt: timestamp('lastActiveAt', { mode: 'date' }).defaultNow().notNull(),
 
+  /**
+   * When a teardown of this Machine's own Sprite was REQUESTED — i.e.
+   * `deleteMachine` ran and meant to destroy it. NULL = nobody has asked for this
+   * Sprite to die. (The row itself is DELETED once the kill is confirmed, so a
+   * row that still has this set is a teardown that never completed.)
+   *
+   * This is an INTENT marker, and it is what the orphan reconciler requires
+   * before it destroys anything. "The owning page is trashed" is NOT sufficient
+   * intent: `pageService.trashPage` (the generic page DELETE, bulk-delete, and
+   * folder cascade-trash) trashes a MACHINE page WITHOUT any teardown, and that
+   * trash is reversible — a restore is expected to hand the user back a Machine
+   * with its filesystem intact. A `host.kill` is an irreversible DESTROY, so a
+   * reconciler keyed on `isTrashed` alone would silently wipe the disk of every
+   * Machine anyone ever moved to the trash. See `machine-orphan-reconcile.ts`
+   * (which does still reclaim a never-torn-down Sprite once its page is past the
+   * hard-purge cutoff — at that point the page is being erased, so leaving the
+   * VM alive would strand it forever).
+   */
+  teardownRequestedAt: timestamp('teardownRequestedAt', { mode: 'date' }),
+
   // Watermark for the idle-storage reconcile cron (Machine Epic 3): the
   // persistent filesystem accrues cost whether the Machine is active or
   // hibernating, so this is billed separately from active-runtime — see

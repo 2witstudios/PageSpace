@@ -27,7 +27,7 @@ import type { ExecSandboxClient, ExecutableSandbox } from './types';
 import {
   withWakeRetry,
   asPreOpenDrop,
-  isSpriteNotFoundError,
+  isSpriteGoneStatus,
   spawnWithSelfHealingCwd,
   type SpriteCommandLike,
   type SpritesSdk,
@@ -264,25 +264,33 @@ export function createSpriteMachineHost({
     },
 
     /**
-     * Idempotent by contract: a Sprite that is ALREADY gone is a successful
-     * kill, not a failure — mirroring `attach` above, which already maps the
-     * SDK's not-found error to a null handle rather than throwing.
+     * Idempotent by contract: a Sprite the control plane says is ALREADY GONE is
+     * a successful kill, not a failure — mirroring `attach` above, which maps a
+     * not-found error to a null handle rather than throwing.
      *
      * Every caller depends on this. `teardownOneMachine` derives
      * `spriteTornDown` from whether this throws, so a not-found error used to
      * report a live orphaned Sprite for one that had in fact already been
      * destroyed; `killBranch` and the orphan reconciler
-     * (`machine-orphan-reconcile.ts`) would likewise refuse to drop a tracking
-     * row whose Sprite no longer exists, leaving a permanently un-clearable
-     * candidate. Only a not-found error is swallowed — any other failure (auth,
-     * network, 5xx) still throws, because those genuinely leave the Sprite's
-     * fate unknown.
+     * (`machine-orphan-reconcile.ts`) would likewise refuse to release a
+     * tracking row whose Sprite no longer exists, leaving a permanently
+     * un-clearable candidate.
+     *
+     * Gated on `isSpriteGoneStatus` — an authoritative 404/410 — NOT the looser
+     * `isSpriteNotFoundError` the read path uses. That one also accepts
+     * `ENOTFOUND` (a DNS failure) and message heuristics, which are safe when a
+     * false positive merely costs a redundant provision, but here a false
+     * positive is destructive: callers treat "did not throw" as proof the Sprite
+     * is dead and release its ONLY pointer. A transient DNS blip would then
+     * strand every Sprite in the batch, billing forever. Anything that leaves the
+     * Sprite's fate unknown (auth, rate limit, 5xx, socket, DNS) throws, which
+     * keeps the row — and the retry — intact.
      */
     async kill({ machineId }) {
       try {
         await client.stop({ sandboxId: machineId });
       } catch (error) {
-        if (isSpriteNotFoundError(error)) return;
+        if (isSpriteGoneStatus(error)) return;
         throw error;
       }
     },

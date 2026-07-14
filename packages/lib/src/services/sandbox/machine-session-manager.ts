@@ -189,6 +189,18 @@ export interface MachineSessionStore {
   /** Advances `lastActiveAt`; also records `egressPolicyToken` when a new lockdown was just confirmed. */
   touch(args: { sessionKey: string; now: Date; egressPolicyToken?: string }): Promise<void>;
   remove(sessionKey: string): Promise<void>;
+  /**
+   * Compare-and-swap removal: deletes the row ONLY if it still points at
+   * `sandboxId`. Reports whether it actually deleted.
+   *
+   * Use this — never plain `remove` — after killing a Sprite. `sessionKey` is
+   * DETERMINISTIC per (tenant, drive, page) and `save` UPSERTS on it, so between
+   * the kill and the delete a concurrent `acquireMachineSession` can provision a
+   * REPLACEMENT Sprite and write it to this very row. A key-only delete would
+   * then destroy the pointer to that brand-new, LIVE Sprite, leaving it billing
+   * forever with nothing — not even the orphan reconciler — able to find it.
+   */
+  removeIfSandbox(input: { sessionKey: string; sandboxId: string }): Promise<boolean>;
 }
 
 export interface AcquireMachineSessionInput {
@@ -480,11 +492,11 @@ export async function findLiveMachineSandboxId(input: MachineSessionKeyInput): P
 
 /**
  * Production DB-backed implementation of MachineSessionStore.
- * Lazily resolves the db client, schema table, and `eq` operator so callers
+ * Lazily resolves the db client, schema table, and operators so callers
  * that inject a fake (in tests) never load the DB module graph.
  */
 export async function createDbMachineSessionStore(): Promise<MachineSessionStore> {
-  const [{ db }, { eq }, { machineSessions }] = await Promise.all([
+  const [{ db }, { eq, and }, { machineSessions }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-sessions'),
@@ -533,6 +545,14 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
 
     async remove(sessionKey) {
       await db.delete(machineSessions).where(eq(machineSessions.sessionKey, sessionKey));
+    },
+
+    async removeIfSandbox({ sessionKey, sandboxId }) {
+      const deleted = await db
+        .delete(machineSessions)
+        .where(and(eq(machineSessions.sessionKey, sessionKey), eq(machineSessions.sandboxId, sandboxId)))
+        .returning({ id: machineSessions.id });
+      return deleted.length > 0;
     },
   };
 }

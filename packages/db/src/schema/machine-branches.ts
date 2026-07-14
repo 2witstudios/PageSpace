@@ -44,6 +44,21 @@ export const machineBranches = pgTable('machine_branches', {
   sandboxId: text('sandboxId').notNull(),
 
   /**
+   * When a teardown of this branch's Sprite was REQUESTED — i.e. `deleteMachine`
+   * ran and meant to destroy it. NULL = nobody has asked for this Sprite to die.
+   *
+   * This is an INTENT marker, and it is what the orphan reconciler requires
+   * before it destroys anything. "The owning page is trashed" is NOT sufficient
+   * intent: `pageService.trashPage` (the generic page DELETE, bulk-delete, and
+   * folder cascade-trash) trashes a MACHINE page WITHOUT any teardown, and that
+   * trash is reversible — a restore is expected to hand the user back a Machine
+   * with its filesystem intact. A `host.kill` is an irreversible DESTROY, so a
+   * reconciler keyed on `isTrashed` alone would silently wipe the disk of every
+   * Machine anyone ever moved to the trash. See `machine-orphan-reconcile.ts`.
+   */
+  teardownRequestedAt: timestamp('teardownRequestedAt', { mode: 'date' }),
+
+  /**
    * When this row's `sandboxId` Sprite was CONFIRMED destroyed (Machine page
    * trashed, or the orphan reconciler reclaimed it). NULL = we believe a live
    * Sprite exists under `sandboxId`.

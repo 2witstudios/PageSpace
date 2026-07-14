@@ -45,6 +45,14 @@ function makeStore(): MachineSessionStore {
     remove: async (sessionKey) => {
       rows.delete(sessionKey);
     },
+    removeIfSandbox: async ({ sessionKey, sandboxId }) => {
+      // Mirrors the real store: a row whose sandboxId changed under us now points
+      // at a LIVE replacement Sprite — deleting it would orphan that VM.
+      const row = rows.get(sessionKey);
+      if (!row || row.sandboxId !== sandboxId) return false;
+      rows.delete(sessionKey);
+      return true;
+    },
   };
 }
 

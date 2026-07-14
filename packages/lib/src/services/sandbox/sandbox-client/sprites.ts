@@ -1068,6 +1068,35 @@ export function isSpriteNotFoundError(error: unknown): boolean {
 }
 
 /**
+ * STRICT sibling of {@link isSpriteNotFoundError}, for the DESTROY path only:
+ * proof, from the control plane itself, that a Sprite is already gone.
+ *
+ * Only an authoritative HTTP 404/410 counts. Deliberately does NOT accept the
+ * defensive `code`/`name`/message heuristics above, because they are calibrated
+ * for a READ (`get`), where a false positive costs a redundant provision — while
+ * here a false positive is DESTRUCTIVE. `isSpriteNotFoundError` treats
+ * `ENOTFOUND` (a DNS resolution failure — a transport error, no HTTP status) and
+ * any message containing "gone"/"no such" as not-found. If `kill()` accepted
+ * those, a brief DNS blip during the orphan-reconcile cron would report every
+ * kill in the batch as a success, and the reconciler would then release the
+ * tracking row — the ONLY pointer — of every one of those still-running Sprites.
+ * They would bill RAM forever, unreachable: precisely the bug the reconciler
+ * exists to fix, inflicted at scale.
+ *
+ * So: a kill is idempotent ONLY against a control plane that positively says the
+ * Sprite is not there. Anything else (auth, rate limit, 5xx, DNS, socket) leaves
+ * the Sprite's fate UNKNOWN and must surface as a failure, which keeps the row —
+ * and therefore the retry — intact.
+ */
+export function isSpriteGoneStatus(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const e = error as { status?: unknown; statusCode?: unknown };
+  const status =
+    typeof e.status === 'number' ? e.status : typeof e.statusCode === 'number' ? e.statusCode : undefined;
+  return status === 404 || status === 410;
+}
+
+/**
  * Map a raw `@fly/sprites` error into a normalized {@link SandboxProvisionError}.
  * Defensive (duck-typed, like `isSpriteNotFoundError`) because the RC SDK exports
  * no stable typed errors: a creation/concurrent rate limit (`429` /

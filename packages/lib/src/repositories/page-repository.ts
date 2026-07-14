@@ -14,6 +14,25 @@ import { machineBranches } from '@pagespace/db/schema/machine-branches';
 export type PageTypeValue = PageTypeEnum;
 
 /**
+ * How long a trashed page is retained before the hard purge erases it for good
+ * (GDPR Art. 17 — see the `purge-trashed-pages` cron).
+ *
+ * Exported because it is not only the purge's business: it is the exact moment a
+ * page stops being restorable, which is what makes it SAFE for the orphan
+ * reconciler to destroy a Machine's Sprite that nobody ever asked it to tear
+ * down (see `machine-orphan-reconcile.ts`'s tier 2). The two must never drift —
+ * a reconciler cutoff SHORTER than this would wipe the disk of a Machine the
+ * user could still restore; a LONGER one would let the purge cascade the
+ * tracking row away first, stranding a live, billing Sprite forever.
+ */
+export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** The cutoff a trashed page must predate to be hard-purged (and, past it, to be safe for Sprite reclamation). */
+export function trashPurgeCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - TRASH_RETENTION_MS);
+}
+
+/**
  * True for a page that still points at a Sprite we believe is LIVE — a
  * `machine_sessions` row (the Machine's own persistent Sprite; the row exists
  * only while its Sprite is believed live) or a `machine_branches` row whose
