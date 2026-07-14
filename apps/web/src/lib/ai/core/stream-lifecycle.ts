@@ -12,7 +12,7 @@ import {
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
 import {
-  mergeConsecutiveTextParts,
+  convergeRawParts,
   capPartsToByteBudget,
   CHECKPOINT_MAX_SERIALIZED_BYTES,
 } from '@/lib/ai/core/checkpoint-serialize';
@@ -166,6 +166,10 @@ export const createStreamLifecycle = async (
           // between here and the first checkpoint would serve the prior
           // attempt's stale parts as if they were a prefix of this attempt.
           parts: [],
+          // Resets alongside parts for the same reason — a stale count from the previous
+          // attempt would make the client under-skip on rejoin (see rawPartsCount's docblock
+          // in the schema).
+          rawPartsCount: 0,
           // An abort request aimed at the PREVIOUS generation on this messageId must not be
           // inherited by this one — the new stream would be killed the instant the abort watcher
           // next ticked, by a Stop the user pressed on something else entirely. Silent, and
@@ -216,6 +220,7 @@ export const createStreamLifecycle = async (
           status: 'aborted',
           completedAt: abortedAt,
           parts: [],
+          rawPartsCount: 0,
           abortRequestedAt: null,
         })
         .where(eq(aiStreamSessions.messageId, messageId));
@@ -265,10 +270,14 @@ export const createStreamLifecycle = async (
   let hasWarnedSizeCap = false;
 
   const persistBufferedParts = (parts: UIMessagePart[]): Promise<void> => {
-    const { parts: shaped, wasCapped } = capPartsToByteBudget(mergeConsecutiveTextParts(parts));
+    // The RAW count, before convergence/capping — the one thing the merged/capped `parts`
+    // column below cannot answer for a rejoining client. See rawPartsCount's docblock on the
+    // schema for why this must travel separately from parts.length.
+    const rawPartsCount = parts.length;
+    const { parts: shaped, wasCapped } = capPartsToByteBudget(convergeRawParts(parts));
     if (wasCapped && !hasWarnedSizeCap) {
       hasWarnedSizeCap = true;
-      loggers.ai.warn('stream-lifecycle: parts snapshot exceeded serialized size cap, truncating oldest parts', {
+      loggers.ai.warn('stream-lifecycle: parts snapshot at or over the serialized size cap', {
         messageId,
         maxBytes: CHECKPOINT_MAX_SERIALIZED_BYTES,
       });
@@ -277,7 +286,7 @@ export const createStreamLifecycle = async (
       try {
         await db
           .update(aiStreamSessions)
-          .set({ parts: shaped, lastHeartbeatAt: new Date() })
+          .set({ parts: shaped, rawPartsCount, lastHeartbeatAt: new Date() })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
         loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {
@@ -394,6 +403,7 @@ export const createStreamLifecycle = async (
             // Clearing it here avoids keeping an unbounded, unpruned copy of
             // every AI reply's content sitting in this table indefinitely.
             parts: [],
+            rawPartsCount: 0,
           })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
@@ -431,9 +441,12 @@ export const createStreamLifecycle = async (
     }
 
     dirty = true;
-    // Anything that isn't a plain text delta (a tool call starting or finishing) is a
-    // boundary a rejoining client should see immediately — see decideCheckpoint.
-    maybeCheckpoint(part.type !== 'text');
+    // A tool call starting or finishing is a boundary a rejoining client should see
+    // immediately — see decideCheckpoint. Matched against the `tool-` prefix explicitly
+    // (not "anything but text") so a future part type chunkToPart.ts starts forwarding
+    // (reasoning, source, file — its docblock names these as future waves) doesn't silently
+    // start bypassing the dirty-flush throttle on every chunk.
+    maybeCheckpoint(part.type.startsWith('tool-'));
   };
 
   const getBufferedParts = (): UIMessagePart[] =>

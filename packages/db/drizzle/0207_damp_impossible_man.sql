@@ -1,0 +1,1 @@
+ALTER TABLE "ai_stream_sessions" ADD COLUMN "raw_parts_count" integer DEFAULT 0 NOT NULL;

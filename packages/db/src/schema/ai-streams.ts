@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, integer, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
 
 export const aiStreamSessions = pgTable('ai_stream_sessions', {
   messageId:      text('message_id').primaryKey(),
@@ -11,9 +11,32 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   browserSessionId: text('browser_session_id').notNull().default(''),
   status:         text('status', { enum: ['streaming', 'complete', 'aborted'] }).notNull().default('streaming'),
   // Periodic snapshot of the accumulated UIMessagePart[] buffer (debounced,
-  // not written per-token). Lets a client restore mid-stream content after
-  // the originator's process dies, without depending on the live multicast.
+  // not written per-token, and — as of the time-based checkpoint cadence —
+  // merged/capped rather than raw: see rawPartsCount below for why the two
+  // diverge). Lets a client restore mid-stream content after the originator's
+  // process dies, without depending on the live multicast.
   parts:          jsonb('parts').$type<unknown[]>().notNull().default([]),
+  // How many RAW parts (one per pushed chunk — every text delta, every tool-call state
+  // transition) were reflected in this checkpoint, BEFORE `parts` above was merged and
+  // capped for storage. `parts.length` alone cannot answer this: mergeConsecutiveTextParts
+  // folds many raw text-delta chunks into one entry, so the merged array is always <= the
+  // true raw count.
+  //
+  // This is NOT redundant with `parts` — it is the one thing a client needs that the
+  // merged snapshot cannot provide. `streamMulticastRegistry`'s live buffer (the thing a
+  // rejoining client's SSE join replays) is always raw, one entry per pushed chunk. A
+  // client that seeds its store from `parts` (already-merged, cheap to render) and then
+  // joins the live replay must skip exactly the number of RAW frames already reflected in
+  // that seed, or it re-applies chunks whose content is already rendered — text is
+  // additive-concat with no idempotency, so under-skipping duplicates visible text.
+  // `parts.length` used to be a safe proxy for this (the old checkpoint persisted the raw
+  // buffer verbatim), but merging broke that equivalence. See
+  // apps/web/src/hooks/useChannelStreamSocket.ts's skipReplayCount usage.
+  //
+  // Additive with a default, and a client on an old build simply falls back to
+  // `parts.length` (correct there since old rows had no merging) — safe across a rolling
+  // deploy in both directions.
+  rawPartsCount:  integer('raw_parts_count').notNull().default(0),
   startedAt:      timestamp('started_at', { mode: 'date' }).defaultNow().notNull(),
   // Written on a dedicated interval by the generation (and also refreshed by each parts
   // checkpoint). It CANNOT ride the checkpoint alone: a stream inside a long tool call

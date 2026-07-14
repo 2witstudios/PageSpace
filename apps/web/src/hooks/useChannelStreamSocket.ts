@@ -38,8 +38,22 @@ interface ActiveStreamRow {
   conversationId: string;
   /** ISO timestamp of the stream's start; stamps synthesized bubbles with a `createdAt`. */
   startedAt?: string;
-  /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
+  /**
+   * Last debounced snapshot persisted server-side. NOT necessarily a prefix of the live
+   * multicast buffer at the frame level any more — the server merges/converges consecutive
+   * chunks before persisting (fewer, larger entries), so `parts.length` no longer counts
+   * how many raw frames are reflected here. See `rawPartsCount` below, which does.
+   */
   parts?: UIMessagePart[];
+  /**
+   * How many RAW frames (one per pushed chunk — every text delta, every tool-call state
+   * transition) are reflected in `parts` above. This, not `parts.length`, is what the live
+   * SSE replay must skip to avoid re-applying content already present in the seeded
+   * snapshot — see `skipReplayCount` below. Optional for backward compatibility with rows
+   * written by a not-yet-updated worker mid-rollout (falls back to `parts.length`, correct
+   * for those rows since they were never merged).
+   */
+  rawPartsCount?: number;
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
@@ -344,16 +358,12 @@ export function useChannelStreamSocket(
           // the originator's process has died. Seeding through addStream
           // (a no-op when the entry exists) keeps a co-mounted surface that
           // bootstrapped the same channel from appending the snapshot twice.
-          // The persisted snapshot is the raw registry buffer (one entry per
-          // pushed chunk: every text delta, and a separate frame per tool-call
-          // state transition) — the same shape the live SSE replay delivers.
           // isValidPartFrame applies the same wire-trust gate the live path
-          // applies in consumeStreamJoin, and the count of frames that pass
-          // it is what the replay will actually skip past (see
-          // skipReplayCount below); appendPartPure then folds the raw
-          // sequence the way the store's own appendPart does for every live
-          // chunk, so a restored snapshot renders identically to a live one
-          // (merged text, tool parts converged to their latest state).
+          // applies in consumeStreamJoin; appendPartPure then folds the
+          // (already server-merged) sequence the way the store's own
+          // appendPart does for every live chunk, so a restored snapshot
+          // renders identically to a live one (merged text, tool parts
+          // converged to their latest state).
           const persistedParts = (stream.parts ?? []).filter(isValidPartFrame);
           const foldedParts = persistedParts.reduce(appendPartPure, [] as UIMessagePart[]);
           addStream({
@@ -372,7 +382,14 @@ export function useChannelStreamSocket(
               conversationId: stream.conversationId,
             });
           }
-          startConsume(stream.messageId, stream.conversationId, persistedParts.length);
+          // The live SSE replay always delivers the RAW registry buffer (one frame per
+          // pushed chunk), but the persisted snapshot above is server-merged/converged —
+          // fewer, larger entries — so `persistedParts.length` no longer counts how many
+          // raw frames are already reflected in the seed. `rawPartsCount` does (see its
+          // docblock on ActiveStreamRow). Fall back to `persistedParts.length` only for a
+          // row written by a not-yet-updated worker mid-rollout, where it's still correct
+          // (those rows were never merged).
+          startConsume(stream.messageId, stream.conversationId, stream.rawPartsCount ?? persistedParts.length);
         }
 
         // The server's word on what is still running. Consumers reconcile any ownership

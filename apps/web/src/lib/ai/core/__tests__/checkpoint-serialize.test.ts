@@ -1,12 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import {
-  mergeConsecutiveTextParts,
+  convergeRawParts,
   capPartsToByteBudget,
   CHECKPOINT_MAX_SERIALIZED_BYTES,
 } from '../checkpoint-serialize';
 
 const text = (t: string) => ({ type: 'text' as const, text: t });
-const tool = (toolCallId: string) => ({
+const toolInputAvailable = (toolCallId: string) => ({
+  type: 'tool-list_pages' as const,
+  toolCallId,
+  toolName: 'list_pages',
+  state: 'input-available' as const,
+  input: { driveId: 'd1' },
+});
+const toolOutputAvailable = (toolCallId: string) => ({
   type: 'tool-list_pages' as const,
   toolCallId,
   toolName: 'list_pages',
@@ -14,39 +21,50 @@ const tool = (toolCallId: string) => ({
   input: { driveId: 'd1' },
   output: { pages: [] },
 });
+const tool = (toolCallId: string) => toolOutputAvailable(toolCallId);
 
-describe('mergeConsecutiveTextParts', () => {
+describe('convergeRawParts', () => {
   it('given an empty buffer, should return an empty array', () => {
-    expect(mergeConsecutiveTextParts([])).toEqual([]);
+    expect(convergeRawParts([])).toEqual([]);
   });
 
   // The multicast registry buffers one entry per text-delta chunk — this is the reduction that
   // keeps the serialized snapshot from growing one entry per token.
   it('given consecutive text-delta parts, should merge them into a single text part', () => {
-    expect(mergeConsecutiveTextParts([text('hel'), text('lo'), text(' world')])).toEqual([
+    expect(convergeRawParts([text('hel'), text('lo'), text(' world')])).toEqual([
       text('hello world'),
     ]);
   });
 
   it('given a tool part between two runs of text parts, should merge each run but keep the tool part as its own entry', () => {
     const toolPart = tool('tc1');
-    expect(mergeConsecutiveTextParts([text('before'), toolPart, text('af'), text('ter')])).toEqual([
+    expect(convergeRawParts([text('before'), toolPart, text('af'), text('ter')])).toEqual([
       text('before'),
       toolPart,
       text('after'),
     ]);
   });
 
-  it('given only tool parts, should return them unchanged and in order', () => {
+  it('given only tool parts with distinct toolCallIds, should return them unchanged and in order', () => {
     const a = tool('tc1');
     const b = tool('tc2');
-    expect(mergeConsecutiveTextParts([a, b])).toEqual([a, b]);
+    expect(convergeRawParts([a, b])).toEqual([a, b]);
+  });
+
+  // The raw buffer carries a separate frame per tool-call state transition (input-available,
+  // then output-available for the SAME toolCallId) — reusing appendPart converges these to the
+  // latest state instead of persisting both, the same way the client's own live-append and
+  // bootstrap-fold paths already do.
+  it('given the same toolCallId appearing twice (input-available then output-available), should keep only the latest state', () => {
+    const started = toolInputAvailable('tc1');
+    const finished = toolOutputAvailable('tc1');
+    expect(convergeRawParts([started, finished])).toEqual([finished]);
   });
 
   it('given a non-empty buffer, should not mutate the input array', () => {
     const initial = [text('hel'), text('lo')];
     const snapshot = JSON.parse(JSON.stringify(initial));
-    mergeConsecutiveTextParts(initial);
+    convergeRawParts(initial);
     expect(initial).toEqual(snapshot);
   });
 });

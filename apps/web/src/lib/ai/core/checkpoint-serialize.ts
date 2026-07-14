@@ -1,24 +1,23 @@
 import type { UIMessage } from 'ai';
-import { mergeTextDeltas } from '@/lib/ai/streams/mergeTextDeltas';
+import { appendPart } from '@/lib/ai/streams/appendPart';
 
 /**
  * Shapes the multicast registry's raw buffer into what's actually written to
  * `aiStreamSessions.parts`. Pure — no DB, no I/O.
  *
- * The registry buffers one entry per pushed part, including one per text-delta chunk. Left
- * unreduced, a checkpoint of a long reply serializes an ever-growing array of single-token
- * fragments. `mergeConsecutiveTextParts` folds it down to the same shape a client renders —
- * reusing the exact reduction `apps/web/src/lib/ai/streams/mergeTextDeltas.ts` already applies
- * client-side, rather than re-deriving the merge rule here.
+ * The registry buffers one entry per pushed part: one per text-delta chunk, and a separate
+ * frame per tool-call state transition (input-available, then output-available/output-error
+ * for the SAME toolCallId). Left unreduced, a checkpoint of a long reply serializes an
+ * ever-growing array of single-token fragments plus stale intermediate tool states.
+ * `convergeRawParts` folds it down to the same converged shape a client renders — reusing
+ * `apps/web/src/lib/ai/streams/appendPart.ts` (the exact reduction the client's own bootstrap
+ * fold and live-append path already apply) rather than re-deriving the merge/dedup rule here.
  */
 
 type AnyPart = UIMessage['parts'][number];
 
-export const mergeConsecutiveTextParts = (parts: readonly AnyPart[]): AnyPart[] =>
-  parts.reduce<AnyPart[]>(
-    (acc, part) => (part.type === 'text' ? mergeTextDeltas(acc, part) : [...acc, part]),
-    [],
-  );
+export const convergeRawParts = (parts: readonly AnyPart[]): AnyPart[] =>
+  parts.reduce<AnyPart[]>((acc, part) => appendPart(acc, part), []);
 
 /** ~5MB — bounds how large a single checkpoint write's `parts` column can grow. */
 export const CHECKPOINT_MAX_SERIALIZED_BYTES = 5 * 1024 * 1024;

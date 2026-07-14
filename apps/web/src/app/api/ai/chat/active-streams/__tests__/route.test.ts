@@ -31,6 +31,7 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
     displayName: 'displayName',
     browserSessionId: 'browserSessionId',
     parts: 'parts',
+    rawPartsCount: 'rawPartsCount',
     channelId: 'channelId',
     status: 'status',
     startedAt: 'startedAt',
@@ -112,6 +113,7 @@ describe('GET /api/ai/chat/active-streams', () => {
         displayName: 'Alice',
         browserSessionId: 'session-2',
         parts,
+        rawPartsCount: 4,
         startedAt: new Date('2024-01-01T00:00:00.000Z'),
         lastHeartbeatAt: new Date(),
       },
@@ -126,6 +128,9 @@ describe('GET /api/ai/chat/active-streams', () => {
         conversationId: 'conv-1',
         startedAt: '2024-01-01T00:00:00.000Z',
         parts,
+        // The RAW pushed-chunk count, distinct from parts.length (parts may already be
+        // merged) — the client's live-replay skip depends on this, not on parts.length.
+        rawPartsCount: 4,
         triggeredBy: {
           userId: 'user-2',
           displayName: 'Alice',

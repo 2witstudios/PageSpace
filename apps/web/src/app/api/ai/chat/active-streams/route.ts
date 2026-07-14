@@ -84,6 +84,7 @@ export async function GET(request: Request) {
         displayName: aiStreamSessions.displayName,
         browserSessionId: aiStreamSessions.browserSessionId,
         parts: aiStreamSessions.parts,
+        rawPartsCount: aiStreamSessions.rawPartsCount,
         startedAt: aiStreamSessions.startedAt,
         lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
       })
@@ -113,6 +114,12 @@ export async function GET(request: Request) {
         // client render mid-stream content immediately, without waiting on
         // (or depending on) the originator process's live multicast.
         parts: s.parts ?? [],
+        // How many RAW parts (one per pushed chunk) are reflected in the snapshot above —
+        // NOT parts.length, which counts merged/converged entries. The client's live-replay
+        // join skips exactly this many raw frames off the multicast buffer to avoid
+        // re-applying content already present in the seeded snapshot. See rawPartsCount's
+        // docblock on the schema (packages/db/src/schema/ai-streams.ts).
+        rawPartsCount: s.rawPartsCount,
         triggeredBy: {
           userId: s.userId,
           displayName: s.displayName,

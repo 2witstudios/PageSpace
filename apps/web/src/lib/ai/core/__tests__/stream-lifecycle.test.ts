@@ -248,6 +248,9 @@ describe('createStreamLifecycle', () => {
         // racing the re-registration would serve the prior attempt's stale parts as
         // if they were a prefix of the new attempt's live buffer.
         parts: [],
+        // Resets alongside parts — a stale count from the previous attempt would make a
+        // rejoining client under-skip on its live replay.
+        rawPartsCount: 0,
       });
       expect(cfg.set.startedAt).toBeInstanceOf(Date);
     });
@@ -386,6 +389,7 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
       expect(mockUpdateSet).toHaveBeenCalledWith({
         parts: fakeParts,
+        rawPartsCount: fakeParts.length,
         lastHeartbeatAt: expect.any(Date),
       });
     });
@@ -402,6 +406,7 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
       expect(mockUpdateSet).toHaveBeenCalledWith({
         parts: fakeParts,
+        rawPartsCount: fakeParts.length,
         lastHeartbeatAt: expect.any(Date),
       });
     });
@@ -441,6 +446,7 @@ describe('createStreamLifecycle', () => {
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
       expect(mockUpdateSet).toHaveBeenCalledWith({
         parts: fakeParts,
+        rawPartsCount: fakeParts.length,
         lastHeartbeatAt: expect.any(Date),
       });
     });
@@ -500,6 +506,10 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalledWith({
         parts: [{ type: 'text', text: 'hello world' }],
+        // The RAW count (3 pushed chunks), NOT the merged array's length (1) — a rejoining
+        // client's live-replay skip must be counted against the raw multicast buffer, which
+        // the merged snapshot no longer has a 1:1 length relationship with.
+        rawPartsCount: 3,
         lastHeartbeatAt: expect.any(Date),
       });
     });
@@ -519,8 +529,11 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(2);
       for (const call of mockUpdateSet.mock.calls) {
-        const written = call[0] as { parts: unknown[] };
+        const written = call[0] as { parts: unknown[]; rawPartsCount: number };
         expect(written.parts).not.toContainEqual(huge);
+        // The cap trims what's STORED, never what's reported as the raw count — a rejoining
+        // client's skip math must stay correct even when old content was dropped from parts.
+        expect(written.rawPartsCount).toBe(3);
       }
       expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
     });
@@ -663,6 +676,7 @@ describe('createStreamLifecycle', () => {
         status: 'complete',
         completedAt: expect.any(Date),
         parts: [],
+        rawPartsCount: 0,
       });
       expect(mockBroadcastComplete).toHaveBeenCalledWith({
         messageId: 'msg-1',
@@ -682,6 +696,7 @@ describe('createStreamLifecycle', () => {
         status: 'aborted',
         completedAt: expect.any(Date),
         parts: [],
+        rawPartsCount: 0,
       });
       expect(mockBroadcastComplete).toHaveBeenCalledWith({
         messageId: 'msg-1',
@@ -771,6 +786,7 @@ describe('createStreamLifecycle', () => {
         status: 'complete',
         completedAt: expect.any(Date),
         parts: [],
+        rawPartsCount: 0,
       });
 
       mockRegistryGetBufferedParts.mockReturnValue([]);
@@ -803,6 +819,7 @@ describe('createStreamLifecycle', () => {
         status: 'complete',
         completedAt: expect.any(Date),
         parts: [],
+        rawPartsCount: 0,
       });
 
       mockRegistryGetBufferedParts.mockReturnValue([]);
@@ -890,7 +907,7 @@ describe('createStreamLifecycle', () => {
         expect.objectContaining({ status: 'streaming' }),
       );
       expect(mockUpdateSet).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 'aborted', parts: [], abortRequestedAt: null }),
+        expect.objectContaining({ status: 'aborted', parts: [], rawPartsCount: 0, abortRequestedAt: null }),
       );
       expect(mockUpdateWhere).toHaveBeenCalled();
     });
