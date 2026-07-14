@@ -16,16 +16,26 @@
 import { describe, it, expect } from 'vitest';
 
 /**
- * Mirrors the global-mode load-on-select effect (~line 983-991):
- * `if (selectedAgent) return; if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return; setGlobalLocalMessages(globalInitialMessages);`
+ * Mirrors the global-mode load-on-select effect (~line 1008-1023):
+ * `if (selectedAgent) return; if (globalInitialMessages === prevRef) return; if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return; prevRef = globalInitialMessages; setGlobalLocalMessages(globalInitialMessages);`
+ *
+ * The prevRef/dedup check is load-bearing (CodeRabbit review on this PR): without it, this
+ * effect re-fires on EVERY effectiveIsStreaming transition, including the streaming -> not
+ * -streaming edge at the end of an ordinary send. `globalInitialMessages` is not refreshed for a
+ * fresh own completion (GlobalChatContext's onStreamComplete deliberately no-ops for that case),
+ * so re-firing without the dedup would reapply the stale pre-send snapshot and wipe the
+ * just-completed reply straight back out of the surface's own useChat state.
  */
-function shouldApplyGlobalLocalMessages(
+function shouldApplyGlobalLocalMessages<T>(
   selectedAgent: { id: string } | null,
   globalIsInitialized: boolean,
   globalConversationId: string | null,
+  globalInitialMessages: T[],
+  prevGlobalInitialMessages: T[] | null,
   effectiveIsStreaming: boolean,
 ): boolean {
   if (selectedAgent) return false;
+  if (globalInitialMessages === prevGlobalInitialMessages) return false;
   if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return false;
   return true;
 }
@@ -78,28 +88,66 @@ function createRefAdvancesOnlyOnApplySimulator<X>() {
 }
 
 const mockAgent = { id: 'agent-123' };
+const mockPreSendSnapshot = [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[];
+const mockPostLoadSnapshot = [
+  { id: 'msg-1', role: 'user', content: 'Hello' },
+  { id: 'msg-2', role: 'assistant', content: 'Hi there' },
+] as never[];
 
 describe('GlobalAssistantView load-on-select effects', () => {
   describe('shouldApplyGlobalLocalMessages (global mode)', () => {
-    it('given global mode, initialized, with a conversation id, and not streaming, should apply', () => {
-      expect(shouldApplyGlobalLocalMessages(null, true, 'conv-1', false)).toBe(true);
+    it('given global mode, initialized, with a conversation id, a new snapshot, and not streaming, should apply', () => {
+      expect(
+        shouldApplyGlobalLocalMessages(null, true, 'conv-1', mockPostLoadSnapshot, null, false)
+      ).toBe(true);
     });
 
     it('given agent selected, should never apply (agent mode owns its own effect)', () => {
-      expect(shouldApplyGlobalLocalMessages(mockAgent, true, 'conv-1', false)).toBe(false);
+      expect(
+        shouldApplyGlobalLocalMessages(mockAgent, true, 'conv-1', mockPostLoadSnapshot, null, false)
+      ).toBe(false);
     });
 
     it('given not yet initialized, should NOT apply', () => {
-      expect(shouldApplyGlobalLocalMessages(null, false, 'conv-1', false)).toBe(false);
+      expect(
+        shouldApplyGlobalLocalMessages(null, false, 'conv-1', mockPostLoadSnapshot, null, false)
+      ).toBe(false);
     });
 
     it('given no conversation id, should NOT apply', () => {
-      expect(shouldApplyGlobalLocalMessages(null, true, null, false)).toBe(false);
+      expect(
+        shouldApplyGlobalLocalMessages(null, true, null, mockPostLoadSnapshot, null, false)
+      ).toBe(false);
+    });
+
+    it('given the snapshot reference is unchanged, should NOT re-apply (no-op)', () => {
+      expect(
+        shouldApplyGlobalLocalMessages(null, true, 'conv-1', mockPostLoadSnapshot, mockPostLoadSnapshot, false)
+      ).toBe(false);
     });
 
     // Regression coverage for the clobber bug fixed in this PR.
     it('given effectiveIsStreaming=true (e.g. reload/switch mid-stream), should NOT apply', () => {
-      expect(shouldApplyGlobalLocalMessages(null, true, 'conv-1', true)).toBe(false);
+      expect(
+        shouldApplyGlobalLocalMessages(null, true, 'conv-1', mockPostLoadSnapshot, null, true)
+      ).toBe(false);
+    });
+
+    // Regression coverage for the CodeRabbit-flagged bug: without the prevRef dedup, this
+    // effect re-fires on every effectiveIsStreaming transition — including the moment an
+    // ordinary send finishes — and `globalInitialMessages` is never refreshed for that case
+    // (GlobalChatContext's onStreamComplete deliberately no-ops for an own fresh stream), so it
+    // would reapply the stale PRE-SEND snapshot and wipe the just-completed reply straight back
+    // out of the surface's own useChat state. The already-applied snapshot (prevRef === current
+    // reference) must short-circuit at the dedup check regardless of how the streaming flag
+    // transitions around it.
+    it('given the snapshot was already applied and effectiveIsStreaming flips from true to false (stream just completed), should NOT re-apply the stale pre-send snapshot', () => {
+      expect(
+        shouldApplyGlobalLocalMessages(null, true, 'conv-1', mockPreSendSnapshot, mockPreSendSnapshot, true)
+      ).toBe(false);
+      expect(
+        shouldApplyGlobalLocalMessages(null, true, 'conv-1', mockPreSendSnapshot, mockPreSendSnapshot, false)
+      ).toBe(false);
     });
   });
 

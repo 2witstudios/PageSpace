@@ -1005,9 +1005,21 @@ const GlobalAssistantView: React.FC = () => {
   // overwrites the in-progress assistant bubble with a stale snapshot that predates the reply —
   // the live text itself keeps rendering separately via `remoteStreams` regardless, so this
   // effect only ever needs to apply the persisted snapshot once streaming has stopped.
+  //
+  // Dedup'd on a prevRef (CodeRabbit caught this): `globalInitialMessages` is NOT refreshed for
+  // a fresh own send/completion in this surface (onStreamComplete deliberately no-ops — "surface's
+  // useChat already has the message"), so without the reference check this effect would re-fire on
+  // every effectiveIsStreaming transition, including the streaming -> not-streaming edge at the end
+  // of every ordinary send — reapplying the SAME STALE pre-send snapshot and wiping the
+  // just-completed reply straight back out of view. The ref advances only inside the guard (see
+  // the load-on-select effects above) so a load skipped mid-stream is still retried once
+  // streaming ends, rather than being marked "seen" and dropped.
+  const prevGlobalInitialMessagesRef = useRef<import('ai').UIMessage[] | null>(null);
   useEffect(() => {
     if (selectedAgent) return;
+    if (globalInitialMessages === prevGlobalInitialMessagesRef.current) return;
     if (!globalIsInitialized || !globalConversationId || effectiveIsStreaming) return;
+    prevGlobalInitialMessagesRef.current = globalInitialMessages;
     setGlobalLocalMessages(globalInitialMessages);
   }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, effectiveIsStreaming, setGlobalLocalMessages]);
 
