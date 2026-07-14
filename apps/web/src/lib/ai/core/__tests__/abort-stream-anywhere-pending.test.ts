@@ -79,7 +79,7 @@ describe('abortStreamAnywhere', () => {
       // Make wasRecentlyFinishedHere return true so awaiting is empty (simulates cross-instance)
       vi.mocked(wasRecentlyFinishedHere).mockReturnValue(true);
 
-      const result = await abortStreamAnywhere({
+      await abortStreamAnywhere({
         conversationId: 'conv1',
         userId: 'user1',
       });
@@ -88,7 +88,7 @@ describe('abortStreamAnywhere', () => {
     });
 
     it('does NOT record a pending-abort when no conversationId is provided', async () => {
-      const result = await abortStreamAnywhere({
+      await abortStreamAnywhere({
         streamId: 'stream1',
         userId: 'user1',
       });
