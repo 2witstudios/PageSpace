@@ -26,6 +26,11 @@ export default defineConfig({
         '**/node_modules/**',
       ],
       thresholds: {
+        // The /* ratchet:start */.../* ratchet:end */ markers below are load-bearing:
+        // ../../scripts/coverage-ratchet.mjs matches this exact comment-delimited region
+        // to rewrite only these four scalars and never touch the per-glob keys after
+        // ratchet:end. Do not remove/move the markers, and do not add new scalar
+        // thresholds inside them — see that script's header comment for why.
         /* ratchet:start */
         lines: 44,
         branches: 85,

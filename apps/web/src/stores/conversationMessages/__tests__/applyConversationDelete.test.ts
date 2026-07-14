@@ -34,4 +34,20 @@ describe('applyConversationDelete', () => {
     const result = applyConversationDelete({}, { conversationId: 'c1', messageId: 'm1' });
     expect(result).toEqual({});
   });
+
+  it('given an actual delete, should bump loadGeneration so an in-flight load snapshotted before this delete cannot later resurrect the row', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 1 },
+    };
+    const result = applyConversationDelete(initial, { conversationId: 'c1', messageId: 'm1' });
+    expect(result.c1.loadGeneration).toBe(2);
+  });
+
+  it('given a no-op delete (id present in neither array), should not bump loadGeneration', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 1 },
+    };
+    const result = applyConversationDelete(initial, { conversationId: 'c1', messageId: 'missing' });
+    expect(result.c1.loadGeneration).toBe(1);
+  });
 });

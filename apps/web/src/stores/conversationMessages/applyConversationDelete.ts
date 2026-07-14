@@ -6,7 +6,16 @@ export interface ApplyConversationDeleteEvent {
   messageId: string;
 }
 
-/** Applies a remote delete broadcast to a conversation's messages and optimisticSends, reusing `applyMessageDelete`. */
+/**
+ * Applies a remote delete broadcast to a conversation's messages and
+ * optimisticSends, reusing `applyMessageDelete`.
+ *
+ * Bumps `loadGeneration` on an actual change: a load already in flight was
+ * snapshotted before this delete necessarily landed, so it must not be
+ * allowed to later overwrite `messages` and silently resurrect the deleted
+ * row — bumping the generation makes that in-flight `applyLoad` stale so it
+ * gets rejected.
+ */
 export const applyConversationDelete = (
   byConversationId: ConversationMessagesById,
   event: ApplyConversationDeleteEvent,
@@ -20,6 +29,6 @@ export const applyConversationDelete = (
 
   return {
     ...byConversationId,
-    [event.conversationId]: { ...existing, messages, optimisticSends },
+    [event.conversationId]: { ...existing, messages, optimisticSends, loadGeneration: existing.loadGeneration + 1 },
   };
 };

@@ -6,7 +6,15 @@ export interface ApplyConversationEditEvent {
   payload: MessageEditPayload;
 }
 
-/** Applies a remote edit broadcast to a conversation's confirmed messages, reusing `applyMessageEdit`. */
+/**
+ * Applies a remote edit broadcast to a conversation's confirmed messages,
+ * reusing `applyMessageEdit`.
+ *
+ * Bumps `loadGeneration` on an actual change: a load already in flight was
+ * snapshotted before this edit necessarily landed, so it must not be allowed
+ * to later overwrite `messages` and silently undo the edit — bumping the
+ * generation makes that in-flight `applyLoad` stale so it gets rejected.
+ */
 export const applyConversationEdit = (
   byConversationId: ConversationMessagesById,
   event: ApplyConversationEditEvent,
@@ -19,6 +27,6 @@ export const applyConversationEdit = (
 
   return {
     ...byConversationId,
-    [event.conversationId]: { ...existing, messages },
+    [event.conversationId]: { ...existing, messages, loadGeneration: existing.loadGeneration + 1 },
   };
 };

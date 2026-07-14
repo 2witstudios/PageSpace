@@ -48,4 +48,26 @@ describe('applyConversationEdit', () => {
     });
     expect(result.other).toBe(initial.other);
   });
+
+  it('given an actual edit, should bump loadGeneration so an in-flight load snapshotted before this edit cannot later clobber it', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [msg('m1', 'old')], optimisticSends: [], loadGeneration: 1 },
+    };
+    const result = applyConversationEdit(initial, {
+      conversationId: 'c1',
+      payload: { messageId: 'm1', parts: [{ type: 'text', text: 'new' }], editedAt: new Date() },
+    });
+    expect(result.c1.loadGeneration).toBe(2);
+  });
+
+  it('given a no-op edit (messageId not present), should not bump loadGeneration', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [msg('m1', 'old')], optimisticSends: [], loadGeneration: 1 },
+    };
+    const result = applyConversationEdit(initial, {
+      conversationId: 'c1',
+      payload: { messageId: 'missing', parts: [], editedAt: new Date() },
+    });
+    expect(result.c1.loadGeneration).toBe(1);
+  });
 });

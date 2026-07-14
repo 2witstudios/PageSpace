@@ -35,4 +35,20 @@ describe('applyRemoteUserMessage', () => {
     const result = applyRemoteUserMessage(initial, { conversationId: 'c1', message: msg('opt1') });
     expect(result.c1.optimisticSends).toEqual([msg('opt2')]);
   });
+
+  it('given an actual append, should bump loadGeneration so an in-flight load snapshotted before this broadcast cannot later clobber it', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [], optimisticSends: [], loadGeneration: 1 },
+    };
+    const result = applyRemoteUserMessage(initial, { conversationId: 'c1', message: msg('m1') });
+    expect(result.c1.loadGeneration).toBe(2);
+  });
+
+  it('given a duplicate broadcast (no-op), should not bump loadGeneration', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 1 },
+    };
+    const result = applyRemoteUserMessage(initial, { conversationId: 'c1', message: msg('m1') });
+    expect(result.c1.loadGeneration).toBe(1);
+  });
 });
