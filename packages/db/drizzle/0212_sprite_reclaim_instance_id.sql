@@ -1,19 +1,39 @@
--- Carry the Sprite INSTANCE id through the reclaim outbox.
+-- Sprite reclaim triggers — make the pointer to a live microVM UNKILLABLE.
 --
--- `sandboxId` is only the Sprite's NAME — our own derived session key — and a
--- name is REUSED across re-creates: destroy a Sprite and provision another under
--- the same key and it answers to the same `sandboxId` while being a physically
+-- A Sprite is a real, billing VM, findable only by its `sandboxId`. That id lives
+-- in `machine_sessions` / `machine_branches`, both of which FK-cascade off
+-- `pages.id` (and off `users.id`). So EVERY hard delete of a page destroys the
+-- only pointer to a VM that may still be running: the 30-day GDPR purge, "delete
+-- permanently" from the trash, a permanent drive delete, the account-erasure
+-- worker — and any path added in the future. The VM then bills forever,
+-- unreachable. We found one of these in production and killed it by hand.
+--
+-- Guarding each delete path is unenforceable (there is always one more), and it
+-- cannot work for erasure: GDPR Art. 17 must never be blocked by a Sprite we
+-- failed to kill. So we do not guard the deletes — we rescue the pointer.
+--
+-- These AFTER DELETE triggers copy the Sprite's id into `machine_sprite_reclaims`
+-- (no foreign keys — nothing can cascade IT away) as the tracking row dies.
+-- Postgres fires row-level triggers for rows deleted by a referential CASCADE as
+-- well as by a direct DELETE, so this captures the id no matter which table's
+-- delete started it — including a hand-run `DELETE FROM pages` in psql. The INSERT
+-- runs inside the deleting transaction: either the pointer moves, or the delete
+-- does not commit. The pointer therefore OUTLIVES the resource.
+--
+-- BOTH ids are rescued, and the instance one is the load-bearing half.
+-- `sandboxId` is only the Sprite's NAME — our own derived session key — and a name
+-- is REUSED across re-creates: destroy a Sprite and provision another under the
+-- same key and it answers to the same `sandboxId` while being a physically
 -- different VM (the codebase already relies on this distinction for the egress
--- lockdown token, which is keyed on the instance id precisely because "a Sprite
--- destroyed and re-created under the same name is a different VM").
+-- lockdown token). The kill is name-keyed (`deleteSprite(name)`), so a reclaim
+-- carrying only a name says "destroy whatever VM currently holds this name" —
+-- which, if someone legitimately re-provisioned under it meanwhile, destroys THEIR
+-- live VM. With the instance id the reconciler can say: kill the VM at this name
+-- ONLY if it is still the one we meant.
 --
--- The kill is name-keyed (`deleteSprite(name)`), so a reclaim that carries only a
--- name says "destroy whatever VM currently holds this name" — which, if someone
--- legitimately re-provisioned under it in the meantime, destroys THEIR live VM.
--- Rescuing the instance id alongside the name lets the reconciler pass it as an
--- identity guard: kill the VM at this name ONLY if it is still the one we meant.
--- A row with a NULL instance id (rescued before this column existed) falls back
--- to the name-only kill.
+-- The orphan-reconcile cron drains the table with an idempotent kill and removes a
+-- row only once the Sprite is CONFIRMED gone, so a failed kill is retried forever
+-- instead of being forgotten.
 
 DROP TRIGGER IF EXISTS machine_sessions_sprite_reclaim ON machine_sessions;
 DROP TRIGGER IF EXISTS machine_branches_sprite_reclaim ON machine_branches;
@@ -77,3 +97,30 @@ CREATE TRIGGER machine_branches_sprite_reclaim
   AFTER DELETE ON machine_branches
   FOR EACH ROW
   EXECUTE FUNCTION machine_branches_capture_sprite_reclaim();
+
+-- Backfill: any Sprite whose page is ALREADY trashed and whose teardown was
+-- requested but never confirmed is, by definition, at risk of being stranded by
+-- the next purge. The triggers only capture deletions from here on, so seed the
+-- outbox with the pointers that already exist — including the one class this whole
+-- workstream started from (a failed teardown behind a trashed page).
+--
+-- Deliberately NOT seeding Sprites of merely-trashed Machines whose teardown was
+-- never requested: those are hibernating VMs the user can still restore, and a
+-- reclaim is an irreversible destroy. When their page is finally purged, the
+-- trigger captures them then.
+INSERT INTO machine_sprite_reclaims ("sandboxId", "spriteInstanceId")
+SELECT s."sandboxId", s."spriteInstanceId"
+FROM machine_sessions s
+JOIN pages p ON p.id = s."pageId"
+WHERE p."isTrashed" = true
+  AND s."teardownRequestedAt" IS NOT NULL
+ON CONFLICT ("sandboxId") DO NOTHING;
+
+INSERT INTO machine_sprite_reclaims ("sandboxId", "spriteInstanceId")
+SELECT b."sandboxId", b."spriteInstanceId"
+FROM machine_branches b
+JOIN pages p ON p.id = b."machineId"
+WHERE p."isTrashed" = true
+  AND b."teardownRequestedAt" IS NOT NULL
+  AND b."spriteTornDownAt" IS NULL
+ON CONFLICT ("sandboxId") DO NOTHING;
