@@ -85,7 +85,7 @@ import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
-import type { RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
+import { canConcludeTurnIsLost, type RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
 import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
@@ -612,9 +612,17 @@ const GlobalAssistantView: React.FC = () => {
     // flight together. A single shared slot would let one caller's probe answer the other's
     // question, which on this path means regenerating over a run we never actually asked about.
     let probeAnswered = false;
-    if (!currentConversationId) return { recovered: false, probeAnswered };
+    let dbAnswered = false;
+    const conversationId = currentConversationId;
+    if (!conversationId) return { recovered: false, probeAnswered, dbAnswered };
     const channelId = selectedAgent?.id ?? (user?.id ? globalChannelId(user.id) : null);
-    if (!channelId) return { recovered: false, probeAnswered };
+    if (!channelId) return { recovered: false, probeAnswered, dbAnswered };
+    // Every write below happens after an await, into a useChat instance whose id is constant
+    // across conversation switches. Re-check the LIVE conversation before each one, exactly as
+    // handlePullUpRefresh and loadGlobalMessages do — otherwise a recovery for the conversation
+    // the user just left lands in the one they moved to.
+    const stillOnThisConversation = () =>
+      shouldApplyLoadedMessages(conversationId, currentConversationIdRef.current);
 
     // Step 1: live stream check
     try {
@@ -636,9 +644,13 @@ const GlobalAssistantView: React.FC = () => {
         // swallow it while we went on believing we had an answer.
         probeAnswered = true;
         const liveStream = (data.streams ?? []).find(
-          (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
+          (s) => s.conversationId === conversationId && s.triggeredBy.userId === user?.id,
         );
-        if (liveStream && decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin') {
+        if (
+          liveStream &&
+          stillOnThisConversation() &&
+          decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin'
+        ) {
           // Evict the half-streamed assistant bubble useChat is still holding for this run.
           //
           // This is load-bearing, not tidy-up. `Chat.stop()` "keeps the generated tokens", and a
@@ -676,33 +688,51 @@ const GlobalAssistantView: React.FC = () => {
             if (hasServerParts) globalSetMessages(evictStale);
             rejoinGlobalStream();
           }
-          return { recovered: true, probeAnswered };
+          return { recovered: true, probeAnswered, dbAnswered };
         }
       }
     } catch { /* network error — fall through to DB check */ }
 
-    // Step 2: DB check for persisted reply for the CURRENT turn.
-    // Only accept when the DB has at least as many user messages as we have locally —
-    // this guards against the case where the network error fired before the user's
-    // message reached the server, making the DB end with the PREVIOUS turn's
-    // assistant reply and causing us to silently drop the new user prompt.
+    // Step 2: DB check for a persisted reply to the CURRENT turn.
     try {
       const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
-        : `/api/ai/global/${currentConversationId}/messages`;
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
+        : `/api/ai/global/${conversationId}/messages`;
       const res = await fetchWithAuth(url);
       if (res.ok) {
         const data = await res.json();
-        const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{ role: string }>;
-        const localUserCount = currentMessagesRef.current.filter((m) => m.role === 'user').length;
-        const dbUserCount = msgs.filter((m) => m.role === 'user').length;
-        // DB must have at least as many user messages as local (the user's turn
-        // was persisted) AND end with an assistant reply (the run completed).
+        const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{
+          id: string;
+          role: string;
+        }>;
+        // Only NOW do we know what is persisted. As with the probe above, a throw or a non-ok
+        // leaves us knowing nothing — and treating that silence as "no reply exists" would let the
+        // caller regenerate over a reply that had in fact completed, which DELETES it (handleRetry
+        // removes the trailing assistant by the very id the server persisted it under).
+        dbAnswered = true;
+
+        // "Was the user's turn persisted?" asked by IDENTITY, not by counting.
+        //
+        // It used to compare user-message counts (dbUserCount >= localUserCount). That silently
+        // breaks on any conversation longer than one page: this GET is unpaginated, so the route
+        // applies its default limit of 50 and returns only the newest 50 rows, while local
+        // `messages` is the initial 50 PLUS every turn since. Past that boundary the count guard
+        // is permanently false, step 2 can never recover, and every interrupted turn on a long
+        // conversation would fall through to a regenerate that deletes the reply it should have
+        // refetched. The last local user message is by definition the newest, so it is always
+        // inside the returned window — checking for its id is both correct and pagination-proof.
+        const lastLocalUserId = [...currentMessagesRef.current]
+          .reverse()
+          .find((m) => m.role === 'user')?.id;
+        const ourTurnIsPersisted =
+          lastLocalUserId === undefined || msgs.some((m) => m.id === lastLocalUserId);
         const hasPersistedReply =
-          msgs.length > 0 &&
-          msgs[msgs.length - 1].role === 'assistant' &&
-          dbUserCount >= localUserCount;
-        if (decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch') {
+          msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && ourTurnIsPersisted;
+
+        if (
+          stillOnThisConversation() &&
+          decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch'
+        ) {
           // Write the SAME normalized array the guards above were computed from. Reading
           // defensively and then writing `data.messages` raw would blank the surface outright if
           // the route ever answered with a bare array.
@@ -713,12 +743,12 @@ const GlobalAssistantView: React.FC = () => {
           } else {
             setGlobalLocalMessages(serverMessages);
           }
-          return { recovered: true, probeAnswered };
+          return { recovered: true, probeAnswered, dbAnswered };
         }
       }
-    } catch { /* network error — fall through to regenerate */ }
+    } catch { /* network error — the caller must not treat this as "nothing is persisted" */ }
 
-    return { recovered: false, probeAnswered };
+    return { recovered: false, probeAnswered, dbAnswered };
   }, [
     currentConversationId,
     selectedAgent,
@@ -870,38 +900,44 @@ const GlobalAssistantView: React.FC = () => {
       let attempt = await tryRecover();
       if (attempt.recovered) return;
 
-      // Came up empty — but that means one of two OPPOSITE things, and only one of them is an
-      // answer:
+      // Came up empty — but "we recovered nothing" is NOT "there was nothing to recover". Each of
+      // tryRecover's two questions can come back UNANSWERED, and silence from either one means the
+      // work we would be about to destroy might still exist:
       //
-      //   "the server says nothing is live"    → the run died; regenerating is the recovery.
-      //   "the probe never reached the server" → we know NOTHING; a run may well still be live.
+      //   /active-streams silent → a run may still be LIVE.       Regenerating aborts it.
+      //   messages GET silent    → the reply may already be SAVED. Regenerating deletes it.
       //
-      // The first request after a foreground is the one most likely to fail (cold radio), so on
-      // this path the second case is common. Re-probe a couple of times before concluding: the
-      // radio comes back well inside a few seconds.
-      for (let i = 1; !attempt.probeAnswered && i <= 2; i++) {
+      // The first request after a foreground is the one most likely to fail (cold radio), so this
+      // is common on exactly this path. Re-ask until both questions come back, bounded — the radio
+      // returns well inside a few seconds.
+      for (let i = 1; !(attempt.probeAnswered && attempt.dbAnswered) && i <= 2; i++) {
         await new Promise((resolve) => setTimeout(resolve, i * 1000));
         attempt = await tryRecover();
         if (attempt.recovered) return;
       }
 
-      // Regenerate ONLY on an answered probe, and only if a turn of ours really was in flight.
+      // Regenerate ONLY once BOTH questions came back, and only for a turn of ours that really was
+      // in flight (canConcludeTurnIsLost).
       //
       // The regenerate is needed BECAUSE of the stop above: aborting the fetch settles useChat at
       // `ready` with NO `error`, and useStreamRecovery only fires on `status === 'error'`. Without
       // it, a turn whose POST died on the background transition would find no stream, no reply and
       // no error, and the user's prompt would sit unanswered forever.
       //
-      // But regenerating on SILENCE would be far worse than doing nothing. Every generation start
-      // calls takeOverConversationStreams, so a regenerate issued while the run is in fact still
-      // live does not race it — it ABORTS it. We would kill a healthy, possibly nearly-finished
-      // generation, re-run any write tools it had already executed, bill the discarded tokens, and
-      // strand its partial in the DB. Silence is not an answer.
+      // But regenerating on SILENCE would be far worse than doing nothing, because regenerating is
+      // destructive twice over:
+      //   - takeOverConversationStreams runs on every generation start, so a regenerate issued
+      //     while the run is in fact still live ABORTS it — re-running write tools it had already
+      //     executed, billing its discarded tokens, stranding its partial in the DB.
+      //   - handleRetry DELETEs the trailing assistant by id before re-requesting, and that is the
+      //     same id the server persisted the reply under — so a regenerate issued when the reply
+      //     had in fact completed deletes the finished reply and pays for it again.
       //
-      // Doing nothing there is safe: the stop released this channel's `consuming` mark, so a live
-      // run is picked up by the socket-reconnect bootstrap once the network returns, and a dead one
-      // leaves the user their prompt and the retry action on it.
-      if (hadTurnInFlight && attempt.probeAnswered) await handleRetry();
+      // Doing nothing on silence is safe: the stop released this channel's `consuming` mark, so a
+      // live run is picked up by the socket-reconnect bootstrap once the network returns, a
+      // persisted reply is picked up by the next load, and a genuinely dead turn leaves the user
+      // their prompt and the retry action on it.
+      if (hadTurnInFlight && canConcludeTurnIsLost(attempt)) await handleRetry();
     }, [
       effectiveIsStreaming,
       selectedAgent,

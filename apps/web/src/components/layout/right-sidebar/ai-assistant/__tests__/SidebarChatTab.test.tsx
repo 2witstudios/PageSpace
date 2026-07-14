@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
+import { canConcludeTurnIsLost } from '@/lib/ai/streams/recoveryAttempt';
 
 // ============================================
 // Test Helpers - Display Logic Extraction
@@ -163,19 +164,27 @@ function resumeEnabled(currentConversationId: string | null, isAnyEditing: boole
 type ResumeEffect = 'stop' | 'try-recover' | 'refresh' | 'regenerate';
 
 /**
- * One tryRecover outcome. `recovered` and `probeAnswered` are separate because "we recovered
- * nothing" is NOT the same claim as "the server told us there was nothing to recover".
+ * One tryRecover outcome. `recovered` and the two "answered" flags are separate because "we
+ * recovered nothing" is NOT the same claim as "the server told us there was nothing to recover" —
+ * and regenerating on the latter is destructive twice over (it aborts a still-live run, and it
+ * DELETEs an already-persisted reply, since handleRetry removes the trailing assistant by the very
+ * id the server saved it under).
  */
 interface Attempt {
   recovered: boolean;
   probeAnswered: boolean;
+  dbAnswered: boolean;
 }
+
+const ANSWERED_NOTHING: Attempt = { recovered: false, probeAnswered: true, dbAnswered: true };
+const SILENT: Attempt = { recovered: false, probeAnswered: false, dbAnswered: false };
+const RECOVERED: Attempt = { recovered: true, probeAnswered: true, dbAnswered: true };
 
 function planResume({
   native,
   isStreaming,
   ownTurnInFlight = isStreaming,
-  attempts = [{ recovered: true, probeAnswered: true }],
+  attempts = [RECOVERED],
 }: {
   native: boolean;
   /** The broad display/effective streaming flag — what resolveResumeAction sees. */
@@ -188,7 +197,7 @@ function planResume({
    * rather than the one that was interrupted.
    */
   ownTurnInFlight?: boolean;
-  /** Successive tryRecover outcomes, one per probe the resume handler makes (up to 3). */
+  /** Successive tryRecover outcomes, one per attempt the resume handler makes (up to 3). */
   attempts?: Attempt[];
 }): ResumeEffect[] {
   const action = resolveResumeAction({ native, isStreaming });
@@ -198,18 +207,19 @@ function planResume({
   // body, which releases the channel's `consuming` mark. Without that the rejoin's bootstrap
   // treats the stream as one we are already reading off the POST and skips attaching it.
   const effects: ResumeEffect[] = ['stop', 'try-recover'];
-  let attempt: Attempt = attempts[0] ?? { recovered: false, probeAnswered: false };
+  let attempt: Attempt = attempts[0] ?? SILENT;
   if (attempt.recovered) return effects;
 
-  // An unanswered probe is not an answer. Re-probe (bounded) before concluding anything.
-  for (let i = 1; !attempt.probeAnswered && i <= 2; i++) {
+  // Re-ask until BOTH questions come back. Silence from either means the work we would destroy
+  // might still exist.
+  for (let i = 1; !(attempt.probeAnswered && attempt.dbAnswered) && i <= 2; i++) {
     effects.push('try-recover');
-    attempt = attempts[i] ?? { recovered: false, probeAnswered: false };
+    attempt = attempts[i] ?? SILENT;
     if (attempt.recovered) return effects;
   }
 
-  // Regenerate only on an ANSWERED probe, and only for a turn of ours on this conversation.
-  if (ownTurnInFlight && attempt.probeAnswered) effects.push('regenerate');
+  // The REAL predicate, not a copy of it.
+  if (ownTurnInFlight && canConcludeTurnIsLost(attempt)) effects.push('regenerate');
   return effects;
 }
 
@@ -732,7 +742,7 @@ function evictStalePartial<T extends { id: string }>(
             native: true,
             isStreaming: true,
             ownTurnInFlight: false,
-            attempts: [{ recovered: false, probeAnswered: true }],
+            attempts: [ANSWERED_NOTHING],
           }),
         ).toEqual(['stop', 'try-recover']);
       });
@@ -747,13 +757,24 @@ function evictStalePartial<T extends { id: string }>(
           native: true,
           isStreaming: true,
           ownTurnInFlight: true,
-          attempts: [
-            { recovered: false, probeAnswered: false },
-            { recovered: false, probeAnswered: false },
-            { recovered: false, probeAnswered: false },
-          ],
+          attempts: [SILENT, SILENT, SILENT],
         });
         expect(plan).toEqual(['stop', 'try-recover', 'try-recover', 'try-recover']);
+        expect(plan).not.toContain('regenerate');
+      });
+
+      it('given the probe answered but the DB GET did NOT, should NOT regenerate', () => {
+        // The other half of "silence is not an answer", and the more destructive half. If the
+        // messages GET failed we do not know whether the reply is already persisted — and
+        // handleRetry DELETEs the trailing assistant by the very id the server saved it under, so
+        // regenerating here would delete a COMPLETED reply and pay for it a second time.
+        const dbSilent = { recovered: false, probeAnswered: true, dbAnswered: false };
+        const plan = planResume({
+          native: true,
+          isStreaming: true,
+          ownTurnInFlight: true,
+          attempts: [dbSilent, dbSilent, dbSilent],
+        });
         expect(plan).not.toContain('regenerate');
       });
 
@@ -766,10 +787,7 @@ function evictStalePartial<T extends { id: string }>(
             native: true,
             isStreaming: true,
             ownTurnInFlight: true,
-            attempts: [
-              { recovered: false, probeAnswered: false },
-              { recovered: false, probeAnswered: true },
-            ],
+            attempts: [SILENT, ANSWERED_NOTHING],
           }),
         ).toEqual(['stop', 'try-recover', 'try-recover', 'regenerate']);
       });
@@ -780,10 +798,7 @@ function evictStalePartial<T extends { id: string }>(
             native: true,
             isStreaming: true,
             ownTurnInFlight: true,
-            attempts: [
-              { recovered: false, probeAnswered: false },
-              { recovered: true, probeAnswered: true },
-            ],
+            attempts: [SILENT, RECOVERED],
           }),
         ).toEqual(['stop', 'try-recover', 'try-recover']);
       });
@@ -794,14 +809,14 @@ function evictStalePartial<T extends { id: string }>(
         // used to drive the fallback. Without regenerating here, a turn whose POST died on the
         // background transition (a radio drop right then is common) finds no stream, no reply and
         // no error, and the user's prompt sits unanswered forever.
-        const plan = planResume({ native: true, isStreaming: true, attempts: [{ recovered: false, probeAnswered: true }] });
+        const plan = planResume({ native: true, isStreaming: true, attempts: [ANSWERED_NOTHING] });
         expect(plan).toEqual(['stop', 'try-recover', 'regenerate']);
         expect(plan).not.toContain('refresh');
       });
 
       it('given native, NO turn in flight, and nothing to recover, should NOT regenerate', () => {
         // An ordinary resume on an idle conversation must never fire a spurious generation.
-        expect(planResume({ native: true, isStreaming: false, attempts: [{ recovered: false, probeAnswered: true }] })).toEqual([
+        expect(planResume({ native: true, isStreaming: false, attempts: [ANSWERED_NOTHING] })).toEqual([
           'stop',
           'try-recover',
         ]);
