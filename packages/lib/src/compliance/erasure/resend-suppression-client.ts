@@ -12,6 +12,12 @@ import { Resend } from 'resend';
 import { loggers } from '../../logging/logger-config';
 import type { EmailSuppressionClient, EmailSuppressionEntry } from './email-suppression';
 
+/** Resend's per-page maximum for contacts.list (the API default is only 20). */
+const SUPPRESSION_PAGE_SIZE = 100;
+
+/** Backstop against an API that never stops setting `has_more` (100k contacts). */
+const MAX_SUPPRESSION_PAGES = 1000;
+
 /**
  * Read back the suppression audience: every contact flagged `unsubscribed`.
  *
@@ -37,19 +43,52 @@ export async function listSuppressedEmails(): Promise<Set<string> | null> {
   }
 
   const resend = new Resend(apiKey);
-  const { data, error } = await resend.contacts.list({ audienceId });
-
-  if (error) {
-    throw new Error(`Failed to read Resend suppression audience: ${error.message}`);
-  }
-
   const suppressed = new Set<string>();
-  for (const contact of data?.data ?? []) {
-    if (contact.unsubscribed && contact.email) {
-      suppressed.add(contact.email.trim().toLowerCase());
+
+  // Resend paginates contacts (max 100/page, and only 20 by default). A single
+  // unpaginated call would hand back a partial audience that is INDISTINGUISHABLE
+  // from a complete one — the caller would exclude the first page of erased users
+  // and mail everyone after it. Page until `has_more` is false.
+  let after: string | undefined;
+  for (let page = 0; page < MAX_SUPPRESSION_PAGES; page++) {
+    const { data, error } = await resend.contacts.list({
+      audienceId,
+      limit: SUPPRESSION_PAGE_SIZE,
+      ...(after ? { after } : {}),
+    });
+
+    if (error) {
+      throw new Error(`Failed to read Resend suppression audience: ${error.message}`);
     }
+    if (!data) {
+      throw new Error('Failed to read Resend suppression audience: empty response');
+    }
+
+    for (const contact of data.data) {
+      if (contact.unsubscribed && contact.email) {
+        suppressed.add(contact.email.trim().toLowerCase());
+      }
+    }
+
+    if (!data.has_more) return suppressed;
+
+    const last = data.data[data.data.length - 1];
+    if (!last?.id) {
+      // has_more with nothing to page from: we cannot advance the cursor, and
+      // returning what we have would understate the suppression list. Refuse.
+      throw new Error(
+        'Failed to read Resend suppression audience: has_more was set but the page carried no cursor',
+      );
+    }
+    after = last.id;
   }
-  return suppressed;
+
+  // A suppression list this large is more likely a paging bug than reality, and
+  // silently returning a truncated set is the one outcome we must never produce.
+  throw new Error(
+    `Failed to read Resend suppression audience: exceeded ${MAX_SUPPRESSION_PAGES} pages ` +
+      `(${suppressed.size} suppressed so far). Refusing to return a possibly-truncated list.`,
+  );
 }
 
 export function createResendSuppressionClient(): EmailSuppressionClient {

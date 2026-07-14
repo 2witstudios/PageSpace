@@ -7,6 +7,7 @@ import {
   Heading,
   Html,
   Link,
+  Preview,
   Section,
   Text,
 } from '@react-email/components';
@@ -89,6 +90,9 @@ export function SdkCliLaunchEmail({
   return (
     <Html>
       <Head />
+      {/* The inbox snippet. Without it, clients scrape the first body text and
+          show "New PageSpace now has an SDK and a CLI Hi Ada…". */}
+      <Preview>Build on PageSpace from your own code and your terminal</Preview>
       <Body style={emailStyles.main}>
         <Container style={emailStyles.container}>
           <Section style={emailStyles.header}>

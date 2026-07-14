@@ -6,9 +6,11 @@ import {
   decideRecipient,
   isLocalhostUrl,
   LedgerCorruptError,
+  listUnsubscribeHeaders,
   loadSentEmails,
   openLedger,
   parseArgs,
+  preflight,
   recordSent,
   resolveBaseUrl,
   resolveMarketingBase,
@@ -66,8 +68,65 @@ describe('parseArgs', () => {
   });
 
   it('given valid flags, should parse them', () => {
-    const opts = parseArgs(['--live', '--verified-only', '--limit=25', '--delay-ms=0'], LEDGER);
-    expect(opts).toMatchObject({ live: true, verifiedOnly: true, limit: 25, delayMs: 0 });
+    const opts = parseArgs(['--live', '--include-unverified', '--limit=25', '--delay-ms=0'], LEDGER);
+    expect(opts).toMatchObject({ live: true, includeUnverified: true, limit: 25, delayMs: 0 });
+  });
+
+  it('given no flags, should exclude unverified addresses', () => {
+    // An unverified address was never proven to belong to the account holder.
+    // Mailing it is mailing a stranger, so opting in must be deliberate.
+    expect(parseArgs([], LEDGER).includeUnverified).toBe(false);
+  });
+});
+
+describe('preflight', () => {
+  const base = {
+    live: true,
+    baseUrl: 'https://app.pagespace.ai',
+    suppressed: new Set<string>(),
+    isOnPrem: false,
+  };
+
+  it('given a well-configured live send, should allow it', () => {
+    expect(preflight(base)).toEqual({ ok: true });
+  });
+
+  it('given a localhost app URL, should refuse the live send', () => {
+    // Otherwise every recipient gets an unsubscribe link they cannot use.
+    const result = preflight({ ...base, baseUrl: 'http://localhost:3000' });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: expect.stringMatching(/localhost/) });
+  });
+
+  it('given an unreadable suppression audience, should refuse the live send', () => {
+    // We cannot prove GDPR-erased users are excluded, so we do not send at all.
+    const result = preflight({ ...base, suppressed: null });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: expect.stringMatching(/erased users cannot be/) });
+  });
+
+  it('given on-prem mode, should refuse the live send', () => {
+    // sendEmail() silently drops mail on-prem: the run would send nothing while
+    // recording every recipient as already-sent, poisoning the ledger.
+    const result = preflight({ ...base, isOnPrem: true });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: expect.stringMatching(/on-prem/) });
+  });
+
+  it('given a dry run, should allow every otherwise-unsafe configuration', () => {
+    expect(
+      preflight({ live: false, baseUrl: 'http://localhost:3000', suppressed: null, isOnPrem: true }),
+    ).toEqual({ ok: true });
+  });
+});
+
+describe('listUnsubscribeHeaders', () => {
+  it('should advertise RFC 8058 one-click unsubscribe pointing at the recipient token', () => {
+    // Gmail/Yahoo bulk rules require these headers; a body link alone is not enough.
+    expect(listUnsubscribeHeaders('https://app.pagespace.ai/api/notifications/unsubscribe/tok')).toEqual({
+      'List-Unsubscribe': '<https://app.pagespace.ai/api/notifications/unsubscribe/tok>',
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    });
   });
 });
 

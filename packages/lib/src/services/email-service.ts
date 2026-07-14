@@ -50,6 +50,12 @@ export interface SendEmailOptions {
   to: string;
   subject: string;
   react: React.ReactNode;
+  /**
+   * Extra SMTP headers. Bulk sends need `List-Unsubscribe` and
+   * `List-Unsubscribe-Post` — Gmail and Yahoo's bulk-sender rules require a
+   * one-click unsubscribe header, and a body link alone does not satisfy them.
+   */
+  headers?: Record<string, string>;
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<void> {
@@ -78,6 +84,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
     to: options.to,
     subject: options.subject,
     react: options.react as React.ReactNode,
+    ...(options.headers ? { headers: options.headers } : {}),
   });
 
   if (error) {

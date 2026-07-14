@@ -15,7 +15,13 @@ import path from 'node:path';
 
 export interface CliOptions {
   live: boolean;
-  verifiedOnly: boolean;
+  /**
+   * Mail users who never confirmed their address. Defaults to FALSE: an
+   * unverified address was never proven to belong to the account holder, so a
+   * blast to it may be mail to a stranger (or to a spam trap that damages the
+   * sending domain we are about to depend on). Opting in is deliberate.
+   */
+  includeUnverified: boolean;
   limit: number | null;
   delayMs: number;
   logPath: string;
@@ -42,7 +48,7 @@ export function parseArgs(argv: string[], defaultLogPath: string): CliOptions {
 
   const opts: CliOptions = {
     live: false,
-    verifiedOnly: false,
+    includeUnverified: false,
     limit: null,
     delayMs: 120,
     logPath: defaultLogPath,
@@ -53,8 +59,8 @@ export function parseArgs(argv: string[], defaultLogPath: string): CliOptions {
       opts.live = true;
     } else if (arg === '--dry-run') {
       opts.live = false;
-    } else if (arg === '--verified-only') {
-      opts.verifiedOnly = true;
+    } else if (arg === '--include-unverified') {
+      opts.includeUnverified = true;
     } else if (arg.startsWith('--limit=')) {
       const n = Number.parseInt(arg.slice('--limit='.length), 10);
       if (!Number.isInteger(n) || n <= 0) {
@@ -200,6 +206,72 @@ export async function openLedger(logPath: string): Promise<FileHandle> {
 export async function recordSent(handle: FileHandle, entry: SentLedgerEntry): Promise<void> {
   await handle.write(`${JSON.stringify(entry)}\n`, null, 'utf8');
   await handle.sync();
+}
+
+/**
+ * Headers that make the unsubscribe one-click at the mail-client level.
+ *
+ * Gmail's and Yahoo's bulk-sender rules require `List-Unsubscribe` plus
+ * `List-Unsubscribe-Post` on bulk mail — a link in the body does not satisfy
+ * them, and mail that omits these gets throttled or binned. The URL is the same
+ * per-recipient token link the footer carries, so the header and the body agree.
+ */
+export function listUnsubscribeHeaders(unsubscribeUrl: string): Record<string, string> {
+  return {
+    'List-Unsubscribe': `<${unsubscribeUrl}>`,
+    'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+  };
+}
+
+export type PreflightResult = { ok: true } | { ok: false; reason: string };
+
+/**
+ * The guards that stand between a mistake and an unrecoverable mass email.
+ * Pure, so each one can be pinned by a test — they are the whole safety story,
+ * and "we never actually ran the guard" is not something you learn afterwards.
+ *
+ * A dry run passes every check (it sends nothing); these only bind a live send.
+ */
+export function preflight(input: {
+  live: boolean;
+  baseUrl: string;
+  /** null = the erasure-suppression audience could not be read. */
+  suppressed: Set<string> | null;
+  isOnPrem: boolean;
+}): PreflightResult {
+  if (!input.live) return { ok: true };
+
+  if (isLocalhostUrl(input.baseUrl)) {
+    return {
+      ok: false,
+      reason:
+        'app base URL resolves to localhost, which would email everyone a broken unsubscribe link.\n' +
+        '   Set NEXT_PUBLIC_APP_URL (or WEB_APP_URL) to the public app URL and re-run.',
+    };
+  }
+
+  if (input.suppressed === null) {
+    return {
+      ok: false,
+      reason:
+        'the Resend erasure-suppression audience could not be read, so erased users cannot be\n' +
+        '   excluded. Set RESEND_API_KEY and RESEND_AUDIENCE_ID and re-run.',
+    };
+  }
+
+  if (input.isOnPrem) {
+    // sendEmail() is a silent no-op on-prem. A "successful" live run would print
+    // a tick per recipient and fsync a ledger line for each, sending nothing and
+    // permanently marking those people as already-mailed. Refuse instead.
+    return {
+      ok: false,
+      reason:
+        'DEPLOYMENT_MODE is on-prem, where sendEmail() silently drops mail. The run would send\n' +
+        '   nothing while recording everyone as already-sent, poisoning the ledger for the real send.',
+    };
+  }
+
+  return { ok: true };
 }
 
 export type SkipReason = 'invalid-email' | 'already-sent' | 'suppressed' | 'opted-out';

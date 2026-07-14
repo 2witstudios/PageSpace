@@ -36,18 +36,24 @@
  * Usage:
  *   bun scripts/send-sdk-launch-notifications.ts                    # dry run (default)
  *   bun scripts/send-sdk-launch-notifications.ts --live --limit=25  # canary
- *   bun scripts/send-sdk-launch-notifications.ts --live --verified-only
+ *   bun scripts/send-sdk-launch-notifications.ts --live
  *
  * Flags:
- *   --live            Actually send. Without it, nothing leaves the building.
- *   --dry-run         Explicit form of the default; send nothing, write nothing.
- *   --verified-only   Only target users whose email is verified.
- *   --limit=N         Cap the number of (not-yet-sent) recipients this run.
- *   --delay-ms=N      Pause between real sends (default 120ms). Ignored in dry runs.
- *   --log=PATH        Override the idempotency ledger path.
+ *   --live                Actually send. Without it, nothing leaves the building.
+ *   --dry-run             Explicit form of the default; send nothing, write nothing.
+ *   --include-unverified  Also mail users who never confirmed their address. Off by
+ *                         default: an unverified address was never proven to belong
+ *                         to the account holder, so a blast to it may be mail to a
+ *                         stranger (or a spam trap). Opt in deliberately.
+ *   --limit=N             Cap the number of (not-yet-sent) recipients this run.
+ *   --delay-ms=N          Pause between real sends (default 120ms). Ignored in dry runs.
+ *   --log=PATH            Override the idempotency ledger path.
  *
- * Docker usage:
- *   docker compose run --rm migrate bun scripts/send-sdk-launch-notifications.ts
+ * DO NOT run this in a throwaway container (e.g. `docker compose run --rm migrate`)
+ * without mounting the ledger onto durable storage: the `migrate` service declares
+ * no volume, so the ledger would die with the container and a resumed run would
+ * re-mail everyone it had already reached. If you must run it containerized, point
+ * SDK_LAUNCH_EMAIL_LOG_PATH at a mounted host path.
  */
 
 import type { FileHandle } from 'node:fs/promises';
@@ -56,20 +62,23 @@ import { fileURLToPath } from 'node:url';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
-import { and, eq, isNotNull } from '@pagespace/db/operators';
+import { and, eq, isNotNull, isNull } from '@pagespace/db/operators';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { generateUnsubscribeToken } from '@pagespace/lib/services/notification-email-service';
 import { listSuppressedEmails } from '@pagespace/lib/compliance/erasure/resend-suppression-client';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isValidEmail } from '@pagespace/lib/validators/email';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { SdkCliLaunchEmail } from '@pagespace/lib/email-templates/SdkCliLaunchEmail';
 import { renderEmailToHtml } from '@pagespace/lib/email-templates/render-email';
 import {
   decideRecipient,
   isLocalhostUrl,
+  listUnsubscribeHeaders,
   loadSentEmails,
   openLedger,
   parseArgs,
+  preflight,
   recordSent,
   resolveBaseUrl,
   resolveMarketingBase,
@@ -107,7 +116,8 @@ async function loadOptedOutUserIds(): Promise<Set<string>> {
   return new Set(rows.map((r) => r.userId));
 }
 
-async function main(): Promise<void> {
+/** @returns the process exit code (non-zero if any send failed). */
+async function main(): Promise<number> {
   const opts = parseArgs(process.argv.slice(2), defaultLogPath());
   const baseUrl = resolveBaseUrl();
   const marketingBase = resolveMarketingBase();
@@ -116,40 +126,32 @@ async function main(): Promise<void> {
 
   console.log('📢 SDK + CLI launch announcement broadcast');
   console.log(`  Mode:          ${opts.live ? 'LIVE SEND' : 'DRY RUN (no sends) — pass --live to send'}`);
-  console.log(`  Audience:      ${opts.verifiedOnly ? 'verified emails only' : 'all users with a valid email'}`);
+  console.log(
+    `  Audience:      ${opts.includeUnverified ? 'ALL users, including unverified addresses' : 'verified addresses only'}` +
+      ' (suspended accounts always excluded)',
+  );
   console.log(`  Ledger:        ${opts.logPath}`);
   console.log(`  Docs:          ${sdkDocsUrl}`);
   if (opts.limit) console.log(`  Limit:         ${opts.limit}`);
   console.log('');
 
-  // Never email every user a broken localhost unsubscribe link. A dry run may
-  // use localhost (it sends nothing); a live send must resolve a public URL.
-  if (isLocalhostUrl(baseUrl)) {
-    if (!opts.live) {
-      console.warn('  ⚠️  Base URL resolves to localhost — set NEXT_PUBLIC_APP_URL or WEB_APP_URL before a real send.\n');
-    } else {
-      console.error(
-        '❌ Refusing live send: app base URL resolves to localhost, which would email broken links.\n' +
-          '   Set NEXT_PUBLIC_APP_URL (or WEB_APP_URL) to the public app URL and re-run.',
-      );
-      process.exit(1);
-    }
+  // Reading the suppression audience can THROW (a partial read is worse than no
+  // read — see listSuppressedEmails). null means "not configured".
+  const suppressed = await listSuppressedEmails();
+
+  const check = preflight({ live: opts.live, baseUrl, suppressed, isOnPrem: isOnPrem() });
+  if (!check.ok) {
+    console.error(`❌ Refusing live send: ${check.reason}`);
+    process.exit(1);
   }
 
-  // GDPR erasure suppression. Fail CLOSED on a live send: if we cannot read the
-  // audience we cannot prove we're excluding erased users, so we don't send.
-  const suppressed = await listSuppressedEmails();
   if (suppressed === null) {
-    if (opts.live) {
-      console.error(
-        '❌ Refusing live send: the Resend suppression audience is not configured, so erased\n' +
-          '   users cannot be excluded. Set RESEND_API_KEY and RESEND_AUDIENCE_ID and re-run.',
-      );
-      process.exit(1);
-    }
     console.warn('  ⚠️  Suppression audience unavailable (unconfigured) — a live send would refuse to start.\n');
   } else {
     console.log(`🚫 ${suppressed.size} address(es) in the erasure-suppression audience will be skipped.\n`);
+  }
+  if (!opts.live && isLocalhostUrl(baseUrl)) {
+    console.warn('  ⚠️  Base URL resolves to localhost — set NEXT_PUBLIC_APP_URL or WEB_APP_URL before a real send.\n');
   }
 
   const alreadySent = await loadSentEmails(opts.logPath);
@@ -163,8 +165,15 @@ async function main(): Promise<void> {
   // bad path or permission error fails fast rather than after emails go out.
   const ledger: FileHandle | null = opts.live ? await openLedger(opts.logPath) : null;
 
-  // emailVerified gating is opt-in via --verified-only; email validity is always
-  // enforced per row below. Rows come back encrypted (GDPR #965).
+  // Two exclusions are enforced in the QUERY because they are properties of the
+  // account, not the address: an unverified address was never proven to belong to
+  // the account holder, and a suspended account is one we've administratively cut
+  // off — neither should receive marketing. Email validity is checked per row.
+  // Rows come back encrypted (GDPR #965).
+  const audience = [
+    isNull(users.suspendedAt),
+    ...(opts.includeUnverified ? [] : [isNotNull(users.emailVerified)]),
+  ];
   const rows = await db
     .select({
       id: users.id,
@@ -172,7 +181,7 @@ async function main(): Promise<void> {
       email: users.email,
     })
     .from(users)
-    .where(opts.verifiedOnly ? isNotNull(users.emailVerified) : undefined);
+    .where(and(...audience));
 
   console.log(`👥 ${rows.length} user(s) returned from the database.\n`);
 
@@ -241,15 +250,14 @@ async function main(): Promise<void> {
     // we name the unrecorded recipient and abort before sending anyone else.
     try {
       const token = await generateUnsubscribeToken(user.id, NOTIFICATION_TYPE);
+      const unsubscribeUrl = `${baseUrl}/api/notifications/unsubscribe/${token}`;
       await sendEmail({
         to: email,
         subject: EMAIL_SUBJECT,
-        react: SdkCliLaunchEmail({
-          userName,
-          sdkDocsUrl,
-          cliDocsUrl,
-          unsubscribeUrl: `${baseUrl}/api/notifications/unsubscribe/${token}`,
-        }),
+        react: SdkCliLaunchEmail({ userName, sdkDocsUrl, cliDocsUrl, unsubscribeUrl }),
+        // Bulk mail must offer a client-level one-click unsubscribe, not just a
+        // body link. The route answers POST for exactly this.
+        headers: listUnsubscribeHeaders(unsubscribeUrl),
       });
     } catch (error) {
       errorCount++;
@@ -300,11 +308,14 @@ async function main(): Promise<void> {
   } else {
     console.log('\n⚠️  Broadcast finished with errors; re-run to retry the failures.');
   }
+
+  // A partly-failed blast must not look like a success to whatever ran us.
+  return errorCount === 0 ? 0 : 1;
 }
 
 if (import.meta.main) {
   main()
-    .then(() => process.exit(0))
+    .then((code) => process.exit(code))
     .catch((error) => {
       console.error('\n❌ Script failed:', error);
       process.exit(1);
