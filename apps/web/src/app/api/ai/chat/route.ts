@@ -143,6 +143,14 @@ export async function POST(request: Request) {
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
+  // Set once the assistant placeholder row has received a terminal write (execute-end or
+  // onFinish). The outer catch's best-effort cleanup below must not fire once this is true —
+  // it would otherwise downgrade an already-'complete' row to 'interrupted' if something threw
+  // AFTER a successful persist but before the response was returned. See Server Stream
+  // Durability epic PR 2 — Codex review: a stream stopped before any content (or before
+  // createUIMessageStream even finishes constructing) must not leave the placeholder stuck at
+  // 'streaming' forever (excluded from reads, 409s on edit/delete).
+  let assistantMessagePersisted = false;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // True once the stream/error handler owns the hold's release. Any earlier
@@ -1456,9 +1464,18 @@ export async function POST(request: Request) {
           // idempotent upsert: onFinish, when it runs, refines this write with the
           // richer SDK responseMessage (better tool ordering). When onFinish never
           // runs, this write stands as the sole record of the message.
+          //
+          // Status: a run the user (or the credit gate) stopped is 'interrupted', not
+          // 'complete' — its content, even if non-empty, was cut short, not delivered in
+          // full. And the write must happen even with ZERO buffered parts when aborted:
+          // otherwise a stream stopped before any token arrives leaves its placeholder
+          // stuck at 'streaming' forever — excluded from every reader by default AND
+          // rejected by edit/delete's 409 guard, an invisible, permanently-locked ghost
+          // row. See Server Stream Durability epic PR 2 — Codex review.
           if (chatId && serverAssistantMessageId) {
             const bufferedParts = lifecycle!.getBufferedParts();
-            if (bufferedParts.length > 0) {
+            const aborted = agentRun?.terminalReason === 'aborted' || abortSignal.aborted;
+            if (bufferedParts.length > 0 || aborted) {
               const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
               try {
                 await saveMessageToDatabase({
@@ -1468,7 +1485,9 @@ export async function POST(request: Request) {
                   userId: null,
                   role: 'assistant',
                   ...payload,
+                  status: aborted ? 'interrupted' : 'complete',
                 });
+                assistantMessagePersisted = true;
               } catch (e) {
                 loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
               }
@@ -1478,6 +1497,10 @@ export async function POST(request: Request) {
         onFinish: async ({ responseMessage }) => {
           // Clean up abort controller from registry
           removeStream({ streamId });
+
+          // Computed once and reused below (persist status + lifecycle.finish's aborted flag)
+          // so the two can never disagree about whether this run was stopped.
+          const aborted = agentRun?.terminalReason === 'aborted' || abortSignal.aborted;
 
           loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
           
@@ -1545,6 +1568,7 @@ export async function POST(request: Request) {
                 toolCalls,
                 toolResults,
                 uiMessage,
+                status: aborted ? 'interrupted' : 'complete',
                 ...(page?.driveId && userId && isConversationShared && {
                   mentionNotify: {
                     driveId: page.driveId,
@@ -1553,6 +1577,7 @@ export async function POST(request: Request) {
                   },
                 }),
               });
+              assistantMessagePersisted = true;
 
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
             } catch (error) {
@@ -1659,7 +1684,7 @@ export async function POST(request: Request) {
           // Reflect a user stop, including one that landed during inter-attempt backoff or
           // raced in after the loop broke (onAbort only fires while a streamText is live).
           // finish() is idempotent, so this is a no-op if onAbort already ran.
-          lifecycle!.finish(agentRun?.terminalReason === 'aborted' || abortSignal.aborted);
+          lifecycle!.finish(aborted);
         },
       });
 
@@ -1691,6 +1716,30 @@ export async function POST(request: Request) {
       removeStream({ streamId: activeStreamId });
     }
     lifecycle?.finish(true);
+
+    // Last-resort cleanup: something threw before execute-end or onFinish ever got a chance to
+    // settle the placeholder row (e.g. createUIMessageStream itself failed to construct). Without
+    // this, the row is stuck at 'streaming' forever — excluded from every reader by default AND
+    // rejected by edit/delete's 409 guard. Guarded by assistantMessagePersisted so this can never
+    // downgrade an already-'complete'/'interrupted' row written earlier in the SAME request (e.g.
+    // execute-end succeeded, then something later threw before the response returned). Best-effort:
+    // must not itself throw or block the error response.
+    if (!assistantMessagePersisted && serverAssistantMessageId && chatId && conversationId && !lifecycle?.preAborted) {
+      try {
+        await saveMessageToDatabase({
+          messageId: serverAssistantMessageId,
+          pageId: chatId,
+          conversationId,
+          userId: null,
+          role: 'assistant',
+          ...buildAssistantPersistencePayload(serverAssistantMessageId, lifecycle?.getBufferedParts() ?? []),
+          status: 'interrupted',
+        });
+      } catch (cleanupError) {
+        loggers.ai.error('AI Chat API: failed to terminalize placeholder row after error', cleanupError as Error);
+      }
+    }
+
     loggers.ai.error('AI Chat API Error', error as Error, {
       userId,
       chatId,

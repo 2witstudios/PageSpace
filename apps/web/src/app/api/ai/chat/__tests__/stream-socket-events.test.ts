@@ -300,6 +300,14 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
+import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
+
+/** A signal that reports aborted=true — simulates onAbort having already fired. */
+const abortedSignal = (): AbortSignal => {
+  const ac = new AbortController();
+  ac.abort();
+  return ac.signal;
+};
 
 const mockDbRow = {
   id: 'page-1',
@@ -793,6 +801,54 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(assistantSave).toBeUndefined();
     });
 
+    // Server Stream Durability epic PR 2 — Codex review: a run the user stopped must persist as
+    // 'interrupted', not 'complete' (its content, even if non-empty, was cut short). And the
+    // write must happen even with ZERO buffered parts when aborted — otherwise a stream stopped
+    // before any token arrives leaves its placeholder stuck at 'streaming' forever.
+    it('given the run was aborted with buffered content, should persist with status interrupted', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'partial reply' }]),
+      });
+
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted' });
+    });
+
+    it('given the run was aborted with ZERO buffered parts, should still persist an interrupted placeholder', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      // beforeEach already mocks getBufferedParts to return []
+
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeDefined();
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
+    });
+
+    it('given a normal (non-aborted) run with buffered content, should persist with status complete', async () => {
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'server reply' }]),
+      });
+
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'complete' });
+    });
+
     it('given saveMessageToDatabase rejects from the execute path, should not propagate the error', async () => {
       mockCreateStreamLifecycle.mockResolvedValueOnce({
         pushPart: mockLifecyclePushPart,
@@ -827,6 +883,29 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(mockLifecycleFinish).toHaveBeenCalledWith(true);
     });
 
+    // Server Stream Durability epic PR 2 — Codex review: onFinish's OWN persist (the "refine
+    // with the richer SDK responseMessage" write) must also respect abort state — otherwise it
+    // would clobber the execute-end block's correct 'interrupted' status back to 'complete'.
+    it('given the run was aborted, onFinish should persist with status interrupted even with a responseMessage', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted' });
+    });
+
+    it('given a normal (non-aborted) run, onFinish should persist with status complete', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'complete' });
+    });
+
     it('given createUIMessageStream throws, should call lifecycle.finish(true)', async () => {
       const { createUIMessageStream } = await import('ai');
       vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
@@ -836,6 +915,22 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       await POST(makeRequest());
 
       expect(mockLifecycleFinish).toHaveBeenCalledWith(true);
+    });
+
+    // Server Stream Durability epic PR 2 — Codex review, extended: if createUIMessageStream
+    // itself throws, neither execute-end nor onFinish ever ran — without a last-resort write
+    // here, the placeholder inserted before this point would be stuck at 'streaming' forever.
+    it('given createUIMessageStream throws, should terminalize the placeholder as interrupted', async () => {
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('stream creation failed');
+      });
+
+      await POST(makeRequest());
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
     });
 
     it('given the outer route handler errors after lifecycle init, should call lifecycle.finish(true)', async () => {

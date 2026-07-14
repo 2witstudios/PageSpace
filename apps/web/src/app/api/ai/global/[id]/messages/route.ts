@@ -33,6 +33,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
@@ -245,6 +246,18 @@ export async function POST(
   const startTime = Date.now();
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
+  // Set once the assistant placeholder row has received a terminal write (onFinish). The outer
+  // catch's best-effort cleanup below must not fire once this is true — it would otherwise
+  // downgrade an already-'complete'/'interrupted' row if something threw AFTER a successful
+  // persist but before the response was returned. See Server Stream Durability epic PR 2 —
+  // Codex review: a stream stopped before any content must not leave the placeholder stuck at
+  // 'streaming' forever (excluded from reads, 409s on edit/delete).
+  let assistantMessagePersisted = false;
+  // Mirrors {conversationId, serverAssistantMessageId, userId} once all three are known
+  // (inside the main try, so the originals stay block-scoped `const`s) — purely so the outer
+  // catch's best-effort cleanup can reach them without a wider hoist of variables used in
+  // dozens of places below.
+  let cleanupContext: { conversationId: string; serverAssistantMessageId: string; userId: string } | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // Becomes true once the stream owns the hold (its onFinish will release it via
@@ -1059,6 +1072,7 @@ MENTION PROCESSING:
     });
 
     const serverAssistantMessageId = createId();
+    cleanupContext = { conversationId, serverAssistantMessageId, userId };
 
     const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
@@ -1297,6 +1311,10 @@ MENTION PROCESSING:
 
         const messageId = serverAssistantMessageId;
 
+        // Computed once and reused below (persist status + lifecycle.finish's aborted flag) so
+        // the two can never disagree about whether this run was stopped.
+        const aborted = agentRun?.terminalReason === 'aborted' || abortSignal.aborted;
+
         // Extract tool calls/results with safe defaults — responseMessage is absent on
         // exhausted/no-content runs, but usage settlement below still has to run.
         const extractedToolCalls = responseMessage ? extractToolCalls(responseMessage) : [];
@@ -1304,6 +1322,13 @@ MENTION PROCESSING:
 
         // Save the assistant message. Best-effort: persistence errors must NOT skip
         // usage/credit settlement below — that would leak the gate's hold.
+        //
+        // Status: a run the user (or the credit gate) stopped is 'interrupted', not 'complete'.
+        // And when responseMessage is absent (exhausted/no-content run) but the run WAS aborted,
+        // fall back to whatever lifecycle buffered — otherwise a stream stopped before any token
+        // arrives leaves its placeholder stuck at 'streaming' forever: excluded from every
+        // reader by default AND rejected by edit/delete's 409 guard, an invisible,
+        // permanently-locked ghost row. See Server Stream Durability epic PR 2 — Codex review.
         if (responseMessage) {
           try {
             const messageContent = extractMessageContent(responseMessage);
@@ -1324,7 +1349,9 @@ MENTION PROCESSING:
               toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
               toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
               uiMessage: responseMessage,
+              status: aborted ? 'interrupted' : 'complete',
             });
+            assistantMessagePersisted = true;
 
             // Update conversation lastMessageAt
             await db
@@ -1338,6 +1365,22 @@ MENTION PROCESSING:
             loggers.api.debug('Global Assistant Chat API: AI response message saved to database', {});
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
+          }
+        } else if (aborted) {
+          try {
+            const payload = buildAssistantPersistencePayload(messageId, lifecycle!.getBufferedParts());
+            await saveGlobalAssistantMessageToDatabase({
+              messageId,
+              conversationId,
+              userId,
+              role: 'assistant',
+              ...payload,
+              status: 'interrupted',
+            });
+            assistantMessagePersisted = true;
+            loggers.api.debug('Global Assistant Chat API: terminalized aborted placeholder with no responseMessage', {});
+          } catch (error) {
+            loggers.api.error('Global Assistant Chat API: failed to terminalize aborted placeholder', error as Error);
           }
         }
 
@@ -1412,7 +1455,7 @@ MENTION PROCESSING:
         // Reflect a user stop, including one that landed during inter-attempt backoff or
         // raced in after the loop broke (onAbort only fires while a streamText is live).
         // finish() is idempotent, so this is a no-op if onAbort already ran.
-        lifecycle!.finish(agentRun?.terminalReason === 'aborted' || abortSignal.aborted);
+        lifecycle!.finish(aborted);
       },
     });
 
@@ -1430,6 +1473,29 @@ MENTION PROCESSING:
       removeStream({ streamId: activeStreamId });
     }
     lifecycle?.finish(true);
+
+    // Last-resort cleanup: something threw before onFinish ever got a chance to settle the
+    // placeholder row (e.g. createUIMessageStream itself failed to construct). Without this,
+    // the row is stuck at 'streaming' forever — excluded from every reader by default AND
+    // rejected by edit/delete's 409 guard. Guarded by assistantMessagePersisted so this can
+    // never downgrade an already-'complete'/'interrupted' row written earlier in the SAME
+    // request. Best-effort: must not itself throw or block the error response.
+    if (!assistantMessagePersisted && cleanupContext && !lifecycle?.preAborted) {
+      try {
+        const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, lifecycle?.getBufferedParts() ?? []);
+        await saveGlobalAssistantMessageToDatabase({
+          messageId: cleanupContext.serverAssistantMessageId,
+          conversationId: cleanupContext.conversationId,
+          userId: cleanupContext.userId,
+          role: 'assistant',
+          ...payload,
+          status: 'interrupted',
+        });
+      } catch (cleanupError) {
+        loggers.api.error('Global Assistant Chat API: failed to terminalize placeholder row after error', cleanupError as Error);
+      }
+    }
+
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
 
     return NextResponse.json({

@@ -505,6 +505,7 @@ export async function saveMessageToDatabase({
   uiMessage,
   sourceAgentId,
   mentionNotify,
+  status = 'complete',
 }: {
   messageId: string;
   pageId: string;
@@ -517,6 +518,15 @@ export async function saveMessageToDatabase({
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
   sourceAgentId?: string | null; // ID of the AI agent that sent this message (for agent-to-agent communication)
   mentionNotify?: { driveId: string; triggeredByUserId: string; mentionerName?: string };
+  /**
+   * Terminal status for a formerly-'streaming' placeholder row. Defaults to 'complete' — every
+   * OTHER caller (ask_agent, consult, edits, ask-user-resume merges, etc.) persists a finished
+   * message, never a mid-flight one. The stream-lifecycle terminal writers (execute-end,
+   * onFinish) pass 'interrupted' explicitly when the run was aborted, so a stopped reply — with
+   * or without partial content — reads as terminal-but-cut-short rather than falsely 'complete'.
+   * See Server Stream Durability epic PR 2.
+   */
+  status?: 'complete' | 'interrupted';
 }) {
   try {
     let structuredContent = content;
@@ -545,6 +555,7 @@ export async function saveMessageToDatabase({
         createdAt: new Date(),
         isActive: true,
         sourceAgentId: sourceAgentId ?? null, // Track which AI agent sent this message
+        status,
       })
       .onConflictDoUpdate({
         target: chatMessages.id,
@@ -554,10 +565,10 @@ export async function saveMessageToDatabase({
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
           conversationId, // Update conversationId if message is reprocessed
           sourceAgentId: sourceAgentId ?? null,
-          // Terminal write: flips a 'streaming' placeholder row to 'complete'. Every caller of
-          // saveMessageToDatabase persists a finished message (execute-end, onFinish, ask_agent,
-          // consult, etc.) — never a mid-flight one — so this is unconditionally correct here.
-          status: 'complete',
+          // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'
+          // (never back to 'streaming' — this function is only ever called with a terminal
+          // status, per the param doc above).
+          status,
         }
       });
 
@@ -633,6 +644,7 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolCalls,
   toolResults,
   uiMessage,
+  status = 'complete',
 }: {
   messageId: string;
   conversationId: string;
@@ -642,6 +654,9 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
+  /** Terminal status for a formerly-'streaming' placeholder row. See saveMessageToDatabase's
+   * param doc for the full rationale — same contract, mirrored for the global assistant table. */
+  status?: 'complete' | 'interrupted';
 }) {
   try {
     let structuredContent = content;
@@ -668,6 +683,7 @@ export async function saveGlobalAssistantMessageToDatabase({
         toolResults: toolResults ? JSON.stringify(toolResults) : null,
         createdAt: new Date(),
         isActive: true,
+        status,
       })
       .onConflictDoUpdate({
         target: messages.id,
@@ -675,10 +691,8 @@ export async function saveGlobalAssistantMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          // Terminal write: flips a 'streaming' placeholder row to 'complete'. Every caller of
-          // saveGlobalAssistantMessageToDatabase persists a finished message — never a
-          // mid-flight one — so this is unconditionally correct here.
-          status: 'complete',
+          // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'.
+          status,
         }
       });
 
