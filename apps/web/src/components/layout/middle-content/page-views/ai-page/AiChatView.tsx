@@ -17,15 +17,13 @@ import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-re
 import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
-import { useDriveStore } from '@/hooks/useDrive';
-import { buildPageContext } from '@/lib/ai/shared/buildPageContext';
+import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { PageAgentSettingsTab, PageAgentHistoryTab, ConversationShareToggle, type PageAgentSettingsTabRef } from '@/components/ai/page-agents';
 import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
-import { useSWRConfig } from 'swr';
 
 import { clearActiveStreamId } from '@/lib/ai/core/client';
 import {
@@ -99,8 +97,6 @@ const VOICE_OWNER: VoiceModeOwner = 'ai-page';
 const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const params = useParams();
   const driveId = params.driveId as string;
-  const drives = useDriveStore((state) => state.drives);
-  const { cache } = useSWRConfig();
   const { user } = useAuth();
 
   // ============================================
@@ -888,38 +884,25 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setActiveTab('chat');
   }, [setIdentity]);
 
-  const buildFreshPageContext = useCallback(() => {
-    const treeCacheKey = `/api/drives/${encodeURIComponent(driveId)}/pages`;
-    const treeCacheValue = cache.get(treeCacheKey) as { data?: TreePage[] } | undefined;
-    const cachedTree = Array.isArray(treeCacheValue?.data) ? treeCacheValue.data : [];
-    return buildPageContext({
-      page: { id: page.id, title: page.title, type: page.type },
-      driveId,
-      drives,
-      cachedTree,
-      fetchBreadcrumbs: async (pageId) => {
-        const res = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
-        if (!res.ok) return [];
-        return res.json();
-      },
-    });
-  }, [cache, drives, driveId, page.id, page.title, page.type]);
+  // Synchronous — the page this view is attached to IS the location; no
+  // pathname parsing or fetch needed. The server resolves + permission-checks
+  // this at request time (resolve-request-context.ts).
+  const contextRef: ContextRef = useMemo(
+    () => ({ routeType: 'page', pageId: page.id, driveId }),
+    [page.id, driveId]
+  );
 
-  const buildAskUserAnswerBody = useCallback(async () => {
-    const pageContext = await buildFreshPageContext();
-    return {
-      chatId: page.id,
-      conversationId: currentConversationId,
-      selectedProvider,
-      selectedModel,
-      isReadOnly,
-      webSearchEnabled,
-      imageGenEnabled,
-      mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-      pageContext,
-    };
-  }, [
-    buildFreshPageContext,
+  const buildAskUserAnswerBody = useCallback(() => ({
+    chatId: page.id,
+    conversationId: currentConversationId,
+    selectedProvider,
+    selectedModel,
+    isReadOnly,
+    webSearchEnabled,
+    imageGenEnabled,
+    mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+    contextRef,
+  }), [
     page.id,
     currentConversationId,
     selectedProvider,
@@ -928,6 +911,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     webSearchEnabled,
     imageGenEnabled,
     mcpToolSchemas,
+    contextRef,
   ]);
 
   const askUserAnswering = useAskUserAnswering({
@@ -960,35 +944,28 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!trimmed && files.length === 0) return;
     if (!canSendMessage) return;
 
-    // Start context fetch eagerly — runs in parallel with input clear so the
-    // async wait doesn't delay sendMessage (and the optimistic bubble).
-    const contextPromise = buildFreshPageContext();
-
     clearInputDraft();
     clearFiles();
     inputRef.current?.clear();
 
     adoptConversationAsPersisted();
 
-    wrapSend(async () => {
-      const pageContext = await contextPromise;
-      sendMessage(
-        { text: trimmed, files: files.length > 0 ? files : undefined },
-        {
-          body: {
-            chatId: page.id,
-            conversationId: currentConversationId,
-            selectedProvider,
-            selectedModel,
-            isReadOnly,
-            webSearchEnabled,
-            imageGenEnabled,
-            mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-            pageContext,
-          },
-        }
-      );
-    });
+    wrapSend(() => sendMessage(
+      { text: trimmed, files: files.length > 0 ? files : undefined },
+      {
+        body: {
+          chatId: page.id,
+          conversationId: currentConversationId,
+          selectedProvider,
+          selectedModel,
+          isReadOnly,
+          webSearchEnabled,
+          imageGenEnabled,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+          contextRef,
+        },
+      }
+    ));
   }, [
     isReadOnly,
     input,
@@ -997,7 +974,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // promoted to an error for these files — which is the rule doing exactly its job.
     currentConversationId,
     canSendMessage,
-    buildFreshPageContext,
     getFilesForSend,
     clearInputDraft,
     clearFiles,
@@ -1008,6 +984,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     webSearchEnabled,
     imageGenEnabled,
     mcpToolSchemas,
+    contextRef,
     wrapSend,
     adoptConversationAsPersisted,
   ]);
@@ -1021,38 +998,34 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!text.trim()) return;
     if (!canSendMessage) return;
 
-    const contextPromise = buildFreshPageContext();
     adoptConversationAsPersisted();
-    wrapSend(async () => {
-      const pageContext = await contextPromise;
-      sendMessage(
-        { text: text.trim() },
-        {
-          body: {
-            chatId: page.id,
-            conversationId: currentConversationId,
-            selectedProvider,
-            selectedModel,
-            isReadOnly,
-            webSearchEnabled,
-            imageGenEnabled,
-            mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-            pageContext,
-          },
-        }
-      );
-    });
+    wrapSend(() => sendMessage(
+      { text: text.trim() },
+      {
+        body: {
+          chatId: page.id,
+          conversationId: currentConversationId,
+          selectedProvider,
+          selectedModel,
+          isReadOnly,
+          webSearchEnabled,
+          imageGenEnabled,
+          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
+          contextRef,
+        },
+      }
+    ));
   }, [
     isReadOnly,
     currentConversationId,
     canSendMessage,
-    buildFreshPageContext,
     sendMessage,
     page.id,
     selectedProvider,
     selectedModel,
     webSearchEnabled,
     imageGenEnabled,
+    contextRef,
     mcpToolSchemas,
     wrapSend,
     adoptConversationAsPersisted,

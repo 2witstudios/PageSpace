@@ -107,6 +107,9 @@ import {
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
+import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -188,7 +191,8 @@ export async function POST(request: Request) {
       conversationId: requestConversationId, // Conversation session ID (auto-generated if not provided)
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
-      pageContext,
+      pageContext: legacyPageContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
+      contextRef,
       mcpTools, // MCP tool schemas from desktop client (optional)
       isReadOnly, // Optional read-only mode toggle
       webSearchEnabled, // Optional web search toggle (defaults to false)
@@ -203,6 +207,7 @@ export async function POST(request: Request) {
       isReadOnly?: boolean, // Optional read-only mode toggle
       webSearchEnabled?: boolean, // Optional web search toggle (defaults to false)
       imageGenEnabled?: boolean, // Optional image-generation toggle (defaults to false)
+      contextRef?: ContextRef,
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -215,6 +220,15 @@ export async function POST(request: Request) {
         driveSlug: string,
       }
     } = requestBody;
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // undefined here rather than trusting whatever the client claimed. Falls back to
+    // the legacy client-computed pageContext only for old clients that never sent a
+    // contextRef at all.
+    const pageContext = contextRef
+      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef))
+      : legacyPageContext;
 
     // Assign to outer scope variables for error handling
     chatId = requestChatId;
