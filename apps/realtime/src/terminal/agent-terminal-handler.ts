@@ -939,6 +939,14 @@ export function buildAgentTerminalHandlers({
           command: launch.command,
           args: launch.args,
           cwd: sandbox.cwd,
+          // The watchdog's idle signal, read off the SAME clock the Tasks API
+          // hold ticks on (`startTaskHoldHeartbeat` below): once this session
+          // has been idle long enough for the platform hold to be dropped, the
+          // watchdog stops reattaching for it too, instead of reconnecting to
+          // the Sprite every ~45s for a viewer who is only watching an idle
+          // prompt. The next keystroke reattaches transparently. See
+          // `planWatchdogResponse`'s `attach-quiet`.
+          getLastActivityAt: () => latestActivityAt(session),
           onOutput: (data) => {
             // The hold's "agent output is flowing" signal — kept fresh here so
             // a DETACHED session with an agent mid-run keeps its sprite up.

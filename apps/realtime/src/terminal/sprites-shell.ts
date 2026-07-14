@@ -4,6 +4,7 @@ import type {
   SpriteSessionInfo,
 } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { isAgentActive } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -170,6 +171,31 @@ export type OpenPtyShellArgs = {
    * the caller already supplied — there is nothing new to persist.
    */
   onSessionId?(sessionId: string): void;
+  /**
+   * A cheap, synchronous read of the caller's ALREADY-MAINTAINED activity clock
+   * — the epoch-ms of this session's last output, keystroke, or launch
+   * (`agent-terminal-handler.ts`'s `latestActivityAt`). Consulted on every
+   * watchdog trip, and only there, so it must not do work: no I/O, no
+   * allocation of note.
+   *
+   * This is the SAME clock the Sprites Tasks API hold ticks on (leaf 5-1), read
+   * through the SAME `isAgentActive` predicate and idle window — deliberately,
+   * so the two answers to "is this sprite allowed to pause?" can never disagree.
+   * A shell whose hold has been dropped for idleness must not still be poking
+   * the Sprite every ~45s to keep a socket alive for it.
+   *
+   * OMITTED means the watchdog behaves exactly as it did before `attach-quiet`
+   * existed: an attached shell is always reattached, never quieted. A caller with
+   * no activity clock has no basis to claim the session is idle, and guessing
+   * "idle" from the absence of information would silence output for a viewer who
+   * is sitting right there.
+   *
+   * CONTRACT for callers that DO supply it: a keystroke must be recorded in this
+   * clock BEFORE it is handed to `write()`, because `write()`'s lazy reattach
+   * re-consults `planWatchdogResponse`, which reads this. (The handler does:
+   * `session.lastInputAt = Date.now()` immediately precedes `command.write()`.)
+   */
+  getLastActivityAt?(): number | undefined;
 };
 
 // The @fly/sprites WSCommand keepalive is output-driven: it declares the socket
@@ -184,7 +210,7 @@ export type OpenPtyShellArgs = {
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 200;
 
-export type WatchdogAction = 'reattach' | 'detach-quiet' | 'fatal';
+export type WatchdogAction = 'reattach' | 'attach-quiet' | 'detach-quiet' | 'fatal';
 
 /**
  * What the watchdog should do about a dropped socket, given whether anyone is
@@ -224,6 +250,47 @@ export type WatchdogAction = 'reattach' | 'detach-quiet' | 'fatal';
  * feature would need that map reworked long before this signature could mean
  * anything other than boolean.
  *
+ * `attach-quiet` is the same trade, one step further in: an ATTACHED viewer
+ * whose session has been idle past `TASK_HOLD_AGENT_IDLE_MS` (no output, no
+ * keystroke — `isAgentActive`, the very predicate the Sprites Tasks API hold
+ * ticks on) is watching a prompt that is producing nothing. Reattaching for
+ * them places a real exec connection on the Sprite every ~45s, indefinitely,
+ * for as long as a browser tab sits open — and per
+ * docs.sprites.dev/keeping-sprites-running an open TTY connection is itself
+ * activity that stops the Sprite from ever pausing, so the churn doesn't merely
+ * cost the round-trip: it holds the whole sandbox resident (the RAM-to-CPU cost
+ * skew this leaf exists to close). We let the drop stand and reattach lazily on
+ * the next keystroke instead — `write()` resumes it exactly as
+ * `setViewerAttached(true)` resumes a `detach-quiet` (both go through
+ * `resumeIfLazyReattachNeeded`), and the keystroke itself is queued in
+ * `pendingInput` and flushed the moment the replacement command opens, so the
+ * reattach is invisible.
+ *
+ * The trade-off, stated plainly (mirroring `detach-quiet`'s): while
+ * `attach-quiet` is in effect, output from a BACKGROUND process — one nobody
+ * triggered with a keystroke — will not reach the client until the next
+ * keystroke. That is bounded by exactly the same idle window the Tasks API hold
+ * already uses, which is the point of reusing `isAgentActive` rather than
+ * inventing a second threshold: a session that has produced no byte and taken
+ * no input for `TASK_HOLD_AGENT_IDLE_MS` has ALREADY had its platform hold
+ * deleted and is already free to be paused by the Sprite. Nothing here newly
+ * exposes a legitimately-running background job to an earlier pause than it was
+ * exposed to before — a job that is actually running keeps `lastActivityAt`
+ * fresh with its own output, which keeps both the hold and this reattach alive.
+ *
+ * `lastActivityAt` of `undefined` means the caller keeps no activity clock (the
+ * `getLastActivityAt` arg was omitted), NOT "never active": with no information
+ * we cannot claim idleness, so an attached shell reattaches, exactly as it did
+ * before this verdict existed. This is why the check is not a bare
+ * `!isAgentActive(...)`, which treats an unknown clock as idle.
+ *
+ * Both quiet verdicts are decided BEFORE the failure budget, for the reason
+ * spelled out above: a quiet verdict means no attempt runs, and an attempt that
+ * never ran is not evidence the shell is dead. Going `fatal` here would latch
+ * `closed` on a perfectly healthy idle shell. `fatal` stays reachable — a
+ * keystroke resets the budget and re-arms real attempts (`write()` →
+ * `resumeIfLazyReattachNeeded`), and those failing repeatedly still exhausts it.
+ *
  * `consecutiveFailures` must be the count AFTER `reconnect()`'s own increment
  * — this is the single place that decision is made (the error handler, the
  * internal retry recursion, and the lazy `setViewerAttached(true)` reattach
@@ -236,13 +303,21 @@ export function planWatchdogResponse({
   viewersAttached,
   closed,
   consecutiveFailures,
+  lastActivityAt,
+  now,
 }: {
   viewersAttached: boolean;
   closed: boolean;
   consecutiveFailures: number;
+  /** Epoch-ms of the session's last output/keystroke/launch; `undefined` = the caller keeps no clock. */
+  lastActivityAt: number | undefined;
+  now: number;
 }): WatchdogAction {
   if (closed) return 'detach-quiet';
   if (!viewersAttached) return 'detach-quiet';
+  // Default `idleMs` on purpose: this MUST be the same window the Tasks API
+  // hold uses (TASK_HOLD_AGENT_IDLE_MS), not a knob of its own.
+  if (lastActivityAt !== undefined && !isAgentActive({ lastActivityAt, now })) return 'attach-quiet';
   return consecutiveFailures > MAX_RECONNECT_ATTEMPTS ? 'fatal' : 'reattach';
 }
 
@@ -401,6 +476,7 @@ export function openPtyShell({
   onOutput,
   onExit,
   onSessionId,
+  getLastActivityAt,
 }: OpenPtyShellArgs): PtyShell {
   const toBuf = (chunk: unknown): Buffer => (typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer));
 
@@ -958,14 +1034,27 @@ export function openPtyShell({
     // keyed on (the inline check this replaces compared the same
     // post-increment value), so a 'fatal' verdict here is the real one, not
     // a preview of one `reconnect()` would recompute differently.
-    const action = planWatchdogResponse({ viewersAttached: viewerAttached, closed, consecutiveFailures });
-    if (action === 'detach-quiet') {
-      // No viewer: proceeding would only place a fresh exec connection on the
-      // Sprite to relay output nobody is watching — exactly the churn this
-      // gate exists to remove. Undo the speculative increment above: no
-      // attempt actually ran, so it must not count against the budget.
-      // Remember one is owed; `setViewerAttached(true)` resumes it (with a
-      // fresh budget of its own — see there).
+    const action = planWatchdogResponse({
+      viewersAttached: viewerAttached,
+      closed,
+      consecutiveFailures,
+      lastActivityAt: getLastActivityAt?.(),
+      now: Date.now(),
+    });
+    if (action === 'detach-quiet' || action === 'attach-quiet') {
+      // Nothing worth reconnecting FOR. Either no viewer at all
+      // ('detach-quiet'), or a viewer watching a session that has produced and
+      // received nothing for the whole Tasks-API idle window ('attach-quiet').
+      // Either way, proceeding would only place a fresh exec connection on the
+      // Sprite — relaying output nobody is watching, or output nothing is
+      // producing — and that connection is itself what keeps the Sprite from
+      // pausing. Exactly the churn these gates exist to remove; the two
+      // verdicts are handled identically because the remedy is identical.
+      //
+      // Undo the speculative increment above: no attempt actually ran, so it
+      // must not count against the budget. Remember one is owed;
+      // `resumeIfLazyReattachNeeded` pays it (with a fresh budget of its own —
+      // see there) on the next viewer attach or the next keystroke.
       consecutiveFailures -= 1;
       needsLazyReattach = true;
       reconnecting = false;
@@ -1094,6 +1183,33 @@ export function openPtyShell({
     }
   }
 
+  /**
+   * Pay back a watchdog trip that was swallowed by a quiet verdict. Shared by
+   * the two things that can make a quiet shell interesting again: a viewer
+   * coming back (`setViewerAttached(true)` — resumes a `detach-quiet`) and a
+   * keystroke arriving (`write()` — resumes an `attach-quiet`, whose viewer
+   * never left). Both mean the same thing to the socket: someone is going to
+   * want bytes now, so re-establish it.
+   *
+   * A no-op unless a trip was ACTUALLY swallowed: a viewer toggling
+   * attach/detach faster than the ~45s keepalive, or typing into a healthy
+   * shell, never tripped anything, and output is already flowing.
+   */
+  function resumeIfLazyReattachNeeded(): void {
+    if (!needsLazyReattach || closed) return;
+    needsLazyReattach = false;
+    // A deliberate resume after a (possibly long) quiet gap is a FRESH attempt,
+    // not a continuation of whatever consecutive failures triggered the
+    // original quiet-down. Reset both budgets so a shell that happened to be
+    // at/near its cap when it went quiet gets a real attempt instead of an
+    // instant fatal(-1) with zero retries — "consecutive" is meant to bound
+    // rapid retries close together in time, not something spanning a
+    // human-timescale idle window.
+    consecutiveFailures = 0;
+    abandonedUnnamedSessions = 0;
+    void reconnect();
+  }
+
   if (currentSessionId !== undefined) {
     current = sprite.attachSession(currentSessionId, { cols, rows });
   } else {
@@ -1108,9 +1224,17 @@ export function openPtyShell({
   return {
     write: (data) => {
       if (closed) return;
-      // The wired command is known-stale (a reconnect — attached or lazy — is
-      // in flight) and its replacement hasn't opened yet: queue rather than
-      // hand bytes to a socket that would silently swallow them.
+      // A keystroke is precisely the event `attach-quiet` was waiting for: the
+      // viewer never left, they simply had nothing to say for a while, and now
+      // they do. Re-establish the socket before touching stdin. (Nothing to pay
+      // back = nothing happens; a healthy shell's writes are unaffected.)
+      resumeIfLazyReattachNeeded();
+      // The wired command is known-stale (a reconnect — attached, quiet, or
+      // lazy — is in flight) and its replacement hasn't opened yet: queue
+      // rather than hand bytes to a socket that would silently swallow them.
+      // This is what makes the resume above invisible: `flushPendingInput`
+      // delivers these bytes the moment the replacement command opens, so no
+      // new UI state (and no lost keystroke) is involved.
       if (!inputReady) { pendingInput.push(data); return; }
       current.stdin?.write(data);
     },
@@ -1146,22 +1270,12 @@ export function openPtyShell({
     },
     setViewerAttached: (attached) => {
       viewerAttached = attached;
-      // A lazy reattach only fires if a watchdog trip actually got swallowed while
-      // detached — a viewer toggling attach/detach faster than the ~45s keepalive
-      // (nothing ever tripped) is a no-op here, correctly: output is already flowing.
-      if (attached && needsLazyReattach && !closed) {
-        needsLazyReattach = false;
-        // A deliberate, viewer-initiated reattach after a (possibly long) detached
-        // gap is a FRESH attempt, not a continuation of whatever consecutive
-        // failures triggered the original quiet-down. Reset both budgets so a
-        // shell that happened to be at/near its cap when it went quiet gets a
-        // real attempt instead of an instant fatal(-1) with zero retries —
-        // "consecutive" is meant to bound rapid retries close together in time,
-        // not something spanning a human-timescale detached window.
-        consecutiveFailures = 0;
-        abandonedUnnamedSessions = 0;
-        void reconnect();
-      }
+      // A returning viewer pays back a swallowed trip — see
+      // `resumeIfLazyReattachNeeded`, which `write()` also calls (an
+      // `attach-quiet` shell's viewer never left, so a keystroke is its only
+      // resume trigger). `viewerAttached` is set FIRST so the reconnect this
+      // may kick off sees the viewer that is now here.
+      if (attached) resumeIfLazyReattachNeeded();
     },
   };
 }
