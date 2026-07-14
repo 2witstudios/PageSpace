@@ -10,6 +10,7 @@ import {
   markAbortRequested,
   reconcileDeadStreamRows,
 } from '@/lib/ai/core/stream-abort-mark';
+import { recordPendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import type { AbortCode } from '@/lib/ai/core/stream-abort-decisions';
 
 export interface AbortOutcomeReport {
@@ -126,10 +127,19 @@ export const abortStreamAnywhere = async ({
   const { marked, failed } = await markAbortRequested({ messageId, streamId, conversationId, userId });
 
   if (failed) {
-    // The request was never RECORDED — the DB write itself did not happen. That is not the benign
-    // "nothing was in flight" (which the UI is designed to stay silent about); it means the Stop
-    // reached nobody, and the generation is still running, still calling write tools, and still
-    // billing while the button flips back to Send. It has to be loud.
+    // The request was never RECORDED — the DB write itself did not happen. But we may still have
+    // stopped streams locally (item 4a from #2028): if `locallyAborted` is non-empty, we
+    // demonstrably killed them in-process, and reporting `unconfirmed` would be a false
+    // "may still be running" about streams that are provably dead. Report the partial truth.
+    if (locallyAborted.length > 0) {
+      loggers.ai.warn('cross-instance abort: mark failed, but locally-aborted streams are stopped', {
+        userId,
+        conversationId,
+        locallyAborted,
+      });
+      return ABORTED;
+    }
+
     loggers.ai.error('cross-instance abort: could not record the abort request', {
       userId,
       conversationId,
@@ -149,7 +159,24 @@ export const abortStreamAnywhere = async ({
   // Nothing left to wait for: we stopped (or finished) it all ourselves, or there was nothing of
   // the caller's in flight to stop.
   if (awaiting.length === 0) {
-    return locallyAborted.length > 0 ? ABORTED : NOT_FOUND;
+    if (locallyAborted.length > 0) return ABORTED;
+
+    // We found NOTHING — no local registry entry, no markable row, nothing. The generation may
+    // simply not have started yet: this Stop was pressed during the route's preflight (auth,
+    // permissions, context assembly: 0.5-3s TTFB), before `createStreamLifecycle` INSERTed the
+    // `ai_stream_sessions` row. Record a durable pending-abort intent so `createStreamLifecycle`
+    // can honour it at INSERT time (#2028 item 1). Without this, the generation starts a moment
+    // later and runs to completion: write tools, billing, the lot.
+    //
+    // Only when we genuinely found NOTHING (marked is also empty): rows that WERE marked but
+    // filtered out of `awaiting` (because they finished here) mean the generation existed and
+    // we have already accounted for it — recording a pending abort would fire a spurious
+    // pre-abort on the NEXT send.
+    if (conversationId && marked.length === 0) {
+      await recordPendingAbort({ conversationId, userId });
+    }
+
+    return NOT_FOUND;
   }
 
   const outcome = await awaitAbortSettled({ messageIds: awaiting });

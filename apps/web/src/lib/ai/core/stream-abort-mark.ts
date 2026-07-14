@@ -342,10 +342,17 @@ export const clearAbortMarks = async ({
   if (messageIds.length === 0) return;
 
   try {
+    // Conditional on status so a mark written against a row that has since terminated
+    // (or been taken over by a new generation) is not cleared here — the old mark is
+    // harmless on a non-streaming row, and clearing it unconditionally could erase a
+    // mark written between the watcher's read and this clear (#2028 item 4b).
     await db
       .update(aiStreamSessions)
       .set({ abortRequestedAt: null })
-      .where(inArray(aiStreamSessions.messageId, [...messageIds]));
+      .where(and(
+        inArray(aiStreamSessions.messageId, [...messageIds]),
+        eq(aiStreamSessions.status, 'streaming'),
+      ));
   } catch (error) {
     loggers.ai.warn('cross-instance abort: could not clear stale abort mark(s)', {
       messageIds,

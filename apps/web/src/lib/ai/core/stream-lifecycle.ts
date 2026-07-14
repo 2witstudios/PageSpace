@@ -9,6 +9,7 @@ import {
   streamMulticastRegistry,
   type UIMessagePart,
 } from '@/lib/ai/core/stream-multicast-registry';
+import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -42,6 +43,12 @@ export interface StreamLifecycleHandle {
   finish: (aborted: boolean) => void;
   pushPart: (part: UIMessagePart) => void;
   getBufferedParts: () => UIMessagePart[];
+  /**
+   * True when a pending-abort intent was consumed at INSERT time (#2028 item 1).
+   * The row was written as 'aborted' directly; the caller should abort the controller
+   * so streamText never starts, and skip broadcastAiStreamStart.
+   */
+  preAborted: boolean;
 }
 
 // Batch DB writes rather than persisting on every token — a checkpoint every
@@ -101,6 +108,68 @@ export const createStreamLifecycle = async (
   // Lazily started, and it stops itself when this instance owns no more streams. An instance that
   // never generates never polls.
   ensureStreamAbortWatcher();
+
+  // ── PRE-INSERT PENDING-ABORT CHECK (#2028 item 1) ─────────────────────────────────────────
+  //
+  // A Stop pressed during the route's preflight (auth, permissions, context assembly: 0.5-3s of
+  // TTFB) found no row to mark and wrote a durable pending-abort intent instead. If one exists,
+  // honour it: the user pressed Stop, and the stream must not generate.
+  //
+  // We INSERT the row as 'aborted' directly, skip multicast registration and the heartbeat, and
+  // return a pre-finished handle. The caller aborts the controller so streamText never starts.
+  const preAborted = await consumePendingAbort({ conversationId, userId });
+
+  if (preAborted) {
+    loggers.ai.info('stream-lifecycle: consumed pending-abort intent, stream pre-aborted', {
+      messageId,
+      conversationId,
+    });
+
+    const abortedAt = new Date();
+    try {
+      await db
+        .insert(aiStreamSessions)
+        .values({
+          messageId,
+          channelId,
+          conversationId,
+          userId,
+          displayName,
+          browserSessionId,
+          streamId,
+          status: 'aborted',
+          startedAt: abortedAt,
+          lastHeartbeatAt: abortedAt,
+          completedAt: abortedAt,
+        })
+        .onConflictDoUpdate({
+          target: aiStreamSessions.messageId,
+          set: {
+            channelId,
+            conversationId,
+            userId,
+            displayName,
+            browserSessionId,
+            streamId,
+            status: 'aborted',
+            startedAt: abortedAt,
+            lastHeartbeatAt: abortedAt,
+            completedAt: abortedAt,
+            parts: [],
+            abortRequestedAt: null,
+          },
+        });
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: pre-aborted INSERT failed', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    // No multicast, no broadcast, no heartbeat. A no-op handle whose finish is idempotent.
+    const noop = (): void => {};
+    return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
+  }
 
   try {
     streamMulticastRegistry.register(messageId, {
@@ -327,5 +396,5 @@ export const createStreamLifecycle = async (
   const getBufferedParts = (): UIMessagePart[] =>
     streamMulticastRegistry.getBufferedParts(messageId);
 
-  return { finish, pushPart, getBufferedParts };
+  return { finish, pushPart, getBufferedParts, preAborted: false };
 };

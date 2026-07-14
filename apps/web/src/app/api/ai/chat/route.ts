@@ -1164,7 +1164,7 @@ export async function POST(request: Request) {
 
     serverAssistantMessageId = createId();
 
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
 
     const [userProfile] = await userProfilePromise;
@@ -1229,6 +1229,14 @@ export async function POST(request: Request) {
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
     // this row to settle before deciding what to tell the user. See attachStreamFinisher.
     attachStreamFinisher({ streamId, finish: lifecycle.finish });
+
+    // Pre-aborted: a pending-abort intent was consumed in createStreamLifecycle (#2028 item 1).
+    // The user pressed Stop during the preflight window. Abort the controller so streamText
+    // never starts; the lifecycle handle is already finished and its finish() is a no-op.
+    if (lifecycle.preAborted) {
+      abortController.abort();
+      removeStream({ streamId });
+    }
 
     try {
       const stream = createUIMessageStream({

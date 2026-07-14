@@ -13,6 +13,8 @@ const {
   mockUpdateSet,
   mockUpdateWhere,
   mockLoggerWarn,
+  mockConsumePendingAbort,
+  mockEnsureWatcher,
   aiStreamSessionsToken,
 } = vi.hoisted(() => ({
   mockRegistryRegister: vi.fn(),
@@ -27,6 +29,8 @@ const {
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
   mockLoggerWarn: vi.fn(),
+  mockConsumePendingAbort: vi.fn().mockResolvedValue(false),
+  mockEnsureWatcher: vi.fn(),
   aiStreamSessionsToken: { __table: 'ai_stream_sessions', messageId: 'message_id' },
 }));
 
@@ -91,6 +95,18 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
+vi.mock('@/lib/ai/core/stream-horizons', () => ({
+  STREAM_MAX_LIFETIME_MS: 60 * 60 * 1000,
+}));
+
+vi.mock('@/lib/ai/core/stream-abort-watcher', () => ({
+  ensureStreamAbortWatcher: mockEnsureWatcher,
+}));
+
+vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
+  consumePendingAbort: mockConsumePendingAbort,
+}));
+
 import { createStreamLifecycle } from '../stream-lifecycle';
 
 const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> = {}) => ({
@@ -109,6 +125,8 @@ const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolv
 describe('createStreamLifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConsumePendingAbort.mockResolvedValue(false);
+    mockEnsureWatcher.mockImplementation(() => {});
     // clearAllMocks() clears calls, NOT implementations — a mockReturnValue set inside one test
     // otherwise leaks into every test after it. These two drive the parts-checkpoint guards, so
     // a leak here silently changes what later tests are actually exercising.
@@ -682,6 +700,73 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalled();
       expect(mockBroadcastComplete).toHaveBeenCalled();
+    });
+  });
+
+  describe('pre-aborted: pending-abort intent consumed at INSERT time (#2028 item 1)', () => {
+    it('given a pending-abort intent exists, should return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(handle.preAborted).toBe(true);
+    });
+
+    it('given a pending-abort intent exists, should NOT register in the multicast registry', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockRegistryRegister).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, should NOT broadcast stream_start', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockBroadcastStart).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, should INSERT the row as status=aborted', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'aborted' }),
+      );
+    });
+
+    it('given a pending-abort intent exists, should return a handle whose finish is a no-op', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+
+      handle.finish(false);
+      await flushMicrotasks();
+
+      expect(mockRegistryFinish).not.toHaveBeenCalled();
+      expect(mockBroadcastComplete).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, pushPart should be a no-op', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+      handle.pushPart({ type: 'text', text: 'hello' });
+
+      expect(mockRegistryPush).not.toHaveBeenCalled();
+    });
+
+    it('given NO pending-abort intent, should proceed normally with preAborted=false', async () => {
+      mockConsumePendingAbort.mockResolvedValue(false);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(handle.preAborted).toBe(false);
+      expect(mockRegistryRegister).toHaveBeenCalled();
+      expect(mockBroadcastStart).toHaveBeenCalled();
     });
   });
 
