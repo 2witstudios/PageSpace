@@ -42,13 +42,13 @@ AI works *directly in* your workspace, and so does everything else you use to ge
 ## See It In Action
 
 ### One prompt creates entire projects
-```
+```text
 You: "Create a complete documentation site for our API"
 AI: *Creates 24 nested documents with actual content in your workspace*
 ```
 
 ### Your team collaborates with AI
-```
+```text
 Team Member A: "Can you analyze our Q3 metrics?"
 AI: *Reads relevant documents, creates analysis page*
 Team Member B: *Sees the conversation and analysis in real-time*
@@ -61,7 +61,7 @@ $ pagespace agents ask <agentId> "Summarize what changed on the roadmap this wee
 ```
 
 ### An agent that can actually ship code
-```
+```text
 You: "Spin up a machine on feature/pricing-v2 and fix the failing test"
 AI: *Opens a real terminal, reproduces the failure, edits the code, commits, opens a PR*
 ```
@@ -71,7 +71,8 @@ AI: *Opens a real terminal, reproduces the failure, edits the code, commits, ope
 # Zero-install MCP — add to Claude Desktop, Claude Code, or Cursor's config
 npx -y -p @pagespace/cli pagespace-mcp
 ```
-```
+
+```text
 Claude: "Update all meeting notes in my PageSpace"
 *Claude directly edits documents at www.pagespace.ai*
 ```
@@ -128,6 +129,7 @@ Script your workspace from a terminal.
 npm install -g @pagespace/cli
 pagespace login              # browser OAuth login
 pagespace keys                # mint a drive-scoped access key
+pagespace keys use <name>     # activate it for this machine
 pagespace drives list
 pagespace search text "roadmap" --all-drives
 ```
@@ -267,7 +269,9 @@ Each item in a drive is a typed page with a specific role:
 PageSpace is built around a zero-trust model for cloud deployment. One explicit exception is desktop-local MCP server hosting, which runs inside the user's local trust boundary (same model as Claude Desktop).
 
 - **OAuth 2.1 authorization server**: `pagespace login` and every scoped access key are minted
-  through a real browser consent flow, not a static bearer token
+  through a real browser consent flow, not handed out as a fixed, unrotatable static token. The
+  resulting key is still a bearer secret once issued, so it gets the same handling and revocation
+  expectations as any other credential — see Connected Apps below
 - **Connected Apps**: See every OAuth grant on your account, including the CLI and any MCP
   client, from Settings, and revoke one instantly. Minting and revoking both require a fresh
   step-up confirmation (passkey, or a confirmation email if you have no passkey)
