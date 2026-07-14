@@ -489,12 +489,17 @@ const SidebarChatTab: React.FC = () => {
   // NOTE: prod runs multiple web instances — live tokens from a stream on another
   // instance won't be in the pending store; the persisted message still shows up
   // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
-  const loadGlobalMessages = useCallback((conversationId: string) => {
+  // Returns the in-flight promise so callers that must sequence against it can await it —
+  // the resume handler below has to know the load has LANDED before it rejoins the stream,
+  // or the response could still be outstanding when the rejoined stream completes and would
+  // overwrite the finished reply with its pre-reply snapshot. Callers that just want to kick
+  // off a refresh (load-on-select, refreshSignal, retry) can keep ignoring the result.
+  const loadGlobalMessages = useCallback((conversationId: string): Promise<void> => {
     globalLoadRequestedIdRef.current = conversationId;
     setIsLoadingGlobalMessages(true);
     setGlobalMessagesLoadError(null);
 
-    fetchWithAuth(`/api/ai/global/${conversationId}/messages`)
+    return fetchWithAuth(`/api/ai/global/${conversationId}/messages`)
       .then(async (res) => {
         if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
         if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
@@ -618,7 +623,8 @@ const SidebarChatTab: React.FC = () => {
     if (selectedAgent) {
       await refreshAgentConversation();
     } else if (globalConversationId && globalIsInitialized) {
-      loadGlobalMessages(globalConversationId);
+      // Awaited, not fire-and-forget: the resume handler sequences the rejoin after this.
+      await loadGlobalMessages(globalConversationId);
     }
   }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, loadGlobalMessages]);
 
