@@ -33,6 +33,7 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
+import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
@@ -107,6 +108,9 @@ import {
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
+import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -188,7 +192,8 @@ export async function POST(request: Request) {
       conversationId: requestConversationId, // Conversation session ID (auto-generated if not provided)
       selectedProvider: requestSelectedProvider,
       selectedModel: requestSelectedModel,
-      pageContext,
+      pageContext: legacyPageContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
+      contextRef,
       mcpTools, // MCP tool schemas from desktop client (optional)
       isReadOnly, // Optional read-only mode toggle
       webSearchEnabled, // Optional web search toggle (defaults to false)
@@ -203,6 +208,7 @@ export async function POST(request: Request) {
       isReadOnly?: boolean, // Optional read-only mode toggle
       webSearchEnabled?: boolean, // Optional web search toggle (defaults to false)
       imageGenEnabled?: boolean, // Optional image-generation toggle (defaults to false)
+      contextRef?: ContextRef,
       pageContext?: {
         pageId: string,
         pageTitle: string,
@@ -230,11 +236,30 @@ export async function POST(request: Request) {
       loggers.ai.warn('AI Chat API: No messages provided');
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
-    
+
     if (!chatId) {
       loggers.ai.warn('AI Chat API: No chatId provided');
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 });
     }
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // undefined here rather than trusting whatever the client claimed. Falls back to
+    // the legacy client-computed pageContext only for old clients that never sent a
+    // contextRef at all. Deferred until after the required-field checks above so an
+    // invalid request (no messages/chatId) fails fast without an extra DB round-trip.
+    const pageContext = contextRef
+      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef, (denied) => {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId,
+            resourceType: denied.routeType === 'drive' ? 'drive' : 'page',
+            resourceId: denied.routeType === 'drive' ? denied.driveId : denied.pageId,
+            details: { reason: 'context_ref_denied', method: 'POST', chatId },
+            riskScore: 0.3,
+          });
+        }))
+      : legacyPageContext;
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
     if (mcpScopeError) {
@@ -1195,35 +1220,35 @@ export async function POST(request: Request) {
     // terminal write never landed (crashed process; the write is fire-and-forget) would
     // otherwise lock the user out of their own chat. See stream-liveness.ts.
     //
-    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
-    // comment used to claim that it did. It is a check-then-act with no serialization: the SELECT
-    // inside takeOverConversationStreams and the INSERT inside createStreamLifecycle (a few
-    // statements below) are not atomic together. Two near-simultaneous sends can BOTH see zero
-    // in-flight rows and BOTH proceed — two generations, two sets of tool calls, two bills.
-    //
-    // Deliberately not closed here: it needs DB-level serialization (an advisory lock spanning
-    // takeover+insert, or a partial unique index on (conversation_id) WHERE status='streaming' —
-    // whose migration would fail outright on any pre-existing duplicate rows, so it needs a
-    // reconciliation step first). That is its own change with its own migration risk, and `master`
-    // has no takeover at all — concurrent sends there ALWAYS double-generate — so this is a strict
-    // improvement, not a regression.
-    //
-    // Do not read what follows as if the race were closed. It is narrow, not absent.
-    await takeOverConversationStreams({
+    // BEST-EFFORT, not an invariant — named honestly. `startGenerationExclusive` closes the
+    // check-then-act race documented here previously (the SELECT inside
+    // takeOverConversationStreams and the INSERT inside createStreamLifecycle are not atomic on
+    // their own) by holding a per-conversation Postgres advisory lock across both. On lock_busy
+    // it retries briefly, then proceeds UNLOCKED rather than blocking the send — availability
+    // wins over serialization, so a rare contention/pool-exhaustion case can still double-generate.
+    // See start-generation-exclusive.ts and the PR 4 board page.
+    const generation = await startGenerationExclusive({
       conversationId: conversationId!,
-      channelId: chatId,
+      run: async () => {
+        await takeOverConversationStreams({
+          conversationId: conversationId!,
+          channelId: chatId!,
+        });
+
+        return createStreamLifecycle({
+          messageId: serverAssistantMessageId!,
+          channelId: chatId!,
+          conversationId: conversationId!,
+          userId: userId!,
+          displayName,
+          browserSessionId,
+          streamId,
+          isShared: isConversationShared,
+        });
+      },
     });
 
-    lifecycle = await createStreamLifecycle({
-      messageId: serverAssistantMessageId,
-      channelId: chatId,
-      conversationId: conversationId!,
-      userId: userId!,
-      displayName,
-      browserSessionId,
-      streamId,
-      isShared: isConversationShared,
-    });
+    lifecycle = generation.result;
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for

@@ -222,13 +222,38 @@ describe('ChatMessagesArea — remoteStreams rendering', () => {
     expect(remoteRendererCalls()).toHaveLength(0);
   });
 
-  it('given remoteStreams but isLoading=true, suppresses synthesized renders (loading skeleton owns the area)', () => {
+  // Superseded by the "Deterministic Chat Rendering & Send" epic (leaf 1.2/1.3,
+  // selectMessagesAreaMode): this used to suppress remote streams whenever
+  // `isLoading` was true, on the assumption a loading conversation has nothing
+  // worth showing yet. But `remoteStreams` is already conversation-scoped by
+  // every caller (see AiChatView's `remoteStreams` selector) before it reaches
+  // this component, so a stream present here genuinely belongs to the
+  // conversation being displayed — hiding it behind a skeleton during a
+  // switch/refresh is exactly the flash the epic exists to eliminate (epic
+  // goal: "streams stay visible through conversation switches, refreshes...";
+  // epic-level verification: "switch conversation and back shows live
+  // stream"). The skeleton is now reserved for truly empty loading (no
+  // messages AND no streams) — see selectMessagesAreaMode.
+  it('given remoteStreams and isLoading=true, still renders the stream (already-scoped content beats the skeleton)', () => {
     render(
       <ChatMessagesArea
         messages={[]}
         isLoading={true}
         isStreaming={false}
         remoteStreams={[makeStream({ messageId: 'remote-x', parts: [textPart('partial')] })]}
+      />
+    );
+
+    expect(remoteRendererCalls()).toHaveLength(1);
+  });
+
+  it('given isLoading=true with NO messages and NO streams, suppresses synthesized renders (skeleton owns the area)', () => {
+    render(
+      <ChatMessagesArea
+        messages={[]}
+        isLoading={true}
+        isStreaming={false}
+        remoteStreams={[]}
       />
     );
 

@@ -50,6 +50,17 @@ describe('buildGlobalChatRequestBody', () => {
     expect(body.locationContext).toBe(locationContext);
   });
 
+  it('given no contextRef, should default to undefined', () => {
+    const body = buildGlobalChatRequestBody(baseParams);
+    expect(body.contextRef).toBeUndefined();
+  });
+
+  it('given a contextRef, should pass it through', () => {
+    const contextRef = { routeType: 'page' as const, pageId: 'p1' };
+    const body = buildGlobalChatRequestBody({ ...baseParams, contextRef });
+    expect(body.contextRef).toBe(contextRef);
+  });
+
   it('given no mcpTools, should default to undefined', () => {
     const body = buildGlobalChatRequestBody(baseParams);
     expect(body.mcpTools).toBeUndefined();

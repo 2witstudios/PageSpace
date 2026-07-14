@@ -68,6 +68,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     },
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  logPerformance: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -102,7 +103,16 @@ vi.mock('@pagespace/db/db', () => {
   }));
   const insert = vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) }));
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
-  return { db: { select, insert, update } };
+  // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
+  // exactly as before. Its own retry/degrade behavior is covered by
+  // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
+  const getAdvisoryLockPool = vi.fn(() => ({
+    connect: vi.fn(async () => ({
+      query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+      release: vi.fn(),
+    })),
+  }));
+  return { db: { select, insert, update }, getAdvisoryLockPool };
 });
 
 vi.mock('@pagespace/db/operators', () => ({
