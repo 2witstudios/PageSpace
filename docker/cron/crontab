@@ -74,13 +74,15 @@
 # Orphaned sprite reconcile - Every 30 minutes
 # Kills Sprites whose Machine page was deleted but whose teardown never
 # confirmed (see machine-orphan-reconcile.ts in @pagespace/lib) — they bill RAM
-# with no owner reachable from the app. Candidates are tracking rows still
-# present under a trashed page. Every effect is idempotent (the sprite kill
-# treats an already-gone sprite as success; row deletes are naturally safe), so
-# unlike the storage reconcile this needs no advisory lock — flock -n just keeps
-# this container's own ticks from doing redundant work. 30 min is well inside
-# the daily hard-purge window, so an orphan is always reclaimed before the purge
-# could reach its page.
+# with no owner reachable from the app. Candidates are Sprites still believed
+# LIVE under a trashed page: a machine_sessions row that still exists, or a
+# machine_branches row whose spriteTornDownAt is still NULL. Every effect is
+# safe under concurrency (the kill treats an already-gone sprite as success;
+# both release writes are compare-and-swaps that no-op if the page was restored
+# or the sandboxId changed), so unlike the storage reconcile this needs no
+# advisory lock — flock -n just keeps this container's own ticks from doing
+# redundant work. 30 min is well inside the daily hard-purge window, so an
+# orphan is always reclaimed before the purge could reach its page.
 */30 * * * * flock -n /run/reconcile-orphaned-sprites.lock cron-curl GET __WEB_URL__/api/cron/reconcile-orphaned-sprites >> /var/log/cron/reconcile-orphaned-sprites.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-orphaned-sprites.log
 
 # Expired row sweep - Every 15 minutes
