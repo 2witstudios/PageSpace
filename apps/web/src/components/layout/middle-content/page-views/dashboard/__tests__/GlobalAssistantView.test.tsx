@@ -14,6 +14,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
+import { canConcludeTurnIsLost } from '@/lib/ai/streams/recoveryAttempt';
+import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
+import { evictStalePartial } from '@/lib/ai/streams/evictStalePartial';
 
 /**
  * Mirrors the global-mode load-on-select effect (~line 1019-1044):
@@ -109,6 +113,106 @@ function createRefAdvancesOnlyOnApplySimulator<X>() {
       return true;
     },
   };
+}
+
+/**
+ * Mirrors the side effects of the `onResume` body, IN ORDER. The decision itself is NOT
+ * mirrored — it calls the real `resolveResumeAction`, so this pins the wiring against the
+ * real policy.
+ *
+ * Two invariants worth stating plainly, because both were bugs:
+ *
+ *  - On the native path we stop the local fetch and hand off to `tryRecover`, and there is NO
+ *    DB-refresh fallback afterwards. tryRecover already refetches when the run finished while
+ *    we were away. A fallback would only fire in the cases where a DB write is UNSAFE: the
+ *    /active-streams probe failed (a stream may still be live, and the DB cannot contain an
+ *    unpersisted reply), or the DB is behind local state (a send whose POST never landed).
+ *
+ *  - The web path never stops or probes: a live fetch survives a tab switch.
+ *
+ */
+type ResumeEffect = 'stop' | 'try-recover' | 'refresh' | 'regenerate';
+
+/**
+ * One tryRecover outcome. `recovered` and the two "answered" flags are separate because "we
+ * recovered nothing" is NOT the same claim as "the server told us there was nothing to recover" —
+ * and regenerating on the latter is destructive twice over (it aborts a still-live run, and it
+ * DELETEs an already-persisted reply, since handleRetry removes the trailing assistant by the very
+ * id the server saved it under).
+ */
+interface Attempt {
+  recovered: boolean;
+  probeAnswered: boolean;
+  dbAnswered: boolean;
+}
+
+const ANSWERED_NOTHING: Attempt = { recovered: false, probeAnswered: true, dbAnswered: true };
+const SILENT: Attempt = { recovered: false, probeAnswered: false, dbAnswered: false };
+const RECOVERED: Attempt = { recovered: true, probeAnswered: true, dbAnswered: true };
+
+function planResume({
+  native,
+  isStreaming,
+  ownTurnInFlight = isStreaming,
+  somethingRestarted = false,
+  stillOnInterruptedConversation = true,
+  attempts = [RECOVERED],
+}: {
+  native: boolean;
+  /** The broad display/effective streaming flag — what resolveResumeAction sees. */
+  isStreaming: boolean;
+  /**
+   * Whether a stream of OUR OWN was running for the conversation ON SCREEN. Distinct from
+   * `isStreaming`, which stays true for a stream still running against a conversation the user has
+   * since navigated away from (the useChat id is stable across a switch). Only this may gate a
+   * regenerate — otherwise we would fire a generation for the turn the user is now LOOKING at
+   * rather than the one that was interrupted.
+   */
+  ownTurnInFlight?: boolean;
+  /**
+   * Whether something has ALREADY restarted the turn while we were recovering — useStreamRecovery
+   * watches the same failure from the other side (it fires on `status === 'error'`) and regenerates
+   * too, and the two share no lock.
+   */
+  somethingRestarted?: boolean;
+  /**
+   * Whether we are still on the conversation the interrupted turn belongs to. The recovery spans
+   * seconds of network and the user can switch conversation inside that window; handleRetry always
+   * acts on the LIVE conversation, so regenerating after a switch would fire a generation for the
+   * turn they moved TO rather than the one that was interrupted.
+   */
+  stillOnInterruptedConversation?: boolean;
+  /** Successive tryRecover outcomes, one per attempt the resume handler makes (up to 3). */
+  attempts?: Attempt[];
+}): ResumeEffect[] {
+  const action = resolveResumeAction({ native, isStreaming });
+  if (action === 'noop') return [];
+  if (action === 'refresh') return ['refresh'];
+  // The stop is local-only. It clears useChat state and — critically — ends the dead response
+  // body, which releases the channel's `consuming` mark. Without that the rejoin's bootstrap
+  // treats the stream as one we are already reading off the POST and skips attaching it.
+  const effects: ResumeEffect[] = ['stop', 'try-recover'];
+  let attempt: Attempt = attempts[0] ?? SILENT;
+  if (attempt.recovered) return effects;
+
+  // Re-ask until BOTH questions come back. Silence from either means the work we would destroy
+  // might still exist.
+  for (let i = 1; !(attempt.probeAnswered && attempt.dbAnswered) && i <= 2; i++) {
+    effects.push('try-recover');
+    attempt = attempts[i] ?? SILENT;
+    if (attempt.recovered) return effects;
+  }
+
+  // The REAL predicate, not a copy of it.
+  if (
+    ownTurnInFlight &&
+    stillOnInterruptedConversation &&
+    !somethingRestarted &&
+    canConcludeTurnIsLost(attempt)
+  ) {
+    effects.push('regenerate');
+  }
+  return effects;
 }
 
 const mockAgent = { id: 'agent-123' };
@@ -280,6 +384,276 @@ describe('GlobalAssistantView load-on-select effects', () => {
     it('given the exact regression scenario — sending in conv-A (or agent conversation A), then switching to idle conv-B while A keeps streaming — the load-on-select guard for conv-B must NOT be blocked', () => {
       const blocked = isOwnStreamForConversation(true, 'conv-A', 'conv-B');
       expect(blocked).toBe(false);
+    });
+  });
+
+  describe('app-state resume recovery (useAppStateRecovery wiring)', () => {
+    describe('resumeEnabled (the gate)', () => {
+      it('given a conversation and no active editing, should enable recovery', () => {
+        expect(canResumeRecovery('conv-A', false)).toBe(true);
+      });
+
+      it('given no conversation, should NOT enable recovery (nothing to rejoin)', () => {
+        expect(canResumeRecovery(null, false)).toBe(false);
+      });
+
+      it('given the user is actively editing, should NOT enable recovery (would clobber their edit)', () => {
+        expect(canResumeRecovery('conv-A', true)).toBe(false);
+      });
+
+    });
+
+    describe('regenerateTurnOnce (the mutex both recovery paths share)', () => {
+      // Mirrors the component's wrapper. useStreamRecovery and the resume handler watch the same
+      // failure from opposite sides and would otherwise regenerate the same turn twice — and
+      // useStreamRecovery calls clearError() BEFORE its own probes, so for its whole decision
+      // window the chat looks idle to us. Two regenerates for one turn is the double destruction
+      // the resume gate exists to prevent: the server takes over the conversation on every
+      // generation start, so the second aborts the first, and handleRetry deletes its assistant
+      // message on the way in.
+      function makeRegenerateTurnOnce(handleRetry: () => Promise<void>) {
+        let inFlight = false;
+        return async () => {
+          if (inFlight) return;
+          inFlight = true;
+          try {
+            await handleRetry();
+          } finally {
+            inFlight = false;
+          }
+        };
+      }
+
+      it('given both paths fire while the first is still running, should regenerate ONCE', async () => {
+        let calls = 0;
+        let release!: () => void;
+        const blocked = new Promise<void>((r) => { release = r; });
+        const regenerateTurnOnce = makeRegenerateTurnOnce(async () => {
+          calls += 1;
+          await blocked; // handleRetry's message DELETEs are a network round-trip
+        });
+
+        const first = regenerateTurnOnce();  // useStreamRecovery's retry
+        const second = regenerateTurnOnce(); // the resume handler, deciding concurrently
+        release();
+        await Promise.all([first, second]);
+
+        expect(calls).toBe(1);
+      });
+
+      it('given the lock was released, should allow a LATER regenerate (it is a mutex, not a one-shot latch)', async () => {
+        let calls = 0;
+        const regenerateTurnOnce = makeRegenerateTurnOnce(async () => { calls += 1; });
+        await regenerateTurnOnce();
+        await regenerateTurnOnce();
+        expect(calls).toBe(2);
+      });
+
+      it('given handleRetry throws, should still release the lock', async () => {
+        let calls = 0;
+        const regenerateTurnOnce = makeRegenerateTurnOnce(async () => {
+          calls += 1;
+          throw new Error('regenerate failed');
+        });
+        await expect(regenerateTurnOnce()).rejects.toThrow('regenerate failed');
+        await expect(regenerateTurnOnce()).rejects.toThrow('regenerate failed');
+        expect(calls).toBe(2); // not wedged shut
+      });
+    });
+
+    describe('planResume (the onResume body)', () => {
+      it('given native mid-stream (the orphaned-stream bug), should stop the local fetch and hand off to tryRecover — and NOT read the DB', () => {
+        // THE KEY INVARIANT. The reply is not persisted until the run completes, so a DB
+        // snapshot taken while the stream is still generating contains no assistant message.
+        // Writing it would wipe the in-progress bubble. tryRecover asks /active-streams first
+        // and rejoins; the DB is never read while a run is live.
+        expect(planResume({ native: true, isStreaming: true })).toEqual(['stop', 'try-recover']);
+      });
+
+      it('given native, should always stop BEFORE recovering', () => {
+        // The stop is local-only, but it is what ends the dead response body and so releases
+        // the channel's `consuming` mark. Without that, the rejoin's bootstrap classifies the
+        // stream as one we are already reading off the POST body and skips attaching it — the
+        // rejoin would silently do nothing.
+        const plan = planResume({ native: true, isStreaming: true });
+        expect(plan.indexOf('stop')).toBeLessThan(plan.indexOf('try-recover'));
+      });
+
+      it('given native and NOT streaming, should still stop and probe — the recovery is deterministic, not flag-gated', () => {
+        // The local fetch is dead after backgrounding regardless of what useChat still
+        // reports, so native always probes. /active-streams is the authoritative answer
+        // on whether a stream is actually live; no client flag gates the rejoin.
+        expect(planResume({ native: true, isStreaming: false })).toEqual(['stop', 'try-recover']);
+      });
+
+      it('given web with a live fetch, should do nothing — the fetch survives a tab switch and must not be clobbered', () => {
+        expect(planResume({ native: false, isStreaming: true })).toEqual([]);
+      });
+
+      it('given web with no live fetch, should refresh only (no stop, no probe)', () => {
+        expect(planResume({ native: false, isStreaming: false })).toEqual(['refresh']);
+      });
+
+      it('given native, a stream for a DIFFERENT conversation, and nothing to recover, should NOT regenerate', () => {
+        // The broad flag stays true for a stream still running against a conversation the user has
+        // navigated away from. Regenerating on it would fire a generation for the turn now on
+        // screen rather than the interrupted one — a spurious reply, and a spurious charge, on an
+        // untouched conversation.
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: false,
+            attempts: [ANSWERED_NOTHING],
+          }),
+        ).toEqual(['stop', 'try-recover']);
+      });
+
+      it('given native and the probe never ANSWERED, should re-probe and then NOT regenerate', () => {
+        // Silence is not an answer. Every generation start calls takeOverConversationStreams, so a
+        // regenerate issued while the run is in fact still live does not race it — it ABORTS it.
+        // We would kill a healthy generation, re-run write tools it had already executed, bill the
+        // discarded tokens, and strand its partial in the DB. Doing nothing is safe: the stop
+        // released the `consuming` mark, so the socket-reconnect bootstrap picks a live run up.
+        const plan = planResume({
+          native: true,
+          isStreaming: true,
+          ownTurnInFlight: true,
+          attempts: [SILENT, SILENT, SILENT],
+        });
+        expect(plan).toEqual(['stop', 'try-recover', 'try-recover', 'try-recover']);
+        expect(plan).not.toContain('regenerate');
+      });
+
+      it('given useStreamRecovery already restarted the turn, should NOT regenerate again', () => {
+        // The two paths watch the same failure and share no lock: useStreamRecovery fires on
+        // `status === 'error'`, and rawStop() cannot have cancelled it (Chat.stop returns early
+        // unless the status is streaming/submitted). Regenerating on top would be exactly the
+        // double destruction the gate exists to prevent — takeOverConversationStreams aborts the
+        // run that just started, and handleRetry deletes its assistant message on the way in.
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            somethingRestarted: true,
+            attempts: [ANSWERED_NOTHING],
+          }),
+        ).toEqual(['stop', 'try-recover']);
+      });
+
+      it('given the user switched conversation during the recovery, should NOT regenerate', () => {
+        // handleRetry acts on the LIVE conversation. The recovery spans seconds of network, so a
+        // switch inside that window would make it fire a generation for the turn the user moved
+        // TO, not the interrupted one.
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            stillOnInterruptedConversation: false,
+            attempts: [ANSWERED_NOTHING],
+          }),
+        ).toEqual(['stop', 'try-recover']);
+      });
+
+      it('given the probe answered but the DB GET did NOT, should NOT regenerate', () => {
+        // The other half of "silence is not an answer", and the more destructive half. If the
+        // messages GET failed we do not know whether the reply is already persisted — and
+        // handleRetry DELETEs the trailing assistant by the very id the server saved it under, so
+        // regenerating here would delete a COMPLETED reply and pay for it a second time.
+        const dbSilent = { recovered: false, probeAnswered: true, dbAnswered: false };
+        const plan = planResume({
+          native: true,
+          isStreaming: true,
+          ownTurnInFlight: true,
+          attempts: [dbSilent, dbSilent, dbSilent],
+        });
+        expect(plan).not.toContain('regenerate');
+      });
+
+      it('given the probe answers only on a LATER attempt, should still regenerate — a cold radio must not strand the turn', () => {
+        // The first request after a foreground is the one most likely to fail. Concluding from that
+        // single silence would leave the user's prompt unanswered forever; re-probing lets the
+        // radio come back and gives us a real answer to act on.
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            attempts: [SILENT, ANSWERED_NOTHING],
+          }),
+        ).toEqual(['stop', 'try-recover', 'try-recover', 'regenerate']);
+      });
+
+      it('given a re-probe finds the live stream, should rejoin and never regenerate', () => {
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            attempts: [SILENT, RECOVERED],
+          }),
+        ).toEqual(['stop', 'try-recover', 'try-recover']);
+      });
+
+      it('given native, a turn in flight, an ANSWERED probe, and NOTHING to recover, should regenerate — never a DB refresh', () => {
+        // The stop above settles useChat at `ready` with no `error`, and useStreamRecovery only
+        // fires on `status === 'error'` — so aborting the fetch destroys the very signal that
+        // used to drive the fallback. Without regenerating here, a turn whose POST died on the
+        // background transition (a radio drop right then is common) finds no stream, no reply and
+        // no error, and the user's prompt sits unanswered forever.
+        const plan = planResume({ native: true, isStreaming: true, attempts: [ANSWERED_NOTHING] });
+        expect(plan).toEqual(['stop', 'try-recover', 'regenerate']);
+        expect(plan).not.toContain('refresh');
+      });
+
+      it('given native, NO turn in flight, and nothing to recover, should NOT regenerate', () => {
+        // An ordinary resume on an idle conversation must never fire a spurious generation.
+        expect(planResume({ native: true, isStreaming: false, attempts: [ANSWERED_NOTHING] })).toEqual([
+          'stop',
+          'try-recover',
+        ]);
+      });
+    });
+
+    describe('evictStalePartial (why the rejoin renders at all)', () => {
+      const liveId = 'srv-msg-1';
+      // A checkpoint the bootstrap would actually seed from (survives isValidPartFrame).
+      const SEEDED_PARTS = [{ type: 'text', text: 'partial reply' }];
+      const messages = [
+        { id: 'u1', role: 'user' },
+        { id: liveId, role: 'assistant' }, // the frozen half-streamed bubble
+      ];
+
+      it('given a rejoined live stream the server has parts for, should drop the local partial carrying that same messageId', () => {
+        // Without this the pending stream the rejoin adds under `liveId` is deduped away,
+        // because `liveId` is still present in `messages`. The bubble would never update.
+        expect(evictStalePartial(messages, liveId, SEEDED_PARTS)).toEqual([{ id: 'u1', role: 'user' }]);
+      });
+
+      it('given the partial is evicted, the rejoined stream is no longer deduped out', () => {
+        const remaining = evictStalePartial(messages, liveId, SEEDED_PARTS);
+        const seen = new Set(remaining.map((m) => m.id));
+        expect(seen.has(liveId)).toBe(false);
+      });
+
+      it('given the server checkpoint is EMPTY, should KEEP the local partial', () => {
+        // The checkpoint lags the live stream, so it is empty for a stream in its first moments. If we evicted here
+        // and the SSE join then failed (multi-instance: the multicast lives in another process),
+        // the bootstrap removes the stream and the user is left with nothing at all — worse than
+        // the frozen partial. Keep what they had; the rejoin can still attach and take over.
+        expect(evictStalePartial(messages, liveId, [])).toEqual(messages);
+      });
+
+      it('given messages with no matching id, should leave them untouched', () => {
+        expect(evictStalePartial(messages, 'some-other-id', SEEDED_PARTS)).toEqual(messages);
+      });
+
+      it('should only ever drop the ONE message the server named — never the user turn', () => {
+        const out = evictStalePartial(messages, liveId, SEEDED_PARTS);
+        expect(out.some((m) => m.role === 'user')).toBe(true);
+      });
     });
   });
 });
