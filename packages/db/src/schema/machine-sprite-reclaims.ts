@@ -46,6 +46,16 @@ export const machineSpriteReclaims = pgTable(
      */
     sandboxId: text('sandboxId').primaryKey(),
 
+    /**
+     * The platform's id for the Sprite INSTANCE that was live when this pointer
+     * was rescued. The kill is NAME-keyed, and a name is reused across
+     * re-creates, so without this we could destroy a REPLACEMENT VM that
+     * legitimately took the name later. The reconciler passes it as the kill's
+     * identity guard: "kill the VM at this name ONLY if it is still this one".
+     * NULL for a legacy row (then the kill falls back to name-only).
+     */
+    spriteInstanceId: text('spriteInstanceId'),
+
     /** When the pointer was rescued — i.e. when its tracking row was destroyed. */
     recordedAt: timestamp('recordedAt', { mode: 'date' }).defaultNow().notNull(),
 

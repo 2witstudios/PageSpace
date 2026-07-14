@@ -325,7 +325,11 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   // earlier teardown (trash → restore → trash) points at a Sprite that is
   // already gone, so re-killing it would just be a wasted API round-trip.
   const branchRows = await db
-    .select({ id: machineBranches.id, sandboxId: machineBranches.sandboxId })
+    .select({
+      id: machineBranches.id,
+      sandboxId: machineBranches.sandboxId,
+      spriteInstanceId: machineBranches.spriteInstanceId,
+    })
     .from(machineBranches)
     .where(and(eq(machineBranches.machineId, machineId), isNull(machineBranches.spriteTornDownAt)));
 
@@ -388,13 +392,27 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   // row's existence — which is exactly the signal the reconciler reclaims on.
   for (const branch of branchRows) {
     try {
-      await host.kill({ machineId: branch.sandboxId });
+      // Identity-guarded: the kill is name-keyed and names are reused, so without
+      // this we could destroy a replacement VM instead of the one we mean.
+      await host.kill({
+        machineId: branch.sandboxId,
+        expectedInstanceId: branch.spriteInstanceId ?? undefined,
+      });
       await db
         .update(machineBranches)
         .set({ spriteTornDownAt: new Date() })
-        // CAS on sandboxId: never stamp a Sprite we did not just kill (a
-        // concurrent re-provision may already have written a live replacement).
-        .where(and(eq(machineBranches.id, branch.id), eq(machineBranches.sandboxId, branch.sandboxId)));
+        // CAS on the INSTANCE, not the name: a concurrent re-provision may already
+        // have written a LIVE replacement into this row, and stamping that as torn
+        // down would hide a billing VM from the reconciler forever.
+        .where(
+          and(
+            eq(machineBranches.id, branch.id),
+            eq(machineBranches.sandboxId, branch.sandboxId),
+            branch.spriteInstanceId === null
+              ? isNull(machineBranches.spriteInstanceId)
+              : eq(machineBranches.spriteInstanceId, branch.spriteInstanceId),
+          ),
+        );
     } catch {
       // Best-effort; leave the row unstamped for the reconciler to retry.
     }
@@ -405,7 +423,10 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   // best-effort so a remove failure AFTER a successful kill doesn't invert the
   // flag into falsely reporting the Sprite as still alive.
   if (session && sessionKey) {
-    await host.kill({ machineId: session.sandboxId });
+    await host.kill({
+      machineId: session.sandboxId,
+      expectedInstanceId: session.spriteInstanceId ?? undefined,
+    });
     try {
       // CAS on sandboxId — NEVER a key-only delete. `sessionKey` is deterministic
       // per (tenant, drive, page) and `save` UPSERTS on it, so between the kill
@@ -413,7 +434,11 @@ async function teardownOneMachine(machineId: string): Promise<void> {
       // REPLACEMENT Sprite into this very row. Deleting by key alone would destroy
       // the pointer to that brand-new, LIVE Sprite — leaving it billing forever
       // with nothing, not even the orphan reconciler, able to find it.
-      await sessionStore.removeIfSandbox({ sessionKey, sandboxId: session.sandboxId });
+      await sessionStore.removeIfSandbox({
+        sessionKey,
+        sandboxId: session.sandboxId,
+        spriteInstanceId: session.spriteInstanceId,
+      });
     } catch {
       // Sprite is dead; a stale machine_sessions row is harmless (the orphan
       // reconciler, or a re-provision under the same key, reclaims it).

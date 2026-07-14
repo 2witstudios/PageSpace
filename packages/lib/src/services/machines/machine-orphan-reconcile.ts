@@ -112,9 +112,9 @@ export type OrphanRow =
    * and nothing to restore — the Sprite is unreachable by definition and must
    * die. See source (A) in the module doc.
    */
-  | { kind: 'reclaim'; sandboxId: string }
-  | { kind: 'session'; pageId: string; sessionKey: string; sandboxId: string }
-  | { kind: 'branch'; pageId: string; id: string; sandboxId: string };
+  | { kind: 'reclaim'; sandboxId: string; spriteInstanceId: string | null }
+  | { kind: 'session'; pageId: string; sessionKey: string; sandboxId: string; spriteInstanceId: string | null }
+  | { kind: 'branch'; pageId: string; id: string; sandboxId: string; spriteInstanceId: string | null };
 
 export interface ReconcileOrphanSpritesDeps {
   /**
@@ -130,12 +130,32 @@ export interface ReconcileOrphanSpritesDeps {
   listOrphanCandidates: () => Promise<{ rows: OrphanRow[]; capped: boolean }>;
   /** Fresh re-read of the owning page's trash state, immediately before the kill — a restore that landed since listing must not have its live Sprite destroyed. */
   isStillTrashed: (pageId: string) => Promise<boolean>;
-  /** Idempotent kill by sandboxId — an already-gone Sprite reports `ok` (see `MachineHost.kill`'s not-found handling). Never throws; failures come back as `{ ok: false }`. */
-  killSprite: (sandboxId: string) => Promise<{ ok: true } | { ok: false; error: unknown }>;
-  /** CAS-delete the session row: only if the page is STILL trashed and `sandboxId` is still the one we killed. Reports whether it actually wrote. */
-  releaseSessionRow: (input: { sessionKey: string; sandboxId: string }) => Promise<boolean>;
-  /** CAS-stamp `spriteTornDownAt` on the branch row (never delete it — it is re-creatable config): only if the page is STILL trashed and `sandboxId` is still the one we killed. Reports whether it actually wrote. */
-  markBranchTornDown: (input: { id: string; sandboxId: string }) => Promise<boolean>;
+  /**
+   * Idempotent kill — an already-gone Sprite reports `ok` (see `MachineHost.kill`).
+   * Never throws; failures come back as `{ ok: false }`.
+   *
+   * Takes the INSTANCE id as well as the name, and it is load-bearing: the kill is
+   * name-keyed, and a name is REUSED across re-creates, so "destroy whatever holds
+   * this name" would destroy a replacement VM that legitimately took the name after
+   * our target was already gone. With the instance id, a mismatch means our target
+   * is dead and the newcomer is left alone.
+   */
+  killSprite: (input: {
+    sandboxId: string;
+    spriteInstanceId: string | null;
+  }) => Promise<{ ok: true } | { ok: false; error: unknown }>;
+  /** CAS-delete the session row: only if the page is STILL trashed and the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
+  releaseSessionRow: (input: {
+    sessionKey: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+  }) => Promise<boolean>;
+  /** CAS-stamp `spriteTornDownAt` on the branch row (never delete it — it is re-creatable config): only if the page is STILL trashed and the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
+  markBranchTornDown: (input: {
+    id: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+  }) => Promise<boolean>;
   /** Drop an outbox row — ONLY after its Sprite is confirmed gone. */
   releaseReclaim: (sandboxId: string) => Promise<void>;
   /** Record a failed kill against its outbox row (attempts/lastError) so a Sprite that cannot be killed becomes visible rather than silently retried forever. */
@@ -180,7 +200,10 @@ export async function reconcileOrphanSprites(
         continue;
       }
 
-      const killed = await deps.killSprite(row.sandboxId);
+      const killed = await deps.killSprite({
+        sandboxId: row.sandboxId,
+        spriteInstanceId: row.spriteInstanceId,
+      });
       if (!killed.ok) {
         // Leave the row EXACTLY as it is: it is the only pointer to this
         // sandboxId. The next run retries it.
@@ -213,8 +236,16 @@ export async function reconcileOrphanSprites(
 
       const released =
         row.kind === 'session'
-          ? await deps.releaseSessionRow({ sessionKey: row.sessionKey, sandboxId: row.sandboxId })
-          : await deps.markBranchTornDown({ id: row.id, sandboxId: row.sandboxId });
+          ? await deps.releaseSessionRow({
+              sessionKey: row.sessionKey,
+              sandboxId: row.sandboxId,
+              spriteInstanceId: row.spriteInstanceId,
+            })
+          : await deps.markBranchTornDown({
+              id: row.id,
+              sandboxId: row.sandboxId,
+              spriteInstanceId: row.spriteInstanceId,
+            });
 
       if (!released) {
         skipped += 1;

@@ -41,7 +41,16 @@ export const machineBranches = pgTable('machine_branches', {
   branchName: text('branchName').notNull(),
 
   sessionKey: text('sessionKey').notNull().unique(),
+  /** The Sprite's NAME (reused across re-creates) — see `spriteInstanceId` for the actual identity. */
   sandboxId: text('sandboxId').notNull(),
+
+  /**
+   * The platform's id for the Sprite INSTANCE this row points at — the VM's
+   * actual identity. NULL for legacy rows. Comparing `sandboxId` cannot
+   * distinguish a replacement Sprite from the one we meant to act on (same name),
+   * so every teardown CAS keys on this.
+   */
+  spriteInstanceId: text('spriteInstanceId'),
 
   /**
    * When a teardown of this branch's Sprite was REQUESTED — i.e. `deleteMachine`

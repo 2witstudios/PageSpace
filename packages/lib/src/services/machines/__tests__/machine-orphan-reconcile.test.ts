@@ -21,7 +21,7 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   const deps: ReconcileOrphanSpritesDeps = {
     listOrphanCandidates: async () => ({ rows: [], capped: false }),
     isStillTrashed: async () => true,
-    killSprite: async (sandboxId) => {
+    killSprite: async ({ sandboxId }) => {
       killed.push(sandboxId);
       return { ok: true };
     },
@@ -49,15 +49,21 @@ const sessionRow: OrphanRow = {
   pageId: 'machine-1',
   sessionKey: 'sk-1',
   sandboxId: 'pgs-sbx-1',
+  spriteInstanceId: 'inst-1',
 };
 const branchRow: OrphanRow = {
   kind: 'branch',
   pageId: 'machine-2',
   id: 'branch-1',
   sandboxId: 'pgs-sbx-2',
+  spriteInstanceId: 'inst-2',
 };
 
-const reclaimRow: OrphanRow = { kind: 'reclaim', sandboxId: 'pgs-sbx-orphaned' };
+const reclaimRow: OrphanRow = {
+  kind: 'reclaim',
+  sandboxId: 'pgs-sbx-orphaned',
+  spriteInstanceId: 'inst-orphaned',
+};
 
 describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose page is already gone)', () => {
   it('kills an outbox Sprite and drops its row, WITHOUT any trash check — there is no page left to restore', async () => {
@@ -150,7 +156,7 @@ describe('reconcileOrphanSprites', () => {
 
     expect(result).toEqual({ processed: 2, capped: false, torndown: 1, skipped: 1, failed: 0 });
     expect(killSprite).toHaveBeenCalledTimes(1);
-    expect(killSprite).toHaveBeenCalledWith('pgs-sbx-2'); // only the still-trashed one
+    expect(killSprite).toHaveBeenCalledWith({ sandboxId: 'pgs-sbx-2', spriteInstanceId: 'inst-2' }); // only the still-trashed one
     expect(releasedSessions).toEqual([]);
     expect(stampedBranches).toEqual(['branch-1']);
   });
@@ -173,7 +179,7 @@ describe('reconcileOrphanSprites', () => {
   it('LEAVES the row untouched when the kill fails — it is the only pointer to the Sprite', async () => {
     const { deps, releasedSessions, stampedBranches } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [sessionRow, branchRow], capped: false }),
-      killSprite: async (sandboxId) =>
+      killSprite: async ({ sandboxId }) =>
         sandboxId === 'pgs-sbx-1' ? { ok: false, error: new Error('sprite unreachable') } : { ok: true },
     });
 
@@ -186,15 +192,15 @@ describe('reconcileOrphanSprites', () => {
   });
 
   it('isolates a failing row — one bad Sprite never aborts the rest of the batch', async () => {
-    const killSprite = vi.fn(async (sandboxId: string) => {
+    const killSprite = vi.fn(async ({ sandboxId }: { sandboxId: string; spriteInstanceId: string | null }) => {
       if (sandboxId === 'boom') throw new Error('host exploded');
       return { ok: true } as const;
     });
     const { deps, releasedSessions } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [
-        { kind: 'session', pageId: 'p-a', sessionKey: 'sk-a', sandboxId: 'ok-a' },
-        { kind: 'session', pageId: 'p-boom', sessionKey: 'sk-boom', sandboxId: 'boom' },
-        { kind: 'session', pageId: 'p-b', sessionKey: 'sk-b', sandboxId: 'ok-b' },
+        { kind: 'session', pageId: 'p-a', sessionKey: 'sk-a', sandboxId: 'ok-a', spriteInstanceId: null },
+        { kind: 'session', pageId: 'p-boom', sessionKey: 'sk-boom', sandboxId: 'boom', spriteInstanceId: null },
+        { kind: 'session', pageId: 'p-b', sessionKey: 'sk-b', sandboxId: 'ok-b', spriteInstanceId: null },
       ], capped: false }),
       killSprite,
     });
@@ -229,13 +235,13 @@ describe('reconcileOrphanSprites', () => {
     const { deps, releasedSessions, stampedBranches } = makeDeps({
       listOrphanCandidates: async () => ({
         rows: [
-          { kind: 'branch', pageId: 'm-1', id: 'b-bad', sandboxId: 'sbx-bad' },
-          { kind: 'branch', pageId: 'm-1', id: 'b-good', sandboxId: 'sbx-good' },
-          { kind: 'session', pageId: 'm-1', sessionKey: 'sk-1', sandboxId: 'sbx-own' },
+          { kind: 'branch', pageId: 'm-1', id: 'b-bad', sandboxId: 'sbx-bad', spriteInstanceId: null },
+          { kind: 'branch', pageId: 'm-1', id: 'b-good', sandboxId: 'sbx-good', spriteInstanceId: null },
+          { kind: 'session', pageId: 'm-1', sessionKey: 'sk-1', sandboxId: 'sbx-own', spriteInstanceId: null },
         ],
         capped: false,
       }),
-      killSprite: async (sandboxId) =>
+      killSprite: async ({ sandboxId }) =>
         sandboxId === 'sbx-bad' ? { ok: false, error: new Error('unreachable') } : { ok: true },
     });
 
@@ -256,6 +262,25 @@ describe('reconcileOrphanSprites', () => {
     const result = await reconcileOrphanSprites(deps);
 
     expect(result).toMatchObject({ capped: true, torndown: 1 });
+  });
+
+  it('passes the Sprite INSTANCE to the kill, not just the reused name', async () => {
+    // `sandboxId` is our derived session key, and it is REUSED across re-creates —
+    // so "kill whatever holds this name" would destroy a replacement VM that
+    // legitimately took the name after our target was already gone. The instance id
+    // is what lets the host tell the two apart.
+    const killSprite = vi.fn(async () => ({ ok: true }) as const);
+    const { deps } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
+      killSprite,
+    });
+
+    await reconcileOrphanSprites(deps);
+
+    expect(killSprite).toHaveBeenCalledWith({
+      sandboxId: 'pgs-sbx-orphaned',
+      spriteInstanceId: 'inst-orphaned',
+    });
   });
 
   it('is a clean no-op when nothing is orphaned — no kills, no writes', async () => {

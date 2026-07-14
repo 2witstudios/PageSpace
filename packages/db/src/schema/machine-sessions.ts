@@ -37,8 +37,23 @@ export const machineSessions = pgTable('machine_sessions', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
 
-  // Fly Sprite id — used to reconnect and to tear down.
+  // Fly Sprite NAME — our derived session key. NOT an identity: it is reused
+  // across re-creates, so a Sprite destroyed and re-provisioned under this same
+  // key answers to the same value while being a physically different VM.
   sandboxId: text('sandboxId').notNull(),
+
+  /**
+   * The platform's id for the Sprite INSTANCE this row points at — the VM's
+   * actual identity (see `SpriteInstanceLike.id`). NULL for rows written before
+   * this column existed, or when the platform reported no id.
+   *
+   * Load-bearing for teardown safety: a kill and a row release must both be able
+   * to tell "the VM I meant" from "a replacement that took its name". Comparing
+   * `sandboxId` cannot — it is the same string for both — so a re-provision
+   * racing a teardown would let us drop the pointer to a LIVE VM (orphaning it) or
+   * destroy it outright.
+   */
+  spriteInstanceId: text('spriteInstanceId'),
 
   // Proof that a specific egress policy was applied to a specific Sprite INSTANCE
   // — a token over (sprite id, policy hash); see

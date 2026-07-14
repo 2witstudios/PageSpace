@@ -94,6 +94,7 @@ async function seed() {
     pageId: TEARDOWN_PENDING,
     userId: USER_ID,
     sandboxId: 'sbx-pending-session',
+    spriteInstanceId: 'inst-pending-session',
     teardownRequestedAt: new Date(),
   });
   await db.insert(machineBranches).values({
@@ -103,6 +104,7 @@ async function seed() {
     branchName: 'feature',
     sessionKey: `${TEARDOWN_PENDING}-branch-key`,
     sandboxId: 'sbx-pending-branch',
+    spriteInstanceId: 'inst-pending-branch',
     teardownRequestedAt: new Date(),
   });
 
@@ -247,7 +249,7 @@ describe('reconcileOrphanSprites composed over the REAL deps', () => {
     const killed: string[] = [];
     const testDeps = {
       ...deps,
-      killSprite: async (sandboxId: string) => {
+      killSprite: async ({ sandboxId }: { sandboxId: string; spriteInstanceId: string | null }) => {
         killed.push(sandboxId);
         return { ok: true } as const;
       },
@@ -297,6 +299,7 @@ describe('the CAS release writes', () => {
     const released = await deps.releaseSessionRow({
       sessionKey: `${TEARDOWN_PENDING}-key`,
       sandboxId: 'sbx-pending-session',
+      spriteInstanceId: 'inst-pending-session',
     });
 
     expect(released).toBe(false);
@@ -317,11 +320,40 @@ describe('the CAS release writes', () => {
       .set({ sandboxId: 'sbx-freshly-reprovisioned' })
       .where(eq(machineBranches.id, branch.id));
 
-    const marked = await deps.markBranchTornDown({ id: branch.id, sandboxId: 'sbx-pending-branch' });
+    const marked = await deps.markBranchTornDown({
+      id: branch.id,
+      sandboxId: 'sbx-pending-branch',
+      spriteInstanceId: 'inst-pending-branch',
+    });
 
     expect(marked).toBe(false);
     const [after] = await db.select().from(machineBranches).where(eq(machineBranches.id, branch.id));
     expect(after.spriteTornDownAt).toBeNull();
+  });
+
+  it('REFUSE to fire when a REPLACEMENT Sprite took the same name (the ABA that `sandboxId` cannot see)', async () => {
+    if (!dbAvailable) return;
+    // The orphan this whole design exists to prevent, and the one a name-keyed CAS
+    // would sail straight through: `sandboxId` is our derived session key, REUSED
+    // across re-creates. A Sprite re-provisioned after our kill answers to the SAME
+    // sandboxId while being a physically different, LIVE VM. Only the instance id
+    // can tell them apart — and if the release wrote anyway, we would delete the
+    // last pointer to that live VM and it would bill forever, unreachable.
+    await db
+      .update(machineSessions)
+      .set({ spriteInstanceId: 'inst-REPLACEMENT' }) // same sandboxId, new VM
+      .where(eq(machineSessions.pageId, TEARDOWN_PENDING));
+
+    const released = await deps.releaseSessionRow({
+      sessionKey: `${TEARDOWN_PENDING}-key`,
+      sandboxId: 'sbx-pending-session', // unchanged — the name is not an identity
+      spriteInstanceId: 'inst-pending-session', // the VM we actually killed
+    });
+
+    expect(released).toBe(false);
+    const rows = await db.select().from(machineSessions).where(eq(machineSessions.pageId, TEARDOWN_PENDING));
+    expect(rows).toHaveLength(1); // the live replacement keeps its pointer
+    expect(rows[0].spriteInstanceId).toBe('inst-REPLACEMENT');
   });
 
   it('STAMPS the branch row rather than deleting it — the row is re-creatable config', async () => {
@@ -331,7 +363,11 @@ describe('the CAS release writes', () => {
       .from(machineBranches)
       .where(eq(machineBranches.machineId, TEARDOWN_PENDING));
 
-    const marked = await deps.markBranchTornDown({ id: branch.id, sandboxId: 'sbx-pending-branch' });
+    const marked = await deps.markBranchTornDown({
+      id: branch.id,
+      sandboxId: 'sbx-pending-branch',
+      spriteInstanceId: 'inst-pending-branch',
+    });
 
     expect(marked).toBe(true);
     const [after] = await db.select().from(machineBranches).where(eq(machineBranches.id, branch.id));

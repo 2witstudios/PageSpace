@@ -24,6 +24,7 @@ function makeStore(seed?: MachineSessionRecord) {
         pageId: input.pageId,
         userId: input.userId,
         sandboxId: input.sandboxId,
+        spriteInstanceId: input.spriteInstanceId,
         lastActiveAt: input.now,
         egressPolicyToken: input.egressPolicyToken,
       });

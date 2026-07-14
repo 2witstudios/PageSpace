@@ -42,6 +42,23 @@ import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } 
 export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
 
 /**
+ * Destroy a Sprite we provisioned but failed to RECORD, best-effort.
+ *
+ * An unrecorded Sprite is the worst possible state: alive, billing, and with no
+ * row anywhere — so no delete ever fires the reclaim trigger, and nothing (not
+ * even the orphan reconciler) can find it. Killing it is the only way to avoid
+ * an immortal orphan; if the kill itself fails we can do no better, so we log and
+ * move on rather than masking the original error.
+ */
+async function safeKillProvisionedSprite(deps: MachineBranchesDeps, handle: MachineHandle): Promise<void> {
+  try {
+    await deps.host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
+  } catch {
+    // Nothing more we can do — the original failure is what the caller reports.
+  }
+}
+
+/**
  * Where Claude Code writes its OAuth credential/config on a Sprite's own
  * persistent filesystem. A branch-terminal is a SEPARATE Sprite from its
  * owning Machine (see module doc), so it never inherits whatever the user
@@ -577,6 +594,8 @@ export async function spawnBranch({
       id: existing.id,
       previousSandboxId: existing.sandboxId,
       sandboxId: handle.machineId,
+      // WHICH VM this now is. `sandboxId` is the reused name and cannot say.
+      spriteInstanceId: handle.spriteInstanceId ?? null,
       now: deps.now(),
     });
     if (!updated) {
@@ -601,6 +620,8 @@ export async function spawnBranch({
       branchName,
       sessionKey,
       sandboxId: handle.machineId,
+      // WHICH VM this is — `sandboxId` is only the (reused) name.
+      spriteInstanceId: handle.spriteInstanceId ?? null,
       now: deps.now(),
     });
   } catch (error) {
@@ -611,7 +632,15 @@ export async function spawnBranch({
       if (reconciled.row) {
         return { ok: true, sandboxId: reconciled.row.sandboxId, branchName: reconciled.row.branchName, resumed: true };
       }
+      return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
     }
+    // ANY other failure to record the row (connection blip, aborted tx, statement
+    // timeout) would otherwise leave the Sprite we just provisioned ALIVE with no
+    // row anywhere — so nothing is ever deleted, no trigger fires, no reclaim is
+    // enqueued, and the VM bills forever, unreachable. Kill it: the row is the
+    // only thing that could ever have found it again. (`provisionFreshMachine`
+    // has always done this on its own save failure; this path did not.)
+    await safeKillProvisionedSprite(deps, handle);
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 
@@ -711,7 +740,10 @@ export async function killBranch({
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
-    await host.kill({ machineId: existing.sandboxId });
+    // Identity-guarded: the kill is name-keyed, and a name is reused across
+    // re-creates, so without this a Sprite re-provisioned under this branch's key
+    // would be destroyed in place of the one we meant.
+    await host.kill({ machineId: existing.sandboxId, expectedInstanceId: existing.spriteInstanceId ?? undefined });
   } catch {
     // Sprite may still be running — keep the tracking row so a retry can still
     // find and kill it later. There is no reaper: an untracked-but-live Sprite
@@ -726,6 +758,10 @@ export async function killBranch({
   // to that brand-new, LIVE Sprite — leaving it billing forever, invisible even
   // to the orphan reconciler. Losing the CAS is the correct outcome: the winner's
   // Sprite is live and tracked, and the one we killed was already redundant.
-  await store.removeIfSandbox({ id: existing.id, sandboxId: existing.sandboxId });
+  await store.removeIfSandbox({
+    id: existing.id,
+    sandboxId: existing.sandboxId,
+    spriteInstanceId: existing.spriteInstanceId,
+  });
   return { ok: true };
 }

@@ -28,6 +28,7 @@ function makeStore(): MachineSessionStore {
         pageId: input.pageId,
         userId: input.userId,
         sandboxId: input.sandboxId,
+        spriteInstanceId: input.spriteInstanceId,
         lastActiveAt: input.now,
         egressPolicyToken: input.egressPolicyToken,
       });

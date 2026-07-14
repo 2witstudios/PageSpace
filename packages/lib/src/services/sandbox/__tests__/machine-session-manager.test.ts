@@ -37,6 +37,7 @@ function makeStore(seed?: MachineSessionRecord) {
         pageId: input.pageId,
         userId: input.userId,
         sandboxId: input.sandboxId,
+        spriteInstanceId: input.spriteInstanceId,
         lastActiveAt: input.now,
         egressPolicyToken: input.egressPolicyToken,
       });
@@ -102,6 +103,7 @@ function seedRecord(over: Partial<MachineSessionRecord> = {}): MachineSessionRec
     pageId: 'p1',
     userId: 'u1',
     sandboxId: 'sbx-existing',
+    spriteInstanceId: 'inst-existing',
     lastActiveAt: new Date('2026-06-01T11:59:00.000Z'),
     egressPolicyToken: null,
     ...over,

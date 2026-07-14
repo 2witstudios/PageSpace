@@ -52,6 +52,8 @@ function makeStore(seed: MachineBranchRecord[] = []) {
         branchName: input.branchName,
         sessionKey: input.sessionKey,
         sandboxId: input.sandboxId,
+        spriteInstanceId: input.spriteInstanceId,
+        teardownRequestedAt: null,
         spriteTornDownAt: null,
         createdAt: input.now,
         updatedAt: input.now,
@@ -59,14 +61,22 @@ function makeStore(seed: MachineBranchRecord[] = []) {
       rows.set(k, row);
       return row;
     },
-    updateSandboxId: async ({ id, previousSandboxId, sandboxId, now }) => {
+    updateSandboxId: async ({ id, previousSandboxId, sandboxId, spriteInstanceId, now }) => {
       for (const [k, row] of rows) {
         if (row.id === id) {
           if (row.sandboxId !== previousSandboxId) return false;
-          // Mirrors the real store: recording a live replacement Sprite clears
-          // the torn-down stamp, or the new Sprite would be invisible to the
-          // orphan reconciler and the hard-purge guard.
-          rows.set(k, { ...row, sandboxId, spriteTornDownAt: null, updatedAt: now });
+          // Mirrors the real store: recording a LIVE replacement Sprite clears BOTH
+          // teardown marks. A surviving `teardownRequestedAt` would let the
+          // reconciler destroy this live VM (and turn a later reversible trash into
+          // an irreversible kill); a surviving `spriteTornDownAt` would hide it.
+          rows.set(k, {
+            ...row,
+            sandboxId,
+            spriteInstanceId,
+            spriteTornDownAt: null,
+            teardownRequestedAt: null,
+            updatedAt: now,
+          });
           return true;
         }
       }
@@ -399,6 +409,7 @@ describe('spawnBranch', () => {
             secret: SECRET,
           }),
           sandboxId: state.machineId,
+          spriteInstanceId: null,
           now: NOW,
         });
         return { exitCode: 128, stdout: '', stderr: 'fatal: destination path already exists' };
@@ -436,6 +447,7 @@ describe('spawnBranch', () => {
             secret: SECRET,
           }),
           sandboxId: 'sbx-other-winner',
+          spriteInstanceId: 'inst-other-winner',
           now: NOW,
         });
       }
@@ -475,6 +487,8 @@ describe('spawnBranch', () => {
         // Not registered with the fake host → attach returns null, i.e. the
         // Sprite the reconciler killed is genuinely gone.
         sandboxId: 'sbx-reclaimed',
+        spriteInstanceId: 'inst-reclaimed',
+        teardownRequestedAt: NOW,
         spriteTornDownAt: NOW,
         createdAt: NOW,
         updatedAt: NOW,
@@ -501,6 +515,7 @@ describe('spawnBranch', () => {
         // Simulate a truly concurrent racer winning the re-provision update
         // for the SAME vanished branch just before we do.
         void store.updateSandboxId({
+          spriteInstanceId: 'inst-race',
           id: raceRowId,
           previousSandboxId: racePreviousSandboxId,
           sandboxId: 'sbx-concurrent-winner',

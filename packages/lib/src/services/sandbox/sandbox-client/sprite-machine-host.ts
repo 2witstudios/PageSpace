@@ -143,6 +143,7 @@ function wrapSpriteHandle({
 }): MachineHandle {
   return {
     machineId: exec.sandboxId,
+    spriteInstanceId: exec.spriteInstanceId,
     egressPolicyToken: exec.egressPolicyToken,
     exec: (args) => exec.runCommand(args),
     writeFiles: (files) => exec.writeFiles(files),
@@ -286,8 +287,21 @@ export function createSpriteMachineHost({
      * Sprite's fate unknown (auth, rate limit, 5xx, socket, DNS) throws, which
      * keeps the row — and the retry — intact.
      */
-    async kill({ machineId }) {
+    async kill({ machineId, expectedInstanceId }) {
       try {
+        // Identity guard. The kill is NAME-keyed (`deleteSprite(name)`) and a name
+        // is REUSED across re-creates, so without this we would happily destroy a
+        // REPLACEMENT Sprite — a live VM someone re-provisioned under the same
+        // session key after the one we meant to kill was already gone. Read who
+        // actually lives at this name first; if it is not our target, our target
+        // is already dead and there is nothing to do. (A replace between this read
+        // and the delete below is a residual TOCTOU, but the DB-side CAS is keyed
+        // on the same instance id, so a replacement still cannot have its pointer
+        // dropped.)
+        if (expectedInstanceId !== undefined) {
+          const current = await sdk.getSprite(machineId);
+          if (current.id !== undefined && current.id !== expectedInstanceId) return;
+        }
         await client.stop({ sandboxId: machineId });
       } catch (error) {
         if (isSpriteGoneStatus(error)) return;

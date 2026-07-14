@@ -94,6 +94,13 @@ export interface MachineStream {
 
 /** A provisioned/attached machine session — the full surface a caller drives. */
 export interface MachineHandle {
+  /**
+   * The platform's id for this Sprite INSTANCE — the VM's actual identity, unique
+   * per generation. `machineId` below is only the reused NAME, so anything that
+   * must act on THIS VM (a kill, a CAS against a tracking row) keys on this.
+   * Undefined when the driver could not report one.
+   */
+  spriteInstanceId?: string;
   readonly machineId: string;
   /**
    * Proof of the egress lockdown confirmed for THIS VM, for the caller to persist
@@ -154,5 +161,16 @@ export interface MachineHost {
     appliedEgressToken?: string | null;
   }): Promise<MachineHandle>;
   attach(args: { machineId: string }): Promise<MachineHandle | null>;
-  kill(args: { machineId: string }): Promise<void>;
+  /**
+   * DESTROY the Sprite currently named `machineId`.
+   *
+   * `expectedInstanceId` is the identity guard, and it matters because the kill
+   * is NAME-keyed (`deleteSprite(name)`) while a name is REUSED across
+   * re-creates: without it, killing a Sprite that was destroyed and
+   * re-provisioned under the same session key would destroy the REPLACEMENT —
+   * someone's live VM. When supplied, the host verifies the VM currently holding
+   * the name is the one we meant to kill, and treats "a different VM lives here
+   * now" as success (our target is already gone) rather than destroying it.
+   */
+  kill(args: { machineId: string; expectedInstanceId?: string }): Promise<void>;
 }

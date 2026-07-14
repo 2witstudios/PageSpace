@@ -25,7 +25,7 @@
  * it permanently.
  */
 
-import { and, asc, eq, exists, isNotNull, isNull, sql } from '@pagespace/db/operators';
+import { and, asc, eq, exists, gte, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
@@ -72,7 +72,10 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
     // no such check: their page is already gone.
     const [reclaimRows, sessionRows, branchRows] = await Promise.all([
       db
-        .select({ sandboxId: machineSpriteReclaims.sandboxId })
+        .select({
+          sandboxId: machineSpriteReclaims.sandboxId,
+          spriteInstanceId: machineSpriteReclaims.spriteInstanceId,
+        })
         .from(machineSpriteReclaims)
         .orderBy(asc(machineSpriteReclaims.recordedAt))
         .limit(MAX_CANDIDATES_PER_TABLE),
@@ -81,10 +84,23 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
           pageId: machineSessions.pageId,
           sessionKey: machineSessions.sessionKey,
           sandboxId: machineSessions.sandboxId,
+          spriteInstanceId: machineSessions.spriteInstanceId,
         })
         .from(machineSessions)
         .innerJoin(pages, eq(machineSessions.pageId, pages.id))
-        .where(and(eq(pages.isTrashed, true), isNotNull(machineSessions.teardownRequestedAt)))
+        .where(
+          and(
+            eq(pages.isTrashed, true),
+            isNotNull(machineSessions.teardownRequestedAt),
+            // The intent must belong to THIS trash. A stale request left over from
+            // an earlier delete (page restored, Sprite re-provisioned) must not
+            // license destroying the VM when the Machine is later merely dragged to
+            // the trash — that trash is reversible and asked for no teardown. The
+            // live-Sprite write paths clear the stamp, and this is the belt to that
+            // brace.
+            gte(machineSessions.teardownRequestedAt, pages.trashedAt),
+          ),
+        )
         // Oldest-trashed first: the longest-billing orphans go first, and a
         // capped run can never starve a row indefinitely.
         .orderBy(asc(pages.trashedAt))
@@ -94,6 +110,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
           pageId: machineBranches.machineId,
           id: machineBranches.id,
           sandboxId: machineBranches.sandboxId,
+          spriteInstanceId: machineBranches.spriteInstanceId,
         })
         .from(machineBranches)
         .innerJoin(pages, eq(machineBranches.machineId, pages.id))
@@ -104,6 +121,9 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
             eq(pages.isTrashed, true),
             isNull(machineBranches.spriteTornDownAt),
             isNotNull(machineBranches.teardownRequestedAt),
+            // See the session query: a stale intent must never license a kill on a
+            // LATER, reversible trash.
+            gte(machineBranches.teardownRequestedAt, pages.trashedAt),
           ),
         )
         .orderBy(asc(pages.trashedAt))
@@ -138,13 +158,14 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
     return row?.isTrashed ?? true;
   },
 
-  async killSprite(sandboxId) {
+  async killSprite({ sandboxId, spriteInstanceId }) {
     try {
       const host = await getMachineHostForBranches();
-      // Idempotent: an already-destroyed Sprite is a successful kill (see
-      // `createSpriteMachineHost`'s `kill`), so a Sprite that vanished on its
-      // own still releases its row instead of being retried forever.
-      await host.kill({ machineId: sandboxId });
+      // Idempotent AND identity-guarded: an already-destroyed Sprite is a
+      // successful kill, and a DIFFERENT VM now holding this name means our target
+      // is already gone — so we leave the newcomer alone rather than destroying
+      // someone's live machine (`sandboxId` is a reused name, not an identity).
+      await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
       return { ok: true };
     } catch (error) {
       // Reported, never thrown: the reconciler decides what to do with a failed
@@ -153,7 +174,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
     }
   },
 
-  async releaseSessionRow({ sessionKey, sandboxId }) {
+  async releaseSessionRow({ sessionKey, sandboxId, spriteInstanceId }) {
     // One transaction: the AFTER DELETE trigger rescues this row's sandboxId into
     // the outbox as it goes (it cannot know why the row is going). Here the Sprite
     // is already CONFIRMED dead, so the rescued pointer would only cost a
@@ -166,6 +187,12 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
           and(
             eq(machineSessions.sessionKey, sessionKey),
             eq(machineSessions.sandboxId, sandboxId),
+            // The INSTANCE, not just the name: a replacement Sprite provisioned
+            // under this same session key would otherwise pass the check, and we
+            // would delete the only pointer to a LIVE VM.
+            spriteInstanceId === null
+              ? isNull(machineSessions.spriteInstanceId)
+              : eq(machineSessions.spriteInstanceId, spriteInstanceId),
             owningPageStillTrashed(machineSessions.pageId),
           ),
         )
@@ -195,7 +222,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
       .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
   },
 
-  async markBranchTornDown({ id, sandboxId }) {
+  async markBranchTornDown({ id, sandboxId, spriteInstanceId }) {
     // Stamped, never deleted: the row is the user's branch-terminal config, and
     // its branch-scoped machine_agent_terminals FK-cascade off it.
     const marked = await db
@@ -205,6 +232,11 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         and(
           eq(machineBranches.id, id),
           eq(machineBranches.sandboxId, sandboxId),
+          // The INSTANCE — stamping a row that a re-provision has already pointed
+          // at a LIVE Sprite would hide that VM from this cron forever.
+          spriteInstanceId === null
+            ? isNull(machineBranches.spriteInstanceId)
+            : eq(machineBranches.spriteInstanceId, spriteInstanceId),
           owningPageStillTrashed(machineBranches.machineId),
         ),
       )
