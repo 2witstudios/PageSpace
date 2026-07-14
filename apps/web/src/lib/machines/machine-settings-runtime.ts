@@ -38,11 +38,18 @@
  * own-Sprite kill failures govern `spriteTornDown`; branch kills and the
  * tracking-row removal are best-effort so they never invert that flag.
  *
- * The Machine's dependent metadata ROWS (`machine_projects` / `machine_branches` /
+ * The Machine's CONFIGURED-METADATA rows (`machine_projects` /
  * `machine_agent_terminals`) are intentionally left in place — they FK-cascade on
  * the page's eventual HARD purge, so a reversible soft-delete never destroys the
  * user's configured-repo metadata (killing the Sprites frees the compute; the rows
  * stay for a restore).
+ *
+ * `machine_branches` is NOT metadata in that sense — it is a live-Sprite pointer
+ * (a branch-terminal's own Sprite id), and `killBranch` already deletes the row
+ * on a confirmed kill. So the teardown below does the same: kill, then drop the
+ * row. A row that SURVIVES the teardown therefore means its Sprite was never
+ * confirmed dead — the pending-teardown signal the orphan reconciler
+ * (`machine-orphan-reconcile.ts`) reclaims on, uniform with `machine_sessions`.
  *
  * NOT handled here (deliberate scope): PATCH (`updateSettings`) still writes the
  * settings fields via raw `db.update` — a Machine rename/toggle does not bump the
@@ -301,7 +308,7 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   if (!page) return;
 
   const branchRows = await db
-    .select({ sandboxId: machineBranches.sandboxId })
+    .select({ id: machineBranches.id, sandboxId: machineBranches.sandboxId })
     .from(machineBranches)
     .where(eq(machineBranches.machineId, machineId));
 
@@ -324,14 +331,23 @@ async function teardownOneMachine(machineId: string): Promise<void> {
 
   const host = await getMachineHostForBranches();
 
-  // Branch Sprites: best-effort. A failure leaves a microVM the hard-purge
-  // cascade won't reclaim (rows are kept), but it must not fail the delete or
-  // invert spriteTornDown — the branch row stays so a retry can find it.
+  // Branch Sprites: best-effort. A failure must not fail the delete or invert
+  // spriteTornDown — the branch row STAYS so the orphan reconciler
+  // (@pagespace/lib/services/machines/machine-orphan-reconcile, wired in
+  // ./machine-orphan-reconcile-runtime) can find the sandboxId and retry.
+  //
+  // The row is removed only after a CONFIRMED kill, mirroring the
+  // machine_sessions removal below. That is what makes "tracking row still
+  // exists + owning page trashed" a uniform pending-teardown signal across both
+  // tables — the reconciler's entire candidate query rests on it, and leaving a
+  // row behind after a successful kill would make a healthy Machine look
+  // perpetually orphaned.
   for (const branch of branchRows) {
     try {
       await host.kill({ machineId: branch.sandboxId });
+      await db.delete(machineBranches).where(eq(machineBranches.id, branch.id));
     } catch {
-      // Best-effort; leave the row for a later retry.
+      // Best-effort; leave the row for the reconciler to retry.
     }
   }
 

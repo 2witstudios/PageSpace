@@ -27,6 +27,7 @@ import type { ExecSandboxClient, ExecutableSandbox } from './types';
 import {
   withWakeRetry,
   asPreOpenDrop,
+  isSpriteNotFoundError,
   spawnWithSelfHealingCwd,
   type SpriteCommandLike,
   type SpritesSdk,
@@ -262,8 +263,28 @@ export function createSpriteMachineHost({
       return wrapSpriteHandle({ sdk, exec, streamOpenTimeoutMs });
     },
 
+    /**
+     * Idempotent by contract: a Sprite that is ALREADY gone is a successful
+     * kill, not a failure — mirroring `attach` above, which already maps the
+     * SDK's not-found error to a null handle rather than throwing.
+     *
+     * Every caller depends on this. `teardownOneMachine` derives
+     * `spriteTornDown` from whether this throws, so a not-found error used to
+     * report a live orphaned Sprite for one that had in fact already been
+     * destroyed; `killBranch` and the orphan reconciler
+     * (`machine-orphan-reconcile.ts`) would likewise refuse to drop a tracking
+     * row whose Sprite no longer exists, leaving a permanently un-clearable
+     * candidate. Only a not-found error is swallowed — any other failure (auth,
+     * network, 5xx) still throws, because those genuinely leave the Sprite's
+     * fate unknown.
+     */
     async kill({ machineId }) {
-      await client.stop({ sandboxId: machineId });
+      try {
+        await client.stop({ sandboxId: machineId });
+      } catch (error) {
+        if (isSpriteNotFoundError(error)) return;
+        throw error;
+      }
     },
   };
 }

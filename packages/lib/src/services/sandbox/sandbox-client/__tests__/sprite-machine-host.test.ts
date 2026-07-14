@@ -183,6 +183,34 @@ describe('createSpriteMachineHost', () => {
     expect(calls.deleted).toEqual(['session-key']);
   });
 
+  it('given kill of an ALREADY-GONE sprite, should resolve as a successful (idempotent) kill', async () => {
+    // Every caller derives "the sprite is dead" from this NOT throwing:
+    // teardownOneMachine's spriteTornDown flag, killBranch's row removal, and the
+    // orphan reconciler's row removal. A not-found error must therefore read as
+    // success, or an already-destroyed sprite's tracking row can never be cleared.
+    const { sdk } = makeSdk({
+      deleteSprite: async () => {
+        throw Object.assign(new Error('sprite not found'), { status: 404 });
+      },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await expect(host.kill({ machineId: 'already-gone' })).resolves.toBeUndefined();
+  });
+
+  it('given kill that fails for a reason OTHER than not-found, should still throw — the sprite may be alive', async () => {
+    const { sdk } = makeSdk({
+      deleteSprite: async () => {
+        throw Object.assign(new Error('internal server error'), { status: 500 });
+      },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await expect(host.kill({ machineId: 'unknown-fate' })).rejects.toThrow('internal server error');
+  });
+
   it('given stream with no sessionId, should create a fresh interactive session and stream its combined stdout/stderr', async () => {
     // Built LAZILY, inside createSession — exactly when the real SDK builds it, so
     // its one-shot 'spawn' cannot fire before `stream()` has attached its listener.

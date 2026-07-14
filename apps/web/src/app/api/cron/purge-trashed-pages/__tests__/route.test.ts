@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const { mockPageRepo, mockAudit, mockReapOrphanedFiles } = vi.hoisted(() => ({
-  mockPageRepo: { purgeExpiredTrashedPages: vi.fn() },
+  mockPageRepo: { purgeExpiredTrashedPages: vi.fn(), countStaleBlockedTrashedPages: vi.fn() },
   mockAudit: vi.fn(),
   mockReapOrphanedFiles: vi.fn(),
 }));
@@ -48,6 +48,7 @@ describe('/api/cron/purge-trashed-pages', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(0);
+    mockPageRepo.countStaleBlockedTrashedPages.mockResolvedValue(0);
     mockReapOrphanedFiles.mockResolvedValue({
       orphansFound: 0,
       physicalFilesDeleted: 0,
@@ -126,7 +127,7 @@ describe('/api/cron/purge-trashed-pages', () => {
         eventType: 'data.delete',
         resourceType: 'cron_job',
         resourceId: 'purge_trashed_pages',
-        details: { pagesPurged: 3, filesReaped: 0 },
+        details: { pagesPurged: 3, filesReaped: 0, staleBlocked: 0 },
       })
     );
   });
@@ -147,7 +148,7 @@ describe('/api/cron/purge-trashed-pages', () => {
     expect(body.filesReaped).toBe(2);
     expect(mockAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        details: { pagesPurged: 4, filesReaped: 2 },
+        details: { pagesPurged: 4, filesReaped: 2, staleBlocked: 0 },
       })
     );
   });
@@ -203,5 +204,47 @@ describe('/api/cron/purge-trashed-pages', () => {
     // Assert
     expect(body.success).toBe(true);
     expect(body.pagesPurged).toBe(2);
+  });
+
+  it('surfaces pages stuck behind a live Sprite-tracking row as a warned, audited signal', async () => {
+    // A page still blocked from the purge weeks past its cutoff means the orphan
+    // reconciler cannot kill its Sprite — it must be visible, not silent.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(1);
+    mockPageRepo.countStaleBlockedTrashedPages.mockResolvedValue(2);
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.staleBlocked).toBe(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('held back from purge'));
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: { pagesPurged: 1, filesReaped: 0, staleBlocked: 2 },
+      })
+    );
+    warn.mockRestore();
+  });
+
+  it('checks the stale-blocked count against a cutoff 15 days OLDER than the purge cutoff', async () => {
+    // The grace window is what makes the signal meaningful: a page blocked for a
+    // few hours is the reconciler doing its job, not a stuck Sprite.
+    await GET(makeRequest());
+
+    const purgeCutoff: Date = mockPageRepo.purgeExpiredTrashedPages.mock.calls[0][0];
+    const staleCutoff: Date = mockPageRepo.countStaleBlockedTrashedPages.mock.calls[0][0];
+
+    expect(purgeCutoff.getTime() - staleCutoff.getTime()).toBe(15 * 24 * 60 * 60 * 1000);
+  });
+
+  it('does not warn when nothing is blocked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockPageRepo.countStaleBlockedTrashedPages.mockResolvedValue(0);
+
+    const body = await (await GET(makeRequest())).json();
+
+    expect(body.staleBlocked).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
