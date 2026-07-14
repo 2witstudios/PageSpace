@@ -16,6 +16,7 @@ import {
   capPartsToByteBudget,
   CHECKPOINT_MAX_SERIALIZED_BYTES,
 } from '@/lib/ai/core/checkpoint-serialize';
+import { isToolPart } from '@/lib/ai/streams/appendPart';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -332,6 +333,13 @@ export const createStreamLifecycle = async (
   // calls — e.g. sitting inside a long tool call after the tool-input-available part landed —
   // still gets flushed instead of staying frozen until the tool call ends.
   const maybeCheckpoint = (isToolBoundary: boolean): void => {
+    // Both current call sites (pushPart, the checkpointInterval tick) already check
+    // `finished` before calling in, so this is unreachable today — kept as defense in
+    // depth rather than removed. A part flushed after finish() has already deleted the
+    // registry entry and issued the final write races that write with no ordering
+    // guarantee against it; that failure mode has enough documented history elsewhere in
+    // this file that a future third caller forgetting the same check should fail closed,
+    // not silently reopen it.
     if (finished) return;
     const now = Date.now();
     const shouldFlush = decideCheckpoint({
@@ -442,11 +450,12 @@ export const createStreamLifecycle = async (
 
     dirty = true;
     // A tool call starting or finishing is a boundary a rejoining client should see
-    // immediately — see decideCheckpoint. Matched against the `tool-` prefix explicitly
-    // (not "anything but text") so a future part type chunkToPart.ts starts forwarding
-    // (reasoning, source, file — its docblock names these as future waves) doesn't silently
-    // start bypassing the dirty-flush throttle on every chunk.
-    maybeCheckpoint(part.type.startsWith('tool-'));
+    // immediately — see decideCheckpoint. isToolPart (reused from appendPart.ts, the
+    // same file convergeRawParts already delegates to) so a future part type
+    // chunkToPart.ts starts forwarding (reasoning, source, file — its docblock names
+    // these as future waves) doesn't silently start bypassing the dirty-flush throttle
+    // on every chunk the way a bare "anything but text" check would.
+    maybeCheckpoint(isToolPart(part));
   };
 
   const getBufferedParts = (): UIMessagePart[] =>

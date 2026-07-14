@@ -38,20 +38,13 @@ interface ActiveStreamRow {
   conversationId: string;
   /** ISO timestamp of the stream's start; stamps synthesized bubbles with a `createdAt`. */
   startedAt?: string;
-  /**
-   * Last debounced snapshot persisted server-side. NOT necessarily a prefix of the live
-   * multicast buffer at the frame level any more — the server merges/converges consecutive
-   * chunks before persisting (fewer, larger entries), so `parts.length` no longer counts
-   * how many raw frames are reflected here. See `rawPartsCount` below, which does.
-   */
+  /** Last debounced snapshot persisted server-side — see `rawPartsCount` below. */
   parts?: UIMessagePart[];
   /**
-   * How many RAW frames (one per pushed chunk — every text delta, every tool-call state
-   * transition) are reflected in `parts` above. This, not `parts.length`, is what the live
-   * SSE replay must skip to avoid re-applying content already present in the seeded
-   * snapshot — see `skipReplayCount` below. Optional for backward compatibility with rows
-   * written by a not-yet-updated worker mid-rollout (falls back to `parts.length`, correct
-   * for those rows since they were never merged).
+   * See rawPartsCount's docblock on the schema (packages/db/src/schema/ai-streams.ts) for
+   * why this, not `parts.length`, is the live-replay skip count (`skipReplayCount` below).
+   * Optional here only because an old (pre-rawPartsCount) `active-streams` route build
+   * omits the field entirely mid-rollout.
    */
   rawPartsCount?: number;
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
@@ -386,10 +379,18 @@ export function useChannelStreamSocket(
           // pushed chunk), but the persisted snapshot above is server-merged/converged —
           // fewer, larger entries — so `persistedParts.length` no longer counts how many
           // raw frames are already reflected in the seed. `rawPartsCount` does (see its
-          // docblock on ActiveStreamRow). Fall back to `persistedParts.length` only for a
-          // row written by a not-yet-updated worker mid-rollout, where it's still correct
-          // (those rows were never merged).
-          startConsume(stream.messageId, stream.conversationId, stream.rawPartsCount ?? persistedParts.length);
+          // docblock on ActiveStreamRow).
+          //
+          // `||`, deliberately not `??`: the column is NOT NULL DEFAULT 0, so a row
+          // written by a not-yet-updated worker mid-rollout (whose code never sets this
+          // column) reads back as a real `0`, not null/undefined — `??` would use that 0
+          // verbatim and skip nothing, re-delivering the live replay's raw frames on top
+          // of the seeded snapshot and reproducing the exact duplicate-text bug this fix
+          // exists to close. `0` is only ever the CORRECT value when `parts` is also
+          // empty (every write of this column sets it from the same raw buffer snapshot
+          // as `parts`, atomically), so falling through to `persistedParts.length` on any
+          // falsy value is safe for the legitimate zero case too — both are 0 there.
+          startConsume(stream.messageId, stream.conversationId, stream.rawPartsCount || persistedParts.length);
         }
 
         // The server's word on what is still running. Consumers reconcile any ownership
