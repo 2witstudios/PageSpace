@@ -42,6 +42,7 @@ import { ChatLayout } from '../ChatLayout';
 import type { PendingStream } from '@/stores/usePendingStreamsStore';
 
 const BASE_PROPS = {
+  conversationId: 'conv-1',
   messages: [{ id: '1', role: 'user' as const, content: 'hello', parts: [{ type: 'text' as const, text: 'hello' }] }],
   input: '',
   onInputChange: vi.fn(),

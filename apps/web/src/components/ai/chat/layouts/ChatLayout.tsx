@@ -10,8 +10,13 @@ import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/ch
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 import type { PendingStream } from '@/stores/usePendingStreamsStore';
+import { resolveInputPosition, type InputPositionLatch } from '@/lib/ai/streams/resolveInputPosition';
 
 export interface ChatLayoutProps {
+  /** Conversation identity — latches the docked input position per conversation so a
+   *  mid-refetch frame (isLoading/hasMessages momentarily both false) can't flash the
+   *  input back to centered for a conversation that plainly has content. */
+  conversationId: string | null;
   /** Messages in the conversation */
   messages: UIMessage[];
   /** Current input value */
@@ -122,6 +127,7 @@ export interface ChatLayoutRef {
 export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
   (
     {
+      conversationId,
       messages,
       input,
       onInputChange,
@@ -171,11 +177,22 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       scrollToBottom: () => messagesRef.current?.scrollToBottom(),
     }));
 
-    // Determine position based on message state
+    // Determine position based on message state. The latch survives renders in a ref
+    // (not state) — it only ever gates a derived value computed fresh every render,
+    // never itself triggers one.
     const hasMessages = messages.length > 0;
     const hasRemoteStreams = remoteStreams.length > 0;
-    const inputPosition: InputPosition = hasMessages || isLoading || hasRemoteStreams ? 'docked' : 'centered';
+    const latchRef = useRef<InputPositionLatch>({ conversationId: null, docked: false });
+    const { position: inputPosition, latch } = resolveInputPosition({
+      conversationId,
+      isLoading,
+      hasMessages,
+      hasRemoteStreams,
+      latch: latchRef.current,
+    });
+    latchRef.current = latch;
     const isCentered = inputPosition === 'centered';
+    const showMessagesPanel = inputPosition === 'docked';
 
     // Default input renderer (placeholder - will be replaced with ChatInput in Phase 3)
     const defaultInputContent = (
@@ -239,11 +256,14 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
 
     return (
       <div className="relative flex flex-col h-full overflow-hidden">
-        {/* Messages area - only visible when there are messages */}
+        {/* Messages area - only visible when docked. Keyed by conversationId (not a
+            static string) so a conversation switch is a clean remount rather than the
+            same instance silently swapping its content out from under an in-flight
+            exit/enter animation. */}
         <AnimatePresence>
-          {(hasMessages || isLoading || hasRemoteStreams) && (
+          {showMessagesPanel && (
             <motion.div
-              key="messages"
+              key={conversationId ?? 'new'}
               initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}

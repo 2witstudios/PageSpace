@@ -73,6 +73,7 @@ import {
   LocationContext,
   buildGlobalChatRequestBody,
 } from '@/lib/ai/shared';
+import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -240,7 +241,12 @@ const GlobalAssistantView: React.FC = () => {
     }
   }, [selectedAgent, agentConversationId, agentIsLoading, loadMostRecentConversation]);
 
-  // Extract location context from pathname
+  // Extract location context from pathname — UI display only (welcome text,
+  // mention-picker driveId below). Message sends must NOT read this state —
+  // it's effect-derived and can lag a fast navigate-then-send by a render.
+  // Sends build a `ContextRef` instead (buildFreshContextRef, below),
+  // synchronously from the current pathname/drives — the server resolves +
+  // permission-checks it at request time (resolve-request-context.ts).
   useEffect(() => {
     const pathParts = pathname.split('/').filter(Boolean);
     if (pathParts.length >= 2 && pathParts[0] === 'dashboard') {
@@ -257,6 +263,11 @@ const GlobalAssistantView: React.FC = () => {
       setLocationContext(null);
     }
   }, [pathname, drives]);
+
+  const buildFreshContextRef = useCallback(
+    (): ContextRef => buildContextRef(pathname, drives),
+    [pathname, drives],
+  );
 
   // Initialize settings store on mount
   useEffect(() => {
@@ -1122,7 +1133,7 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           imageGenEnabled,
           showPageTree,
-          locationContext,
+          contextRef: buildFreshContextRef(),
           selectedProvider: currentProvider,
           selectedModel: currentModel,
           mcpTools: mcpToolSchemas,
@@ -1156,7 +1167,7 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           imageGenEnabled,
           showPageTree,
-          locationContext,
+          contextRef: buildFreshContextRef(),
           selectedProvider: currentProvider,
           selectedModel: currentModel,
           mcpTools: mcpToolSchemas,
@@ -1173,7 +1184,7 @@ const GlobalAssistantView: React.FC = () => {
     webSearchEnabled,
     imageGenEnabled,
     showPageTree,
-    locationContext,
+    buildFreshContextRef,
     currentProvider,
     currentModel,
     mcpToolSchemas,
@@ -1199,7 +1210,7 @@ const GlobalAssistantView: React.FC = () => {
           webSearchEnabled,
           imageGenEnabled,
           showPageTree,
-          locationContext,
+          contextRef: buildFreshContextRef(),
           selectedProvider: currentProvider,
           selectedModel: currentModel,
           mcpTools: mcpToolSchemas,
@@ -1213,7 +1224,7 @@ const GlobalAssistantView: React.FC = () => {
     webSearchEnabled,
     imageGenEnabled,
     showPageTree,
-    locationContext,
+    buildFreshContextRef,
     currentProvider,
     currentModel,
     mcpToolSchemas,
@@ -1365,6 +1376,7 @@ const GlobalAssistantView: React.FC = () => {
       {/* Chat Interface - unified for both modes with floating input */}
       <ChatLayout
         ref={chatLayoutRef}
+        conversationId={currentConversationId}
         messages={messages}
         input={input}
         onInputChange={setInput}

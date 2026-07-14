@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { toast } from 'sonner';
 import { useEditingStore } from '@/stores/useEditingStore';
+import { getAIErrorMessage } from '@/lib/ai/shared/error-messages';
+import { isThenable } from '@/lib/ai/streams/isThenable';
 
 /**
  * Manages deterministic handoff between pending send and streaming state.
@@ -68,13 +71,26 @@ export function useSendHandoff(
       }
     }, 15000);
 
-    try {
-      return sendFn();
-    } catch (error) {
-      // If sendFn throws synchronously, immediately clear
+    // Shared by both failure paths: sendFn can throw synchronously (e.g. a guard
+    // clause before any await) or return a promise that rejects later (e.g. an
+    // awaited pre-send fetch) — either way pendingSend must clear immediately and
+    // the caller sees an error, rather than sitting registered until the 15s
+    // safety timeout with no visible feedback.
+    const settleOnFailure = (error: unknown) => {
       hasPendingSendRef.current = false;
       useEditingStore.getState().endPendingSend(conversationId);
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      toast.error(getAIErrorMessage(error instanceof Error ? error.message : String(error)));
+    };
+
+    try {
+      const result = sendFn();
+      if (isThenable(result)) {
+        Promise.resolve(result).catch(settleOnFailure);
+      }
+      return result;
+    } catch (error) {
+      settleOnFailure(error);
       throw error;
     }
   }, [conversationId]);
