@@ -21,6 +21,107 @@ export function formatDate(dateString: string): string {
 }
 
 export const blogPosts: Record<string, BlogPost> = {
+  "build-a-chat-app-on-pagespace": {
+    slug: "build-a-chat-app-on-pagespace",
+    title: "Build a Chat App Without Building a Backend",
+    description:
+      "Every PageSpace agent is an OpenAI-compatible endpoint, so your chat app can skip the model, the prompt, the tools, and the conversation store. Here is the whole integration, end to end.",
+    content: `
+## What you'll have when you're done
+
+A chat app whose entire backend is a PageSpace agent. It answers with your system prompt, runs your tools, reaches into your drive, and stores every conversation — and the only thing you wrote is the interface.
+
+Adding a chatbot to an app usually burns a week on plumbing that has nothing to do with the app: choose a model, wire up streaming, write a system prompt and keep it in sync, build the tools it can call, stand up a place to pull context from, and save conversations somewhere. None of that is your product. It's the tax you pay before you get to your product.
+
+If your knowledge already lives in PageSpace, you've paid it. Every AI Chat page is an agent — a system prompt, a set of tools, and the run of a whole drive behind it — and every agent answers on an OpenAI-compatible endpoint. So a PageSpace agent is the backend. You point at it.
+
+## Wire your UI to an agent
+
+**1. Mint a scoped key.** From the [CLI](/docs/features/cli):
+
+\`\`\`bash
+pagespace keys create --drive <driveId> --role member --name chat-app
+\`\`\`
+
+Use \`--role member\`, not viewer. The agent runs write tools on your behalf, so the endpoint needs edit access — a view-only key gets a \`403\`. Keep the \`mcp_\` key on your server; it can read and write everything in its scope.
+
+**2. Grab an agent's id.** Open an AI Chat page, copy its id from the settings tab, and address it as \`ps-agent://<pageId>\`. \`GET /api/v1/models\` lists every agent a key can reach.
+
+**3. Call it exactly like OpenAI.** It speaks Chat Completions, so change three things — the base URL, the key, and the model:
+
+\`\`\`ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "https://pagespace.ai/api/v1",
+  apiKey: process.env.PAGESPACE_KEY, // the mcp_ key, server-side only
+});
+
+const stream = await client.chat.completions.create({
+  model: "ps-agent://<pageId>",
+  stream: true, // required
+  messages: [{ role: "user", content: "What changed in the roadmap this week?" }],
+});
+\`\`\`
+
+The agent answers with its own system prompt and runs its own tools server-side — it searches the drive, reads pages, and writes back, all within the key's scope. If the key can't see a page, neither can the agent. It's the same credential the [SDK](/docs/features/sdk) uses, so one key covers your whole integration.
+
+**4. Stream it to the browser.** The response is an OpenAI stream, so a Next.js route handler that pipes it to the client is a dozen lines:
+
+\`\`\`ts
+// app/api/chat/route.ts
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const stream = await client.chat.completions.create({
+    model: "ps-agent://<pageId>",
+    stream: true,
+    messages,
+  });
+
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (delta) controller.enqueue(encoder.encode(delta));
+        }
+        controller.close();
+      },
+    }),
+    { headers: { "Content-Type": "text/plain; charset=utf-8" } },
+  );
+}
+\`\`\`
+
+Your front end reads that stream and renders tokens as they land. That's the app.
+
+## Conversations live in PageSpace
+
+Pass a \`conversation_id\` and the thread stops being throwaway. Every message persists in PageSpace, shows up on the AI Chat page in the app, and reads back later so a user can resume where they left off.
+
+You don't give up control to get that. Set \`client_manages_history: true\` and your app keeps its own context window and its own UI, while PageSpace records the thread under the id you pass. Mint the id yourself — it's created on first use and owned by your key. To resume:
+
+\`\`\`bash
+curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
+  -H "Authorization: Bearer mcp_your_key_here"
+# -> { "messages": [ { "role": "user", "content": "..." }, ... ] }
+\`\`\`
+
+Rehydrate your UI from those messages, or let a teammate open the same thread in PageSpace and reply in their browser. The conversation isn't locked inside your app's database. It's a page in the workspace.
+
+## What you didn't have to build
+
+Count what you skipped: no model to choose, no system prompt to maintain — it lives on the agent page, and anyone on your team can edit it without a deploy — no tools to define, no retrieval layer because [the drive is the context](/blog/your-workspace-is-the-context), and no conversation store. You brought a UI and a scoped key. PageSpace brought the rest.
+
+Start with the [Agent API reference](/docs/features/agent-api): streaming, threads, listing agents, and permissions, in full.
+`,
+    author: "Jono",
+    date: "2026-07-14",
+    readTime: "4 min read",
+    category: "Guide",
+  },
   "usage-based-pricing-and-built-for-scale": {
     slug: "usage-based-pricing-and-built-for-scale",
     title:
