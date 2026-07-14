@@ -80,21 +80,28 @@ type DegradeReason =
    */
   | 'lock_error';
 
-function degradeToUnlocked(info: {
-  conversationId: string;
-  attemptsMade: number;
-  reason: DegradeReason;
-  /** Set only for `reason: 'lock_error'` — the error the lock connection itself threw. */
-  error?: unknown;
-}): void {
+function degradeToUnlocked<T>(
+  info: {
+    conversationId: string;
+    attemptsMade: number;
+    reason: DegradeReason;
+    /** Set only for `reason: 'lock_error'` — the error the lock connection itself threw. */
+    error?: unknown;
+  },
+  run: () => Promise<T>,
+): Promise<StartGenerationExclusiveOutcome<T>> {
   const { error, ...metricInfo } = info;
+  const errorMessage = error === undefined ? undefined : error instanceof Error ? error.message : String(error);
+
   // Rail 8: never silent. Named metric + structured warn, always — best-effort serialization
   // gives up here; availability wins over serialization, a send must never block on this lock.
   logPerformance('ai_send.advisory_lock_degraded', 1, 'count', metricInfo);
   loggers.ai.warn(
     'start-generation-exclusive: advisory lock unavailable, proceeding unlocked (degraded, best-effort serialization)',
-    { ...metricInfo, ...(error !== undefined ? { error: error instanceof Error ? error.message : String(error) } : {}) },
+    { ...metricInfo, error: errorMessage },
   );
+
+  return run().then((result) => ({ outcome: 'degraded', result }));
 }
 
 export async function startGenerationExclusive<T>(
@@ -119,9 +126,7 @@ export async function startGenerationExclusive<T>(
       // way lock contention might, so retrying here would only add latency to a send that
       // must never block. See the PR board page's verification: "Lock-pool exhaustion
       // simulation: proceeds unlocked, metric emitted, warn logged, both requests complete."
-      degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error', error });
-      const result = await run();
-      return { outcome: 'degraded', result };
+      return degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error', error }, run);
     }
 
     if (attempt.outcome === 'acquired') {
@@ -135,8 +140,6 @@ export async function startGenerationExclusive<T>(
       continue;
     }
 
-    degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_busy' });
-    const result = await run();
-    return { outcome: 'degraded', result };
+    return degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_busy' }, run);
   }
 }
