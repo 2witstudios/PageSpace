@@ -86,7 +86,7 @@ import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemote
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 import { canConcludeTurnIsLost, type RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
-import { evictStalePartial } from '@/lib/ai/streams/evictStalePartial';
+import { evictStalePartial, canEvictStalePartial } from '@/lib/ai/streams/evictStalePartial';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
@@ -652,24 +652,23 @@ const GlobalAssistantView: React.FC = () => {
           stillOnThisConversation() &&
           decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin'
         ) {
-          // Evict the half-streamed assistant bubble useChat is still holding for this run — see
-          // evictStalePartial for why that is load-bearing (without it the rejoined stream is
-          // deduped straight back out and renders nothing) and why it is conditional.
-          const staleId = liveStream.messageId;
-          // evictStalePartial owns BOTH halves of the rule — why the stale bubble must go, and why
-          // only when the server's (debounced, isValidPartFrame-filtered) checkpoint can render in
-          // its place. It returns the same array reference when it is not safe, so this is a no-op
-          // write in that case.
-          const before = currentMessagesRef.current;
-          const evicted = evictStalePartial(before, staleId, liveStream.parts);
+          // Evict the half-streamed assistant bubble useChat is still holding for this run. See
+          // evictStalePartial: without it the rejoined stream is deduped straight back out and
+          // renders nothing, and it is safe only when the server's checkpoint has frames the
+          // bootstrap can actually seed in its place.
+          //
+          // Ask before writing, so an unsafe checkpoint costs no state write at all; then evict
+          // through the UPDATER form, so the filter runs against the freshest message list rather
+          // than one captured before the awaits above.
+          //
           // Written via agentSetMessages / globalSetMessages, not the raw useChat setters: agent
           // mode must drop the stale partial from the dashboard store as well, or the store keeps
           // serving it back to a co-mounted surface (and hands it to the sidebar on navigation).
-          // Skipped entirely when the helper declined to evict — it returns the same reference,
-          // and there is no reason to push an identical array through two setters.
-          if (evicted !== before) {
-            if (selectedAgent) agentSetMessages(evicted);
-            else globalSetMessages(evicted);
+          const staleId = liveStream.messageId;
+          if (canEvictStalePartial(liveStream.parts)) {
+            const evict = (prev: UIMessage[]) => evictStalePartial(prev, staleId, liveStream.parts);
+            if (selectedAgent) agentSetMessages(evict);
+            else globalSetMessages(evict);
           }
           if (selectedAgent) {
             rejoinAgentStreamRef.current();

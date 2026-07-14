@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evictStalePartial } from '../evictStalePartial';
+import { evictStalePartial, canEvictStalePartial } from '../evictStalePartial';
 
 const liveId = 'srv-msg-1';
 const messages = [
@@ -51,5 +51,26 @@ describe('evictStalePartial', () => {
 
   it('given no message matching the live id, should return the list unchanged', () => {
     expect(evictStalePartial(messages, 'some-other-id', seededParts)).toEqual(messages);
+  });
+
+  describe('canEvictStalePartial (the gate the call sites ask before writing)', () => {
+    it('given a checkpoint with seedable frames, should allow the eviction', () => {
+      expect(canEvictStalePartial(seededParts)).toBe(true);
+    });
+
+    it('given an empty, absent, or all-malformed checkpoint, should refuse', () => {
+      expect(canEvictStalePartial([])).toBe(false);
+      expect(canEvictStalePartial(undefined)).toBe(false);
+      expect(canEvictStalePartial([{ nope: true }, 'junk', null])).toBe(false);
+    });
+
+    it('should agree with evictStalePartial — the helper self-guards on the same rule', () => {
+      // The gate exists so an unsafe checkpoint costs no state write; it must never disagree with
+      // the helper it is gating, or a caller could evict against a checkpoint that seeds nothing.
+      for (const parts of [seededParts, [], undefined, [{ bogus: 1 }]]) {
+        const evicted = evictStalePartial(messages, liveId, parts);
+        expect(evicted !== messages).toBe(canEvictStalePartial(parts));
+      }
+    });
   });
 });

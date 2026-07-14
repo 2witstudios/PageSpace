@@ -1,6 +1,20 @@
 import { isValidPartFrame } from './isValidPartFrame';
 
 /**
+ * Whether the server's checkpoint for a live stream has anything the bootstrap could actually
+ * render — i.e. whether it is safe to evict the local partial in favour of it.
+ *
+ * Counted with `isValidPartFrame`, the SAME predicate the bootstrap seeds with: it is the
+ * post-filter count that becomes `skipReplayCount`, and a `skipReplayCount` of 0 is exactly what
+ * makes a failed SSE join drop the stream entirely. A raw `parts.length > 0` would call a
+ * checkpoint of malformed frames "safe" while it in fact seeds nothing.
+ *
+ * Exported so callers can decide whether to write at all, without having to reproduce the rule.
+ */
+export const canEvictStalePartial = (serverParts: readonly unknown[] | undefined): boolean =>
+  (serverParts ?? []).filter(isValidPartFrame).length > 0;
+
+/**
  * Drops the half-streamed assistant bubble useChat is still holding for a run we are about to
  * rejoin — but only when the server has something to render in its place.
  *
@@ -29,7 +43,7 @@ export const evictStalePartial = <T extends { id: string }>(
   liveMessageId: string,
   serverParts: readonly unknown[] | undefined,
 ): T[] => {
-  const seededParts = (serverParts ?? []).filter(isValidPartFrame);
-  if (seededParts.length === 0) return messages;
+  // Self-guarding, so the rule holds even if a caller forgets to ask canEvictStalePartial first.
+  if (!canEvictStalePartial(serverParts)) return messages;
   return messages.filter((m) => m.id !== liveMessageId);
 };
