@@ -906,7 +906,12 @@ const SidebarChatTab: React.FC = () => {
       );
       if (res.ok) {
         const data = (await res.json()) as {
-          streams?: Array<{ messageId: string; conversationId: string; triggeredBy: { userId: string } }>;
+          streams?: Array<{
+            messageId: string;
+            conversationId: string;
+            parts?: unknown[];
+            triggeredBy: { userId: string };
+          }>;
         };
         const liveStream = (data.streams ?? []).find(
           (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
@@ -923,16 +928,22 @@ const SidebarChatTab: React.FC = () => {
           // straight back out and not one token of it would ever render. The user would sit in
           // front of a frozen partial reply.
           //
-          // Nothing is lost by dropping it: the bootstrap seeds the stream from the server's
-          // registry buffer, which holds every part pushed so far — strictly more than the
-          // partial we froze with.
+          // Only when the server has something to put in its place, though. `parts` here is the
+          // registry's DEBOUNCED checkpoint (persisted every N parts), so it is empty for a stream
+          // that is only a few parts old. Evict against an empty checkpoint and, if the SSE join
+          // then fails — the documented multi-instance case, where the multicast lives in another
+          // process — the bootstrap removes the stream and the user is left with NOTHING, which is
+          // strictly worse than the frozen partial we started with. In that case keep the partial:
+          // the rejoin can still attach and take over, and if it cannot, the user keeps what they
+          // had.
           const staleId = liveStream.messageId;
+          const hasServerParts = (liveStream.parts?.length ?? 0) > 0;
           const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
           if (selectedAgent) {
-            setMessages(evictStale);
+            if (hasServerParts) setMessages(evictStale);
             rejoinAgentStream();
           } else {
-            setGlobalMessages(evictStale);
+            if (hasServerParts) setGlobalMessages(evictStale);
             rejoinGlobalStream();
           }
           return true;

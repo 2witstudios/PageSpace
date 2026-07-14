@@ -84,7 +84,6 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
-import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
@@ -617,7 +616,12 @@ const GlobalAssistantView: React.FC = () => {
       );
       if (res.ok) {
         const data = (await res.json()) as {
-          streams?: Array<{ messageId: string; conversationId: string; triggeredBy: { userId: string } }>;
+          streams?: Array<{
+            messageId: string;
+            conversationId: string;
+            parts?: unknown[];
+            triggeredBy: { userId: string };
+          }>;
         };
         const liveStream = (data.streams ?? []).find(
           (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
@@ -634,19 +638,25 @@ const GlobalAssistantView: React.FC = () => {
           // so the rejoined stream would be filtered straight back out and not one token of it
           // would ever render. The user would sit in front of a frozen partial reply.
           //
-          // Nothing is lost by dropping it: the bootstrap seeds the stream from the server's
-          // registry buffer, which holds every part pushed so far — strictly more than the
-          // partial we froze with.
+          // Only when the server has something to put in its place, though. `parts` here is the
+          // registry's DEBOUNCED checkpoint (persisted every N parts), so it is empty for a stream
+          // that is only a few parts old. Evict against an empty checkpoint and, if the SSE join
+          // then fails — the documented multi-instance case, where the multicast lives in another
+          // process — the bootstrap removes the stream and the user is left with NOTHING, which is
+          // strictly worse than the frozen partial we started with. In that case keep the partial:
+          // the rejoin can still attach and take over, and if it cannot, the user keeps what they
+          // had.
           const staleId = liveStream.messageId;
+          const hasServerParts = (liveStream.parts?.length ?? 0) > 0;
           const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
           // Via agentSetMessages / globalSetMessages, not the raw useChat setters: agent mode
           // must drop the stale partial from the dashboard store as well, or the store keeps
-          // serving it back to a co-mounted surface.
+          // serving it back to a co-mounted surface (and hands it to the sidebar on navigation).
           if (selectedAgent) {
-            agentSetMessages(evictStale);
+            if (hasServerParts) agentSetMessages(evictStale);
             rejoinAgentStreamRef.current();
           } else {
-            globalSetMessages(evictStale);
+            if (hasServerParts) globalSetMessages(evictStale);
             rejoinGlobalStream();
           }
           return true;
@@ -733,20 +743,18 @@ const GlobalAssistantView: React.FC = () => {
   // Pull-up / resume refresh: check for messages this surface missed (real-time may have failed,
   // or the app was backgrounded and no live stream was found to rejoin).
   //
-  // Carries the two guards the authoritative loaders elsewhere in the app use
-  // (AiChatView.loadMessagesForConversation, SidebarChatTab.loadGlobalMessages), because a
-  // message load that lands late can otherwise overwrite state it knows nothing about:
+  // Guarded by shouldApplyLoadedMessages against the LIVE conversation (currentConversationIdRef):
+  // drop the response if the user switched conversation or agent while the fetch was in flight, so
+  // it cannot clobber the conversation they moved to.
   //
-  //   1. shouldApplyLoadedMessages, against the LIVE conversation (currentConversationIdRef) —
-  //      drop the response if the user switched conversation or agent while the fetch was in
-  //      flight, so it cannot clobber the conversation they moved to.
-  //   2. mergeServerAndPending — keep a bootstrap-restored stream's in-flight bubble, which is
-  //      absent from the DB snapshot until the run persists its reply.
-  //
-  // Note this is NOT the mid-stream write path: the resume handler below reaches this only when
-  // /active-streams reported nothing live to rejoin. Guard 2 covers a stream restored into the
-  // pending store by a bootstrap (after a refresh mid-stream) — an OWN stream being read off the
-  // POST body is deliberately never in that store, so it is not what this protects.
+  // NOTE — deliberately does NOT reconcile with the pending-streams store the way
+  // AiChatView.loadMessagesForConversation does. On this surface the pending store IS the live
+  // bubble: an in-flight stream renders from `remoteStreams`, and both renderers drop a pending
+  // stream whose messageId already appears in `messages` (dedupRemoteStreams /
+  // ChatMessagesArea.visibleRemoteStreams). mergeServerAndPending synthesizes a message under
+  // exactly that id, so merging here would FREEZE the live bubble at the merged snapshot — the
+  // rejoined stream would be deduped away and stop updating until completion. Leaving the DB
+  // snapshot alone keeps the id absent from `messages`, and the stream keeps rendering live.
   const handlePullUpRefresh = useCallback(async () => {
     const conversationId = currentConversationId;
     if (!conversationId) return;
@@ -763,26 +771,11 @@ const GlobalAssistantView: React.FC = () => {
       if (!shouldApplyLoadedMessages(conversationId, currentConversationIdRef.current)) return;
 
       const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-      // Scoped by channel AND conversation, the same way AiChatView scopes its own lookup.
-      // A conversation id is only unique within its channel, and this surface switches between
-      // the global channel and per-agent channels, so matching on `isOwn && conversationId`
-      // alone could splice a different agent's in-flight bubble into this conversation.
-      const channelId = agentId ?? (user?.id ? globalChannelId(user.id) : null);
-      const ownStream = channelId
-        ? usePendingStreamsStore
-            .getState()
-            .getOwnStreams(channelId)
-            .find((s) => s.conversationId === conversationId)
-        : undefined;
-      const merged = ownStream
-        ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
-        : serverMessages;
-
       if (agentId) {
-        setAgentMessages(merged);
-        setAgentStoreMessages(merged);
+        setAgentMessages(serverMessages);
+        setAgentStoreMessages(serverMessages);
       } else {
-        setGlobalLocalMessages(merged);
+        setGlobalLocalMessages(serverMessages);
       }
     } catch (error) {
       console.error('Failed to refresh messages:', error);
@@ -790,7 +783,6 @@ const GlobalAssistantView: React.FC = () => {
   }, [
     currentConversationId,
     selectedAgent,
-    user,
     setAgentMessages,
     setAgentStoreMessages,
     setGlobalLocalMessages,
