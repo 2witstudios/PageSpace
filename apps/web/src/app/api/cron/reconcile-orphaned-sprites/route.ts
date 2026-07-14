@@ -40,7 +40,7 @@ export async function GET(request: Request) {
     const run = await reconcileOrphanSprites(defaultReconcileOrphanSpritesDeps);
 
     console.log(
-      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}`,
+      `[Cron] Orphan sprite reconcile: processed ${run.processed}, torndown ${run.torndown}, skipped ${run.skipped}, failed ${run.failed}${run.capped ? ' (CAPPED — backlog remains, draining next tick)' : ''}`,
     );
 
     audit({
@@ -52,6 +52,7 @@ export async function GET(request: Request) {
         torndown: run.torndown,
         skipped: run.skipped,
         failed: run.failed,
+        capped: run.capped,
       },
     });
 
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
       torndown: run.torndown,
       skipped: run.skipped,
       failed: run.failed,
+      capped: run.capped,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

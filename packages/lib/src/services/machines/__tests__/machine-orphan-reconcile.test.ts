@@ -15,7 +15,7 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   const releasedSessions: string[] = [];
   const stampedBranches: string[] = [];
   const deps: ReconcileOrphanSpritesDeps = {
-    listOrphanCandidates: async () => [],
+    listOrphanCandidates: async () => ({ rows: [], capped: false }),
     isStillTrashed: async () => true,
     killSprite: async (sandboxId) => {
       killed.push(sandboxId);
@@ -50,12 +50,12 @@ const branchRow: OrphanRow = {
 describe('reconcileOrphanSprites', () => {
   it('kills a never-torn-down Machine Sprite and releases its machine_sessions row', async () => {
     const { deps, killed, releasedSessions, stampedBranches } = makeDeps({
-      listOrphanCandidates: async () => [sessionRow],
+      listOrphanCandidates: async () => ({ rows: [sessionRow], capped: false }),
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 1, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-sbx-1']);
     expect(releasedSessions).toEqual(['sk-1']);
     expect(stampedBranches).toEqual([]);
@@ -66,12 +66,12 @@ describe('reconcileOrphanSprites', () => {
     // machine_agent_terminals FK-cascade off it — deleting it would destroy the
     // user's branch terminals on a reversible soft-delete.
     const { deps, killed, stampedBranches, releasedSessions } = makeDeps({
-      listOrphanCandidates: async () => [branchRow],
+      listOrphanCandidates: async () => ({ rows: [branchRow], capped: false }),
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 1, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-sbx-2']);
     expect(stampedBranches).toEqual(['branch-1']);
     expect(releasedSessions).toEqual([]);
@@ -82,7 +82,7 @@ describe('reconcileOrphanSprites', () => {
     // already-destroyed Sprite must RELEASE its row rather than being retried
     // forever (it would otherwise be a permanent phantom candidate).
     const { deps, releasedSessions } = makeDeps({
-      listOrphanCandidates: async () => [sessionRow],
+      listOrphanCandidates: async () => ({ rows: [sessionRow], capped: false }),
       killSprite: async () => ({ ok: true }),
     });
 
@@ -97,14 +97,14 @@ describe('reconcileOrphanSprites', () => {
     // restored Machine's filesystem.
     const killSprite = vi.fn(async () => ({ ok: true }) as const);
     const { deps, releasedSessions, stampedBranches } = makeDeps({
-      listOrphanCandidates: async () => [sessionRow, branchRow],
+      listOrphanCandidates: async () => ({ rows: [sessionRow, branchRow], capped: false }),
       isStillTrashed: async (pageId) => pageId !== 'machine-1', // machine-1 was restored mid-run
       killSprite,
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 2, torndown: 1, skipped: 1, failed: 0 });
+    expect(result).toEqual({ processed: 2, capped: false, torndown: 1, skipped: 1, failed: 0 });
     expect(killSprite).toHaveBeenCalledTimes(1);
     expect(killSprite).toHaveBeenCalledWith('pgs-sbx-2'); // only the still-trashed one
     expect(releasedSessions).toEqual([]);
@@ -117,25 +117,25 @@ describe('reconcileOrphanSprites', () => {
     // be recorded as dead, or it would be invisible to this cron AND to the
     // hard-purge guard.
     const { deps } = makeDeps({
-      listOrphanCandidates: async () => [branchRow],
+      listOrphanCandidates: async () => ({ rows: [branchRow], capped: false }),
       markBranchTornDown: async () => false,
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 0, skipped: 1, failed: 0 });
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 1, failed: 0 });
   });
 
   it('LEAVES the row untouched when the kill fails — it is the only pointer to the Sprite', async () => {
     const { deps, releasedSessions, stampedBranches } = makeDeps({
-      listOrphanCandidates: async () => [sessionRow, branchRow],
+      listOrphanCandidates: async () => ({ rows: [sessionRow, branchRow], capped: false }),
       killSprite: async (sandboxId) =>
         sandboxId === 'pgs-sbx-1' ? { ok: false, error: new Error('sprite unreachable') } : { ok: true },
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 2, torndown: 1, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 2, capped: false, torndown: 1, skipped: 0, failed: 1 });
     // The failed row keeps its sandboxId on record so the next run retries it.
     expect(releasedSessions).toEqual([]);
     expect(stampedBranches).toEqual(['branch-1']);
@@ -147,24 +147,24 @@ describe('reconcileOrphanSprites', () => {
       return { ok: true } as const;
     });
     const { deps, releasedSessions } = makeDeps({
-      listOrphanCandidates: async () => [
+      listOrphanCandidates: async () => ({ rows: [
         { kind: 'session', pageId: 'p-a', sessionKey: 'sk-a', sandboxId: 'ok-a' },
         { kind: 'session', pageId: 'p-boom', sessionKey: 'sk-boom', sandboxId: 'boom' },
         { kind: 'session', pageId: 'p-b', sessionKey: 'sk-b', sandboxId: 'ok-b' },
-      ],
+      ], capped: false }),
       killSprite,
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 3, torndown: 2, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 3, capped: false, torndown: 2, skipped: 0, failed: 1 });
     expect(killSprite).toHaveBeenCalledTimes(3);
     expect(releasedSessions).toEqual(['sk-a', 'sk-b']);
   });
 
   it('counts a post-kill release failure as failed, leaving the row for the next (idempotent) run', async () => {
     const { deps, killed } = makeDeps({
-      listOrphanCandidates: async () => [sessionRow],
+      listOrphanCandidates: async () => ({ rows: [sessionRow], capped: false }),
       releaseSessionRow: async () => {
         throw new Error('db write failed');
       },
@@ -172,9 +172,46 @@ describe('reconcileOrphanSprites', () => {
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 0, skipped: 0, failed: 1 });
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 0, skipped: 0, failed: 1 });
     // The Sprite IS dead; the next run's kill is idempotent, so it simply releases the row then.
     expect(killed).toEqual(['pgs-sbx-1']);
+  });
+
+  it('releases a page\'s session row even when one of its OWN branch kills fails', async () => {
+    // A Machine has a session row and several branch rows. A failure on one
+    // branch must not hold back the rest of that same page — an early `continue`
+    // that bailed per-page (rather than per-row) would silently leave the
+    // Machine's own Sprite billing.
+    const { deps, releasedSessions, stampedBranches } = makeDeps({
+      listOrphanCandidates: async () => ({
+        rows: [
+          { kind: 'branch', pageId: 'm-1', id: 'b-bad', sandboxId: 'sbx-bad' },
+          { kind: 'branch', pageId: 'm-1', id: 'b-good', sandboxId: 'sbx-good' },
+          { kind: 'session', pageId: 'm-1', sessionKey: 'sk-1', sandboxId: 'sbx-own' },
+        ],
+        capped: false,
+      }),
+      killSprite: async (sandboxId) =>
+        sandboxId === 'sbx-bad' ? { ok: false, error: new Error('unreachable') } : { ok: true },
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 3, capped: false, torndown: 2, skipped: 0, failed: 1 });
+    expect(stampedBranches).toEqual(['b-good']); // the failed branch keeps its pointer
+    expect(releasedSessions).toEqual(['sk-1']); // and the Machine's own Sprite is still reclaimed
+  });
+
+  it('reports a CAPPED run so a partial sweep never reads as a clean one', async () => {
+    // Silent truncation is the danger: "processed 200, failed 0" looks like the
+    // backlog is clear while un-attempted Sprites keep billing.
+    const { deps } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [sessionRow], capped: true }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toMatchObject({ capped: true, torndown: 1 });
   });
 
   it('is a clean no-op when nothing is orphaned — no kills, no writes', async () => {
@@ -182,7 +219,7 @@ describe('reconcileOrphanSprites', () => {
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 0, torndown: 0, skipped: 0, failed: 0 });
+    expect(result).toEqual({ processed: 0, capped: false, torndown: 0, skipped: 0, failed: 0 });
     expect(killed).toEqual([]);
     expect(releasedSessions).toEqual([]);
     expect(stampedBranches).toEqual([]);

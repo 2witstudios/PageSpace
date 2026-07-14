@@ -98,8 +98,17 @@ export type OrphanRow =
   | { kind: 'branch'; pageId: string; id: string; sandboxId: string };
 
 export interface ReconcileOrphanSpritesDeps {
-  /** Every Sprite believed live under a trashed page that ALSO satisfies one of the two reclaim tiers — teardown requested, or page past the hard-purge cutoff (see module doc; keying on `isTrashed` alone would destroy the disk of every merely-trashed Machine). */
-  listOrphanCandidates: () => Promise<OrphanRow[]>;
+  /**
+   * Every Sprite believed live under a trashed page that ALSO satisfies one of
+   * the two reclaim tiers — teardown requested, or page past the hard-purge
+   * cutoff (see module doc; keying on `isTrashed` alone would destroy the disk of
+   * every merely-trashed Machine).
+   *
+   * Reports `capped` itself: the runtime caps each table's query separately, so
+   * only it can tell whether a backlog remains (one table can cap while the other
+   * comes back empty).
+   */
+  listOrphanCandidates: () => Promise<{ rows: OrphanRow[]; capped: boolean }>;
   /** Fresh re-read of the owning page's trash state, immediately before the kill — a restore that landed since listing must not have its live Sprite destroyed. */
   isStillTrashed: (pageId: string) => Promise<boolean>;
   /** Idempotent kill by sandboxId — an already-gone Sprite reports `ok` (see `MachineHost.kill`'s not-found handling). Never throws; failures come back as `{ ok: false }`. */
@@ -112,6 +121,14 @@ export interface ReconcileOrphanSpritesDeps {
 
 export interface ReconcileOrphanSpritesResult {
   processed: number;
+  /**
+   * True when the candidate list came back at the runtime's per-run cap, i.e. a
+   * backlog remains that this run did not attempt. Surfaced (not swallowed)
+   * because a silent truncation reads exactly like "nothing left to reclaim"
+   * while the un-attempted Sprites keep billing. The backlog drains over
+   * subsequent ticks, oldest-trashed first.
+   */
+  capped: boolean;
   /** Rows whose Sprite is now confirmed gone AND whose row was released/stamped. */
   torndown: number;
   /** Rows left alone because their page was restored mid-run, or because the CAS lost to a concurrent restore/re-provision. Benign — see module doc. */
@@ -123,7 +140,7 @@ export interface ReconcileOrphanSpritesResult {
 export async function reconcileOrphanSprites(
   deps: ReconcileOrphanSpritesDeps,
 ): Promise<ReconcileOrphanSpritesResult> {
-  const rows = await deps.listOrphanCandidates();
+  const { rows, capped } = await deps.listOrphanCandidates();
 
   let torndown = 0;
   let skipped = 0;
@@ -180,5 +197,5 @@ export async function reconcileOrphanSprites(
     }
   }
 
-  return { processed: rows.length, torndown, skipped, failed };
+  return { processed: rows.length, capped, torndown, skipped, failed };
 }

@@ -21,7 +21,7 @@
  * it permanently.
  */
 
-import { and, eq, exists, isNotNull, isNull, lt, or, sql } from '@pagespace/db/operators';
+import { and, asc, eq, exists, isNotNull, isNull, lt, or, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
@@ -43,8 +43,24 @@ function owningPageStillTrashed(pageIdColumn: typeof machineSessions.pageId | ty
   );
 }
 
+/**
+ * Most rows one run will attempt, per table.
+ *
+ * The reconciler kills SERIALLY, one network round-trip per row, inside a cron
+ * request — so an unbounded batch (a drive with hundreds of Machines trashed at
+ * once) would run until the platform's request timeout killed it mid-flight, and
+ * then do the same thing again on the next tick, never draining. A cap keeps each
+ * run bounded and lets the backlog drain across ticks instead: every 30 minutes,
+ * another {@link MAX_CANDIDATES_PER_TABLE} Sprites die. Oldest-trashed first, so
+ * the longest-billing orphans go first and nothing can be starved indefinitely.
+ *
+ * A capped run is LOGGED (see the cron route's `capped` flag) — a silent
+ * truncation would read as "nothing left to reclaim" while Sprites kept billing.
+ */
+export const MAX_CANDIDATES_PER_TABLE = 200;
+
 export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
-  async listOrphanCandidates(): Promise<OrphanRow[]> {
+  async listOrphanCandidates(): Promise<{ rows: OrphanRow[]; capped: boolean }> {
     // A kill is an irreversible DESTROY, so "the page is trashed" is never enough
     // on its own — trashing is reversible, and the generic page-trash paths tear
     // down nothing. A row is reclaimable only under one of the two tiers (see
@@ -65,7 +81,11 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         })
         .from(machineSessions)
         .innerJoin(pages, eq(machineSessions.pageId, pages.id))
-        .where(and(eq(pages.isTrashed, true), reclaimable(machineSessions.teardownRequestedAt))),
+        .where(and(eq(pages.isTrashed, true), reclaimable(machineSessions.teardownRequestedAt)))
+        // Oldest-trashed first: the longest-billing orphans go first, and a
+        // capped run can never starve a row indefinitely.
+        .orderBy(asc(pages.trashedAt))
+        .limit(MAX_CANDIDATES_PER_TABLE),
       db
         .select({
           pageId: machineBranches.machineId,
@@ -82,13 +102,21 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
             isNull(machineBranches.spriteTornDownAt),
             reclaimable(machineBranches.teardownRequestedAt),
           ),
-        ),
+        )
+        .orderBy(asc(pages.trashedAt))
+        .limit(MAX_CANDIDATES_PER_TABLE),
     ]);
 
-    return [
-      ...sessionRows.map((row): OrphanRow => ({ kind: 'session', ...row })),
-      ...branchRows.map((row): OrphanRow => ({ kind: 'branch', ...row })),
-    ];
+    return {
+      rows: [
+        ...sessionRows.map((row): OrphanRow => ({ kind: 'session', ...row })),
+        ...branchRows.map((row): OrphanRow => ({ kind: 'branch', ...row })),
+      ],
+      // Either table hitting its cap means a backlog remains — report it rather
+      // than letting a partial sweep look like a clean one.
+      capped:
+        sessionRows.length >= MAX_CANDIDATES_PER_TABLE || branchRows.length >= MAX_CANDIDATES_PER_TABLE,
+    };
   },
 
   async isStillTrashed(pageId) {

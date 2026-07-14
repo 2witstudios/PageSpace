@@ -29,6 +29,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { reconcileOrphanSprites } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
 import { defaultReconcileOrphanSpritesDeps as deps } from '../machine-orphan-reconcile-runtime';
 
 const USER_ID = 'orphan-rt-user';
@@ -184,8 +185,8 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
   it('finds only the Sprites believed LIVE under a TRASHED page', async () => {
     if (!dbAvailable) return;
 
-    const candidates = await deps.listOrphanCandidates();
-    const mine = candidates.filter((row) => ALL_PAGES.includes(row.pageId));
+    const { rows } = await deps.listOrphanCandidates();
+    const mine = rows.filter((row) => ALL_PAGES.includes(row.pageId));
 
     // Tier 1 (teardown requested): the trashed machine's own Sprite and its
     // unstamped branch Sprite. Tier 2 (past the purge cutoff): the expired
@@ -197,9 +198,9 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
       'sbx-trashed-branch',
       'sbx-trashed-session',
     ]);
-    expect(mine.find((row) => row.kind === 'session')).toMatchObject({
-      pageId: TRASHED_MACHINE,
+    expect(mine.find((row) => row.pageId === TRASHED_MACHINE && row.kind === 'session')).toMatchObject({
       sessionKey: `${TRASHED_MACHINE}-key`,
+      sandboxId: 'sbx-trashed-session',
     });
     expect(mine.find((row) => row.kind === 'branch')).toMatchObject({ pageId: TRASHED_MACHINE });
   });
@@ -210,8 +211,8 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
     // cascade-trash) hides a MACHINE page with NO teardown. Its Sprite just
     // hibernates, and a restore is expected to hand back the disk intact. A
     // reconciler keyed on isTrashed alone would wipe it within 30 minutes.
-    const candidates = await deps.listOrphanCandidates();
-    const sandboxIds = candidates.map((row) => row.sandboxId);
+    const { rows } = await deps.listOrphanCandidates();
+    const sandboxIds = rows.map((row) => row.sandboxId);
 
     expect(sandboxIds).not.toContain('sbx-soft-trashed');
     expect(sandboxIds).not.toContain('sbx-soft-trashed-branch');
@@ -222,9 +223,9 @@ describe('defaultReconcileOrphanSpritesDeps.listOrphanCandidates', () => {
     // At that point the page is beyond restore and the purge is about to erase
     // it — and the purge cascades the tracking row away, so a Sprite left alive
     // here would bill forever with nothing able to find it.
-    const candidates = await deps.listOrphanCandidates();
+    const { rows } = await deps.listOrphanCandidates();
 
-    expect(candidates.map((row) => row.sandboxId)).toContain('sbx-expired');
+    expect(rows.map((row) => row.sandboxId)).toContain('sbx-expired');
   });
 });
 
@@ -327,5 +328,40 @@ describe('defaultReconcileOrphanSpritesDeps.markBranchTornDown', () => {
     const after = await branchRow(TRASHED_MACHINE);
     expect(after.sandboxId).toBe('sbx-freshly-reprovisioned');
     expect(after.spriteTornDownAt).toBeNull();
+  });
+});
+
+describe('reconcileOrphanSprites composed over the REAL deps', () => {
+  it('is idempotent across runs — the second sweep finds nothing left, so overlapping runs converge', async () => {
+    if (!dbAvailable) return;
+    // This is the evidence behind the "no advisory lock needed" decision (unlike
+    // the storage reconcile, whose charge is a non-idempotent money movement).
+    // Only the sprite kill is faked; every DB effect is the real thing.
+    const killed: string[] = [];
+    const testDeps = {
+      ...deps,
+      killSprite: async (sandboxId: string) => {
+        killed.push(sandboxId);
+        return { ok: true } as const;
+      },
+    };
+
+    const first = await reconcileOrphanSprites(testDeps);
+    expect(first.torndown).toBeGreaterThanOrEqual(3); // our seeded orphans (plus any pre-existing)
+    expect(first.failed).toBe(0);
+
+    const killedInFirst = killed.length;
+    const second = await reconcileOrphanSprites(testDeps);
+
+    // Nothing of ours is left to do: the session rows are gone and the branch
+    // rows are stamped, so a re-run kills nothing and writes nothing.
+    const secondRoundOurs = killed.slice(killedInFirst).filter((id) => id.startsWith('sbx-'));
+    expect(secondRoundOurs).toEqual([]);
+    expect(second.failed).toBe(0);
+
+    // And the branch row SURVIVED as config — stamped, not deleted.
+    const branch = await branchRow(TRASHED_MACHINE);
+    expect(branch).toBeDefined();
+    expect(branch.spriteTornDownAt).toBeInstanceOf(Date);
   });
 });
