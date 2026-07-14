@@ -10,6 +10,13 @@ import {
   type UIMessagePart,
 } from '@/lib/ai/core/stream-multicast-registry';
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
+import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
+import {
+  convergeRawParts,
+  capPartsToByteBudget,
+  CHECKPOINT_MAX_SERIALIZED_BYTES,
+} from '@/lib/ai/core/checkpoint-serialize';
+import { isToolPart } from '@/lib/ai/streams/appendPart';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -51,10 +58,9 @@ export interface StreamLifecycleHandle {
   preAborted: boolean;
 }
 
-// Batch DB writes rather than persisting on every token — a checkpoint every
-// N parts is enough to bound the unrecoverable window on process death while
-// keeping write amplification low.
-const PERSIST_EVERY_N_PARTS = 20;
+// Batch DB writes rather than persisting on every token. Cadence decision lives in
+// checkpoint-scheduler.ts (decideCheckpoint) — dirty-flush throttled to this interval, with an
+// immediate bypass on tool-boundary parts. See CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS there.
 
 /**
  * How often the generation writes `lastHeartbeatAt`.
@@ -161,6 +167,10 @@ export const createStreamLifecycle = async (
           // between here and the first checkpoint would serve the prior
           // attempt's stale parts as if they were a prefix of this attempt.
           parts: [],
+          // Resets alongside parts for the same reason — a stale count from the previous
+          // attempt would make the client under-skip on rejoin (see rawPartsCount's docblock
+          // in the schema).
+          rawPartsCount: 0,
           // An abort request aimed at the PREVIOUS generation on this messageId must not be
           // inherited by this one — the new stream would be killed the instant the abort watcher
           // next ticked, by a Stop the user pressed on something else entirely. Silent, and
@@ -211,6 +221,7 @@ export const createStreamLifecycle = async (
           status: 'aborted',
           completedAt: abortedAt,
           parts: [],
+          rawPartsCount: 0,
           abortRequestedAt: null,
         })
         .where(eq(aiStreamSessions.messageId, messageId));
@@ -247,18 +258,36 @@ export const createStreamLifecycle = async (
   }).catch(() => {});
 
   let finished = false;
-  let partsSincePersist = 0;
+  // True when the in-memory buffer holds content not yet reflected in the last checkpoint
+  // write — decideCheckpoint's dirty gate.
+  let dirty = false;
+  let lastPersistAt = startedAt.getTime();
   // Tracks the in-flight periodic write so finish() can await it before issuing
   // its own final write — otherwise a slow periodic write could resolve AFTER
   // finish()'s write and clobber the final parts with a stale snapshot.
   let persistInFlight: Promise<void> | null = null;
+  // One warning per stream, not one per checkpoint — a reply that stays over the cap for its
+  // whole remaining run would otherwise log on every tick.
+  let hasWarnedSizeCap = false;
 
   const persistBufferedParts = (parts: UIMessagePart[]): Promise<void> => {
+    // The RAW count, before convergence/capping — the one thing the merged/capped `parts`
+    // column below cannot answer for a rejoining client. See rawPartsCount's docblock on the
+    // schema for why this must travel separately from parts.length.
+    const rawPartsCount = parts.length;
+    const { parts: shaped, wasCapped } = capPartsToByteBudget(convergeRawParts(parts));
+    if (wasCapped && !hasWarnedSizeCap) {
+      hasWarnedSizeCap = true;
+      loggers.ai.warn('stream-lifecycle: parts snapshot at or over the serialized size cap', {
+        messageId,
+        maxBytes: CHECKPOINT_MAX_SERIALIZED_BYTES,
+      });
+    }
     const attempt = (async () => {
       try {
         await db
           .update(aiStreamSessions)
-          .set({ parts, lastHeartbeatAt: new Date() })
+          .set({ parts: shaped, rawPartsCount, lastHeartbeatAt: new Date() })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
         loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {
@@ -298,10 +327,62 @@ export const createStreamLifecycle = async (
   // Never hold the process open for a heartbeat.
   heartbeat.unref?.();
 
+  // Runs the checkpoint decision and, if eligible, kicks off the persist. Shared by pushPart
+  // (isToolBoundary reflects the part just pushed) and the 1s interval below (always false —
+  // it isn't tied to any specific part; it exists so a DIRTY buffer with no further pushPart
+  // calls — e.g. sitting inside a long tool call after the tool-input-available part landed —
+  // still gets flushed instead of staying frozen until the tool call ends.
+  const maybeCheckpoint = (isToolBoundary: boolean): void => {
+    // Both current call sites (pushPart, the checkpointInterval tick) already check
+    // `finished` before calling in, so this is unreachable today — kept as defense in
+    // depth rather than removed. A part flushed after finish() has already deleted the
+    // registry entry and issued the final write races that write with no ordering
+    // guarantee against it; that failure mode has enough documented history elsewhere in
+    // this file that a future third caller forgetting the same check should fail closed,
+    // not silently reopen it.
+    if (finished) return;
+    const now = Date.now();
+    const shouldFlush = decideCheckpoint({
+      dirty,
+      isToolBoundary,
+      persistInFlight: persistInFlight !== null,
+      lastPersistAt,
+      heartbeatDeadline,
+      now,
+    });
+    if (!shouldFlush) return;
+
+    // The registry entry is the source of the snapshot. Once it is gone — evicted at the
+    // horizon, or deleted by a finish() that raced us — `getBufferedParts` returns `[]`
+    // meaning "NO ENTRY", not "no content". Serializing that would overwrite the real parts
+    // snapshot with nothing, destroying exactly the crash-recovery state it exists to provide:
+    // a client restoring mid-stream content after the originator's process dies.
+    if (streamMulticastRegistry.getMeta(messageId) === undefined) return;
+
+    dirty = false;
+    lastPersistAt = now;
+    persistBufferedParts(streamMulticastRegistry.getBufferedParts(messageId));
+  };
+
+  // Independent of pushPart on purpose — see maybeCheckpoint's docblock above. Obeys the same
+  // MAX_HEARTBEAT_MS horizon as the heartbeat interval and self-clears past it for the same
+  // reason: an interval that kept ticking forever on an abandoned-cap lifecycle would be a
+  // leak, even though decideCheckpoint would keep declining to flush past the deadline anyway.
+  const checkpointInterval = setInterval(() => {
+    if (finished || Date.now() > heartbeatDeadline) {
+      clearInterval(checkpointInterval);
+      return;
+    }
+    maybeCheckpoint(false);
+  }, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+  // Never hold the process open for a checkpoint tick.
+  checkpointInterval.unref?.();
+
   const finish = (aborted: boolean): void => {
     if (finished) return;
     finished = true;
     clearInterval(heartbeat);
+    clearInterval(checkpointInterval);
 
     const priorPersist = persistInFlight;
 
@@ -330,6 +411,7 @@ export const createStreamLifecycle = async (
             // Clearing it here avoids keeping an unbounded, unpruned copy of
             // every AI reply's content sitting in this table indefinitely.
             parts: [],
+            rawPartsCount: 0,
           })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
@@ -366,28 +448,14 @@ export const createStreamLifecycle = async (
       });
     }
 
-    partsSincePersist += 1;
-    if (partsSincePersist >= PERSIST_EVERY_N_PARTS && !persistInFlight) {
-      partsSincePersist = 0;
-
-      // The checkpoint obeys the SAME horizon as the interval beat. It did not, and that made
-      // it the exact hole MAX_HEARTBEAT_MS exists to close rather than (as the docblock above
-      // used to claim) a mitigation for it: `persistBufferedParts` also writes lastHeartbeatAt,
-      // so any generation still pushing parts past the horizon refreshed its own liveness
-      // FOREVER. Both registries have already evicted it by then — its Stop button is a silent
-      // no-op and no client can join it — while /active-streams went on serving the row as a
-      // live, joinable stream. An immortal ghost, which is precisely what the cap was for.
-      if (Date.now() > heartbeatDeadline) return;
-
-      // The registry entry is the source of the snapshot. Once it is gone — evicted at the
-      // horizon, or deleted by a finish() that raced us — `getBufferedParts` returns `[]`
-      // meaning "NO ENTRY", not "no content". Serializing that would overwrite the real parts
-      // snapshot with nothing, destroying exactly the crash-recovery state it exists to provide:
-      // a client restoring mid-stream content after the originator's process dies.
-      if (streamMulticastRegistry.getMeta(messageId) === undefined) return;
-
-      persistBufferedParts(streamMulticastRegistry.getBufferedParts(messageId));
-    }
+    dirty = true;
+    // A tool call starting or finishing is a boundary a rejoining client should see
+    // immediately — see decideCheckpoint. isToolPart (reused from appendPart.ts, the
+    // same file convergeRawParts already delegates to) so a future part type
+    // chunkToPart.ts starts forwarding (reasoning, source, file — its docblock names
+    // these as future waves) doesn't silently start bypassing the dirty-flush throttle
+    // on every chunk the way a bare "anything but text" check would.
+    maybeCheckpoint(isToolPart(part));
   };
 
   const getBufferedParts = (): UIMessagePart[] =>

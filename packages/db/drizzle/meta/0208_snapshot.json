@@ -1,6 +1,6 @@
 {
-  "id": "30f07448-1f84-465b-8989-7f604e052c69",
-  "prevId": "51de21e2-aec7-43cd-8bb6-cba5859819e5",
+  "id": "271ffcc8-7c4f-42bf-8dff-9da5c7f3d787",
+  "prevId": "30f07448-1f84-465b-8989-7f604e052c69",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -19605,7 +19605,8 @@
         "EMAIL_VERIFICATION_REQUIRED",
         "TOS_PRIVACY_UPDATED",
         "MENTION",
-        "TASK_ASSIGNED"
+        "TASK_ASSIGNED",
+        "PRODUCT_UPDATE"
       ]
     },
     "public.toast_notification_level": {
