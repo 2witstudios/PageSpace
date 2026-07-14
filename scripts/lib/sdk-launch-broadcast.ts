@@ -238,6 +238,8 @@ export function preflight(input: {
   /** null = the erasure-suppression audience could not be read. */
   suppressed: Set<string> | null;
   isOnPrem: boolean;
+  /** process.env.FROM_EMAIL — unset means the send would use Resend's sandbox from-address. */
+  fromEmail?: string;
 }): PreflightResult {
   if (!input.live) return { ok: true };
 
@@ -271,7 +273,46 @@ export function preflight(input: {
     };
   }
 
+  if (!input.fromEmail?.trim()) {
+    // email-service falls back to Resend's onboarding@resend.dev, which only
+    // delivers to the account owner. Every send would fail, one at a time.
+    return {
+      ok: false,
+      reason:
+        'FROM_EMAIL is not set, so the send would fall back to Resend\'s sandbox address, which\n' +
+        '   only delivers to the account owner. Set FROM_EMAIL to the public sender and re-run.',
+    };
+  }
+
   return { ok: true };
+}
+
+/**
+ * Confirm the pages the email points at actually exist before mailing everyone.
+ *
+ * The CTA and the secondary link go to /docs/features/sdk and /docs/features/cli,
+ * which ship in a SIBLING pull request. If this broadcast goes out first, every
+ * recipient lands on a 404 — and you cannot un-send it. So the live run proves
+ * the links resolve rather than trusting the deploy order.
+ *
+ * @returns the URLs that did not come back OK.
+ */
+export async function findUnreachableUrls(
+  urls: string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<string[]> {
+  const results = await Promise.all(
+    urls.map(async (url) => {
+      try {
+        const response = await fetchImpl(url, { method: 'HEAD', redirect: 'follow' });
+        return response.ok ? null : `${url} (HTTP ${response.status})`;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return `${url} (${msg})`;
+      }
+    }),
+  );
+  return results.filter((r): r is string => r !== null);
 }
 
 export type SkipReason = 'invalid-email' | 'already-sent' | 'suppressed' | 'opted-out';

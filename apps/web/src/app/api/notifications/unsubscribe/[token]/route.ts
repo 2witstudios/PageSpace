@@ -49,23 +49,28 @@ type UnsubscribeOutcome =
  */
 async function applyUnsubscribe(token: string): Promise<UnsubscribeOutcome> {
   const tokenHash = hashToken(token);
-  const record = await db.query.emailUnsubscribeTokens.findFirst({
-    where: and(
+
+  // Claim the token in ONE statement. A read-then-write leaves a window where two
+  // concurrent hits (a mail client's one-click POST and the human clicking the
+  // link) both see an unused token and both proceed. Gating the UPDATE on
+  // `usedAt IS NULL` and taking the returned row means exactly one caller wins.
+  const [record] = await db
+    .update(emailUnsubscribeTokens)
+    .set({ usedAt: new Date() })
+    .where(and(
       eq(emailUnsubscribeTokens.tokenHash, tokenHash),
       gt(emailUnsubscribeTokens.expiresAt, new Date()),
       isNull(emailUnsubscribeTokens.usedAt)
-    ),
-  });
+    ))
+    .returning({
+      userId: emailUnsubscribeTokens.userId,
+      notificationType: emailUnsubscribeTokens.notificationType,
+    });
 
   if (!record) {
     loggers.api.warn('Invalid or expired unsubscribe token attempted');
     return { ok: false, status: 400, error: 'Invalid or expired unsubscribe link' };
   }
-
-  // Mark token as used (one-time use)
-  await db.update(emailUnsubscribeTokens)
-    .set({ usedAt: new Date() })
-    .where(eq(emailUnsubscribeTokens.tokenHash, tokenHash));
 
   const userId = record.userId;
   const notificationType = record.notificationType as NotificationType;
@@ -106,12 +111,13 @@ async function applyUnsubscribe(token: string): Promise<UnsubscribeOutcome> {
 }
 
 /**
- * POST /api/notifications/unsubscribe/[token] — RFC 8058 one-click unsubscribe.
+ * POST /api/notifications/unsubscribe/[token] — the actual opt-out.
  *
- * Mail clients POST here directly from the `List-Unsubscribe` header without ever
- * showing the user our page, so this returns a bare 200 rather than a redirect.
- * Bulk mail advertising `List-Unsubscribe-Post` MUST answer POST, or the client's
- * unsubscribe button fails and the sender's reputation takes the hit.
+ * This is the ONLY method that mutates. Two callers reach it: a mail client
+ * invoking RFC 8058 one-click from the `List-Unsubscribe-Post` header (which
+ * never renders our page, hence the bare 200), and the confirm button on
+ * /unsubscribe. Unauthenticated by design — possession of the one-time token IS
+ * the authorization, and the RFC requires the POST to work without a session.
  */
 export async function POST(
   _request: Request,
@@ -124,7 +130,10 @@ export async function POST(
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
-    return NextResponse.json({ unsubscribed: true }, { status: 200 });
+    return NextResponse.json(
+      { unsubscribed: true, notificationType: result.notificationType },
+      { status: 200 }
+    );
   } catch (error) {
     loggers.api.error('Error processing one-click unsubscribe:', error as Error);
     return NextResponse.json(
@@ -134,26 +143,51 @@ export async function POST(
   }
 }
 
-// GET /api/notifications/unsubscribe/[token] - Unsubscribe from email notifications
+/**
+ * GET /api/notifications/unsubscribe/[token] — validate only, then hand off.
+ *
+ * Deliberately does NOT unsubscribe. Spam filters, link scanners and corporate
+ * mail gateways fetch the URLs they find in a message (both in the body and in
+ * the `List-Unsubscribe` header), so a mutating GET means a machine can opt a
+ * user out of email they never asked to leave — and they would never know. The
+ * token is left unconsumed and the user is sent to a page whose button POSTs.
+ */
 export async function GET(
   request: Request,
   context: { params: Promise<{ token: string }> }
 ) {
   try {
     const { token } = await context.params;
-    const result = await applyUnsubscribe(token);
 
-    if (!result.ok) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+    // Read-only: confirm the token is live so an expired link fails here rather
+    // than after the user has clicked a confirm button.
+    const record = await db.query.emailUnsubscribeTokens.findFirst({
+      where: and(
+        eq(emailUnsubscribeTokens.tokenHash, hashToken(token)),
+        gt(emailUnsubscribeTokens.expiresAt, new Date()),
+        isNull(emailUnsubscribeTokens.usedAt)
+      ),
+    });
+
+    if (!record) {
+      loggers.api.warn('Invalid or expired unsubscribe token attempted');
+      return NextResponse.json(
+        { error: 'Invalid or expired unsubscribe link' },
+        { status: 400 }
+      );
     }
 
-    const { notificationType } = result;
+    const notificationType = record.notificationType;
+    if (!VALID_NOTIFICATION_TYPES.has(notificationType)) {
+      loggers.api.warn('Invalid notification type in unsubscribe token', { notificationType });
+      return NextResponse.json({ error: 'Invalid notification type' }, { status: 400 });
+    }
 
-    // Redirect to a confirmation page
     const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin;
 
     // Construct and validate redirect URL to prevent open redirect
-    const redirectUrl = new URL('/unsubscribe-success', appUrl);
+    const redirectUrl = new URL('/unsubscribe', appUrl);
+    redirectUrl.searchParams.set('token', token);
     redirectUrl.searchParams.set('type', notificationType);
 
     // Ensure redirect stays within the application domain

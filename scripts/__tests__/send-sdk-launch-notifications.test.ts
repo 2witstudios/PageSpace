@@ -1,9 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
   decideRecipient,
+  findUnreachableUrls,
   isLocalhostUrl,
   LedgerCorruptError,
   listUnsubscribeHeaders,
@@ -85,6 +86,7 @@ describe('preflight', () => {
     baseUrl: 'https://app.pagespace.ai',
     suppressed: new Set<string>(),
     isOnPrem: false,
+    fromEmail: 'PageSpace <hello@pagespace.ai>',
   };
 
   it('given a well-configured live send, should allow it', () => {
@@ -113,10 +115,57 @@ describe('preflight', () => {
     expect(result).toMatchObject({ reason: expect.stringMatching(/on-prem/) });
   });
 
+  it('given no FROM_EMAIL, should refuse the live send', () => {
+    // Otherwise every send falls back to Resend's sandbox address and fails.
+    const result = preflight({ ...base, fromEmail: undefined });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: expect.stringMatching(/FROM_EMAIL/) });
+  });
+
   it('given a dry run, should allow every otherwise-unsafe configuration', () => {
     expect(
-      preflight({ live: false, baseUrl: 'http://localhost:3000', suppressed: null, isOnPrem: true }),
+      preflight({
+        live: false,
+        baseUrl: 'http://localhost:3000',
+        suppressed: null,
+        isOnPrem: true,
+        fromEmail: undefined,
+      }),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('findUnreachableUrls', () => {
+  // The email's CTA points at docs pages that ship in a sibling PR. Mailing
+  // everyone a 404 is not something you can take back.
+  const ok = () => Promise.resolve({ ok: true, status: 200 } as Response);
+
+  it('given reachable pages, should report nothing', async () => {
+    const fetchImpl = vi.fn(ok);
+    expect(await findUnreachableUrls(['https://x/a', 'https://x/b'], fetchImpl)).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledWith('https://x/a', { method: 'HEAD', redirect: 'follow' });
+  });
+
+  it('given a page that 404s, should report it', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith('/cli')
+        ? ({ ok: false, status: 404 } as Response)
+        : ({ ok: true, status: 200 } as Response),
+    );
+
+    const unreachable = await findUnreachableUrls(['https://x/sdk', 'https://x/cli'], fetchImpl);
+
+    expect(unreachable).toEqual(['https://x/cli (HTTP 404)']);
+  });
+
+  it('given a network failure, should report it rather than assume the page is fine', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('DNS go boom');
+    });
+
+    const unreachable = await findUnreachableUrls(['https://x/sdk'], fetchImpl);
+
+    expect(unreachable).toEqual(['https://x/sdk (DNS go boom)']);
   });
 });
 

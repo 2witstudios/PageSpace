@@ -63,6 +63,51 @@ describe('email-service', () => {
     );
   });
 
+  it('given no headers or idempotency key, should call Resend with a single argument', async () => {
+    // Guards the common path: adding optional request-options must not change the
+    // call shape for the dozen callers that pass neither.
+    mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
+
+    await sendEmail({ to: 'user@test.com', subject: 'Test', react: null });
+
+    expect(mockSend.mock.calls[0]).toHaveLength(1);
+  });
+
+  it('given headers, should pass them to Resend (List-Unsubscribe on bulk mail)', async () => {
+    mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
+
+    await sendEmail({
+      to: 'user@test.com',
+      subject: 'Test',
+      react: null,
+      headers: { 'List-Unsubscribe': '<https://app.pagespace.ai/u/tok>' },
+    });
+
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: { 'List-Unsubscribe': '<https://app.pagespace.ai/u/tok>' },
+      })
+    );
+  });
+
+  it('given an idempotency key, should pass it so a retry cannot double-send', async () => {
+    // If Resend accepts a send but the response is lost, the caller retries. The
+    // key is what stops the recipient getting two copies.
+    mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
+
+    await sendEmail({
+      to: 'user@test.com',
+      subject: 'Test',
+      react: null,
+      idempotencyKey: 'sdk-cli-launch:u1',
+    });
+
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'user@test.com' }),
+      { idempotencyKey: 'sdk-cli-launch:u1' }
+    );
+  });
+
   it('given tenant mode, should send email via Resend', async () => {
     mockSend.mockResolvedValue({ data: { id: 'email-1' }, error: null });
 

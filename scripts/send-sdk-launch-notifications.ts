@@ -73,6 +73,7 @@ import { SdkCliLaunchEmail } from '@pagespace/lib/email-templates/SdkCliLaunchEm
 import { renderEmailToHtml } from '@pagespace/lib/email-templates/render-email';
 import {
   decideRecipient,
+  findUnreachableUrls,
   isLocalhostUrl,
   listUnsubscribeHeaders,
   loadSentEmails,
@@ -88,6 +89,14 @@ const EMAIL_SUBJECT = 'Build on PageSpace: the SDK and CLI are here';
 
 /** The opt-out channel this broadcast belongs to. */
 const NOTIFICATION_TYPE = 'PRODUCT_UPDATE' as const;
+
+/**
+ * Namespace for the per-recipient Resend idempotency key. Stable across re-runs
+ * ON PURPOSE — that is what makes a retry after a lost response collapse into the
+ * original send instead of delivering a second copy. Bump it only if you ever
+ * genuinely intend to mail this audience a second time.
+ */
+const IDEMPOTENCY_PREFIX = 'sdk-cli-launch-2026-07';
 
 function defaultLogPath(): string {
   const fromEnv = process.env.SDK_LAUNCH_EMAIL_LOG_PATH?.trim();
@@ -139,10 +148,31 @@ async function main(): Promise<number> {
   // read — see listSuppressedEmails). null means "not configured".
   const suppressed = await listSuppressedEmails();
 
-  const check = preflight({ live: opts.live, baseUrl, suppressed, isOnPrem: isOnPrem() });
+  const check = preflight({
+    live: opts.live,
+    baseUrl,
+    suppressed,
+    isOnPrem: isOnPrem(),
+    fromEmail: process.env.FROM_EMAIL,
+  });
   if (!check.ok) {
     console.error(`❌ Refusing live send: ${check.reason}`);
     process.exit(1);
+  }
+
+  // The docs pages ship in a sibling PR. Prove they're live before mailing a CTA
+  // that would otherwise 404 for everyone.
+  if (opts.live) {
+    const unreachable = await findUnreachableUrls([sdkDocsUrl, cliDocsUrl]);
+    if (unreachable.length > 0) {
+      console.error(
+        '❌ Refusing live send: the pages this email links to are not reachable, so every\n' +
+          '   recipient would land on a broken page. Deploy the docs first.\n' +
+          unreachable.map((u) => `     - ${u}`).join('\n'),
+      );
+      process.exit(1);
+    }
+    console.log('🔗 Docs links verified reachable.\n');
   }
 
   if (suppressed === null) {
@@ -192,7 +222,19 @@ async function main(): Promise<number> {
   const errors: string[] = [];
 
   for (const encryptedUser of rows) {
-    const user = await decryptUserRow(encryptedUser);
+    // One row whose PII won't decrypt (a legacy or corrupt ciphertext) must not
+    // abort a broadcast that is already part-way through sending.
+    let user: Awaited<ReturnType<typeof decryptUserRow<(typeof rows)[number]>>>;
+    try {
+      user = await decryptUserRow(encryptedUser);
+    } catch (error) {
+      errorCount++;
+      const msg = error instanceof Error ? error.message : String(error);
+      errors.push(`user ${encryptedUser.id}: could not decrypt PII: ${msg}`);
+      console.error(`  ✗ Skipping user ${encryptedUser.id}: could not decrypt PII: ${msg}`);
+      continue;
+    }
+
     const decision = decideRecipient({
       email: user.email,
       userId: user.id,
@@ -258,6 +300,10 @@ async function main(): Promise<number> {
         // Bulk mail must offer a client-level one-click unsubscribe, not just a
         // body link. The route answers POST for exactly this.
         headers: listUnsubscribeHeaders(unsubscribeUrl),
+        // If Resend accepts the send but the response is lost in transit, the
+        // catch below records a failure and the operator re-runs — this key is
+        // what stops that retry from delivering a second copy.
+        idempotencyKey: `${IDEMPOTENCY_PREFIX}:${user.id}`,
       });
     } catch (error) {
       errorCount++;
