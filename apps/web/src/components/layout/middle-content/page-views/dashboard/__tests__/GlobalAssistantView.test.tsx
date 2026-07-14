@@ -154,6 +154,7 @@ function planResume({
   native,
   isStreaming,
   ownTurnInFlight = isStreaming,
+  somethingRestarted = false,
   stillOnInterruptedConversation = true,
   attempts = [RECOVERED],
 }: {
@@ -168,6 +169,12 @@ function planResume({
    * rather than the one that was interrupted.
    */
   ownTurnInFlight?: boolean;
+  /**
+   * Whether something has ALREADY restarted the turn while we were recovering — useStreamRecovery
+   * watches the same failure from the other side (it fires on `status === 'error'`) and regenerates
+   * too, and the two share no lock.
+   */
+  somethingRestarted?: boolean;
   /**
    * Whether we are still on the conversation the interrupted turn belongs to. The recovery spans
    * seconds of network and the user can switch conversation inside that window; handleRetry always
@@ -197,7 +204,12 @@ function planResume({
   }
 
   // The REAL predicate, not a copy of it.
-  if (ownTurnInFlight && stillOnInterruptedConversation && canConcludeTurnIsLost(attempt)) {
+  if (
+    ownTurnInFlight &&
+    stillOnInterruptedConversation &&
+    !somethingRestarted &&
+    canConcludeTurnIsLost(attempt)
+  ) {
     effects.push('regenerate');
   }
   return effects;
@@ -453,6 +465,23 @@ describe('GlobalAssistantView load-on-select effects', () => {
         });
         expect(plan).toEqual(['stop', 'try-recover', 'try-recover', 'try-recover']);
         expect(plan).not.toContain('regenerate');
+      });
+
+      it('given useStreamRecovery already restarted the turn, should NOT regenerate again', () => {
+        // The two paths watch the same failure and share no lock: useStreamRecovery fires on
+        // `status === 'error'`, and rawStop() cannot have cancelled it (Chat.stop returns early
+        // unless the status is streaming/submitted). Regenerating on top would be exactly the
+        // double destruction the gate exists to prevent — takeOverConversationStreams aborts the
+        // run that just started, and handleRetry deletes its assistant message on the way in.
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            somethingRestarted: true,
+            attempts: [ANSWERED_NOTHING],
+          }),
+        ).toEqual(['stop', 'try-recover']);
       });
 
       it('given the user switched conversation during the recovery, should NOT regenerate', () => {

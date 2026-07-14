@@ -373,6 +373,10 @@ const GlobalAssistantView: React.FC = () => {
   const rawStop = selectedAgent ? agentStop : globalStop;
   const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
   const isStreaming = status === 'submitted' || status === 'streaming';
+  // Mirrored so the resume handler can read it AFTER its awaits. Its own closure captured the
+  // pre-background value, which cannot tell it whether a generation has since restarted.
+  const isStreamingRef = useRef(false);
+  isStreamingRef.current = isStreaming;
   const { wrapSend } = useSendHandoff(currentConversationId, status);
 
   const streamingAssistantText = useMemo(() => {
@@ -647,11 +651,11 @@ const GlobalAssistantView: React.FC = () => {
         const liveStream = (data.streams ?? []).find(
           (s) => s.conversationId === conversationId && s.triggeredBy.userId === user?.id,
         );
-        if (
-          liveStream &&
-          stillOnThisConversation() &&
-          decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin'
-        ) {
+        // decideRecovery's priority (rejoin > refetch > regenerate) is expressed by the ORDER of
+        // these steps, not by a call here: with hasLiveStream hardcoded true it could only ever
+        // answer 'rejoin', so asking would be decoration. Step 2 below is where it genuinely
+        // decides. A live stream is always rejoined, never read around.
+        if (liveStream && stillOnThisConversation()) {
           // Evict the half-streamed assistant bubble useChat is still holding for this run. See
           // evictStalePartial: without it the rejoined stream is deduped straight back out and
           // renders nothing, and it is safe only when the server's checkpoint has frames the
@@ -848,7 +852,8 @@ const GlobalAssistantView: React.FC = () => {
   //
   //   live stream        → rejoin it, no DB read at all
   //   already persisted  → refetch the completed reply (the stream finished while backgrounded)
-  //   neither            → falls through to handlePullUpRefresh below
+  //   neither            → regenerate — but ONLY once both questions actually came back
+  //                         (canConcludeTurnIsLost). Never a DB refresh: see the gate below.
   const resumeEnabled = useCallback(
     () => canResumeRecovery(currentConversationId, useEditingStore.getState().isAnyEditing()),
     [currentConversationId],
@@ -932,7 +937,22 @@ const GlobalAssistantView: React.FC = () => {
       // their prompt and the retry action on it.
       const stillOnTheInterruptedConversation =
         currentConversationIdRef.current === conversationAtResume;
-      if (hadTurnInFlight && stillOnTheInterruptedConversation && canConcludeTurnIsLost(attempt)) {
+      // Nothing has restarted the turn in the meantime. useStreamRecovery watches the SAME failure
+      // from the other side (it fires on `status === 'error'`) and regenerates too, and the two
+      // share no lock. If iOS delivers the dead fetch's rejection as an error before this listener
+      // runs, useStreamRecovery may already have retried — and `rawStop()` above would have been a
+      // no-op, since Chat.stop() returns early unless the status is streaming/submitted, so it
+      // cannot have cancelled that. Regenerating on top would be exactly the double destruction the
+      // gate below exists to prevent: takeOverConversationStreams aborts the run that just started,
+      // and handleRetry deletes its assistant message on the way in. Read through a ref because the
+      // closure's copy is the value captured before we were frozen.
+      const nothingHasRestarted = !isStreamingRef.current;
+      if (
+        hadTurnInFlight &&
+        stillOnTheInterruptedConversation &&
+        nothingHasRestarted &&
+        canConcludeTurnIsLost(attempt)
+      ) {
         await handleRetry();
       }
     }, [
