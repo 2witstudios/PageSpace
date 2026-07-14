@@ -1103,12 +1103,22 @@ export function openPtyShell({
 
     // The SOLE consult of `planWatchdogResponse` — every entry point funnels
     // through here: the error handler's direct call, this function's own
-    // recursive retry (the `catch` block below), and the lazy reattach
-    // `setViewerAttached(true)` triggers. Passing the count AFTER the
-    // increment above matches exactly what this decision has always been
-    // keyed on (the inline check this replaces compared the same
-    // post-increment value), so a 'fatal' verdict here is the real one, not
-    // a preview of one `reconnect()` would recompute differently.
+    // recursive retry (the `catch` block below), and the lazy reattach that
+    // `resumeIfLazyReattachNeeded` pays back (a viewer returning, or a
+    // keystroke). Passing the count AFTER the increment above matches exactly
+    // what this decision has always been keyed on (the inline check this
+    // replaces compared the same post-increment value), so a 'fatal' verdict
+    // here is the real one, not a preview of one `reconnect()` would recompute
+    // differently.
+    //
+    // INVARIANT, load-bearing for the resume path: whenever `needsLazyReattach`
+    // is true, `reconnecting` is false. Every quiet verdict below clears
+    // `reconnecting` in the same breath that it sets the debt, so the
+    // `reconnecting` early-return above can never swallow a resume that has
+    // already cleared the flag. Keep it that way — a quiet branch that returned
+    // while still `reconnecting` would drop the debt on the floor silently, and
+    // the viewer would sit at a dead terminal with nothing left to trigger a
+    // reattach.
     const action = planWatchdogResponse({
       viewersAttached: viewerAttached,
       closed,
