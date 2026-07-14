@@ -80,13 +80,20 @@ type DegradeReason =
    */
   | 'lock_error';
 
-function degradeToUnlocked(info: { conversationId: string; attemptsMade: number; reason: DegradeReason }): void {
+function degradeToUnlocked(info: {
+  conversationId: string;
+  attemptsMade: number;
+  reason: DegradeReason;
+  /** Set only for `reason: 'lock_error'` — the error the lock connection itself threw. */
+  error?: unknown;
+}): void {
+  const { error, ...metricInfo } = info;
   // Rail 8: never silent. Named metric + structured warn, always — best-effort serialization
   // gives up here; availability wins over serialization, a send must never block on this lock.
-  logPerformance('ai_send.advisory_lock_degraded', 1, 'count', info);
+  logPerformance('ai_send.advisory_lock_degraded', 1, 'count', metricInfo);
   loggers.ai.warn(
     'start-generation-exclusive: advisory lock unavailable, proceeding unlocked (degraded, best-effort serialization)',
-    info,
+    { ...metricInfo, ...(error !== undefined ? { error: error instanceof Error ? error.message : String(error) } : {}) },
   );
 }
 
@@ -112,7 +119,7 @@ export async function startGenerationExclusive<T>(
       // way lock contention might, so retrying here would only add latency to a send that
       // must never block. See the PR board page's verification: "Lock-pool exhaustion
       // simulation: proceeds unlocked, metric emitted, warn logged, both requests complete."
-      degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error' });
+      degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error', error });
       const result = await run();
       return { outcome: 'degraded', result };
     }

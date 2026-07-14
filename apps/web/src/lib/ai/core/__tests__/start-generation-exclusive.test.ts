@@ -217,14 +217,25 @@ describe('startGenerationExclusive', () => {
       expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
       const [warnMessage, warnMeta] = mockLoggerWarn.mock.calls[0];
       expect(String(warnMessage).toLowerCase()).toMatch(/degrad|unlocked|best-effort/);
-      expect(warnMeta).toMatchObject({ conversationId: 'conv-77', reason: 'lock_error' });
+      expect(warnMeta).toMatchObject({ conversationId: 'conv-77', reason: 'lock_error', error: 'pool exhausted' });
 
       expect(mockLogPerformance).toHaveBeenCalledTimes(1);
       const [metricName, metricValue, metricUnit, metricMeta] = mockLogPerformance.mock.calls[0];
       expect(metricName).toEqual(expect.stringContaining('advisory_lock'));
       expect(metricValue).toBe(1);
       expect(metricUnit).toBe('count');
-      expect(metricMeta).toMatchObject({ conversationId: 'conv-77', reason: 'lock_error' });
+      expect(metricMeta).toEqual({ conversationId: 'conv-77', attemptsMade: 0, reason: 'lock_error' });
+    });
+
+    it('given the lock machinery throws a non-Error value, should still stringify it in the warn metadata', async () => {
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => { throw 'connection reset'; }) };
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      await startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep });
+
+      const [, warnMeta] = mockLoggerWarn.mock.calls[0];
+      expect(warnMeta).toMatchObject({ error: 'connection reset' });
     });
 
     it('given the lock-busy degrade path, telemetry should carry reason "lock_busy" (distinguishable from lock_error)', async () => {
