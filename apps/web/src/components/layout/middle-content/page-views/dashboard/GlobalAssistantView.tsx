@@ -639,11 +639,14 @@ const GlobalAssistantView: React.FC = () => {
           // partial we froze with.
           const staleId = liveStream.messageId;
           const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
+          // Via agentSetMessages / globalSetMessages, not the raw useChat setters: agent mode
+          // must drop the stale partial from the dashboard store as well, or the store keeps
+          // serving it back to a co-mounted surface.
           if (selectedAgent) {
-            setAgentMessages(evictStale);
+            agentSetMessages(evictStale);
             rejoinAgentStreamRef.current();
           } else {
-            setGlobalLocalMessages(evictStale);
+            globalSetMessages(evictStale);
             rejoinGlobalStream();
           }
           return true;
@@ -690,6 +693,8 @@ const GlobalAssistantView: React.FC = () => {
     selectedAgent,
     user,
     rejoinGlobalStream,
+    agentSetMessages,
+    globalSetMessages,
     setAgentMessages,
     setAgentStoreMessages,
     setGlobalLocalMessages,
