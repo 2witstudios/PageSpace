@@ -221,15 +221,6 @@ export async function POST(request: Request) {
       }
     } = requestBody;
 
-    // Server-resolved (and permission-checked) from contextRef when the client sent
-    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
-    // undefined here rather than trusting whatever the client claimed. Falls back to
-    // the legacy client-computed pageContext only for old clients that never sent a
-    // contextRef at all.
-    const pageContext = contextRef
-      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef))
-      : legacyPageContext;
-
     // Assign to outer scope variables for error handling
     chatId = requestChatId;
     selectedProvider = requestSelectedProvider;
@@ -244,11 +235,21 @@ export async function POST(request: Request) {
       loggers.ai.warn('AI Chat API: No messages provided');
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
-    
+
     if (!chatId) {
       loggers.ai.warn('AI Chat API: No chatId provided');
       return NextResponse.json({ error: 'chatId is required' }, { status: 400 });
     }
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // undefined here rather than trusting whatever the client claimed. Falls back to
+    // the legacy client-computed pageContext only for old clients that never sent a
+    // contextRef at all. Deferred until after the required-field checks above so an
+    // invalid request (no messages/chatId) fails fast without an extra DB round-trip.
+    const pageContext = contextRef
+      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef))
+      : legacyPageContext;
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
     if (mcpScopeError) {

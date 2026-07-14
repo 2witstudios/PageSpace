@@ -321,22 +321,23 @@ export async function POST(
       mcpTools
     } = requestBody;
 
-    // Server-resolved (and permission-checked) from contextRef when the client sent
-    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
-    // null here rather than trusting whatever the client claimed. Falls back to the
-    // legacy client-computed locationContext only for old clients that never sent a
-    // contextRef at all.
-    const locationContext = contextRef
-      ? await resolveRequestContext(auth, contextRef)
-      : legacyLocationContext;
-
     // Validate required parameters
     if (!requestMessages || requestMessages.length === 0) {
       loggers.api.debug('Global Assistant Chat API: No messages provided', {});
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
-    
+
     loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // null here rather than trusting whatever the client claimed. Falls back to the
+    // legacy client-computed locationContext only for old clients that never sent a
+    // contextRef at all. Deferred until after the required-field check above so an
+    // invalid request (no messages) fails fast without an extra DB round-trip.
+    const locationContext = contextRef
+      ? await resolveRequestContext(auth, contextRef)
+      : legacyLocationContext;
 
     // Image security validation — validate file parts in the user message
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
