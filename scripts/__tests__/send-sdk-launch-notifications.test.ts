@@ -87,6 +87,7 @@ describe('preflight', () => {
     suppressed: new Set<string>(),
     isOnPrem: false,
     fromEmail: 'PageSpace <hello@pagespace.ai>',
+    postalAddress: '1 Example St, Springfield',
   };
 
   it('given a well-configured live send, should allow it', () => {
@@ -122,6 +123,14 @@ describe('preflight', () => {
     expect(result).toMatchObject({ reason: expect.stringMatching(/FROM_EMAIL/) });
   });
 
+  it('given no postal address, should refuse the live send', () => {
+    // This is commercial email, so CAN-SPAM requires a physical address in the
+    // footer. We refuse rather than invent one, and it cannot be added after.
+    const result = preflight({ ...base, postalAddress: undefined });
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: expect.stringMatching(/COMPANY_POSTAL_ADDRESS/) });
+  });
+
   it('given a dry run, should allow every otherwise-unsafe configuration', () => {
     expect(
       preflight({
@@ -130,6 +139,7 @@ describe('preflight', () => {
         suppressed: null,
         isOnPrem: true,
         fromEmail: undefined,
+        postalAddress: undefined,
       }),
     ).toEqual({ ok: true });
   });

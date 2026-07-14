@@ -25,6 +25,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(() => 'and'),
   gt: vi.fn(() => 'gt'),
   isNull: vi.fn(() => 'isNull'),
+  isNotNull: vi.fn(() => 'isNotNull'),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   emailUnsubscribeTokens: {
@@ -61,6 +62,10 @@ function tokenClaimFails() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks does NOT drain a mockResolvedValueOnce queue, so a leftover
+  // one-shot value would leak into the next test. Reset the query spies outright.
+  mockTokenFindFirst.mockReset();
+  mockPrefFindFirst.mockReset();
   process.env.WEB_APP_URL = 'https://app.pagespace.ai';
 
   mockUpdate.mockReturnValue({ set: mockUpdateSet });
@@ -97,6 +102,24 @@ describe('GET /api/notifications/unsubscribe/[token]', () => {
     expect(res.status).toBe(400);
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  it('given a token already consumed by one-click, should show "unsubscribed", not an error', async () => {
+    // After a mail client POSTs the one-click header, the reader often clicks the
+    // footer link too. Their opt-out DID work — showing them a raw JSON error
+    // would read as a failure and invite a support ticket.
+    mockTokenFindFirst
+      .mockResolvedValueOnce(undefined) // no live (unused) token
+      .mockResolvedValueOnce({ userId: 'u1', notificationType: 'PRODUCT_UPDATE', usedAt: new Date() });
+
+    const res = await GET(req(), params('tok'));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toBe(
+      'https://app.pagespace.ai/unsubscribe-success?type=PRODUCT_UPDATE',
+    );
+    // Still no second mutation — the opt-out already happened.
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it('given a token carrying an unknown notification type, should 400 without consuming it', async () => {

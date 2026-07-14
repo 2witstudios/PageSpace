@@ -240,6 +240,8 @@ export function preflight(input: {
   isOnPrem: boolean;
   /** process.env.FROM_EMAIL — unset means the send would use Resend's sandbox from-address. */
   fromEmail?: string;
+  /** process.env.COMPANY_POSTAL_ADDRESS — legally required in commercial email. */
+  postalAddress?: string;
 }): PreflightResult {
   if (!input.live) return { ok: true };
 
@@ -284,6 +286,18 @@ export function preflight(input: {
     };
   }
 
+  if (!input.postalAddress?.trim()) {
+    // This is a COMMERCIAL email — a product announcement, not a transactional
+    // notice — so CAN-SPAM requires the sender's physical postal address in the
+    // message. We will not invent one, and it cannot be added after the send.
+    return {
+      ok: false,
+      reason:
+        'COMPANY_POSTAL_ADDRESS is not set. This is a commercial email, and CAN-SPAM requires a\n' +
+        '   physical postal address in the footer. Set COMPANY_POSTAL_ADDRESS and re-run.',
+    };
+  }
+
   return { ok: true };
 }
 
@@ -304,8 +318,13 @@ export async function findUnreachableUrls(
   const results = await Promise.all(
     urls.map(async (url) => {
       try {
-        const response = await fetchImpl(url, { method: 'HEAD', redirect: 'follow' });
-        return response.ok ? null : `${url} (HTTP ${response.status})`;
+        const head = await fetchImpl(url, { method: 'HEAD', redirect: 'follow' });
+        if (head.ok) return null;
+
+        // Plenty of hosts and CDNs answer 403/405 to HEAD on a page that serves
+        // fine over GET. Don't block a launch on that — ask again properly.
+        const get = await fetchImpl(url, { method: 'GET', redirect: 'follow' });
+        return get.ok ? null : `${url} (HTTP ${get.status})`;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         return `${url} (${msg})`;
@@ -346,4 +365,162 @@ export function decideRecipient(input: {
   if (input.suppressed?.has(emailKey)) return { outcome: 'suppressed' };
   if (input.optedOut.has(input.userId)) return { outcome: 'opted-out' };
   return { outcome: 'send', email, emailKey };
+}
+
+/**
+ * Raised when a send succeeded but the ledger did not record it. Fatal by design:
+ * the recipient has the email and nothing remembers that, so continuing would risk
+ * mailing them again on the next run. Carries what the operator must write down.
+ */
+export class LedgerWriteFailed extends Error {
+  constructor(
+    readonly entry: SentLedgerEntry,
+    readonly cause: unknown,
+  ) {
+    const why = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `sent to ${entry.email} but failed to record it in the ledger: ${why}\n` +
+        '   Add this line to the ledger before re-running, or that user will be emailed again:\n' +
+        `   ${JSON.stringify(entry)}`,
+    );
+    this.name = 'LedgerWriteFailed';
+  }
+}
+
+export interface BroadcastUser {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+}
+
+export interface BroadcastResult {
+  sent: number;
+  attempted: number;
+  skipped: Record<SkipReason, number>;
+  errors: string[];
+}
+
+/**
+ * The send loop: decide, send, record — in that order, for every row.
+ *
+ * Every dependency that touches the outside world is injected, because this is
+ * the code that can double-send someone and it must be testable without a
+ * database or a mail provider. The orderings it encodes are the whole point:
+ *
+ *  - `--limit` counts ATTEMPTS, not successes: a provider outage must not let a
+ *    25-person canary quietly walk the entire audience.
+ *  - A send is recorded in the ledger IMMEDIATELY after it succeeds, and a
+ *    failure to record is FATAL — an unrecorded send would go out twice.
+ *  - A send that fails is NOT recorded, so a re-run retries exactly it.
+ *  - An address that succeeds is added to `alreadySent` in-memory too, so two
+ *    accounts sharing one address don't both get mailed in a single run.
+ */
+export async function runBroadcast(input: {
+  live: boolean;
+  limit: number | null;
+  delayMs: number;
+  rows: BroadcastUser[];
+  decrypt: (row: BroadcastUser) => Promise<BroadcastUser>;
+  isValidEmail: (email: string) => boolean;
+  alreadySent: Set<string>;
+  suppressed: Set<string> | null;
+  optedOut: Set<string>;
+  /** Live send for one recipient (mints the token, builds the email, sends it). */
+  sendOne: (r: { userId: string; userName: string; email: string }) => Promise<void>;
+  /** Dry-run equivalent: render only, so template errors still surface. */
+  renderOne: (r: { userId: string; userName: string; email: string }) => Promise<string>;
+  /** Append one successful send to the ledger, durably. */
+  record: (entry: SentLedgerEntry) => Promise<void>;
+  now: () => string;
+  sleep: (ms: number) => Promise<void>;
+  log: (message: string) => void;
+  logError: (message: string) => void;
+}): Promise<BroadcastResult> {
+  const skipped: Record<SkipReason, number> = {
+    'already-sent': 0,
+    suppressed: 0,
+    'opted-out': 0,
+    'invalid-email': 0,
+  };
+  const errors: string[] = [];
+  let sent = 0;
+  let attempted = 0;
+
+  for (const row of input.rows) {
+    // One row whose PII will not decrypt (legacy or corrupt ciphertext) must not
+    // abort a broadcast that is already part-way through sending.
+    let user: BroadcastUser;
+    try {
+      user = await input.decrypt(row);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      errors.push(`user ${row.id}: could not decrypt PII: ${msg}`);
+      input.logError(`  ✗ Skipping user ${row.id}: could not decrypt PII: ${msg}`);
+      continue;
+    }
+
+    const decision = decideRecipient({
+      email: user.email,
+      userId: user.id,
+      isValidEmail: input.isValidEmail,
+      alreadySent: input.alreadySent,
+      suppressed: input.suppressed,
+      optedOut: input.optedOut,
+    });
+
+    if (decision.outcome !== 'send') {
+      skipped[decision.outcome]++;
+      continue;
+    }
+
+    const { email, emailKey } = decision;
+
+    // Checked AFTER the skip filters, so already-sent / suppressed rows don't
+    // consume the budget of a --limit=25 canary.
+    if (input.limit !== null && attempted >= input.limit) {
+      input.log(`\n⏹️  Reached --limit=${input.limit}; stopping.`);
+      break;
+    }
+    attempted++;
+
+    const recipient = { userId: user.id, userName: user.name?.trim() || 'there', email };
+
+    if (!input.live) {
+      try {
+        const html = await input.renderOne(recipient);
+        input.log(`  [dry-run] → ${email} (${html.length} bytes)`);
+        sent++;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        errors.push(`${email}: ${msg}`);
+        input.logError(`  ✗ Render failed for ${email}: ${msg}`);
+      }
+      continue;
+    }
+
+    try {
+      await input.sendOne(recipient);
+    } catch (error) {
+      // Retryable: nothing was written, so a re-run will try this address again.
+      const msg = error instanceof Error ? error.message : String(error);
+      errors.push(`${email}: ${msg}`);
+      input.logError(`  ✗ Send failed for ${email}: ${msg}`);
+      continue;
+    }
+
+    const entry: SentLedgerEntry = { email: emailKey, userId: user.id, sentAt: input.now() };
+    try {
+      await input.record(entry);
+    } catch (error) {
+      // The email is already gone. If we cannot remember that, we must stop.
+      throw new LedgerWriteFailed(entry, error);
+    }
+
+    input.alreadySent.add(emailKey);
+    sent++;
+    input.log(`  ✓ ${email}`);
+    if (input.delayMs > 0) await input.sleep(input.delayMs);
+  }
+
+  return { sent, attempted, skipped, errors };
 }

@@ -72,9 +72,9 @@ import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { SdkCliLaunchEmail } from '@pagespace/lib/email-templates/SdkCliLaunchEmail';
 import { renderEmailToHtml } from '@pagespace/lib/email-templates/render-email';
 import {
-  decideRecipient,
   findUnreachableUrls,
   isLocalhostUrl,
+  LedgerWriteFailed,
   listUnsubscribeHeaders,
   loadSentEmails,
   openLedger,
@@ -83,7 +83,15 @@ import {
   recordSent,
   resolveBaseUrl,
   resolveMarketingBase,
+  runBroadcast,
 } from './lib/sdk-launch-broadcast';
+
+/** One person the broadcast is about to mail. */
+interface Recipient {
+  userId: string;
+  userName: string;
+  email: string;
+}
 
 const EMAIL_SUBJECT = 'Build on PageSpace: the SDK and CLI are here';
 
@@ -148,12 +156,15 @@ async function main(): Promise<number> {
   // read — see listSuppressedEmails). null means "not configured".
   const suppressed = await listSuppressedEmails();
 
+  const postalAddress = process.env.COMPANY_POSTAL_ADDRESS?.trim();
+
   const check = preflight({
     live: opts.live,
     baseUrl,
     suppressed,
     isOnPrem: isOnPrem(),
     fromEmail: process.env.FROM_EMAIL,
+    postalAddress,
   });
   if (!check.ok) {
     console.error(`❌ Refusing live send: ${check.reason}`);
@@ -215,137 +226,81 @@ async function main(): Promise<number> {
 
   console.log(`👥 ${rows.length} user(s) returned from the database.\n`);
 
-  let sentCount = 0;
-  let attemptedCount = 0;
-  const skipped = { 'already-sent': 0, suppressed: 0, 'opted-out': 0, 'invalid-email': 0 };
-  let errorCount = 0;
-  const errors: string[] = [];
+  /** Build and send one real email: mint the opt-out token, then hand it to Resend. */
+  const sendOne = async ({ userId, userName, email }: Recipient): Promise<void> => {
+    const token = await generateUnsubscribeToken(userId, NOTIFICATION_TYPE);
+    const unsubscribeUrl = `${baseUrl}/api/notifications/unsubscribe/${token}`;
+    await sendEmail({
+      to: email,
+      subject: EMAIL_SUBJECT,
+      react: SdkCliLaunchEmail({ userName, sdkDocsUrl, cliDocsUrl, postalAddress, unsubscribeUrl }),
+      // Bulk mail must offer a client-level one-click unsubscribe, not just a body
+      // link. The unsubscribe route answers POST for exactly this.
+      headers: listUnsubscribeHeaders(unsubscribeUrl),
+      // If Resend accepts a send but the response is lost in transit, the operator
+      // is told to re-run — this key lets Resend collapse that retry into the
+      // original send, within its idempotency window (~24h). The LEDGER, not this
+      // key, is what protects a re-run days later.
+      idempotencyKey: `${IDEMPOTENCY_PREFIX}:${userId}`,
+    });
+  };
 
-  for (const encryptedUser of rows) {
-    // One row whose PII won't decrypt (a legacy or corrupt ciphertext) must not
-    // abort a broadcast that is already part-way through sending.
-    let user: Awaited<ReturnType<typeof decryptUserRow<(typeof rows)[number]>>>;
-    try {
-      user = await decryptUserRow(encryptedUser);
-    } catch (error) {
-      errorCount++;
-      const msg = error instanceof Error ? error.message : String(error);
-      errors.push(`user ${encryptedUser.id}: could not decrypt PII: ${msg}`);
-      console.error(`  ✗ Skipping user ${encryptedUser.id}: could not decrypt PII: ${msg}`);
-      continue;
-    }
+  /** Dry-run: render the real template so a template error still surfaces, and send nothing. */
+  const renderOne = ({ userName }: Recipient): Promise<string> =>
+    renderEmailToHtml(
+      SdkCliLaunchEmail({
+        userName,
+        sdkDocsUrl,
+        cliDocsUrl,
+        postalAddress,
+        // A dry run mints no token: that would be a DB write.
+        unsubscribeUrl: `${baseUrl}/api/notifications/unsubscribe/<token>`,
+      }),
+    );
 
-    const decision = decideRecipient({
-      email: user.email,
-      userId: user.id,
+  let result;
+  try {
+    result = await runBroadcast({
+      live: opts.live,
+      limit: opts.limit,
+      delayMs: opts.delayMs,
+      rows,
+      decrypt: decryptUserRow,
       isValidEmail,
       alreadySent,
       suppressed,
       optedOut,
+      sendOne,
+      renderOne,
+      record: (entry) => recordSent(ledger!, entry),
+      now: () => new Date().toISOString(),
+      sleep,
+      log: (msg) => console.log(msg),
+      logError: (msg) => console.error(msg),
     });
-
-    if (decision.outcome !== 'send') {
-      skipped[decision.outcome]++;
-      continue;
+  } catch (error) {
+    if (error instanceof LedgerWriteFailed) {
+      // The email went out but nothing remembers it. Stop before anyone else is
+      // mailed, and tell the operator exactly what to write down.
+      console.error(`\n❌ FATAL: ${error.message}\n   Ledger: ${opts.logPath}`);
+      if (ledger) await ledger.close();
+      return 1;
     }
-
-    const { email, emailKey } = decision;
-
-    // Count ATTEMPTS, not just successes, against --limit: a provider outage must
-    // not let a `--limit=25` canary still try the whole audience. Checked after the
-    // skip filters so already-sent / suppressed rows don't consume the budget.
-    if (opts.limit !== null && attemptedCount >= opts.limit) {
-      console.log(`\n⏹️  Reached --limit=${opts.limit}; stopping.`);
-      break;
-    }
-    attemptedCount++;
-
-    const userName = user.name?.trim() || 'there';
-
-    if (!opts.live) {
-      // Render to HTML so the dry run exercises the real template path and
-      // surfaces any rendering error, without contacting the provider or
-      // minting a token (token generation is a DB write — dry runs stay clean).
-      try {
-        const html = await renderEmailToHtml(
-          SdkCliLaunchEmail({
-            userName,
-            sdkDocsUrl,
-            cliDocsUrl,
-            unsubscribeUrl: `${baseUrl}/api/notifications/unsubscribe/<token>`,
-          }),
-        );
-        console.log(`  [dry-run] → ${email} (${html.length} bytes)`);
-        sentCount++;
-      } catch (error) {
-        errorCount++;
-        const msg = error instanceof Error ? error.message : String(error);
-        errors.push(`${email}: ${msg}`);
-        console.error(`  ✗ Render failed for ${email}: ${msg}`);
-      }
-      continue;
-    }
-
-    // Live send. A provider failure is per-recipient retryable, but once a send
-    // is accepted the ledger record MUST persist — otherwise a re-run would
-    // double-send. So a ledger-write failure after a successful send is fatal:
-    // we name the unrecorded recipient and abort before sending anyone else.
-    try {
-      const token = await generateUnsubscribeToken(user.id, NOTIFICATION_TYPE);
-      const unsubscribeUrl = `${baseUrl}/api/notifications/unsubscribe/${token}`;
-      await sendEmail({
-        to: email,
-        subject: EMAIL_SUBJECT,
-        react: SdkCliLaunchEmail({ userName, sdkDocsUrl, cliDocsUrl, unsubscribeUrl }),
-        // Bulk mail must offer a client-level one-click unsubscribe, not just a
-        // body link. The route answers POST for exactly this.
-        headers: listUnsubscribeHeaders(unsubscribeUrl),
-        // If Resend accepts the send but the response is lost in transit, the
-        // catch below records a failure and the operator re-runs — this key is
-        // what stops that retry from delivering a second copy.
-        idempotencyKey: `${IDEMPOTENCY_PREFIX}:${user.id}`,
-      });
-    } catch (error) {
-      errorCount++;
-      const msg = error instanceof Error ? error.message : String(error);
-      errors.push(`${email}: ${msg}`);
-      console.error(`  ✗ Send failed for ${email}: ${msg}`);
-      continue;
-    }
-
-    try {
-      await recordSent(ledger!, {
-        email: emailKey,
-        userId: user.id,
-        sentAt: new Date().toISOString(),
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error(
-        `\n❌ FATAL: sent to ${email} but failed to record it in the ledger: ${msg}\n` +
-          `   Add this line to ${opts.logPath} before re-running, or that user will be emailed again:\n` +
-          `   ${JSON.stringify({ email: emailKey, userId: user.id })}`,
-      );
-      await ledger!.close();
-      process.exit(1);
-    }
-
-    alreadySent.add(emailKey);
-    sentCount++;
-    console.log(`  ✓ ${email}`);
-    if (opts.delayMs > 0) await sleep(opts.delayMs);
+    throw error;
   }
 
   if (ledger) await ledger.close();
 
+  const { sent, skipped, errors } = result;
   console.log('\n📊 Summary:');
-  console.log(`  ${opts.live ? 'Sent' : 'Would send'}:            ${sentCount}`);
+  console.log(`  ${opts.live ? 'Sent' : 'Would send'}:            ${sent}`);
   console.log(`  Skipped (already sent):  ${skipped['already-sent']}`);
   console.log(`  Skipped (suppressed):    ${skipped.suppressed}`);
   console.log(`  Skipped (opted out):     ${skipped['opted-out']}`);
   console.log(`  Skipped (invalid email): ${skipped['invalid-email']}`);
-  console.log(`  Errors:                  ${errorCount}`);
+  console.log(`  Errors:                  ${errors.length}`);
   errors.forEach((err) => console.error(`    - ${err}`));
+  const errorCount = errors.length;
 
   if (!opts.live) {
     console.log('\n✅ Dry run complete — no emails sent, ledger untouched. Re-run with --live to send.');

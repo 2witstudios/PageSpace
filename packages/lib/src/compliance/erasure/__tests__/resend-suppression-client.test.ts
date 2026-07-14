@@ -1,13 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const resendGet = vi.fn();
+const contactsList = vi.fn();
 const contactsUpdate = vi.fn();
 const contactsCreate = vi.fn();
 
 vi.mock('resend', () => ({
   Resend: class {
-    get = resendGet;
-    contacts = { update: contactsUpdate, create: contactsCreate };
+    contacts = { list: contactsList, update: contactsUpdate, create: contactsCreate };
   },
 }));
 vi.mock('../../../logging/logger-config', () => ({
@@ -47,7 +46,7 @@ afterEach(() => {
 
 describe('listSuppressedEmails', () => {
   it('given unsubscribed contacts, should return only those, normalized', async () => {
-    resendGet.mockResolvedValue({
+    contactsList.mockResolvedValue({
       data: {
         data: [
           { id: 'c1', email: 'Erased@Example.com', unsubscribed: true },
@@ -68,41 +67,37 @@ describe('listSuppressedEmails', () => {
     delete process.env.RESEND_AUDIENCE_ID;
 
     expect(await listSuppressedEmails()).toBeNull();
-    expect(resendGet).not.toHaveBeenCalled();
+    expect(contactsList).not.toHaveBeenCalled();
   });
 
   it('given an empty audience, should return an empty set (not null)', async () => {
-    resendGet.mockResolvedValue(page([], false));
+    contactsList.mockResolvedValue(page([], false));
     expect(await listSuppressedEmails()).toEqual(new Set());
   });
 
-  it('should read the AUDIENCE resource that erasure writes to, not the segments alias', async () => {
-    // resend@6's contacts.list({ audienceId }) silently rewrites to
-    // /segments/{id}/contacts, while suppression writes go to /audiences/{id}/contacts.
-    // Reading a different resource than we write to would report an empty
-    // suppression list and mail every erased user.
-    resendGet.mockResolvedValue(page([], false));
+  it('should ask for the largest page Resend allows, not its 20-row default', async () => {
+    contactsList.mockResolvedValue(page([], false));
 
     await listSuppressedEmails();
 
-    expect(resendGet).toHaveBeenCalledWith('/audiences/test-audience/contacts?limit=100');
+    expect(contactsList).toHaveBeenCalledWith({ audienceId: 'test-audience', limit: 100 });
   });
 
   describe('errors are never swallowed into a short list', () => {
     it('given a provider error, should throw rather than report an empty suppression list', async () => {
-      resendGet.mockResolvedValue({ data: null, error: { message: 'rate limited' } });
+      contactsList.mockResolvedValue({ data: null, error: { message: 'rate limited' } });
       await expect(listSuppressedEmails()).rejects.toThrow(/rate limited/);
     });
 
     it('given a response with no contact array, should throw', async () => {
-      resendGet.mockResolvedValue({ data: {}, error: null });
+      contactsList.mockResolvedValue({ data: {}, error: null });
       await expect(listSuppressedEmails()).rejects.toThrow(/contact array/);
     });
   });
 
   describe('completeness is proven, not assumed', () => {
     it('given an audience spanning several pages, should page until has_more is false', async () => {
-      resendGet
+      contactsList
         .mockResolvedValueOnce(page([{ id: 'c1', email: 'one@example.com', unsubscribed: true }], true))
         .mockResolvedValueOnce(page([{ id: 'c2', email: 'two@example.com', unsubscribed: true }], true))
         .mockResolvedValueOnce(page([{ id: 'c3', email: 'three@example.com', unsubscribed: true }], false));
@@ -110,22 +105,26 @@ describe('listSuppressedEmails', () => {
       expect(await listSuppressedEmails()).toEqual(
         new Set(['one@example.com', 'two@example.com', 'three@example.com']),
       );
-      expect(resendGet).toHaveBeenCalledTimes(3);
+      expect(contactsList).toHaveBeenCalledTimes(3);
     });
 
     it('should advance the cursor by the last contact id of the previous page', async () => {
-      resendGet
+      contactsList
         .mockResolvedValueOnce(page([{ id: 'c1', email: 'one@example.com', unsubscribed: true }], true))
         .mockResolvedValueOnce(page([{ id: 'c2', email: 'two@example.com', unsubscribed: true }], false));
 
       await listSuppressedEmails();
 
-      expect(resendGet).toHaveBeenNthCalledWith(1, '/audiences/test-audience/contacts?limit=100');
-      expect(resendGet).toHaveBeenNthCalledWith(2, '/audiences/test-audience/contacts?limit=100&after=c1');
+      expect(contactsList).toHaveBeenNthCalledWith(1, { audienceId: 'test-audience', limit: 100 });
+      expect(contactsList).toHaveBeenNthCalledWith(2, {
+        audienceId: 'test-audience',
+        limit: 100,
+        after: 'c1',
+      });
     });
 
     it('given an error midway through pagination, should throw rather than return the pages it already read', async () => {
-      resendGet
+      contactsList
         .mockResolvedValueOnce(page([{ id: 'c1', email: 'one@example.com', unsubscribed: true }], true))
         .mockResolvedValueOnce({ data: null, error: { message: 'upstream exploded' } });
 
@@ -133,32 +132,27 @@ describe('listSuppressedEmails', () => {
     });
 
     it('given has_more with no cursor to advance from, should throw rather than truncate', async () => {
-      resendGet.mockResolvedValue(page([], true));
+      contactsList.mockResolvedValue(page([], true));
       await expect(listSuppressedEmails()).rejects.toThrow(/no cursor/);
     });
 
-    it('given a FULL page with no has_more flag, should throw — it may have been truncated', async () => {
-      // The dangerous shape: exactly as many rows as we asked for and no paging
-      // signal. Treating that as complete is how erased users past page 1 get mail.
-      resendGet.mockResolvedValue({ data: { data: filledPage(100) }, error: null });
-
-      await expect(listSuppressedEmails()).rejects.toThrow(/may be truncated/);
-    });
-
-    it('given a SHORT page with no has_more flag, should accept it as complete', async () => {
-      // A short page cannot have been truncated, so no paging signal is needed.
-      resendGet.mockResolvedValue({
+    it('given a response with NO has_more flag, should throw rather than assume it is complete', async () => {
+      // The dangerous shape. `has_more` absent is not "no more pages" — it is a
+      // response we do not recognize, and guessing is how a suppression list gets
+      // silently truncated and erased users get mailed. This must hold even for a
+      // short page: we cannot prove the server honored our `limit`.
+      contactsList.mockResolvedValue({
         data: { data: [{ id: 'c1', email: 'one@example.com', unsubscribed: true }] },
         error: null,
       });
 
-      expect(await listSuppressedEmails()).toEqual(new Set(['one@example.com']));
+      await expect(listSuppressedEmails()).rejects.toThrow(/no `has_more` flag/);
     });
 
     it('given an API that never stops paging, should throw instead of looping forever', async () => {
       // Every page is full, distinct, and claims there's more.
       let n = 0;
-      resendGet.mockImplementation(async () => page(filledPage(100, `p${n++}-`), true));
+      contactsList.mockImplementation(async () => page(filledPage(100, `p${n++}-`), true));
 
       await expect(listSuppressedEmails()).rejects.toThrow(/exceeded 1000 pages/);
     });

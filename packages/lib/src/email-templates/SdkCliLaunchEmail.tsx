@@ -22,6 +22,14 @@ interface SdkCliLaunchEmailProps {
   cliDocsUrl: string;
   /** Optional one-click unsubscribe link for product-update emails. */
   unsubscribeUrl?: string;
+  /**
+   * The sender's physical postal address.
+   *
+   * Required by CAN-SPAM for COMMERCIAL email, which this is — every other
+   * template in this directory is transactional and therefore exempt. The
+   * broadcast script refuses to send live without it rather than invent one.
+   */
+  postalAddress?: string;
 }
 
 // Eyebrow above the main heading: small, uppercase, brand-tinted.
@@ -86,6 +94,7 @@ export function SdkCliLaunchEmail({
   sdkDocsUrl,
   cliDocsUrl,
   unsubscribeUrl,
+  postalAddress,
 }: SdkCliLaunchEmailProps) {
   return (
     <Html>
@@ -177,6 +186,10 @@ export function SdkCliLaunchEmail({
                   Unsubscribe from product update emails
                 </Link>
               </Text>
+            ) : null}
+            {/* CAN-SPAM requires a physical postal address on commercial email. */}
+            {postalAddress ? (
+              <Text style={emailStyles.footerText}>{postalAddress}</Text>
             ) : null}
           </Section>
         </Container>

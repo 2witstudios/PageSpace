@@ -7,6 +7,7 @@ const PROPS = {
   sdkDocsUrl: 'https://pagespace.ai/docs/features/sdk',
   cliDocsUrl: 'https://pagespace.ai/docs/features/cli',
   unsubscribeUrl: 'https://app.pagespace.ai/api/notifications/unsubscribe/ps_unsub_abc',
+  postalAddress: 'PageSpace, 1 Example St, Springfield, IL 62704',
 };
 
 const render = (props: Partial<typeof PROPS> = {}) =>
@@ -40,6 +41,14 @@ describe('SdkCliLaunchEmail', () => {
     const html = await render({ unsubscribeUrl: undefined });
 
     expect(html).not.toContain('Unsubscribe');
+  });
+
+  it('given a postal address, should print it in the footer (CAN-SPAM)', async () => {
+    // This is a commercial email, not a transactional one, so the sender's
+    // physical address is legally required in the message itself.
+    const html = await render();
+
+    expect(html).toContain('1 Example St, Springfield, IL 62704');
   });
 
   it('given a recipient name, should greet them by it', async () => {

@@ -560,6 +560,15 @@ describe('Security Headers', () => {
       expect(isPublicPageRoute('/authorize')).toBe(false);
     });
 
+    it('isPublicPageRoute keeps the unsubscribe pages reachable without a session', () => {
+      // These are reached from a link in an email, where the reader is normally
+      // logged out. Auth-gating them would bounce recipients to a sign-in page —
+      // and since /unsubscribe is not an allowed `next=` target, the token would
+      // be dropped and the opt-out would become impossible to complete.
+      expect(isPublicPageRoute('/unsubscribe')).toBe(true);
+      expect(isPublicPageRoute('/unsubscribe-success')).toBe(true);
+    });
+
     it('shouldDisableCOEP returns true for auth and Stripe routes', () => {
       expect(shouldDisableCOEP('/auth/signin')).toBe(true);
       expect(shouldDisableCOEP('/auth')).toBe(true);

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, gt, isNull } from '@pagespace/db/operators'
+import { eq, and, gt, isNull, isNotNull } from '@pagespace/db/operators'
 import { emailUnsubscribeTokens } from '@pagespace/db/schema/auth'
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
@@ -159,6 +159,9 @@ export async function GET(
   try {
     const { token } = await context.params;
 
+    const appUrlForToken =
+      process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin;
+
     // Read-only: confirm the token is live so an expired link fails here rather
     // than after the user has clicked a confirm button.
     const record = await db.query.emailUnsubscribeTokens.findFirst({
@@ -170,6 +173,23 @@ export async function GET(
     });
 
     if (!record) {
+      // An already-USED token is the normal aftermath of a mail client's one-click
+      // POST: the reader then also clicks the footer link, and would otherwise be
+      // shown a raw JSON error for an unsubscribe that in fact succeeded. Tell
+      // them the truth — they are unsubscribed — rather than an error.
+      const used = await db.query.emailUnsubscribeTokens.findFirst({
+        where: and(
+          eq(emailUnsubscribeTokens.tokenHash, hashToken(token)),
+          isNotNull(emailUnsubscribeTokens.usedAt)
+        ),
+      });
+
+      if (used && VALID_NOTIFICATION_TYPES.has(used.notificationType)) {
+        const done = new URL('/unsubscribe-success', appUrlForToken);
+        done.searchParams.set('type', used.notificationType);
+        return NextResponse.redirect(done.toString());
+      }
+
       loggers.api.warn('Invalid or expired unsubscribe token attempted');
       return NextResponse.json(
         { error: 'Invalid or expired unsubscribe link' },
@@ -183,9 +203,8 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid notification type' }, { status: 400 });
     }
 
-    const appUrl = process.env.WEB_APP_URL || process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin;
-
     // Construct and validate redirect URL to prevent open redirect
+    const appUrl = appUrlForToken;
     const redirectUrl = new URL('/unsubscribe', appUrl);
     redirectUrl.searchParams.set('token', token);
     redirectUrl.searchParams.set('type', notificationType);
