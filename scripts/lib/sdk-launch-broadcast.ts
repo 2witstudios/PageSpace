@@ -334,7 +334,12 @@ export async function findUnreachableUrls(
   return results.filter((r): r is string => r !== null);
 }
 
-export type SkipReason = 'invalid-email' | 'already-sent' | 'suppressed' | 'opted-out';
+export type SkipReason =
+  | 'invalid-email'
+  | 'already-sent'
+  | 'suppressed'
+  | 'opted-out'
+  | 'rights-restricted';
 
 export type RecipientDecision =
   /** Carries the trimmed address and its normalized ledger key, so the caller
@@ -356,6 +361,15 @@ export function decideRecipient(input: {
   alreadySent: Set<string>;
   suppressed: Set<string> | null;
   optedOut: Set<string>;
+  /**
+   * userIds who have exercised a GDPR right that forbids marketing them:
+   * an erasure they asked for that has not executed yet, or an objection /
+   * restriction under Art 21/18. The Resend suppression audience only covers
+   * erasures that already RAN — someone whose erasure is queued or blocked is
+   * still a normal-looking row in `users`, and mailing them is the exact harm
+   * the request was made to prevent.
+   */
+  rightsRestricted: Set<string>;
 }): RecipientDecision {
   const email = input.email?.trim();
   if (!email || !input.isValidEmail(email)) return { outcome: 'invalid-email' };
@@ -363,6 +377,7 @@ export function decideRecipient(input: {
   const emailKey = email.toLowerCase();
   if (input.alreadySent.has(emailKey)) return { outcome: 'already-sent' };
   if (input.suppressed?.has(emailKey)) return { outcome: 'suppressed' };
+  if (input.rightsRestricted.has(input.userId)) return { outcome: 'rights-restricted' };
   if (input.optedOut.has(input.userId)) return { outcome: 'opted-out' };
   return { outcome: 'send', email, emailKey };
 }
@@ -425,6 +440,8 @@ export async function runBroadcast(input: {
   alreadySent: Set<string>;
   suppressed: Set<string> | null;
   optedOut: Set<string>;
+  /** userIds whose GDPR rights request forbids marketing them (see decideRecipient). */
+  rightsRestricted: Set<string>;
   /** Live send for one recipient (mints the token, builds the email, sends it). */
   sendOne: (r: { userId: string; userName: string; email: string }) => Promise<void>;
   /** Dry-run equivalent: render only, so template errors still surface. */
@@ -440,6 +457,7 @@ export async function runBroadcast(input: {
     'already-sent': 0,
     suppressed: 0,
     'opted-out': 0,
+    'rights-restricted': 0,
     'invalid-email': 0,
   };
   const errors: string[] = [];
@@ -466,6 +484,7 @@ export async function runBroadcast(input: {
       alreadySent: input.alreadySent,
       suppressed: input.suppressed,
       optedOut: input.optedOut,
+      rightsRestricted: input.rightsRestricted,
     });
 
     if (decision.outcome !== 'send') {

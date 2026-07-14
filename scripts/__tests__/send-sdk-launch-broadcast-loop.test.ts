@@ -51,6 +51,7 @@ function run(
     alreadySent: new Set(),
     suppressed: new Set(),
     optedOut: new Set(),
+    rightsRestricted: new Set(),
     sendOne: h.sendOne,
     renderOne: async () => '<html>rendered</html>',
     record: h.record,
@@ -150,19 +151,21 @@ describe('runBroadcast — live send', () => {
 });
 
 describe('runBroadcast — exclusions', () => {
-  it('should never mail a suppressed, opted-out, already-sent, or invalid address', async () => {
+  it('should never mail a suppressed, opted-out, rights-restricted, already-sent, or invalid address', async () => {
     const { result, h } = run(
       [
         user('u1', 'erased@example.com'),
         user('u2', 'optedout@example.com'),
         user('u3', 'done@example.com'),
         user('u4', 'not-an-email'),
-        user('u5', 'ada@example.com'),
+        user('u5', 'pending-erasure@example.com'),
+        user('u6', 'ada@example.com'),
       ],
       {
         suppressed: new Set(['erased@example.com']),
         optedOut: new Set(['u2']),
         alreadySent: new Set(['done@example.com']),
+        rightsRestricted: new Set(['u5']),
       },
     );
 
@@ -174,6 +177,7 @@ describe('runBroadcast — exclusions', () => {
       'opted-out': 1,
       'already-sent': 1,
       'invalid-email': 1,
+      'rights-restricted': 1,
     });
   });
 });

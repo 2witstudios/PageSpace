@@ -9,9 +9,12 @@
  *
  *  1. `users.email` / `users.name` are AES-256-GCM ciphertext at rest (GDPR
  *     #965), so rows are decrypted before we can address an envelope.
- *  2. Addresses in the Resend erasure-suppression audience are EXCLUDED. A live
- *     send refuses to start if that audience can't be read — failing closed is
- *     the only safe direction when the alternative is mailing erased users.
+ *  2. Addresses in the Resend erasure-suppression audience are EXCLUDED, and so
+ *     are users with an erasure that has been REQUESTED but not yet executed (it
+ *     may be queued or blocked for days) and anyone who has objected to or
+ *     restricted processing. A live send refuses to start if the audience can't
+ *     be read — failing closed is the only safe direction when the alternative
+ *     is mailing someone who asked us to stop.
  *  3. Recipients who already opted out of PRODUCT_UPDATE email keep that
  *     opt-out, and every email carries a one-click unsubscribe minted from the
  *     same token table as every other notification email.
@@ -62,7 +65,8 @@ import { fileURLToPath } from 'node:url';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
-import { and, eq, isNotNull, isNull } from '@pagespace/db/operators';
+import { dataSubjectRequests } from '@pagespace/db/schema/data-subject-requests';
+import { and, eq, inArray, isNotNull, isNull, ne, or } from '@pagespace/db/operators';
 import { sendEmail } from '@pagespace/lib/services/email-service';
 import { generateUnsubscribeToken } from '@pagespace/lib/services/notification-email-service';
 import { listSuppressedEmails } from '@pagespace/lib/compliance/erasure/resend-suppression-client';
@@ -117,6 +121,40 @@ function defaultLogPath(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * userIds we are forbidden to market to because of a GDPR rights request.
+ *
+ * The Resend suppression audience only holds erasures that already EXECUTED.
+ * An erasure that is still pending, queued, in progress, blocked (e.g. on
+ * sole-owner drive disposition) or failed leaves a completely normal-looking row
+ * in `users` — verified, unsuspended, absent from the audience. Mailing that
+ * person a marketing blast is precisely the harm they asked us to prevent, and
+ * it cannot be undone.
+ *
+ * Objections (Art 21) and restrictions (Art 18) are excluded even when
+ * COMPLETED: honouring an objection to direct marketing is what makes it
+ * completed. Only a cancelled request releases us.
+ */
+async function loadRightsRestrictedUserIds(): Promise<Set<string>> {
+  const rows = await db
+    .select({ userId: dataSubjectRequests.userId })
+    .from(dataSubjectRequests)
+    .where(
+      or(
+        and(
+          eq(dataSubjectRequests.requestType, 'erasure'),
+          inArray(dataSubjectRequests.status, ['pending', 'queued', 'in_progress', 'blocked', 'failed']),
+        ),
+        and(
+          inArray(dataSubjectRequests.requestType, ['objection', 'restriction']),
+          ne(dataSubjectRequests.status, 'cancelled'),
+        ),
+      ),
+    );
+
+  return new Set(rows.map((r) => r.userId).filter((id): id is string => id !== null));
 }
 
 /** userIds that have explicitly turned PRODUCT_UPDATE email off. */
@@ -202,6 +240,15 @@ async function main(): Promise<number> {
 
   const optedOut = await loadOptedOutUserIds();
 
+  // GDPR rights requests that forbid marketing (pending/blocked erasures,
+  // objections, restrictions). The suppression audience only covers erasures
+  // that already ran, so this is the gap that would otherwise mail someone who
+  // has actively asked us to stop.
+  const rightsRestricted = await loadRightsRestrictedUserIds();
+  if (rightsRestricted.size > 0) {
+    console.log(`⚖️  ${rightsRestricted.size} user(s) excluded by a GDPR rights request.\n`);
+  }
+
   // Open (and validate writability of) the ledger BEFORE the first send, so a
   // bad path or permission error fails fast rather than after emails go out.
   const ledger: FileHandle | null = opts.live ? await openLedger(opts.logPath) : null;
@@ -270,6 +317,7 @@ async function main(): Promise<number> {
       alreadySent,
       suppressed,
       optedOut,
+      rightsRestricted,
       sendOne,
       renderOne,
       record: (entry) => recordSent(ledger!, entry),
@@ -297,6 +345,7 @@ async function main(): Promise<number> {
   console.log(`  Skipped (already sent):  ${skipped['already-sent']}`);
   console.log(`  Skipped (suppressed):    ${skipped.suppressed}`);
   console.log(`  Skipped (opted out):     ${skipped['opted-out']}`);
+  console.log(`  Skipped (GDPR request):  ${skipped['rights-restricted']}`);
   console.log(`  Skipped (invalid email): ${skipped['invalid-email']}`);
   console.log(`  Errors:                  ${errors.length}`);
   errors.forEach((err) => console.error(`    - ${err}`));

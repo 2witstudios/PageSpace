@@ -42,6 +42,7 @@ function decide(overrides: Partial<Parameters<typeof decideRecipient>[0]> = {}) 
     alreadySent: new Set(),
     suppressed: new Set(),
     optedOut: new Set(),
+    rightsRestricted: new Set(),
     ...overrides,
   }).outcome;
 }
@@ -295,6 +296,7 @@ describe('decideRecipient', () => {
       alreadySent: new Set(),
       suppressed: new Set(),
       optedOut: new Set(),
+      rightsRestricted: new Set(),
     });
 
     expect(decision).toEqual({
@@ -314,6 +316,19 @@ describe('decideRecipient', () => {
 
   it('given a user who opted out of product updates, should skip them', () => {
     expect(decide({ optedOut: new Set(['u1']) })).toBe('opted-out');
+  });
+
+  it('given a user with a pending or blocked GDPR erasure, should skip them', () => {
+    // The Resend suppression audience only holds erasures that already RAN. An
+    // erasure that is queued or blocked leaves a completely normal-looking user
+    // row — and mailing that person is the exact harm they asked us to prevent.
+    expect(decide({ rightsRestricted: new Set(['u1']) })).toBe('rights-restricted');
+  });
+
+  it('should skip a rights-restricted user even when they are not in the suppression list', () => {
+    expect(decide({ rightsRestricted: new Set(['u1']), suppressed: new Set() })).toBe(
+      'rights-restricted',
+    );
   });
 
   it('given an address already in the ledger, should skip it', () => {
