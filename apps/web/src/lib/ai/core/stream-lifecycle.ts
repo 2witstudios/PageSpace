@@ -44,9 +44,9 @@ export interface StreamLifecycleHandle {
   pushPart: (part: UIMessagePart) => void;
   getBufferedParts: () => UIMessagePart[];
   /**
-   * True when a pending-abort intent was consumed at, or immediately after, INSERT time
-   * (#2028 item 1). The row was written/updated as 'aborted' directly; the caller should
-   * abort the controller so streamText never starts, and skip broadcastAiStreamStart.
+   * True when a pending-abort intent was consumed immediately after INSERT time (#2028 item 1).
+   * The row was updated to 'aborted' directly; the caller should abort the controller so
+   * streamText never starts, and skip broadcastAiStreamStart.
    */
   preAborted: boolean;
 }
@@ -108,68 +108,6 @@ export const createStreamLifecycle = async (
   // Lazily started, and it stops itself when this instance owns no more streams. An instance that
   // never generates never polls.
   ensureStreamAbortWatcher();
-
-  // ── PRE-INSERT PENDING-ABORT CHECK (#2028 item 1) ─────────────────────────────────────────
-  //
-  // A Stop pressed during the route's preflight (auth, permissions, context assembly: 0.5-3s of
-  // TTFB) found no row to mark and wrote a durable pending-abort intent instead. If one exists,
-  // honour it: the user pressed Stop, and the stream must not generate.
-  //
-  // We INSERT the row as 'aborted' directly, skip multicast registration and the heartbeat, and
-  // return a pre-finished handle. The caller aborts the controller so streamText never starts.
-  const preAborted = await consumePendingAbort({ conversationId, userId });
-
-  if (preAborted) {
-    loggers.ai.info('stream-lifecycle: consumed pending-abort intent, stream pre-aborted', {
-      messageId,
-      conversationId,
-    });
-
-    const abortedAt = new Date();
-    try {
-      await db
-        .insert(aiStreamSessions)
-        .values({
-          messageId,
-          channelId,
-          conversationId,
-          userId,
-          displayName,
-          browserSessionId,
-          streamId,
-          status: 'aborted',
-          startedAt: abortedAt,
-          lastHeartbeatAt: abortedAt,
-          completedAt: abortedAt,
-        })
-        .onConflictDoUpdate({
-          target: aiStreamSessions.messageId,
-          set: {
-            channelId,
-            conversationId,
-            userId,
-            displayName,
-            browserSessionId,
-            streamId,
-            status: 'aborted',
-            startedAt: abortedAt,
-            lastHeartbeatAt: abortedAt,
-            completedAt: abortedAt,
-            parts: [],
-            abortRequestedAt: null,
-          },
-        });
-    } catch (error) {
-      loggers.ai.warn('stream-lifecycle: pre-aborted INSERT failed', {
-        messageId,
-        error: error instanceof Error ? error.message : 'unknown',
-      });
-    }
-
-    // No multicast, no broadcast, no heartbeat. A no-op handle whose finish is idempotent.
-    const noop = (): void => {};
-    return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
-  }
 
   try {
     streamMulticastRegistry.register(messageId, {
@@ -240,19 +178,27 @@ export const createStreamLifecycle = async (
     });
   }
 
-  // ── POST-INSERT PENDING-ABORT RECHECK ─────────────────────────────────────────────────────
+  // ── POST-INSERT PENDING-ABORT CHECK (#2028 item 1) ────────────────────────────────────────
   //
-  // The check above ran BEFORE the INSERT — a Stop landing in the gap between that check and
-  // the INSERT resolving would find no row (same as the preflight case) and record a pending
-  // intent that this call has already missed. Left alone, that is worse than a missed abort: the
-  // generation just started here runs to completion AND the orphaned intent sits there to
-  // wrongly pre-abort the user's NEXT send within the TTL. Re-checking now — immediately after
-  // the row exists, before the heartbeat/broadcast start — collapses that window to effectively
-  // nothing and lets the same Stop that missed the first check land here instead.
-  const preAbortedAfterInsert = await consumePendingAbort({ conversationId, userId });
+  // A Stop pressed during the route's preflight (auth, permissions, context assembly: 0.5-3s of
+  // TTFB) — or landing in the narrow gap between entering this function and the INSERT above
+  // resolving — found no row to mark and wrote a durable pending-abort intent instead. Checking
+  // once here, right after the row exists, catches BOTH cases: nothing else consumes the intent
+  // in between, and it persists (bounded by its TTL) regardless of when it was written. If one
+  // exists, honour it: flip the just-inserted row to 'aborted' and return a pre-finished handle.
+  // The caller aborts the controller so streamText never starts.
+  //
+  // NOT fully closed, same as the KNOWN RACE in chat/route.ts: `recordPendingAbort`'s write runs
+  // on an independent connection with no shared lock or transaction, so it can commit-visible
+  // AFTER this consume already ran — a single-digit-millisecond commit-ordering skew, not a logic
+  // bug. In that sliver, the Stop is lost (the generation it targeted runs to completion) and the
+  // orphaned intent then wrongly pre-aborts the user's NEXT, unrelated send within the 30s TTL.
+  // Bounded and self-healing (no double-billing, TTL expiry), so a same-transaction check or
+  // advisory lock is not warranted here — but do not read this as the window being absent.
+  const preAborted = await consumePendingAbort({ conversationId, userId });
 
-  if (preAbortedAfterInsert) {
-    loggers.ai.info('stream-lifecycle: consumed pending-abort intent post-insert, stream pre-aborted', {
+  if (preAborted) {
+    loggers.ai.info('stream-lifecycle: consumed pending-abort intent, stream pre-aborted', {
       messageId,
       conversationId,
     });
@@ -269,7 +215,7 @@ export const createStreamLifecycle = async (
         })
         .where(eq(aiStreamSessions.messageId, messageId));
     } catch (error) {
-      loggers.ai.warn('stream-lifecycle: post-insert pre-abort UPDATE failed', {
+      loggers.ai.warn('stream-lifecycle: pre-aborted UPDATE failed', {
         messageId,
         error: error instanceof Error ? error.message : 'unknown',
       });
@@ -280,12 +226,13 @@ export const createStreamLifecycle = async (
     try {
       streamMulticastRegistry.finish(messageId, true);
     } catch (error) {
-      loggers.ai.warn('stream-lifecycle: registry.finish threw during post-insert pre-abort', {
+      loggers.ai.warn('stream-lifecycle: registry.finish threw during pre-abort', {
         messageId,
         error: error instanceof Error ? error.message : 'unknown',
       });
     }
 
+    // No broadcast, no heartbeat. A no-op handle whose finish is idempotent.
     const noop = (): void => {};
     return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
   }
