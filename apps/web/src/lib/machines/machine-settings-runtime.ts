@@ -74,7 +74,7 @@
  * path as well.
  */
 
-import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, eqOrIsNull, inArray, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
@@ -408,9 +408,7 @@ async function teardownOneMachine(machineId: string): Promise<void> {
           and(
             eq(machineBranches.id, branch.id),
             eq(machineBranches.sandboxId, branch.sandboxId),
-            branch.spriteInstanceId === null
-              ? isNull(machineBranches.spriteInstanceId)
-              : eq(machineBranches.spriteInstanceId, branch.spriteInstanceId),
+            eqOrIsNull(machineBranches.spriteInstanceId, branch.spriteInstanceId),
           ),
         );
     } catch {

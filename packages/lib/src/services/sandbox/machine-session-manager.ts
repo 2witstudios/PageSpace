@@ -573,7 +573,7 @@ export async function findLiveMachineSandboxId(input: MachineSessionKeyInput): P
  * that inject a fake (in tests) never load the DB module graph.
  */
 export async function createDbMachineSessionStore(): Promise<MachineSessionStore> {
-  const [{ db }, { eq, and, isNull }, { machineSessions }, { machineSpriteReclaims }] = await Promise.all([
+  const [{ db }, { eq, and, eqOrIsNull }, { machineSessions }, { machineSpriteReclaims }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-sessions'),
@@ -670,9 +670,7 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
             and(
               eq(machineSessions.sessionKey, sessionKey),
               eq(machineSessions.sandboxId, sandboxId),
-              spriteInstanceId === null
-                ? isNull(machineSessions.spriteInstanceId)
-                : eq(machineSessions.spriteInstanceId, spriteInstanceId),
+              eqOrIsNull(machineSessions.spriteInstanceId, spriteInstanceId),
             ),
           )
           .returning({ id: machineSessions.id });

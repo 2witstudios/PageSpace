@@ -42,23 +42,6 @@ import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } 
 export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
 
 /**
- * Destroy a Sprite we provisioned but failed to RECORD, best-effort.
- *
- * An unrecorded Sprite is the worst possible state: alive, billing, and with no
- * row anywhere — so no delete ever fires the reclaim trigger, and nothing (not
- * even the orphan reconciler) can find it. Killing it is the only way to avoid
- * an immortal orphan; if the kill itself fails we can do no better, so we log and
- * move on rather than masking the original error.
- */
-async function safeKillProvisionedSprite(deps: MachineBranchesDeps, handle: MachineHandle): Promise<void> {
-  try {
-    await deps.host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
-  } catch {
-    // Nothing more we can do — the original failure is what the caller reports.
-  }
-}
-
-/**
  * Where Claude Code writes its OAuth credential/config on a Sprite's own
  * persistent filesystem. A branch-terminal is a SEPARATE Sprite from its
  * owning Machine (see module doc), so it never inherits whatever the user
@@ -462,12 +445,23 @@ export async function propagateClaudeCredential({
   );
 }
 
-async function safeKillSprite(host: MachineHost, machineId: string): Promise<void> {
+/**
+ * Destroy a Sprite we provisioned but do NOT want to keep (a failed clone, or a
+ * redundant one that lost a provisioning race), best-effort and identity-guarded.
+ *
+ * Takes the live `handle` rather than a bare name because the kill is name-keyed
+ * and names are REUSED across re-creates: passing `handle.spriteInstanceId` as
+ * the guard ensures we destroy the VM WE just provisioned, never a replacement a
+ * concurrent spawn put under the same name. Swallows any error — an unrecorded
+ * Sprite left alive is billing with no row anywhere (no trigger, no reclaim), so
+ * killing it is the only cleanup available; if that fails too we can do no
+ * better, and the original failure is what the caller reports.
+ */
+async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {
   try {
-    await host.kill({ machineId });
+    await host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
   } catch {
-    // best-effort — a partially-provisioned Sprite that fails to clone is
-    // still torn down on a best-effort basis rather than left orphaned.
+    // best-effort — see above.
   }
 }
 
@@ -498,7 +492,7 @@ async function reconcileProvisionCollision({
   if (row && row.sandboxId === handle.machineId) {
     return { ok: true, sandboxId: row.sandboxId, branchName: row.branchName, resumed: true };
   }
-  await safeKillSprite(deps.host, handle.machineId);
+  await safeKillSprite(deps.host, handle);
   return { row };
 }
 
@@ -640,7 +634,7 @@ export async function spawnBranch({
     // enqueued, and the VM bills forever, unreachable. Kill it: the row is the
     // only thing that could ever have found it again. (`provisionFreshMachine`
     // has always done this on its own save failure; this path did not.)
-    await safeKillProvisionedSprite(deps, handle);
+    await safeKillSprite(deps.host, handle);
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 

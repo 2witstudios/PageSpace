@@ -25,7 +25,7 @@
  * it permanently.
  */
 
-import { and, asc, eq, exists, gte, isNotNull, isNull, sql } from '@pagespace/db/operators';
+import { and, asc, eq, eqOrIsNull, exists, gte, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
@@ -203,9 +203,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
             // The INSTANCE, not just the name: a replacement Sprite provisioned
             // under this same session key would otherwise pass the check, and we
             // would delete the only pointer to a LIVE VM.
-            spriteInstanceId === null
-              ? isNull(machineSessions.spriteInstanceId)
-              : eq(machineSessions.spriteInstanceId, spriteInstanceId),
+            eqOrIsNull(machineSessions.spriteInstanceId, spriteInstanceId),
             owningPageStillTrashed(machineSessions.pageId),
           ),
         )
@@ -247,9 +245,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
           eq(machineBranches.sandboxId, sandboxId),
           // The INSTANCE — stamping a row that a re-provision has already pointed
           // at a LIVE Sprite would hide that VM from this cron forever.
-          spriteInstanceId === null
-            ? isNull(machineBranches.spriteInstanceId)
-            : eq(machineBranches.spriteInstanceId, spriteInstanceId),
+          eqOrIsNull(machineBranches.spriteInstanceId, spriteInstanceId),
           owningPageStillTrashed(machineBranches.machineId),
         ),
       )

@@ -100,7 +100,7 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineBranchStore(): Promise<MachineBranchStore> {
-  const [{ db }, { eq, and, isNull }, { machineBranches }, { machineSpriteReclaims }] = await Promise.all([
+  const [{ db }, { eq, and, eqOrIsNull }, { machineBranches }, { machineSpriteReclaims }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-branches'),
@@ -200,9 +200,7 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
             and(
               eq(machineBranches.id, id),
               eq(machineBranches.sandboxId, sandboxId),
-              spriteInstanceId === null
-                ? isNull(machineBranches.spriteInstanceId)
-                : eq(machineBranches.spriteInstanceId, spriteInstanceId),
+              eqOrIsNull(machineBranches.spriteInstanceId, spriteInstanceId),
             ),
           )
           .returning({ id: machineBranches.id });
