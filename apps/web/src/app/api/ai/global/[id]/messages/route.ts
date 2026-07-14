@@ -76,6 +76,7 @@ import {
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -311,13 +312,23 @@ export async function POST(
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
-      locationContext,
+      locationContext: legacyLocationContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
+      contextRef,
       isReadOnly,
       webSearchEnabled,
       imageGenEnabled,
       showPageTree,
       mcpTools
     } = requestBody;
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // null here rather than trusting whatever the client claimed. Falls back to the
+    // legacy client-computed locationContext only for old clients that never sent a
+    // contextRef at all.
+    const locationContext = contextRef
+      ? await resolveRequestContext(auth, contextRef)
+      : legacyLocationContext;
 
     // Validate required parameters
     if (!requestMessages || requestMessages.length === 0) {

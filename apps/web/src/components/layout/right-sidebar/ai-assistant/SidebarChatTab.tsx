@@ -33,7 +33,7 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
-import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { holdForStream } from '@/lib/ai/streams/holdForStream';
@@ -440,10 +440,10 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // This effect drives the UI display only (the composer's location chip).
   // Message sends must NOT read `locationContext` state here — it can lag a
-  // fast navigate-then-send by one async round trip. Sends call
-  // `buildFreshLocationContext()` (below) instead, which resolves fresh at
-  // send time from the current pathname/drives, same pattern as
-  // AiChatView's `buildFreshPageContext()`.
+  // fast navigate-then-send by one async round trip. Sends build a
+  // `ContextRef` instead (below), synchronously from the current
+  // pathname/drives — the server resolves + permission-checks it at request
+  // time (resolve-request-context.ts).
   useEffect(() => {
     let ignore = false;
 
@@ -458,8 +458,8 @@ const SidebarChatTab: React.FC = () => {
     };
   }, [pathname, drives]);
 
-  const buildFreshLocationContext = useCallback(
-    () => resolveLocationContext(pathname, drives).then((r) => r.locationContext),
+  const buildFreshContextRef = useCallback(
+    () => buildContextRef(pathname, drives),
     [pathname, drives],
   );
 
@@ -740,7 +740,7 @@ const SidebarChatTab: React.FC = () => {
   // given a freshly-resolved location." Centralized so the agent-mode vs
   // global-mode branch and field list can't drift between call sites.
   const buildSidebarChatRequestBody = useCallback((
-    freshLocation: LocationContext | null,
+    contextRef: ContextRef,
     isReadOnly: boolean,
   ) => {
     return selectedAgent
@@ -753,7 +753,7 @@ const SidebarChatTab: React.FC = () => {
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
-          pageContext: locationContextToPageContext(freshLocation),
+          contextRef,
           enabledTools: selectedAgent.enabledTools,
         }
       : buildGlobalChatRequestBody({
@@ -762,7 +762,7 @@ const SidebarChatTab: React.FC = () => {
           webSearchEnabled,
           imageGenEnabled,
           showPageTree,
-          locationContext: freshLocation,
+          contextRef,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
         });
@@ -784,9 +784,7 @@ const SidebarChatTab: React.FC = () => {
     // Derive isReadOnly from writeMode (inverted)
     const isReadOnly = !writeMode;
 
-    // Start context fetch eagerly — runs in parallel with input clear so the
-    // async wait doesn't delay sendMessage (and the optimistic bubble).
-    const contextPromise = buildFreshLocationContext();
+    const contextRef = buildFreshContextRef();
     const text = input;
     const sendFiles = files.length > 0 ? files : undefined;
 
@@ -794,17 +792,13 @@ const SidebarChatTab: React.FC = () => {
     clearFiles();
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(async () => {
-      const freshLocation = await contextPromise;
-      const body = buildSidebarChatRequestBody(freshLocation, isReadOnly);
-      return sendMessage({ text, files: sendFiles }, { body });
-    });
+    wrapSend(() => sendMessage({ text, files: sendFiles }, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
     currentConversationId,
     writeMode,
-    buildFreshLocationContext,
+    buildFreshContextRef,
     buildSidebarChatRequestBody,
     sendMessage,
     getFilesForSend,
@@ -817,30 +811,25 @@ const SidebarChatTab: React.FC = () => {
     if (!text.trim() || !currentConversationId) return;
 
     const isReadOnly = !writeMode;
-    const contextPromise = buildFreshLocationContext();
+    const contextRef = buildFreshContextRef();
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(async () => {
-      const freshLocation = await contextPromise;
-      const body = buildSidebarChatRequestBody(freshLocation, isReadOnly);
-      return sendMessage({ text }, { body });
-    });
+    wrapSend(() => sendMessage({ text }, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
   }, [
     currentConversationId,
     writeMode,
-    buildFreshLocationContext,
+    buildFreshContextRef,
     buildSidebarChatRequestBody,
     sendMessage,
     wrapSend,
   ]);
 
-  const buildAskUserAnswerBody = useCallback(async () => {
+  const buildAskUserAnswerBody = useCallback(() => {
     const isReadOnly = !writeMode;
-    const freshLocation = await buildFreshLocationContext();
-    return buildSidebarChatRequestBody(freshLocation, isReadOnly);
+    return buildSidebarChatRequestBody(buildFreshContextRef(), isReadOnly);
   }, [
     writeMode,
-    buildFreshLocationContext,
+    buildFreshContextRef,
     buildSidebarChatRequestBody,
   ]);
 
