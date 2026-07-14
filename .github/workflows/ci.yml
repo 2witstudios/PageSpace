@@ -114,13 +114,13 @@ jobs:
   # COVERAGE_SHARD is set. The `web-coverage` job merges the blobs and enforces
   # thresholds on the complete coverage. To scale, raise the shard count.
   web-tests:
-    name: Web Tests (shard ${{ matrix.shard }}/3)
+    name: Web Tests (shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
 
     services:
       postgres:
@@ -164,11 +164,11 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bun run --filter '@pagespace/db' db:migrate
 
-      - name: Run web coverage shard ${{ matrix.shard }}/3
+      - name: Run web coverage shard ${{ matrix.shard }}/6
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           COVERAGE_SHARD: '1'
-        run: cd apps/web && bunx vitest run --coverage --reporter=default --reporter=blob --shard=${{ matrix.shard }}/3
+        run: cd apps/web && bunx vitest run --coverage --reporter=default --reporter=blob --shard=${{ matrix.shard }}/6
 
       - name: Upload coverage blob
         if: always()
