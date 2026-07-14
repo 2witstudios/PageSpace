@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { eq, and } from '@pagespace/db/operators';
+import { eq, and, lt } from '@pagespace/db/operators';
 import { aiPendingAbortIntents } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -148,5 +148,32 @@ export const clearPendingAbort = async ({
       ));
   } catch {
     // non-fatal — the TTL and the next consume/clear will handle it
+  }
+};
+
+/**
+ * Periodic sweep for intents that are never consumed.
+ *
+ * `consumePendingAbort` only reaps a stale row when a LATER `createStreamLifecycle` call
+ * happens to land on that exact (conversation_id, user_id) pair. A conversation where the user
+ * pressed Stop during preflight and never sent another message has no such later call, so its
+ * intent would otherwise sit past its TTL indefinitely. Run from the generic `/api/cron/sweep-expired`
+ * route (see `sweepExpiredRateLimitBuckets`, `sweepExpiredAuthHandoffTokens` for the same pattern
+ * on other append-with-TTL tables) — constant-size row count returned, re-throws in production so
+ * the cron handler can surface a 500, swallows and warns otherwise.
+ */
+export const sweepExpiredPendingAbortIntents = async (): Promise<number> => {
+  try {
+    const cutoff = new Date(Date.now() - PENDING_ABORT_INTENT_TTL_MS);
+    const result = await db
+      .delete(aiPendingAbortIntents)
+      .where(lt(aiPendingAbortIntents.createdAt, cutoff));
+    return result.rowCount ?? 0;
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production') {
+      throw error;
+    }
+    loggers.ai.warn('pending-abort-intents: sweep skipped: DB unavailable');
+    return 0;
   }
 };

@@ -79,12 +79,15 @@ describe('abortStreamAnywhere', () => {
       // Make wasRecentlyFinishedHere return true so awaiting is empty (simulates cross-instance)
       vi.mocked(wasRecentlyFinishedHere).mockReturnValue(true);
 
-      await abortStreamAnywhere({
+      const result = await abortStreamAnywhere({
         conversationId: 'conv1',
         userId: 'user1',
       });
 
       expect(recordPendingAbort).not.toHaveBeenCalled();
+      // marked but finished here, and NOT locally aborted by this process — there is nothing
+      // left for the caller to be told about, so this reads as the benign not_found case.
+      expect(result.code).toBe('not_found');
     });
 
     it('does NOT record a pending-abort when no conversationId is provided', async () => {

@@ -770,6 +770,75 @@ describe('createStreamLifecycle', () => {
     });
   });
 
+  // A Stop landing in the gap between the pre-INSERT check above and the INSERT resolving is
+  // recorded as a pending intent that the pre-INSERT check has already missed — left alone, the
+  // generation runs to completion AND the orphaned intent poisons the NEXT send within its TTL.
+  // This recheck closes that window.
+  describe('pre-aborted: pending-abort intent recheck after INSERT (consume/insert race)', () => {
+    it('given a pending-abort intent lands between the pre-INSERT check and the INSERT resolving, should return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(mockConsumePendingAbort).toHaveBeenCalledTimes(2);
+      expect(handle.preAborted).toBe(true);
+    });
+
+    it('given the late intent, should UPDATE (not INSERT) the already-inserted row to status=aborted', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'aborted', parts: [], abortRequestedAt: null }),
+      );
+      expect(mockUpdateWhere).toHaveBeenCalled();
+    });
+
+    it('given the late intent, should evict the multicast registry entry it just registered', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockRegistryRegister).toHaveBeenCalled();
+      expect(mockRegistryFinish).toHaveBeenCalledWith('msg-1', true);
+    });
+
+    it('given the late intent, should NOT broadcast stream_start', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockBroadcastStart).not.toHaveBeenCalled();
+    });
+
+    it('given the late intent, should return a handle whose finish/pushPart are no-ops', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+      const handle = await createStreamLifecycle(params());
+      mockRegistryFinish.mockClear();
+      mockBroadcastComplete.mockClear();
+
+      handle.finish(false);
+      handle.pushPart({ type: 'text', text: 'hello' });
+      await flushMicrotasks();
+
+      expect(mockRegistryFinish).not.toHaveBeenCalled();
+      expect(mockBroadcastComplete).not.toHaveBeenCalled();
+      expect(mockRegistryPush).not.toHaveBeenCalled();
+    });
+
+    it('given the post-insert UPDATE rejects, should warn and still return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(mockLoggerWarn).toHaveBeenCalled();
+      expect(handle.preAborted).toBe(true);
+    });
+  });
+
   describe('getBufferedParts', () => {
     it('delegates to streamMulticastRegistry.getBufferedParts with the messageId', async () => {
       const fakeParts = [{ type: 'text' as const, text: 'hi' }];

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockInsert, mockDelete, mockLogger } = vi.hoisted(() => ({
   mockInsert: {
@@ -23,6 +23,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ type: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ type: 'and', args })),
+  lt: vi.fn((a: unknown, b: unknown) => ({ type: 'lt', a, b })),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({
@@ -37,7 +38,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: mockLogger },
 }));
 
-import { recordPendingAbort, consumePendingAbort, clearPendingAbort, PENDING_ABORT_INTENT_TTL_MS } from '@/lib/ai/core/pending-abort-intents';
+import {
+  recordPendingAbort,
+  consumePendingAbort,
+  clearPendingAbort,
+  sweepExpiredPendingAbortIntents,
+  PENDING_ABORT_INTENT_TTL_MS,
+} from '@/lib/ai/core/pending-abort-intents';
 
 describe('pending-abort-intents', () => {
   beforeEach(() => {
@@ -117,6 +124,50 @@ describe('pending-abort-intents', () => {
 
       await expect(clearPendingAbort({ conversationId: 'conv1', userId: 'user1' }))
         .resolves.toBeUndefined();
+    });
+  });
+
+  // Reaps intents never consumed by a later createStreamLifecycle call — e.g. the user pressed
+  // Stop during preflight and never sent another message on that conversation. Run from the
+  // generic /api/cron/sweep-expired route alongside sweepExpiredRateLimitBuckets et al.
+  describe('sweepExpiredPendingAbortIntents', () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+
+    afterEach(() => {
+      vi.stubEnv('NODE_ENV', originalNodeEnv ?? 'test');
+    });
+
+    it('deletes rows older than the TTL and returns the row count', async () => {
+      mockDelete.where.mockResolvedValue({ rowCount: 4 });
+
+      const result = await sweepExpiredPendingAbortIntents();
+
+      expect(result).toBe(4);
+      expect(mockDelete.where).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'lt', a: 'created_at' }),
+      );
+    });
+
+    it('returns 0 when rowCount is null', async () => {
+      mockDelete.where.mockResolvedValue({ rowCount: null });
+
+      const result = await sweepExpiredPendingAbortIntents();
+
+      expect(result).toBe(0);
+    });
+
+    it('swallows DB errors and returns 0 outside production', async () => {
+      vi.stubEnv('NODE_ENV', 'test');
+      mockDelete.where.mockRejectedValue(new Error('DB down'));
+
+      await expect(sweepExpiredPendingAbortIntents()).resolves.toBe(0);
+    });
+
+    it('re-throws DB errors in production so the cron handler can surface a 500', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      mockDelete.where.mockRejectedValue(new Error('DB down'));
+
+      await expect(sweepExpiredPendingAbortIntents()).rejects.toThrow('DB down');
     });
   });
 });

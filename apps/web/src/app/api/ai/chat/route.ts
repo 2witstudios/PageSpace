@@ -1243,6 +1243,13 @@ export async function POST(request: Request) {
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
+          // Pre-aborted (#2028 item 1): the controller was already aborted above and the row
+          // was already written 'aborted' by createStreamLifecycle. Nothing past this point can
+          // ever reach the model — skip command-plan writes, capability resolution, and the
+          // agent loop entirely rather than relying on the already-aborted signal to short-circuit
+          // streamText's underlying fetch. onFinish below still runs, on essentially-empty output.
+          if (lifecycle!.preAborted) return;
+
           // Execution feedback (UX spec §7): announce one command indicator
           // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
           // the first parts of the assistant message, in the same order the

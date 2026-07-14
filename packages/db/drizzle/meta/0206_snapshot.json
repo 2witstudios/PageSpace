@@ -1,6 +1,6 @@
 {
-  "id": "64058eee-eed5-43ae-b557-b0486fb806b6",
-  "prevId": "fdd777fb-d869-420e-970b-43c8d7ae9ab3",
+  "id": "51de21e2-aec7-43cd-8bb6-cba5859819e5",
+  "prevId": "ad1d8030-d806-4073-8c6e-fe2147d6a803",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -15136,6 +15136,43 @@
         }
       }
     },
+    "public.ai_pending_abort_intents": {
+      "name": "ai_pending_abort_intents",
+      "schema": "",
+      "columns": {
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "ai_pending_abort_intents_conversation_id_user_id_pk": {
+          "name": "ai_pending_abort_intents_conversation_id_user_id_pk",
+          "columns": [
+            "conversation_id",
+            "user_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {}
+    },
     "public.ai_stream_sessions": {
       "name": "ai_stream_sessions",
       "schema": "",
@@ -19445,43 +19482,6 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {}
-    },
-    "public.ai_pending_abort_intents": {
-      "name": "ai_pending_abort_intents",
-      "schema": "",
-      "columns": {
-        "conversation_id": {
-          "name": "conversation_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "ai_pending_abort_intents_conversation_id_user_id_pk": {
-          "name": "ai_pending_abort_intents_conversation_id_user_id_pk",
-          "columns": [
-            "conversation_id",
-            "user_id"
-          ]
-        }
-      },
       "uniqueConstraints": {}
     }
   },

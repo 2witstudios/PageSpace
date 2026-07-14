@@ -73,7 +73,7 @@
 
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
-# rate_limit_buckets in PR3). Short cadence matches the 5-minute default
+# rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default
 # service-token lifetime so the table never grows more than a few cycles deep.
 */15 * * * * cron-curl GET __WEB_URL__/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1
 

@@ -44,9 +44,9 @@ export interface StreamLifecycleHandle {
   pushPart: (part: UIMessagePart) => void;
   getBufferedParts: () => UIMessagePart[];
   /**
-   * True when a pending-abort intent was consumed at INSERT time (#2028 item 1).
-   * The row was written as 'aborted' directly; the caller should abort the controller
-   * so streamText never starts, and skip broadcastAiStreamStart.
+   * True when a pending-abort intent was consumed at, or immediately after, INSERT time
+   * (#2028 item 1). The row was written/updated as 'aborted' directly; the caller should
+   * abort the controller so streamText never starts, and skip broadcastAiStreamStart.
    */
   preAborted: boolean;
 }
@@ -238,6 +238,56 @@ export const createStreamLifecycle = async (
       messageId,
       error: error instanceof Error ? error.message : 'unknown',
     });
+  }
+
+  // ── POST-INSERT PENDING-ABORT RECHECK ─────────────────────────────────────────────────────
+  //
+  // The check above ran BEFORE the INSERT — a Stop landing in the gap between that check and
+  // the INSERT resolving would find no row (same as the preflight case) and record a pending
+  // intent that this call has already missed. Left alone, that is worse than a missed abort: the
+  // generation just started here runs to completion AND the orphaned intent sits there to
+  // wrongly pre-abort the user's NEXT send within the TTL. Re-checking now — immediately after
+  // the row exists, before the heartbeat/broadcast start — collapses that window to effectively
+  // nothing and lets the same Stop that missed the first check land here instead.
+  const preAbortedAfterInsert = await consumePendingAbort({ conversationId, userId });
+
+  if (preAbortedAfterInsert) {
+    loggers.ai.info('stream-lifecycle: consumed pending-abort intent post-insert, stream pre-aborted', {
+      messageId,
+      conversationId,
+    });
+
+    const abortedAt = new Date();
+    try {
+      await db
+        .update(aiStreamSessions)
+        .set({
+          status: 'aborted',
+          completedAt: abortedAt,
+          parts: [],
+          abortRequestedAt: null,
+        })
+        .where(eq(aiStreamSessions.messageId, messageId));
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: post-insert pre-abort UPDATE failed', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    // Nothing has subscribed yet — registration just happened and broadcastAiStreamStart has not
+    // fired — so evicting the entry here is a plain cleanup, not a notification to a live client.
+    try {
+      streamMulticastRegistry.finish(messageId, true);
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: registry.finish threw during post-insert pre-abort', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    const noop = (): void => {};
+    return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
   }
 
   broadcastAiStreamStart({
