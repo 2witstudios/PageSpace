@@ -125,7 +125,7 @@ vi.mock('@pagespace/db/db', () => {
 });
 
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
+  eq: vi.fn(), ne: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 

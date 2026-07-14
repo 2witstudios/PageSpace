@@ -8,7 +8,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, gte, lt, desc } from '@pagespace/db/operators'
+import { eq, and, gte, lt, ne, desc } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { messages } from '@pagespace/db/schema/conversations';
@@ -178,6 +178,13 @@ export async function previewAiUndo(
     // Use the correct table based on source
     const table = source === 'page_chat' ? chatMessages : messages;
 
+    // SAFE DEFAULT (undo-vs-in-flight-stream UX still needs a product call — see the PR 2
+    // board's "Open decision"): a 'streaming' row is excluded from the sweep entirely, not
+    // just skipped in the count. Undo must never soft-delete a row a live generation still
+    // owns — its execute-end/onFinish upsert doesn't check isActive, so soft-deleting it here
+    // would leave a hidden row that silently reappears with real content once the stream
+    // finishes. Everything else in range still gets undone; only the live placeholder is left
+    // untouched. See Server Stream Durability epic PR 2.
     const affectedMessages = await db
       .select({ id: table.id })
       .from(table)
@@ -185,7 +192,8 @@ export async function previewAiUndo(
         and(
           eq(table.conversationId, conversationId),
           gte(table.createdAt, createdAt),
-          eq(table.isActive, true)
+          eq(table.isActive, true),
+          ne(table.status, 'streaming')
         )
       );
 
@@ -528,7 +536,9 @@ export async function executeAiUndo(
         fromTimestamp: createdAt.toISOString(),
       });
 
-      // Update primary table first (based on source)
+      // Update primary table first (based on source). Excludes 'streaming' rows — see the
+      // SAFE DEFAULT note on previewAiUndo's affectedMessages query above; the same exclusion
+      // must apply to the actual mutation, not just its preview count.
       const primaryTable = preview.source === 'page_chat' ? chatMessages : messages;
       await tx
         .update(primaryTable)
@@ -537,7 +547,8 @@ export async function executeAiUndo(
           and(
             eq(primaryTable.conversationId, conversationId),
             gte(primaryTable.createdAt, createdAt),
-            eq(primaryTable.isActive, true)
+            eq(primaryTable.isActive, true),
+            ne(primaryTable.status, 'streaming')
           )
         );
 
@@ -555,7 +566,8 @@ export async function executeAiUndo(
           and(
             eq(secondaryTable.conversationId, conversationId),
             gte(secondaryTable.createdAt, createdAt),
-            eq(secondaryTable.isActive, true)
+            eq(secondaryTable.isActive, true),
+            ne(secondaryTable.status, 'streaming')
           )
         );
 

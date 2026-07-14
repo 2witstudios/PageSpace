@@ -112,6 +112,8 @@ vi.mock('@pagespace/db/db', () => ({
         })),
       })),
     })),
+    // Server Stream Durability epic PR 2: assistant placeholder row insert at stream start.
+    insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
   },
   // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
   // exactly as before. Its own retry/degrade behavior is covered by
@@ -124,7 +126,7 @@ vi.mock('@pagespace/db/db', () => ({
   })),
 }));
 
-vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), and: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), and: vi.fn() }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { pageId: 'pageId', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },

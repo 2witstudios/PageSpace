@@ -96,7 +96,9 @@ interface ToolPart {
 }
 
 /** Extended UIMessage with extra fields stored in our database */
-type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null };
+type MessageStatus = 'streaming' | 'complete' | 'interrupted';
+
+type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null; status?: MessageStatus };
 
 interface DatabaseMessage {
   id: string;
@@ -111,6 +113,7 @@ interface DatabaseMessage {
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
   userName?: string | null;
+  status?: MessageStatus;
 }
 
 
@@ -126,6 +129,7 @@ interface GlobalAssistantMessage {
   isActive: boolean;
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
+  status?: MessageStatus;
 }
 
 interface ReconstructableMessage {
@@ -290,7 +294,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 
     try {
       const structured = await reconstructFromStructuredContent(dbMessage, parsed);
-      return { ...structured, userName: dbMessage.userName } as ExtendedUIMessage;
+      return { ...structured, userName: dbMessage.userName, status: dbMessage.status } as ExtendedUIMessage;
     } catch (error) {
       // Reconstruction failed (e.g. S3 presign error) — fall back to the
       // original plain-text content rather than leaking the raw structured
@@ -304,11 +308,14 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
         editedAt: dbMessage.editedAt,
         messageType: dbMessage.messageType || 'standard',
         userName: dbMessage.userName,
+        status: dbMessage.status,
       } as ExtendedUIMessage;
     }
   }
 
-  // Simple text message
+  // Simple text message. A 'streaming' row's content is '' here — the empty text part below
+  // is already graceful (renders as nothing, not an error); `status` lets callers filter or
+  // flag it explicitly instead of guessing from empty content.
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
@@ -316,6 +323,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
+    status: dbMessage.status,
     userName: dbMessage.userName,
   } as ExtendedUIMessage;
 }
@@ -546,6 +554,10 @@ export async function saveMessageToDatabase({
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
           conversationId, // Update conversationId if message is reprocessed
           sourceAgentId: sourceAgentId ?? null,
+          // Terminal write: flips a 'streaming' placeholder row to 'complete'. Every caller of
+          // saveMessageToDatabase persists a finished message (execute-end, onFinish, ask_agent,
+          // consult, etc.) — never a mid-flight one — so this is unconditionally correct here.
+          status: 'complete',
         }
       });
 
@@ -578,7 +590,8 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
     });
 
     try {
-      return await reconstructFromStructuredContent(dbMessage, parsed);
+      const structured = await reconstructFromStructuredContent(dbMessage, parsed);
+      return { ...structured, status: dbMessage.status } as ExtendedUIMessage;
     } catch (error) {
       loggers.ai.error('Failed to reconstruct structured global assistant message content', error as Error, { messageId: dbMessage.id });
       return {
@@ -588,11 +601,14 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
         createdAt: dbMessage.createdAt,
         editedAt: dbMessage.editedAt,
         messageType: dbMessage.messageType || 'standard',
+        status: dbMessage.status,
       } as ExtendedUIMessage;
     }
   }
 
-  // Simple text message
+  // Simple text message. A 'streaming' row's content is '' here — the empty text part below
+  // is already graceful (renders as nothing, not an error); `status` lets callers filter or
+  // flag it explicitly instead of guessing from empty content.
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
@@ -600,6 +616,7 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
+    status: dbMessage.status,
   } as ExtendedUIMessage;
 }
 
@@ -658,6 +675,10 @@ export async function saveGlobalAssistantMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
+          // Terminal write: flips a 'streaming' placeholder row to 'complete'. Every caller of
+          // saveGlobalAssistantMessageToDatabase persists a finished message — never a
+          // mid-flight one — so this is unconditionally correct here.
+          status: 'complete',
         }
       });
 

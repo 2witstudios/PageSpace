@@ -13,7 +13,7 @@
  * single-tx app shell), or opens its own transaction otherwise.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, desc, sql } from '@pagespace/db/operators';
+import { and, eq, ne, desc, sql } from '@pagespace/db/operators';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { pages, chatMessages } from '@pagespace/db/schema/core';
 import type {
@@ -182,6 +182,9 @@ async function fetchChatMessages(
   runner: Runner,
   pageId: string,
 ): Promise<ChatMessageSummary[]> {
+  // Excludes 'streaming' placeholders — this is a model-facing AI-payload context bag, not a
+  // client history view, so an empty mid-flight row would be pure noise. See Server Stream
+  // Durability epic PR 2.
   const rows = await runner
     .select({
       id: chatMessages.id,
@@ -194,7 +197,11 @@ async function fetchChatMessages(
       userId: chatMessages.userId,
     })
     .from(chatMessages)
-    .where(and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)))
+    .where(and(
+      eq(chatMessages.pageId, pageId),
+      eq(chatMessages.isActive, true),
+      ne(chatMessages.status, 'streaming')
+    ))
     .orderBy(desc(chatMessages.createdAt))
     .limit(RECENT_MESSAGE_LIMIT);
 

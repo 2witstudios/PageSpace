@@ -54,7 +54,7 @@ import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personali
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
+import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
@@ -142,11 +142,16 @@ export async function GET(
     });
     const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
     const direction = searchParams.get('direction') || 'before'; // 'before' or 'after'
+    // Stale-tab rollout protection: clients deployed before this PR never send this param, so
+    // they never see 'streaming' placeholder rows — only updated clients that know how to
+    // dedup them against a live stream bubble opt in. See Server Stream Durability epic PR 2.
+    const includeStreaming = searchParams.get('includeStreaming') === '1';
 
     // Build query conditions
     const conditions = [
       eq(messages.conversationId, id),
-      eq(messages.isActive, true)
+      eq(messages.isActive, true),
+      ...(includeStreaming ? [] : [ne(messages.status, 'streaming')])
     ];
 
     // Add cursor condition if provided
@@ -198,6 +203,7 @@ export async function GET(
         createdAt: msg.createdAt,
         isActive: msg.isActive,
         editedAt: msg.editedAt,
+        status: msg.status,
       })
     ));
 
@@ -595,13 +601,18 @@ export async function POST(
     // overlap with the independent setup between there and here.
     if (askUserSyncPromise) await askUserSyncPromise;
 
-    // Read ALL active messages from database (source of truth)
+    // Read ALL active messages from database (source of truth). Exclude 'streaming'
+    // placeholders — this load is the model-context source AND the compaction source, so a
+    // placeholder here would both poison this job's own turn and risk being silently
+    // summarized into a durable compaction. 'interrupted' rows stay included — they are
+    // terminal, real partial output. See Server Stream Durability epic PR 2.
     const dbMessages = await db
       .select()
       .from(messages)
       .where(and(
         eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true)
+        eq(messages.isActive, true),
+        ne(messages.status, 'streaming')
       ))
       .orderBy(messages.createdAt);
 
@@ -618,6 +629,7 @@ export async function POST(
         createdAt: msg.createdAt,
         isActive: msg.isActive,
         editedAt: msg.editedAt,
+        status: msg.status,
       })
     ));
 
@@ -1112,7 +1124,7 @@ MENTION PROCESSING:
           channelId,
         });
 
-        return createStreamLifecycle({
+        const streamLifecycle = await createStreamLifecycle({
           messageId: serverAssistantMessageId,
           channelId,
           conversationId,
@@ -1122,6 +1134,29 @@ MENTION PROCESSING:
           streamId,
           isShared: conversation.isShared === true,
         });
+
+        // Assistant message row at stream start (Server Stream Durability epic, PR 2): a
+        // 'streaming' placeholder so history can show in-flight entries and pre-checkpoint
+        // process death doesn't silently lose the reply. Same critical section as
+        // takeover+lifecycle-create (PR 4 seam note) so a second send can never observe a
+        // stream row without its placeholder, or vice versa. Skipped when pre-aborted — the
+        // user pressed Stop before streamText ever ran, so there is no generation to show and
+        // no execute-end/onFinish write will ever arrive to flip this row out of 'streaming'.
+        if (!streamLifecycle.preAborted) {
+          await db.insert(messages).values({
+            id: serverAssistantMessageId,
+            conversationId,
+            userId,
+            role: 'assistant',
+            content: '',
+            toolCalls: null,
+            toolResults: null,
+            isActive: true,
+            status: 'streaming',
+          });
+        }
+
+        return streamLifecycle;
       },
     });
 

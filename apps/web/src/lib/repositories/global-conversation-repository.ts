@@ -39,6 +39,7 @@ export interface Message {
   role: string;
   isActive: boolean;
   createdAt: Date;
+  status: 'streaming' | 'complete' | 'interrupted';
 }
 
 export interface UsageLog {

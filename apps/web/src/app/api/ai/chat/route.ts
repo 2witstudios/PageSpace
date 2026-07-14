@@ -86,7 +86,7 @@ import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/ag
 // execute_tool would hit that tool's allowlist check and be rejected.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
 import { userProfiles } from '@pagespace/db/schema/members';
@@ -1125,13 +1125,19 @@ export async function POST(request: Request) {
     if (askUserSyncPromise) await askUserSyncPromise;
 
     const pageId = chatId as string;
+    // Exclude 'streaming' placeholders — this load is the model-context source AND the
+    // compaction source (prepareHistoryForModel below), so a placeholder here would both
+    // poison this job's own turn (it hasn't finished writing yet) and risk being silently
+    // summarized into a durable compaction. 'interrupted' rows stay included — they are
+    // terminal, real partial output. See Server Stream Durability epic PR 2.
     const dbMessages = await db
       .select()
       .from(chatMessages)
       .where(and(
         eq(chatMessages.pageId, pageId),
         eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true)
+        eq(chatMessages.isActive, true),
+        ne(chatMessages.status, 'streaming')
       ))
       .orderBy(chatMessages.createdAt);
 
@@ -1148,6 +1154,7 @@ export async function POST(request: Request) {
         isActive: msg.isActive,
         editedAt: msg.editedAt,
         messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
+        status: msg.status,
       })
     ));
 
@@ -1235,7 +1242,7 @@ export async function POST(request: Request) {
           channelId: chatId!,
         });
 
-        return createStreamLifecycle({
+        const streamLifecycle = await createStreamLifecycle({
           messageId: serverAssistantMessageId!,
           channelId: chatId!,
           conversationId: conversationId!,
@@ -1245,6 +1252,31 @@ export async function POST(request: Request) {
           streamId,
           isShared: isConversationShared,
         });
+
+        // Assistant message row at stream start (Server Stream Durability epic, PR 2): a
+        // 'streaming' placeholder so history can show in-flight entries and pre-checkpoint
+        // process death doesn't silently lose the reply. Same critical section as
+        // takeover+lifecycle-create (PR 4 seam note) so a second send can never observe a
+        // stream row without its placeholder, or vice versa. Skipped when pre-aborted — the
+        // user pressed Stop before streamText ever ran, so there is no generation to show and
+        // no execute-end/onFinish write will ever arrive to flip this row out of 'streaming'.
+        if (!streamLifecycle.preAborted) {
+          await db.insert(chatMessages).values({
+            id: serverAssistantMessageId!,
+            pageId: chatId!,
+            conversationId: conversationId!,
+            role: 'assistant',
+            content: '',
+            toolCalls: null,
+            toolResults: null,
+            isActive: true,
+            userId: null,
+            sourceAgentId: null,
+            status: 'streaming',
+          });
+        }
+
+        return streamLifecycle;
       },
     });
 

@@ -142,6 +142,7 @@ vi.mock('@pagespace/db/db', () => {
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  ne: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
   gt: vi.fn(),

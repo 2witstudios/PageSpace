@@ -40,6 +40,9 @@ export const messages = pgTable('messages', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   isActive: boolean('isActive').default(true).notNull(),
   editedAt: timestamp('editedAt', { mode: 'date' }),
+  // Lifecycle state of an assistant row from the moment generation starts. See chat_messages.status
+  // (packages/db/src/schema/core.ts) for the full contract.
+  status: text('status', { enum: ['streaming', 'complete', 'interrupted'] }).default('complete').notNull(),
 }, (table) => ({
   conversationIdx: index('messages_conversation_id_idx').on(table.conversationId),
   conversationCreatedAtIdx: index('messages_conversation_id_created_at_idx').on(table.conversationId, table.createdAt),
