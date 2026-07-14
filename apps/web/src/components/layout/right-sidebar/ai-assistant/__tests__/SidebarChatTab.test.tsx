@@ -682,6 +682,64 @@ describe('SidebarChatTab Display Logic', () => {
 
     });
 
+    describe('regenerateTurnOnce (the mutex both recovery paths share)', () => {
+      // Mirrors the component's wrapper. useStreamRecovery and the resume handler watch the same
+      // failure from opposite sides and would otherwise regenerate the same turn twice — and
+      // useStreamRecovery calls clearError() BEFORE its own probes, so for its whole decision
+      // window the chat looks idle to us. Two regenerates for one turn is the double destruction
+      // the resume gate exists to prevent: the server takes over the conversation on every
+      // generation start, so the second aborts the first, and handleRetry deletes its assistant
+      // message on the way in.
+      function makeRegenerateTurnOnce(handleRetry: () => Promise<void>) {
+        let inFlight = false;
+        return async () => {
+          if (inFlight) return;
+          inFlight = true;
+          try {
+            await handleRetry();
+          } finally {
+            inFlight = false;
+          }
+        };
+      }
+
+      it('given both paths fire while the first is still running, should regenerate ONCE', async () => {
+        let calls = 0;
+        let release!: () => void;
+        const blocked = new Promise<void>((r) => { release = r; });
+        const regenerateTurnOnce = makeRegenerateTurnOnce(async () => {
+          calls += 1;
+          await blocked; // handleRetry's message DELETEs are a network round-trip
+        });
+
+        const first = regenerateTurnOnce();  // useStreamRecovery's retry
+        const second = regenerateTurnOnce(); // the resume handler, deciding concurrently
+        release();
+        await Promise.all([first, second]);
+
+        expect(calls).toBe(1);
+      });
+
+      it('given the lock was released, should allow a LATER regenerate (it is a mutex, not a one-shot latch)', async () => {
+        let calls = 0;
+        const regenerateTurnOnce = makeRegenerateTurnOnce(async () => { calls += 1; });
+        await regenerateTurnOnce();
+        await regenerateTurnOnce();
+        expect(calls).toBe(2);
+      });
+
+      it('given handleRetry throws, should still release the lock', async () => {
+        let calls = 0;
+        const regenerateTurnOnce = makeRegenerateTurnOnce(async () => {
+          calls += 1;
+          throw new Error('regenerate failed');
+        });
+        await expect(regenerateTurnOnce()).rejects.toThrow('regenerate failed');
+        await expect(regenerateTurnOnce()).rejects.toThrow('regenerate failed');
+        expect(calls).toBe(2); // not wedged shut
+      });
+    });
+
     describe('planResume (the onResume body)', () => {
       it('given native mid-stream (the orphaned-stream bug), should stop the local fetch and hand off to tryRecover — and NOT read the DB', () => {
         // THE KEY INVARIANT. The reply is not persisted until the run completes, so a DB

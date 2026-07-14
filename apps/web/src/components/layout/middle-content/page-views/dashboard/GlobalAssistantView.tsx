@@ -756,7 +756,33 @@ const GlobalAssistantView: React.FC = () => {
   // useStreamRecovery only asks "did you recover?" — the probe-reachability half of the answer is
   // for the resume path, which is the one that would otherwise regenerate over a live run.
   const tryRecoverForError = useCallback(async () => (await tryRecover()).recovered, [tryRecover]);
-  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2, tryRecover: tryRecoverForError });
+
+  // ONE mutex across BOTH recovery paths.
+  //
+  // useStreamRecovery watches this same failure from the other side (it fires on
+  // `status === 'error'`) and regenerates too, and the two shared no lock. Either could decide to
+  // regenerate the turn while the other was still deciding — useStreamRecovery calls clearError()
+  // BEFORE running its own probes, so for the whole of its decision window the status reads
+  // `ready` and looks idle to us. Two regenerates for one turn is the double destruction the
+  // resume gate exists to prevent: the server takes over the conversation on every generation
+  // start, so the second aborts the first, and handleRetry deletes its assistant message on the
+  // way in.
+  //
+  // The lock is held across the whole of handleRetry — its message DELETEs are a network
+  // round-trip — after which the restarted generation's own `submitted` status keeps the other
+  // path out (see `nothingHasRestarted` below).
+  const regenerationInFlightRef = useRef(false);
+  const regenerateTurnOnce = useCallback(async () => {
+    if (regenerationInFlightRef.current) return;
+    regenerationInFlightRef.current = true;
+    try {
+      await handleRetry();
+    } finally {
+      regenerationInFlightRef.current = false;
+    }
+  }, [handleRetry]);
+
+  useStreamRecovery({ error, status, clearError, handleRetry: regenerateTurnOnce, maxRetries: 2, tryRecover: tryRecoverForError });
 
   const handleUndoSuccess = useCallback(async () => {
     if (!currentConversationId) return;
@@ -937,15 +963,11 @@ const GlobalAssistantView: React.FC = () => {
       // their prompt and the retry action on it.
       const stillOnTheInterruptedConversation =
         currentConversationIdRef.current === conversationAtResume;
-      // Nothing has restarted the turn in the meantime. useStreamRecovery watches the SAME failure
-      // from the other side (it fires on `status === 'error'`) and regenerates too, and the two
-      // share no lock. If iOS delivers the dead fetch's rejection as an error before this listener
-      // runs, useStreamRecovery may already have retried — and `rawStop()` above would have been a
-      // no-op, since Chat.stop() returns early unless the status is streaming/submitted, so it
-      // cannot have cancelled that. Regenerating on top would be exactly the double destruction the
-      // gate below exists to prevent: takeOverConversationStreams aborts the run that just started,
-      // and handleRetry deletes its assistant message on the way in. Read through a ref because the
-      // closure's copy is the value captured before we were frozen.
+      // Belt to regenerateTurnOnce's braces. The mutex stops the two paths regenerating at the
+      // same moment; this stops us regenerating on top of a turn that has ALREADY restarted and
+      // moved on — the mutex is released as soon as handleRetry returns, but the generation it
+      // kicked off is still running. Read through a ref because the closure's copy of `isStreaming`
+      // is the value captured before we were frozen.
       const nothingHasRestarted = !isStreamingRef.current;
       if (
         hadTurnInFlight &&
@@ -953,7 +975,7 @@ const GlobalAssistantView: React.FC = () => {
         nothingHasRestarted &&
         canConcludeTurnIsLost(attempt)
       ) {
-        await handleRetry();
+        await regenerateTurnOnce();
       }
     }, [
       effectiveIsStreaming,
@@ -964,7 +986,7 @@ const GlobalAssistantView: React.FC = () => {
       rawStop,
       tryRecover,
       handlePullUpRefresh,
-      handleRetry,
+      regenerateTurnOnce,
     ]),
     enabled: resumeEnabled,
   });
