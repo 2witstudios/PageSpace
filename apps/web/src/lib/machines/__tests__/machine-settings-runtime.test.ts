@@ -72,6 +72,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ and: args })),
   eq: vi.fn((...args: unknown[]) => ({ eq: args })),
   inArray: vi.fn((...args: unknown[]) => ({ inArray: args })),
+  isNull: vi.fn((column: unknown) => ({ isNull: column })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join('?'), values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -90,7 +91,7 @@ vi.mock('@pagespace/db/schema/integrations', () => ({
   globalAssistantConfig: { machines: 'machines', machineAccess: 'machineAccess' },
 }));
 vi.mock('@pagespace/db/schema/machine-branches', () => ({
-  machineBranches: { machineId: 'machineId', sandboxId: 'sandboxId' },
+  machineBranches: { id: 'id', machineId: 'machineId', sandboxId: 'sandboxId', spriteTornDownAt: 'spriteTornDownAt' },
 }));
 vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', () => ({
   createDbMachineSessionStore: vi.fn(async () => ({
@@ -330,6 +331,34 @@ describe('createMachineSpriteTeardown().teardown', () => {
       { machineId: `own-key-${MACHINE}` },
     ]);
     expect(mockSessionRemove).toHaveBeenCalledWith(`key-${MACHINE}`);
+  });
+
+  it('STAMPS the branch row on a confirmed kill rather than deleting it', async () => {
+    // Deleting it would destroy re-creatable branch config on a REVERSIBLE
+    // soft-delete — and cascade away its branch-scoped machine_agent_terminals
+    // (FK onDelete: cascade), so a restore would come back without them.
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([{ id: 'branch-row-1', sandboxId: 'sb-branch' }]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(mockUpdateSet).toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
+  });
+
+  it('leaves the branch row UNSTAMPED when its kill fails, so the reconciler can retry it', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'branch-row-1', sandboxId: 'sb-branch' }]);
+    mockHostKill.mockImplementation(async ({ machineId }: { machineId: string }) => {
+      if (machineId === 'sb-branch') throw new Error('sprite unreachable');
+    });
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    // The row is the only pointer to the orphaned sandboxId — stamping it as
+    // torn down would hide a live, billing Sprite from the reconciler forever.
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
   });
 
   it('tears down nested Machine pages hidden by the cascade-trash (descendants first, root last)', async () => {

@@ -67,7 +67,7 @@
  * path as well.
  */
 
-import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
@@ -313,10 +313,13 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   });
   if (!page) return;
 
+  // Only branches whose Sprite we still believe is LIVE. A row stamped by an
+  // earlier teardown (trash → restore → trash) points at a Sprite that is
+  // already gone, so re-killing it would just be a wasted API round-trip.
   const branchRows = await db
     .select({ id: machineBranches.id, sandboxId: machineBranches.sandboxId })
     .from(machineBranches)
-    .where(eq(machineBranches.machineId, machineId));
+    .where(and(eq(machineBranches.machineId, machineId), isNull(machineBranches.spriteTornDownAt)));
 
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, page.driveId),
