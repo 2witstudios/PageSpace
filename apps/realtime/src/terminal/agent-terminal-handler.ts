@@ -341,6 +341,7 @@ async function settleAccruedWindow(
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   sessionKey: string,
+  { stopClock = false }: { stopClock?: boolean } = {},
 ): Promise<boolean> {
   if (!session.payerId || session.connectedAt === undefined) return true;
   const payerId = session.payerId;
@@ -373,6 +374,28 @@ async function settleAccruedWindow(
     return true;
   }
   if (sessionMap.getByKey(sessionKey) !== session) return true;
+  // The shell quiesced: its exec socket is deliberately down and its Sprite is
+  // free to pause (the task hold was released with it — see
+  // `startTaskHoldHeartbeat`). A paused sandbox costs us nothing, so billing the
+  // payer wall-clock for it would charge them for a tab, not for a sandbox — and
+  // an ATTACHED session is never reaped, so that overbilling would be unbounded.
+  // Stop the clock instead: the window just settled is the last billable one
+  // until the socket comes back (`resumeBillingClock`).
+  //
+  // Set only AFTER a successful settle and only while this session is still the
+  // live one — a failed settle has already rolled `connectedAt` back to the
+  // window start, and clearing it here would silently discard that unbilled
+  // window instead of retrying it.
+  //
+  // No fresh hold is placed either: a hold RESERVES the payer's credits for the
+  // next window, and there is no next window until they come back. Skipping the
+  // gate also means an insolvent payer's quiesced terminal is not torn down
+  // while it sits there costing nothing — they are gated on resume, which is the
+  // moment they would start consuming again.
+  if (stopClock) {
+    session.connectedAt = undefined;
+    return true;
+  }
   try {
     const gate = await billing.gate({ payerId });
     if (!gate.allowed) return false;
@@ -392,10 +415,31 @@ async function settleAccruedWindow(
 }
 
 /**
+ * Restart the billing clock a quiesced window stopped (`settleAccruedWindow`'s
+ * `stopClock`). Called at the very instant the shell resumes — a keystroke, or a
+ * viewer returning — NOT left to the next heartbeat: that is `SETTLE_HEARTBEAT_MS`
+ * (ten minutes) away, and a session that resumed nine minutes before its next
+ * tick would have those nine minutes billed as free.
+ *
+ * Idempotent, and inert for an unmetered session (no `payerId`) or one whose
+ * clock is already running — `connectedAt` is only ever `undefined` here because
+ * a quiesce stopped it.
+ */
+function resumeBillingClock(session: TerminalSession): void {
+  if (!session.payerId) return;
+  if (session.connectedAt !== undefined) return;
+  session.connectedAt = Date.now();
+}
+
+/**
  * Arms the heartbeat for a metered session (see SETTLE_HEARTBEAT_MS). A
  * module-level factory rather than a closure inside onConnect so the
  * long-lived interval callback captures only what it needs — not the whole
  * connect scope (auth result, Sprite handle, session-list snapshots).
+ *
+ * Each tick re-reads whether the shell is QUIESCED, so the same beat that bills
+ * a live session's window stops an idle one's clock — and starts it again when
+ * the socket comes back. Billing tracks sandbox residency, not tab-open time.
  */
 function startSettleHeartbeat(
   billing: SandboxBillingDeps,
@@ -409,7 +453,13 @@ function startSettleHeartbeat(
     if (settling) return;
     settling = true;
     try {
-      const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey);
+      const quiesced = session.command.isQuiesced();
+      // A backstop for the precise `resumeBillingClock` calls at the resume
+      // sites: if a socket came back through some path that did not restart the
+      // clock, this beat notices and restarts it rather than letting the session
+      // run on free forever.
+      if (!quiesced) resumeBillingClock(session);
+      const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: quiesced });
       if (!solvent && sessionMap.getByKey(sessionKey) === session) {
         loggers.realtime.info('Agent terminal session ended (payer out of credits at heartbeat)', {
           sessionKey,
@@ -720,6 +770,12 @@ export function buildAgentTerminalHandlers({
     // connection never actually dropped, since output is already flowing.
     session.command.setViewerAttached(true);
     session.viewerAttached = true;
+    // The line above resumes a shell that quiesced while they were gone, which
+    // wakes the Sprite — so the payer is consuming a sandbox again and the
+    // billing clock (stopped at the quiesce — see `settleAccruedWindow`'s
+    // `stopClock`) restarts HERE, not at the next ten-minute heartbeat. A no-op
+    // for a session that never quiesced: its clock never stopped.
+    resumeBillingClock(session);
     // A viewer is back AND the `setViewerAttached(true)` above has just resumed
     // the shell's socket, so the hold (deleted while idle) is re-created
     // immediately rather than waiting out a heartbeat interval. Derived, not
@@ -1205,6 +1261,14 @@ export function buildAgentTerminalHandlers({
         // Input is activity for the task hold: a typed prompt is work in
         // progress even before the agent's first byte of output.
         session.lastInputAt = Date.now();
+        // A keystroke also RESUMES a quiesced shell (sprites-shell.ts's `write`
+        // pays back the swallowed watchdog trip), which wakes the Sprite and
+        // re-takes the platform hold — so the payer starts consuming a sandbox
+        // again, and the billing clock has to start with it. Done here, at the
+        // instant of the keystroke, rather than at the next heartbeat: that is
+        // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
+        // minutes would otherwise be billed as free.
+        resumeBillingClock(session);
         session.command.write(p.data);
       }
     },
