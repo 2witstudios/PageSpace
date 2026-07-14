@@ -617,15 +617,33 @@ const GlobalAssistantView: React.FC = () => {
       );
       if (res.ok) {
         const data = (await res.json()) as {
-          streams?: Array<{ conversationId: string; triggeredBy: { userId: string } }>;
+          streams?: Array<{ messageId: string; conversationId: string; triggeredBy: { userId: string } }>;
         };
-        const hasLiveStream = (data.streams ?? []).some(
+        const liveStream = (data.streams ?? []).find(
           (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
         );
-        if (decideRecovery({ hasLiveStream, hasPersistedReply: false }) === 'rejoin') {
+        if (liveStream && decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin') {
+          // Evict the half-streamed assistant bubble useChat is still holding for this run.
+          //
+          // This is load-bearing, not tidy-up. `Chat.stop()` "keeps the generated tokens", and a
+          // dropped fetch leaves them too — so `messages` still contains an assistant message
+          // whose id IS the live stream's messageId (the server mints one id and uses it for both
+          // the UI message and the stream registry row). The rejoin re-adds that same stream to
+          // the pending store, and BOTH surfaces drop a pending stream whose messageId already
+          // appears in `messages` (dedupRemoteStreams / ChatMessagesArea.visibleRemoteStreams) —
+          // so the rejoined stream would be filtered straight back out and not one token of it
+          // would ever render. The user would sit in front of a frozen partial reply.
+          //
+          // Nothing is lost by dropping it: the bootstrap seeds the stream from the server's
+          // registry buffer, which holds every part pushed so far — strictly more than the
+          // partial we froze with.
+          const staleId = liveStream.messageId;
+          const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
           if (selectedAgent) {
+            setAgentMessages(evictStale);
             rejoinAgentStreamRef.current();
           } else {
+            setGlobalLocalMessages(evictStale);
             rejoinGlobalStream();
           }
           return true;
@@ -802,16 +820,29 @@ const GlobalAssistantView: React.FC = () => {
     onResume: useCallback(async () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
       if (action === 'noop') return;
-      if (action === 'rejoin-and-refresh') {
-        // Local-only useChat stop. It does NOT signal the server (that is done separately via
-        // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
-        // also ends the dead response body, which releases this channel's `consuming` mark —
-        // without that the rejoin's bootstrap would classify the stream as one we are already
-        // reading off the POST and skip attaching it.
-        rawStop();
-        if (await tryRecover()) return;
+      if (action === 'refresh') {
+        // Web, no live fetch of our own: a plain DB refresh is safe and is all we need.
+        await handlePullUpRefresh();
+        return;
       }
-      await handlePullUpRefresh();
+      // Native. Local-only useChat stop: it does NOT signal the server (that is done separately
+      // via abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
+      // also ends the dead response body, which releases this channel's `consuming` mark —
+      // without that the rejoin's bootstrap would classify the stream as one we are already
+      // reading off the POST and skip attaching it.
+      rawStop();
+      // tryRecover is the whole recovery here, and there is deliberately NO DB-refresh fallback
+      // after it. It already refetches when the run finished while we were away (its step 2). A
+      // fallback refresh would only run in the cases where a DB write is UNSAFE:
+      //   - the /active-streams probe failed (first request after a foreground is the likeliest
+      //     to, with the radio still coming up) — a stream may well be live, and the DB snapshot,
+      //     which cannot contain an unpersisted reply, would erase the in-progress bubble;
+      //   - the DB is behind our local state (step 2's dbUserCount >= localUserCount guard
+      //     rejected it) — e.g. a send whose POST never reached the server, where refreshing
+      //     would erase the user's own prompt.
+      // In both, doing nothing is correct: local state is newer than anything we could fetch, and
+      // the socket reconnect / refreshSignal path heals it.
+      await tryRecover();
     }, [effectiveIsStreaming, rawStop, tryRecover, handlePullUpRefresh]),
     enabled: resumeEnabled,
   });

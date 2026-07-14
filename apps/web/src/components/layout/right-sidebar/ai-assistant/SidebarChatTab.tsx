@@ -489,11 +489,9 @@ const SidebarChatTab: React.FC = () => {
   // NOTE: prod runs multiple web instances — live tokens from a stream on another
   // instance won't be in the pending store; the persisted message still shows up
   // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
-  // Returns the in-flight promise so callers that must sequence against it can await it —
-  // the resume handler below has to know the load has LANDED before it rejoins the stream,
-  // or the response could still be outstanding when the rejoined stream completes and would
-  // overwrite the finished reply with its pre-reply snapshot. Callers that just want to kick
-  // off a refresh (load-on-select, refreshSignal, retry) can keep ignoring the result.
+  // Returns the in-flight promise so callers that need to know the load has LANDED can await it
+  // (the resume handler does). Callers that just want to kick a refresh off — load-on-select,
+  // refreshSignal, retry — can keep ignoring the result.
   const loadGlobalMessages = useCallback((conversationId: string): Promise<void> => {
     globalLoadRequestedIdRef.current = conversationId;
     setIsLoadingGlobalMessages(true);
@@ -607,23 +605,18 @@ const SidebarChatTab: React.FC = () => {
     );
   }, [messages, displayIsStreaming, isVoiceModeActive]);
 
-  // App state recovery - refresh messages when returning from background
-  // This catches completed AI responses that finished while the app was backgrounded
-  // Refresh this surface from the DB after a background resume.
+  // Refresh this surface from the DB after a background resume, catching a reply that landed
+  // while we were away. Reached on the WEB resume path only (an idle tab coming back); the
+  // native path recovers through tryRecover, which never reads the DB while a run is live.
   //
-  // Global mode funnels through `loadGlobalMessages` — the single writer for the global-mode
-  // server→view path — rather than doing its own fetch. This runs DURING an active own stream
-  // on the resume path (see useAppStateRecovery below), and only that loader carries the two
-  // guards that make a mid-stream DB read safe: a stale-response check (so a response arriving
-  // after a conversation switch cannot clobber the conversation the user moved to) and
-  // `mergeServerAndPending` (which re-attaches the in-flight assistant bubble, absent from the
-  // DB snapshot because the reply is not persisted until the run completes). The raw fetch this
-  // replaced had neither, so it wrote a pre-reply snapshot straight over the live bubble.
+  // Global mode funnels through `loadGlobalMessages` — the documented single writer for the
+  // global-mode server→view path — rather than doing its own fetch. That loader carries the
+  // stale-response check, so a response arriving after the user switched conversation cannot
+  // clobber the conversation they moved to. The raw fetch this replaced had no such guard.
   const handleAppResume = useCallback(async () => {
     if (selectedAgent) {
       await refreshAgentConversation();
     } else if (globalConversationId && globalIsInitialized) {
-      // Awaited, not fire-and-forget: the resume handler sequences the rejoin after this.
       await loadGlobalMessages(globalConversationId);
     }
   }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, loadGlobalMessages]);
@@ -913,15 +906,33 @@ const SidebarChatTab: React.FC = () => {
       );
       if (res.ok) {
         const data = (await res.json()) as {
-          streams?: Array<{ conversationId: string; triggeredBy: { userId: string } }>;
+          streams?: Array<{ messageId: string; conversationId: string; triggeredBy: { userId: string } }>;
         };
-        const hasLiveStream = (data.streams ?? []).some(
+        const liveStream = (data.streams ?? []).find(
           (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
         );
-        if (decideRecovery({ hasLiveStream, hasPersistedReply: false }) === 'rejoin') {
+        if (liveStream && decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin') {
+          // Evict the half-streamed assistant bubble useChat is still holding for this run.
+          //
+          // This is load-bearing, not tidy-up. `Chat.stop()` "keeps the generated tokens", and a
+          // dropped fetch leaves them too — so `messages` still contains an assistant message
+          // whose id IS the live stream's messageId (the server mints one id and uses it for both
+          // the UI message and the stream registry row). The rejoin re-adds that same stream to
+          // the pending store, and this surface drops a pending stream whose messageId already
+          // appears in `messages` (dedupRemoteStreams) — so the rejoined stream would be filtered
+          // straight back out and not one token of it would ever render. The user would sit in
+          // front of a frozen partial reply.
+          //
+          // Nothing is lost by dropping it: the bootstrap seeds the stream from the server's
+          // registry buffer, which holds every part pushed so far — strictly more than the
+          // partial we froze with.
+          const staleId = liveStream.messageId;
+          const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
           if (selectedAgent) {
+            setMessages(evictStale);
             rejoinAgentStream();
           } else {
+            setGlobalMessages(evictStale);
             rejoinGlobalStream();
           }
           return true;
@@ -1006,16 +1017,29 @@ const SidebarChatTab: React.FC = () => {
     onResume: useCallback(async () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
       if (action === 'noop') return;
-      if (action === 'rejoin-and-refresh') {
-        // Local-only useChat stop. It does NOT signal the server (that is done separately via
-        // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
-        // also ends the dead response body, which releases this channel's `consuming` mark —
-        // without that the rejoin's bootstrap would classify the stream as one we are already
-        // reading off the POST and skip attaching it.
-        stop();
-        if (await tryRecover()) return;
+      if (action === 'refresh') {
+        // Web, no live fetch of our own: a plain DB refresh is safe and is all we need.
+        await handleAppResume();
+        return;
       }
-      await handleAppResume();
+      // Native. Local-only useChat stop: it does NOT signal the server (that is done separately
+      // via abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
+      // also ends the dead response body, which releases this channel's `consuming` mark —
+      // without that the rejoin's bootstrap would classify the stream as one we are already
+      // reading off the POST and skip attaching it.
+      stop();
+      // tryRecover is the whole recovery here, and there is deliberately NO DB-refresh fallback
+      // after it. It already refetches when the run finished while we were away (its step 2). A
+      // fallback refresh would only run in the cases where a DB write is UNSAFE:
+      //   - the /active-streams probe failed (first request after a foreground is the likeliest
+      //     to, with the radio still coming up) — a stream may well be live, and the DB snapshot,
+      //     which cannot contain an unpersisted reply, would erase the in-progress bubble;
+      //   - the DB is behind our local state (step 2's dbUserCount >= localUserCount guard
+      //     rejected it) — e.g. a send whose POST never reached the server, where refreshing
+      //     would erase the user's own prompt.
+      // In both, doing nothing is correct: local state is newer than anything we could fetch, and
+      // the socket reconnect / refreshSignal path heals it.
+      await tryRecover();
     }, [displayIsStreaming, stop, tryRecover, handleAppResume]),
     enabled: resumeEnabled,
   });

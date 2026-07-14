@@ -131,33 +131,35 @@ function resumeEnabled(currentConversationId: string | null, isAnyEditing: boole
  * mirrored — it calls the real `resolveResumeAction`, so this pins the wiring against the
  * real policy.
  *
- * The critical property: on the rejoin path we stop the local fetch and hand off to
- * `tryRecover` (the /active-streams-first probe), and we DO NOT touch the DB unless
- * tryRecover comes back empty. A blind DB refresh while a run is still generating would
- * write a snapshot with no assistant message over the in-progress bubble.
+ * Two invariants worth stating plainly, because both were bugs:
+ *
+ *  - On the native path we stop the local fetch and hand off to `tryRecover`, and there is NO
+ *    DB-refresh fallback afterwards. tryRecover already refetches when the run finished while
+ *    we were away. A fallback would only fire in the cases where a DB write is UNSAFE: the
+ *    /active-streams probe failed (a stream may still be live, and the DB cannot contain an
+ *    unpersisted reply), or the DB is behind local state (a send whose POST never landed).
+ *
+ *  - The web path never stops or probes: a live fetch survives a tab switch.
  *
  * `recovered` models tryRecover's return: true = it rejoined a live stream or refetched a
- * persisted reply; false = nothing live, nothing persisted.
+ * persisted reply; false = nothing live, nothing persisted, or the probe failed.
  */
 type ResumeEffect = 'stop' | 'try-recover' | 'refresh';
 
 function planResume({
   native,
   isStreaming,
-  recovered = false,
 }: {
   native: boolean;
   isStreaming: boolean;
-  recovered?: boolean;
 }): ResumeEffect[] {
   const action = resolveResumeAction({ native, isStreaming });
   if (action === 'noop') return [];
-  if (action !== 'rejoin-and-refresh') return ['refresh'];
-  // rawStop is local-only — it clears useChat state and releases the channel's `consuming`
-  // mark so the rejoin's bootstrap will attach. It does NOT signal the server; the run keeps
-  // generating and stays rejoinable.
-  if (recovered) return ['stop', 'try-recover'];
-  return ['stop', 'try-recover', 'refresh'];
+  if (action === 'refresh') return ['refresh'];
+  // The stop is local-only. It clears useChat state and — critically — ends the dead response
+  // body, which releases the channel's `consuming` mark. Without that the rejoin's bootstrap
+  // treats the stream as one we are already reading off the POST and skips attaching it.
+  return ['stop', 'try-recover'];
 }
 
 const mockAgent = { id: 'agent-123' };
@@ -332,6 +334,23 @@ describe('GlobalAssistantView load-on-select effects', () => {
     });
   });
 
+/**
+ * Mirrors the rejoin branch of `tryRecover`: the live stream's messageId is used to evict the
+ * half-streamed assistant bubble useChat is still holding, so the rejoined pending stream is not
+ * deduped away.
+ *
+ * `Chat.stop()` "keeps the generated tokens", and a dropped fetch leaves them too — so `messages`
+ * still holds an assistant message whose id IS the live stream's messageId (the server mints one
+ * id and uses it for BOTH the UI message and the stream registry row). The rejoin re-adds that
+ * same stream to the pending store, and the surfaces drop a pending stream whose messageId
+ * already appears in `messages` (dedupRemoteStreams / ChatMessagesArea.visibleRemoteStreams).
+ * Leave the stale bubble in place and the rejoined stream is filtered straight back out — not one
+ * token renders, and the user stares at a frozen partial.
+ */
+function evictStalePartial<T extends { id: string }>(messages: T[], liveMessageId: string): T[] {
+  return messages.filter((m) => m.id !== liveMessageId);
+}
+
   describe('app-state resume recovery (useAppStateRecovery wiring)', () => {
     describe('resumeEnabled (the gate)', () => {
       it('given a conversation and no active editing, should enable recovery', () => {
@@ -349,23 +368,22 @@ describe('GlobalAssistantView load-on-select effects', () => {
     });
 
     describe('planResume (the onResume body)', () => {
-      it('given native mid-stream and a live stream to rejoin, should stop the local fetch and hand off to tryRecover — and NOT touch the DB', () => {
+      it('given native mid-stream (the orphaned-stream bug), should stop the local fetch and hand off to tryRecover — and NOT read the DB', () => {
         // THE KEY INVARIANT. The reply is not persisted until the run completes, so a DB
         // snapshot taken while the stream is still generating contains no assistant message.
         // Writing it would wipe the in-progress bubble. tryRecover asks /active-streams first
-        // and rejoins; the DB is never read on this path.
-        expect(planResume({ native: true, isStreaming: true, recovered: true })).toEqual([
-          'stop',
-          'try-recover',
-        ]);
+        // and rejoins; the DB is never read while a run is live.
+        expect(planResume({ native: true, isStreaming: true })).toEqual(['stop', 'try-recover']);
       });
 
-      it('given native and tryRecover finds nothing live or persisted, should fall back to a DB refresh', () => {
-        expect(planResume({ native: true, isStreaming: true, recovered: false })).toEqual([
-          'stop',
-          'try-recover',
-          'refresh',
-        ]);
+      it('given native, should NOT fall back to a DB refresh when tryRecover comes back empty', () => {
+        // tryRecover returns false in exactly the two cases where a DB write is unsafe: the
+        // probe failed (a stream may still be live — and the first request after a foreground
+        // is the likeliest to fail, radio still coming up), or the DB is behind local state
+        // (a send whose POST never reached the server; refreshing would erase the user's own
+        // prompt). Doing nothing is correct in both; the socket reconnect path heals it.
+        expect(planResume({ native: true, isStreaming: true })).not.toContain('refresh');
+        expect(planResume({ native: true, isStreaming: false })).not.toContain('refresh');
       });
 
       it('given native, should always stop BEFORE recovering', () => {
@@ -373,7 +391,7 @@ describe('GlobalAssistantView load-on-select effects', () => {
         // the channel's `consuming` mark. Without that, the rejoin's bootstrap classifies the
         // stream as one we are already reading off the POST body and skips attaching it — the
         // rejoin would silently do nothing.
-        const plan = planResume({ native: true, isStreaming: true, recovered: true });
+        const plan = planResume({ native: true, isStreaming: true });
         expect(plan.indexOf('stop')).toBeLessThan(plan.indexOf('try-recover'));
       });
 
@@ -381,10 +399,7 @@ describe('GlobalAssistantView load-on-select effects', () => {
         // The local fetch is dead after backgrounding regardless of what useChat still
         // reports, so native always probes. /active-streams is the authoritative answer
         // on whether a stream is actually live; no client flag gates the rejoin.
-        expect(planResume({ native: true, isStreaming: false, recovered: true })).toEqual([
-          'stop',
-          'try-recover',
-        ]);
+        expect(planResume({ native: true, isStreaming: false })).toEqual(['stop', 'try-recover']);
       });
 
       it('given web with a live fetch, should do nothing — the fetch survives a tab switch and must not be clobbered', () => {
@@ -393,6 +408,35 @@ describe('GlobalAssistantView load-on-select effects', () => {
 
       it('given web with no live fetch, should refresh only (no stop, no probe)', () => {
         expect(planResume({ native: false, isStreaming: false })).toEqual(['refresh']);
+      });
+    });
+
+    describe('evictStalePartial (why the rejoin renders at all)', () => {
+      const liveId = 'srv-msg-1';
+      const messages = [
+        { id: 'u1', role: 'user' },
+        { id: liveId, role: 'assistant' }, // the frozen half-streamed bubble
+      ];
+
+      it('given a rejoined live stream, should drop the local partial carrying that same messageId', () => {
+        // Without this the pending stream the rejoin adds under `liveId` is deduped away,
+        // because `liveId` is still present in `messages`. The bubble would never update.
+        expect(evictStalePartial(messages, liveId)).toEqual([{ id: 'u1', role: 'user' }]);
+      });
+
+      it('given the partial is evicted, the rejoined stream is no longer deduped out', () => {
+        const remaining = evictStalePartial(messages, liveId);
+        const seen = new Set(remaining.map((m) => m.id));
+        expect(seen.has(liveId)).toBe(false);
+      });
+
+      it('given messages with no matching id, should leave them untouched', () => {
+        expect(evictStalePartial(messages, 'some-other-id')).toEqual(messages);
+      });
+
+      it('should only ever drop the ONE message the server named — never the user turn', () => {
+        const out = evictStalePartial(messages, liveId);
+        expect(out.some((m) => m.role === 'user')).toBe(true);
       });
     });
   });
