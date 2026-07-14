@@ -27,6 +27,16 @@ export type PendingMutation =
  * over a live mutation, AND a live mutation never causes a genuinely fresh
  * load response to be discarded (see PR #2075 review: generation-only
  * invalidation was too aggressive in the reverse direction).
+ *
+ * Accepted tradeoff: this array is cleared only by `applyLoad`/`applyStartLoad`,
+ * not by any timer or size cap — a conversation that goes a very long time
+ * between reloads (tab focus, reconnect, switch-away/back) while receiving
+ * many live mutations will accumulate all of them. This doesn't affect
+ * correctness (replay is idempotent: a message already present is never
+ * duplicated, an edit/delete of an absent id is a no-op), only memory, and
+ * every real reload trigger the epic names (refresh, reconnect, conversation
+ * switch) clears it. Revisit with a cap or per-message-id collapse if a wired
+ * consumer (PR 4/5) shows this mattering under real traffic.
  */
 export interface ConversationCacheEntry {
   messages: UIMessage[];
