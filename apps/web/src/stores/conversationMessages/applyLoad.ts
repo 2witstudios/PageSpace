@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import type { ConversationMessagesById } from './seedEmpty';
+import { replayPendingMutations } from './replayPendingMutations';
 
 export interface ApplyLoadEvent {
   conversationId: string;
@@ -14,8 +15,19 @@ export interface ApplyLoadEvent {
  * switching) and is dropped — the newer load's result must win, not
  * whichever network request happens to resolve last.
  *
- * Any optimistic send whose id now appears in the loaded set is reconciled
- * out of `optimisticSends` — the DB row supersedes the local echo.
+ * There is no ordering guarantee between this load's DB snapshot and any
+ * live mutation (remote message/edit/delete) that landed while it was in
+ * flight — either can "win the race". `pendingMutationsSinceLoad` (recorded
+ * by `applyRemoteUserMessage`/`applyConversationEdit`/`applyConversationDelete`
+ * since the current `loadGeneration` started) is replayed onto the loaded
+ * snapshot before committing, so the result always reflects both: a live
+ * mutation the snapshot predates is never dropped, and a live append the
+ * snapshot already includes is never duplicated (see PR #2075 review —
+ * unconditionally invalidating the load's generation on every live mutation
+ * was too aggressive and could discard a genuinely fresh/complete response).
+ *
+ * Any optimistic send whose id now appears in the (replayed) set is
+ * reconciled out of `optimisticSends` — the DB row supersedes the local echo.
  */
 export const applyLoad = (
   byConversationId: ConversationMessagesById,
@@ -24,15 +36,17 @@ export const applyLoad = (
   const existing = byConversationId[event.conversationId];
   if (!existing || event.generation !== existing.loadGeneration) return byConversationId;
 
-  const loadedIds = new Set(event.messages.map((m) => m.id));
+  const messages = replayPendingMutations(event.messages, existing.pendingMutationsSinceLoad);
+  const loadedIds = new Set(messages.map((m) => m.id));
   const optimisticSends = existing.optimisticSends.filter((m) => !loadedIds.has(m.id));
 
   return {
     ...byConversationId,
     [event.conversationId]: {
       ...existing,
-      messages: event.messages,
+      messages,
       optimisticSends,
+      pendingMutationsSinceLoad: [],
     },
   };
 };

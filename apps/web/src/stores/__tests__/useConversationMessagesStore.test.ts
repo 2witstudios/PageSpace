@@ -18,7 +18,7 @@ describe('useConversationMessagesStore', () => {
 
   it('given a conversation never seen before, getEntry should return a seeded empty entry without mutating the store', () => {
     const entry = useConversationMessagesStore.getState().getEntry('c1');
-    expect(entry).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0 });
+    expect(entry).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] });
     expect(useConversationMessagesStore.getState().byConversationId.c1).toBeUndefined();
   });
 
@@ -73,6 +73,6 @@ describe('useConversationMessagesStore', () => {
   it('given actions against one conversation, should not affect another conversation entry', () => {
     const { addOptimisticSend, getEntry } = useConversationMessagesStore.getState();
     addOptimisticSend('c1', msg('opt1'));
-    expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0 });
+    expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] });
   });
 });

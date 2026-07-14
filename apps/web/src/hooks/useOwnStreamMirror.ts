@@ -41,6 +41,21 @@ export const useOwnStreamMirror = ({
       startedAtRef.current = new Date().toISOString();
     }
 
+    const store = usePendingStreamsStore.getState();
+    // seq = max(wall-clock millis, storedLastSeq + 1): wall-clock alone can
+    // repeat within the same millisecond (two mirror ticks for fast local
+    // streams, or a tick right at a remount), and applySetStreamParts drops
+    // any write with seq <= lastSeq — a repeat would silently lose that
+    // chunk. Reading the store's current lastSeq as a floor and requiring
+    // strictly-greater guarantees monotonic progress regardless of clock
+    // resolution, while still being immune to this hook remounting mid-
+    // stream (unlike a local incrementing ref, which would restart at 0/1
+    // and have every write from the new instance rejected as stale against
+    // the previous instance's already-higher lastSeq).
+    const relevantId = ownAssistantMessage?.id ?? mirroredIdRef.current;
+    const storedLastSeq = (relevantId && store.streams.get(relevantId)?.lastSeq) || 0;
+    const seq = Math.max(Date.now(), storedLastSeq + 1);
+
     const ops = planOwnStreamMirror({
       status,
       ownAssistantMessage,
@@ -49,19 +64,9 @@ export const useOwnStreamMirror = ({
       conversationId,
       triggeredBy,
       startedAt: startedAtRef.current ?? new Date().toISOString(),
-      // Date.now() rather than a local incrementing ref: the store's
-      // `lastSeq` gate (applySetStreamParts) is keyed globally per messageId
-      // and survives across this hook remounting mid-stream (e.g. a parent
-      // re-key or Suspense reset while the same message is still streaming).
-      // A per-mount ref would restart at 0/1 on remount and have every write
-      // rejected as stale (seq <= the previous mount's already-higher
-      // lastSeq), freezing the mirrored stream until it ends. Wall-clock
-      // millis are monotonic across the whole process, independent of any
-      // single component instance's lifecycle.
-      seq: Date.now(),
+      seq,
     });
 
-    const store = usePendingStreamsStore.getState();
     for (const op of ops) {
       if (op.type === 'addStream') store.addStream(op.stream);
       else if (op.type === 'setStreamParts') store.setStreamParts(op.messageId, op.parts, op.seq);

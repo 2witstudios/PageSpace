@@ -14,11 +14,12 @@ export interface ApplyRemoteUserMessageEvent {
  * send), reconciles it out of `optimisticSends` at the same time — the
  * confirmed row now covers it.
  *
- * Bumps `loadGeneration`: a load's DB snapshot is read before this broadcast
- * necessarily landed, so a load already in flight when this arrives must not
- * be allowed to later overwrite `messages` and silently drop it — bumping
- * the generation makes that in-flight `applyLoad` stale (its generation no
- * longer matches) so it gets rejected instead of clobbering this append.
+ * Also records the append in `pendingMutationsSinceLoad`: there is no
+ * ordering guarantee between this broadcast and any load's DB snapshot, so
+ * `applyLoad` replays pending mutations onto its snapshot rather than this
+ * function invalidating the load outright — invalidating on every live
+ * append would also discard a load whose response already includes this
+ * same message (PR #2075 review).
  */
 export const applyRemoteUserMessage = (
   byConversationId: ConversationMessagesById,
@@ -33,7 +34,10 @@ export const applyRemoteUserMessage = (
       ...existing,
       messages: [...existing.messages, event.message],
       optimisticSends: existing.optimisticSends.filter((m) => m.id !== event.message.id),
-      loadGeneration: existing.loadGeneration + 1,
+      pendingMutationsSinceLoad: [
+        ...existing.pendingMutationsSinceLoad,
+        { type: 'remoteMessage', message: event.message },
+      ],
     },
   };
 };

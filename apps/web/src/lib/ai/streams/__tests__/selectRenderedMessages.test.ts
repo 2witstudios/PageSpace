@@ -15,7 +15,7 @@ const stream = (overrides: Partial<PendingStream> & { messageId: string }): Pend
   ...overrides,
 });
 
-const emptyEntry: ConversationCacheEntry = { messages: [], optimisticSends: [], loadGeneration: 0 };
+const emptyEntry: ConversationCacheEntry = { messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] };
 
 describe('selectRenderedMessages', () => {
   it('given an empty cache and no streams, should return an empty array', () => {

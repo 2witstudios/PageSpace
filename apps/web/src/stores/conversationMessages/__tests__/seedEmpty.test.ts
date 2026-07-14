@@ -3,7 +3,12 @@ import { seedEmpty } from '../seedEmpty';
 
 describe('seedEmpty', () => {
   it('given no arguments, should produce an empty cache entry at generation 0', () => {
-    expect(seedEmpty()).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0 });
+    expect(seedEmpty()).toEqual({
+      messages: [],
+      optimisticSends: [],
+      loadGeneration: 0,
+      pendingMutationsSinceLoad: [],
+    });
   });
 
   it('given two calls, should produce referentially independent entries', () => {

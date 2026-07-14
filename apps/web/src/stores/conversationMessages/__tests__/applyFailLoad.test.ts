@@ -8,7 +8,7 @@ const msg = (id: string): UIMessage => ({ id, role: 'user', parts: [] });
 describe('applyFailLoad', () => {
   it('given an entry with existing messages, should keep them unchanged (never clear to empty on a failed reload)', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [msg('m1'), msg('m2')], optimisticSends: [msg('opt1')], loadGeneration: 2 },
+      c1: { messages: [msg('m1'), msg('m2')], optimisticSends: [msg('opt1')], loadGeneration: 2, pendingMutationsSinceLoad: [] },
     };
     const result = applyFailLoad(initial, { conversationId: 'c1', generation: 2 });
     expect(result).toBe(initial);
@@ -18,7 +18,7 @@ describe('applyFailLoad', () => {
 
   it('given a stale generation, should also keep prior state unchanged', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 3 },
+      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [] },
     };
     const result = applyFailLoad(initial, { conversationId: 'c1', generation: 1 });
     expect(result).toBe(initial);

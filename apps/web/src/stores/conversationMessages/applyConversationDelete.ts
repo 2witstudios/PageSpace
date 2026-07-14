@@ -10,11 +10,13 @@ export interface ApplyConversationDeleteEvent {
  * Applies a remote delete broadcast to a conversation's messages and
  * optimisticSends, reusing `applyMessageDelete`.
  *
- * Bumps `loadGeneration` on an actual change: a load already in flight was
- * snapshotted before this delete necessarily landed, so it must not be
- * allowed to later overwrite `messages` and silently resurrect the deleted
- * row — bumping the generation makes that in-flight `applyLoad` stale so it
- * gets rejected.
+ * Records the delete in `pendingMutationsSinceLoad` only when it actually
+ * removed a *confirmed* message: there is no ordering guarantee between this
+ * broadcast and any load's DB snapshot, so `applyLoad` replays pending
+ * mutations onto its snapshot rather than this function invalidating the
+ * load outright. A delete that only removed an optimistic (unconfirmed) send
+ * needs no replay — an unconfirmed message can never appear in a DB
+ * snapshot in the first place.
  */
 export const applyConversationDelete = (
   byConversationId: ConversationMessagesById,
@@ -27,8 +29,13 @@ export const applyConversationDelete = (
   const optimisticSends = applyMessageDelete(existing.optimisticSends, event.messageId);
   if (messages === existing.messages && optimisticSends === existing.optimisticSends) return byConversationId;
 
+  const pendingMutationsSinceLoad =
+    messages === existing.messages
+      ? existing.pendingMutationsSinceLoad
+      : [...existing.pendingMutationsSinceLoad, { type: 'delete' as const, messageId: event.messageId }];
+
   return {
     ...byConversationId,
-    [event.conversationId]: { ...existing, messages, optimisticSends, loadGeneration: existing.loadGeneration + 1 },
+    [event.conversationId]: { ...existing, messages, optimisticSends, pendingMutationsSinceLoad },
   };
 };

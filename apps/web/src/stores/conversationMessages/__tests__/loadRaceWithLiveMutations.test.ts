@@ -11,35 +11,56 @@ const msg = (id: string, text = ''): UIMessage => ({ id, role: 'user', parts: [{
 
 /**
  * Regression coverage for a race identified in PR #2075 review
- * (chatgpt-codex-connector, apps/web/src/stores/conversationMessages/applyLoad.ts:34):
- * a conversation load reads a DB snapshot BEFORE a live socket mutation lands,
- * but resolves (calls applyLoad) AFTER it. Because the load's `generation`
- * still matched, applyLoad used to unconditionally overwrite `messages` with
- * its (now-stale) snapshot, silently dropping the live mutation until the
- * next reload. Fixed by having every live-mutation transition
- * (applyRemoteUserMessage/applyConversationEdit/applyConversationDelete)
- * bump `loadGeneration` on an actual change, so the in-flight load's
- * generation goes stale and applyLoad correctly rejects it instead.
+ * (chatgpt-codex-connector). There is no ordering guarantee between a
+ * conversation load's DB snapshot and a live socket mutation for the same
+ * conversation — either can "win the race" against the other:
+ *
+ * - A first fix bumped `loadGeneration` on every live mutation so any
+ *   in-flight load became stale and got rejected. That closed the original
+ *   finding (a stale load clobbering a live append/edit/delete) but
+ *   over-corrected: a live mutation now also invalidated a load whose
+ *   response already reflected that same mutation (or was otherwise a
+ *   fully valid, later snapshot), discarding the ENTIRE load response —
+ *   including unrelated history the mutation knew nothing about.
+ * - The actual fix (`replayPendingMutations`): `loadGeneration` only guards
+ *   against a load superseded by a *newer `startLoad`* (unchanged, original
+ *   purpose). Live mutations no longer touch `loadGeneration` at all —
+ *   instead they're recorded in `pendingMutationsSinceLoad` and replayed
+ *   onto the load's snapshot when it resolves, so the result always
+ *   reflects both sources regardless of which arrived first.
  */
-describe('applyLoad race with concurrent live mutations', () => {
-  it('given a remote user message arrives while a load is in flight, should NOT be clobbered when the stale load resolves', () => {
+describe('applyLoad reconciliation with concurrent live mutations', () => {
+  it('given a remote user message arrives while a load is in flight and the stale snapshot predates it, should NOT be clobbered', () => {
     let store: ConversationMessagesById = {};
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;
 
-    // Socket broadcast lands before the fetch resolves.
     store = applyRemoteUserMessage(store, { conversationId: 'c1', message: msg('live-1', 'hello') });
 
-    // The in-flight fetch resolves with the pre-broadcast DB snapshot.
     const staleSnapshot: UIMessage[] = [msg('m0', 'existing')];
     store = applyLoad(store, { conversationId: 'c1', generation, messages: staleSnapshot });
 
-    expect(store.c1.messages.some((m) => m.id === 'live-1')).toBe(true);
+    expect(store.c1.messages.map((m) => m.id)).toEqual(['m0', 'live-1']);
+  });
+
+  it('given a remote user message arrives and the load response ALSO already includes it (Codex finding: over-aggressive invalidation), should keep the full load response with no duplicate', () => {
+    let store: ConversationMessagesById = {};
+    const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
+    store = afterStart;
+
+    store = applyRemoteUserMessage(store, { conversationId: 'c1', message: msg('shared-1', 'hi') });
+
+    // The fetch response is a fully fresh snapshot that independently already
+    // contains shared-1, plus unrelated history the live mutation never saw.
+    const freshSnapshot: UIMessage[] = [msg('historical-1'), msg('historical-2'), msg('shared-1', 'hi')];
+    store = applyLoad(store, { conversationId: 'c1', generation, messages: freshSnapshot });
+
+    expect(store.c1.messages.map((m) => m.id)).toEqual(['historical-1', 'historical-2', 'shared-1']);
   });
 
   it('given an edit lands while a load is in flight, should NOT be undone when the stale load resolves', () => {
     let store: ConversationMessagesById = {
-      c1: { messages: [msg('m1', 'original')], optimisticSends: [], loadGeneration: 0 },
+      c1: { messages: [msg('m1', 'original')], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] },
     };
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;
@@ -50,7 +71,6 @@ describe('applyLoad race with concurrent live mutations', () => {
       payload: { messageId: 'm1', parts: [{ type: 'text', text: 'edited' }], editedAt },
     });
 
-    // Stale load resolves with the pre-edit snapshot.
     store = applyLoad(store, { conversationId: 'c1', generation, messages: [msg('m1', 'original')] });
 
     expect(store.c1.messages[0].parts).toEqual([{ type: 'text', text: 'edited' }]);
@@ -58,20 +78,24 @@ describe('applyLoad race with concurrent live mutations', () => {
 
   it('given a delete lands while a load is in flight, should NOT be resurrected when the stale load resolves', () => {
     let store: ConversationMessagesById = {
-      c1: { messages: [msg('m1'), msg('m2')], optimisticSends: [], loadGeneration: 0 },
+      c1: {
+        messages: [msg('m1'), msg('m2')],
+        optimisticSends: [],
+        loadGeneration: 0,
+        pendingMutationsSinceLoad: [],
+      },
     };
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;
 
     store = applyConversationDelete(store, { conversationId: 'c1', messageId: 'm1' });
 
-    // Stale load resolves with the pre-delete snapshot (m1 still present).
     store = applyLoad(store, { conversationId: 'c1', generation, messages: [msg('m1'), msg('m2')] });
 
     expect(store.c1.messages.some((m) => m.id === 'm1')).toBe(false);
   });
 
-  it('given NO live mutation lands during the load, the load should still commit normally (generation still matches)', () => {
+  it('given NO live mutation lands during the load, the load should still commit the snapshot as-is', () => {
     let store: ConversationMessagesById = {};
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;
@@ -81,7 +105,7 @@ describe('applyLoad race with concurrent live mutations', () => {
     expect(store.c1.messages).toEqual([msg('m1', 'from-db')]);
   });
 
-  it('given a second startLoad supersedes the first (rapid conversation switch), the first stale load should still be rejected as before', () => {
+  it('given a second startLoad supersedes the first (rapid conversation switch), the first stale load should still be rejected', () => {
     let store: ConversationMessagesById = {};
     const first = applyStartLoad(store, 'c1');
     store = first.byConversationId;
@@ -93,5 +117,30 @@ describe('applyLoad race with concurrent live mutations', () => {
 
     store = applyLoad(store, { conversationId: 'c1', generation: second.generation, messages: [msg('fresh-load')] });
     expect(store.c1.messages).toEqual([msg('fresh-load')]);
+  });
+
+  it('given multiple live mutations of different kinds land during one load, all should be reflected after the load resolves', () => {
+    let store: ConversationMessagesById = {
+      c1: { messages: [msg('m1', 'v1'), msg('m2')], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] },
+    };
+    const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
+    store = afterStart;
+
+    store = applyRemoteUserMessage(store, { conversationId: 'c1', message: msg('m3', 'new') });
+    store = applyConversationEdit(store, {
+      conversationId: 'c1',
+      payload: { messageId: 'm1', parts: [{ type: 'text', text: 'v2' }], editedAt: new Date() },
+    });
+    store = applyConversationDelete(store, { conversationId: 'c1', messageId: 'm2' });
+
+    // Stale snapshot: pre-edit m1, still has m2, doesn't know about m3 yet.
+    store = applyLoad(store, {
+      conversationId: 'c1',
+      generation,
+      messages: [msg('m1', 'v1'), msg('m2')],
+    });
+
+    expect(store.c1.messages.map((m) => m.id)).toEqual(['m1', 'm3']);
+    expect(store.c1.messages[0].parts).toEqual([{ type: 'text', text: 'v2' }]);
   });
 });
