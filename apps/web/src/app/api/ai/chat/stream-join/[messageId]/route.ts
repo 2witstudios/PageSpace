@@ -3,6 +3,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { streamMulticastRegistry } from '@/lib/ai/core/stream-multicast-registry';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
 import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 import { isAuthError } from '@/lib/auth/auth-core';
 
@@ -41,11 +42,16 @@ export async function GET(
   }
 
   const channelOwner = parseGlobalChannelId(meta.pageId);
-  const hasViewAccess = async (): Promise<boolean> =>
-    channelOwner !== null ? channelOwner === userId : canUserViewPage(userId, meta.pageId);
+  // Page access, then conversation access. A page channel carries every conversation on
+  // the page and conversations are private by default, so page access alone would let
+  // any member join — and receive the tokens of — another member's PRIVATE conversation.
+  // You may join a stream you started, or one in an explicitly shared conversation.
+  const hasPageAccess = channelOwner !== null
+    ? channelOwner === userId
+    : await canUserViewPage(userId, meta.pageId);
 
-  const canView = await hasViewAccess();
-  if (!canView) {
+  if (!hasPageAccess) {
+    // A genuine authorization violation: this user has no business on this page at all.
     auditRequest(request, {
       eventType: 'authz.access.denied',
       resourceType: 'ai_stream',
@@ -55,6 +61,34 @@ export async function GET(
     });
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+
+  // Page access is not conversation access. A page room holds every member, but
+  // conversations are private by default — the same rule listConversations enforces
+  // (`userId = you OR isShared`). A member asking for a co-member's private stream is
+  // not an attacker; it is the ordinary consequence of a page-wide broadcast. So this
+  // is a plain 404 — the stream genuinely does not exist *for them* — and NOT an
+  // audited 403, which would write an authz-denial row per member per assistant message
+  // and bury real signal. Clients already treat a failed join as benign.
+  const canSubscribe = async (): Promise<boolean> => canSubscribeToStream({
+    userId,
+    streamOwnerId: meta.userId,
+    conversationId: meta.conversationId,
+  });
+
+  if (!(await canSubscribe())) {
+    return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
+  }
+
+  // Re-checked periodically for the life of the stream (the revocation backstop below).
+  // Both halves must hold: page access can be revoked, and a shared conversation can be
+  // un-shared, mid-stream.
+  const hasViewAccess = async (): Promise<boolean> => {
+    const pageOk = channelOwner !== null
+      ? channelOwner === userId
+      : await canUserViewPage(userId, meta.pageId);
+    if (!pageOk) return false;
+    return canSubscribe();
+  };
 
   const encoder = new TextEncoder();
   const encodeDoneFrame = (aborted: boolean): Uint8Array =>

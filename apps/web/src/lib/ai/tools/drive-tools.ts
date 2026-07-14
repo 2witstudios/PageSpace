@@ -133,7 +133,7 @@ export const driveTools = {
    * Create a new workspace/drive
    */
   create_drive: tool({
-    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives. Optionally set initial drive context to establish workspace memory.',
+    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives — check existing drives (list_drives) first. Ask for confirmation before calling this unless the user was explicit about wanting a new workspace. Optionally set initial drive context to establish workspace memory.',
     inputSchema: z.object({
       name: z.string().describe('The name of the new drive/workspace'),
       context: z.string().max(10000).optional().describe('Optional initial drive context (workspace memory) - information about the project, conventions, or preferences'),

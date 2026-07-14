@@ -1415,6 +1415,41 @@
       "when": 1783803166155,
       "tag": "0201_rename_machine_sessions_pkey",
       "breakpoints": true
+    },
+    {
+      "idx": 202,
+      "version": "7",
+      "when": 1783811607171,
+      "tag": "0202_aspiring_warpath",
+      "breakpoints": true
+    },
+    {
+      "idx": 203,
+      "version": "7",
+      "when": 1783813639079,
+      "tag": "0203_adorable_amphibian",
+      "breakpoints": true
+    },
+    {
+      "idx": 204,
+      "version": "7",
+      "when": 1783877348608,
+      "tag": "0204_next_mandroid",
+      "breakpoints": true
+    },
+    {
+      "idx": 205,
+      "version": "7",
+      "when": 1783966913177,
+      "tag": "0205_daily_nuke",
+      "breakpoints": true
+    },
+    {
+      "idx": 206,
+      "version": "7",
+      "when": 1784053313000,
+      "tag": "0206_pending_abort_intents",
+      "breakpoints": true
     }
   ]
 }

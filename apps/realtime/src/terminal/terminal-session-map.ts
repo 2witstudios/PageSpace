@@ -1,4 +1,5 @@
 import type { PtyShell } from './sprites-shell';
+import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 
 export const MAX_SCROLLBACK_BYTES = 64 * 1024;
 export const DETACHED_IDLE_MS = 30 * 60 * 1000;
@@ -16,6 +17,28 @@ export type TerminalSession = {
   viewerUserId: string;
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   sessionId?: string;
+  /**
+   * Is a viewer currently attached? Set true on create/reattach, false on
+   * detach — one of the two "work is in progress" signals the Sprites Tasks
+   * API hold (leaf 5-1) keys on. Kept explicit rather than inferred from
+   * `idleTimer === undefined` so the hold heartbeat reads a stated fact, not
+   * a coincidence of the reap machinery.
+   */
+  viewerAttached: boolean;
+  /** When the PTY last produced output — half of the hold's activity signal. */
+  lastOutputAt?: number;
+  /**
+   * When the viewer last typed into the PTY (or the PTY was launched — the
+   * launch counts as the first input). The other half of the hold's activity
+   * signal: a prompt that kicks off a long SILENT run has produced no output
+   * yet, and a detach in that window must not read as "agent idle" and delete
+   * the hold out from under work that has already started.
+   */
+  lastInputAt?: number;
+  /** The session's platform task hold (Sprites Tasks API), when the seam is wired. */
+  taskHold?: TaskHoldController;
+  /** Heartbeat driving `taskHold` ticks on the refresh cadence. */
+  holdInterval?: ReturnType<typeof setInterval>;
   reAuthInterval?: ReturnType<typeof setInterval>;
   /** Heartbeat that settles the accrued active window mid-session (see agent-terminal-handler), bounding what a realtime restart can lose to one interval. */
   settleInterval?: ReturnType<typeof setInterval>;
@@ -25,6 +48,26 @@ export type TerminalSession = {
   closedFn: (exitCode: number) => void;
   scrollback: string[];
   scrollbackBytes: number;
+  /**
+   * Has this PTY ever produced a byte? NOT the same question as "is the
+   * scrollback non-empty": a single chunk larger than MAX_SCROLLBACK_BYTES is
+   * pushed and then trimmed straight back off, leaving an EMPTY scrollback for a
+   * session that has been screaming output. A client that types a starting prompt
+   * into a terminal reads "has produced nothing" as "still booting, safe to type"
+   * — so it has to be the truth, not an artefact of the trim.
+   */
+  hasOutput: boolean;
+  /**
+   * Was this PTY already running when the bridge picked it up? (`openShell`
+   * resumed a Sprite exec session rather than starting one.)
+   *
+   * Kept ALONGSIDE `hasOutput` because the two answer the same question at
+   * different moments and neither covers the other: a resumed agent that has not
+   * yet said anything has `hasOutput: false`, and a reattach in that window would
+   * otherwise be told the PTY is a fresh boot — and a client holding a starting
+   * prompt would type it into an agent that has been running for hours.
+   */
+  resumedAtCreate: boolean;
   /**
    * Terminal Epic 3 metering (optional — set only when a `billing` seam is
    * wired). `payerId` + `connectedAt` identify who pays for the window that
@@ -39,8 +82,12 @@ export type TerminalSession = {
   pageId?: string;
 };
 
-export function appendScrollback(session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes'>, data: string): void {
+export function appendScrollback(
+  session: Pick<TerminalSession, 'scrollback' | 'scrollbackBytes' | 'hasOutput'>,
+  data: string,
+): void {
   const bytes = Buffer.byteLength(data, 'utf8');
+  session.hasOutput = true;
   session.scrollback.push(data);
   session.scrollbackBytes += bytes;
   while (session.scrollbackBytes > MAX_SCROLLBACK_BYTES && session.scrollback.length > 0) {

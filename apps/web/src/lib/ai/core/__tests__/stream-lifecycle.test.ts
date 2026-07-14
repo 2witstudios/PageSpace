@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const {
   mockRegistryRegister,
   mockRegistryPush,
   mockRegistryFinish,
   mockRegistryGetBufferedParts,
+  mockRegistryGetMeta,
   mockBroadcastStart,
   mockBroadcastComplete,
   mockInsertValues,
@@ -12,12 +13,15 @@ const {
   mockUpdateSet,
   mockUpdateWhere,
   mockLoggerWarn,
+  mockConsumePendingAbort,
+  mockEnsureWatcher,
   aiStreamSessionsToken,
 } = vi.hoisted(() => ({
   mockRegistryRegister: vi.fn(),
   mockRegistryPush: vi.fn(),
   mockRegistryFinish: vi.fn(),
   mockRegistryGetBufferedParts: vi.fn().mockReturnValue([]),
+  mockRegistryGetMeta: vi.fn().mockReturnValue({ pageId: 'page-1', userId: 'u1', displayName: 'U', conversationId: 'conv-1', browserSessionId: 's1' }),
   mockBroadcastStart: vi.fn().mockResolvedValue(undefined),
   mockBroadcastComplete: vi.fn().mockResolvedValue(undefined),
   mockInsertValues: vi.fn(),
@@ -25,6 +29,8 @@ const {
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
   mockLoggerWarn: vi.fn(),
+  mockConsumePendingAbort: vi.fn().mockResolvedValue(false),
+  mockEnsureWatcher: vi.fn(),
   aiStreamSessionsToken: { __table: 'ai_stream_sessions', messageId: 'message_id' },
 }));
 
@@ -34,7 +40,12 @@ vi.mock('@/lib/ai/core/stream-multicast-registry', () => ({
     push: mockRegistryPush,
     finish: mockRegistryFinish,
     getBufferedParts: mockRegistryGetBufferedParts,
-    getMeta: vi.fn(),
+    // A REGISTERED stream has meta. The old fixture returned undefined — i.e. it modelled a
+    // stream whose registry entry was already evicted — which was harmless only because
+    // production never asked. It asks now: the parts checkpoint skips when the entry is gone,
+    // because `getBufferedParts()` then returns `[]` meaning "no entry", and persisting that
+    // would wipe the crash-recovery snapshot.
+    getMeta: mockRegistryGetMeta,
     subscribe: vi.fn(),
   },
 }));
@@ -84,6 +95,18 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
+vi.mock('@/lib/ai/core/stream-horizons', () => ({
+  STREAM_MAX_LIFETIME_MS: 60 * 60 * 1000,
+}));
+
+vi.mock('@/lib/ai/core/stream-abort-watcher', () => ({
+  ensureStreamAbortWatcher: mockEnsureWatcher,
+}));
+
+vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
+  consumePendingAbort: mockConsumePendingAbort,
+}));
+
 import { createStreamLifecycle } from '../stream-lifecycle';
 
 const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> = {}) => ({
@@ -93,6 +116,7 @@ const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> 
   userId: 'user-1',
   displayName: 'Alice',
   browserSessionId: 'session-1',
+  streamId: 'stream-1',
   ...overrides,
 });
 
@@ -101,6 +125,13 @@ const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolv
 describe('createStreamLifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConsumePendingAbort.mockResolvedValue(false);
+    mockEnsureWatcher.mockImplementation(() => {});
+    // clearAllMocks() clears calls, NOT implementations — a mockReturnValue set inside one test
+    // otherwise leaks into every test after it. These two drive the parts-checkpoint guards, so
+    // a leak here silently changes what later tests are actually exercising.
+    mockRegistryGetBufferedParts.mockReturnValue([]);
+    mockRegistryGetMeta.mockReturnValue({ pageId: 'page-1', userId: 'u1', displayName: 'U', conversationId: 'conv-1', browserSessionId: 's1' });
     mockInsertOnConflict.mockResolvedValue(undefined);
     mockUpdateWhere.mockResolvedValue(undefined);
     mockBroadcastStart.mockResolvedValue(undefined);
@@ -130,9 +161,40 @@ describe('createStreamLifecycle', () => {
         userId: 'user-1',
         displayName: 'Alice',
         browserSessionId: 'session-1',
+        streamId: 'stream-1',
         status: 'streaming',
         startedAt: expect.any(Date),
+        lastHeartbeatAt: expect.any(Date),
       });
+    });
+
+    // The streamId is the name the client is handed in `X-Stream-Id`, and the ONLY reason a Stop
+    // that lands on another web instance can resolve which stream it means — the registry that
+    // mints it is in-process. Drop it here and every fresh row has stream_id = NULL: the mark
+    // matches zero rows, the endpoint reports `not_found`, the client stays SILENT by design, and
+    // the generation runs on and bills. The headline feature, dead, with nothing to show for it.
+    it('given a streamId, should persist it on the row so any instance can resolve the stream', async () => {
+      await createStreamLifecycle({ ...params(), streamId: 'stream-1' });
+
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ streamId: 'stream-1' }),
+      );
+    });
+
+    it('given a REUSED row, should record the streamId it now belongs to', async () => {
+      await createStreamLifecycle({ ...params(), streamId: 'stream-2' });
+
+      expect(mockInsertOnConflict.mock.calls[0][0].set).toMatchObject({ streamId: 'stream-2' });
+    });
+
+    // An abort request aimed at the PREVIOUS generation on this messageId must not be inherited by
+    // this one, or the abort watcher kills the fresh stream within a second of it starting — a
+    // generation cancelled by a Stop the user pressed on something else entirely. No error, no
+    // log; it would simply look like the model gave up.
+    it('given a REUSED row, should clear any abort request left over from the previous generation', async () => {
+      await createStreamLifecycle({ ...params(), streamId: 'stream-2' });
+
+      expect(mockInsertOnConflict.mock.calls[0][0].set).toMatchObject({ abortRequestedAt: null });
     });
 
     it('given a duplicate messageId, should refresh all fields via onConflictDoUpdate, including resetting parts to empty', async () => {
@@ -183,6 +245,9 @@ describe('createStreamLifecycle', () => {
         pageId: 'page-1',
         conversationId: 'conv-1',
         startedAt: expect.any(String),
+        // Rides the broadcast so page members can tell a stream they may watch from a
+        // co-member's PRIVATE conversation, without firing a doomed join at the server.
+        isShared: false,
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       });
     });
@@ -277,7 +342,14 @@ describe('createStreamLifecycle', () => {
       await flushMicrotasks();
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
-      expect(mockUpdateSet).toHaveBeenCalledWith({ parts: fakeParts });
+      // The parts checkpoint ALSO refreshes lastHeartbeatAt, on top of the independent
+      // heartbeat timer (see the 'heartbeat' describe below) — so a busy stream's liveness
+      // is never staler than its most recent checkpoint. The timer is what covers a stream
+      // that pushes no parts at all, which no checkpoint-driven heartbeat could.
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        parts: fakeParts,
+        lastHeartbeatAt: expect.any(Date),
+      });
     });
 
     it('given 40 pushes across two batches, should persist once per batch', async () => {
@@ -324,6 +396,120 @@ describe('createStreamLifecycle', () => {
 
       resolveFirst();
       await flushMicrotasks();
+    });
+  });
+
+  // Liveness must NOT ride the parts checkpoint. A stream sitting in a long tool call
+  // (sandbox exec, deep research, a slow MCP tool) pushes no parts for minutes — a
+  // checkpoint-driven heartbeat would declare a perfectly healthy stream dead: it would
+  // vanish from /active-streams so no client could attach, and the next send would fail
+  // to abort it and would generate alongside it.
+  describe('heartbeat — an independent timer, not the parts checkpoint', () => {
+    const textPart = { type: 'text' as const, text: 'hello' };
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('given a stream that pushes NO parts at all (a long tool call), should still beat', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(mockUpdateSet).toHaveBeenCalled();
+      // Heartbeat-only: it must never touch `parts`, or it could race the checkpoint writes.
+      for (const call of mockUpdateSet.mock.calls) {
+        expect(call[0]).toEqual({ lastHeartbeatAt: expect.any(Date) });
+      }
+
+      lifecycle.finish(false);
+    });
+
+    // Backstop. finish() clears the interval and every generation path reaches it — but
+    // an UNBOUNDED heartbeat on a lifecycle that somehow never finished would be strictly
+    // worse than no heartbeat: the row would look live forever, so it could never be
+    // reconciled and never be taken over (the abort registry drops its entry after 10
+    // min), and would be served to clients as an unjoinable phantom stream for the life
+    // of the process. Capping the beat turns that immortal ghost back into an ordinary
+    // stale row.
+    it('given a lifecycle that never finishes, should stop beating after the cap rather than looking live forever', async () => {
+      await createStreamLifecycle(params());
+
+      // Still beating well inside the cap — a long-but-plausible generation must never be
+      // cut off, or the next send would drive its LIVE row terminal.
+      await vi.advanceTimersByTimeAsync(45 * 60 * 1000);
+      expect(mockUpdateSet).toHaveBeenCalled();
+
+      // Past the cap: the interval must have cancelled itself.
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      mockUpdateSet.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
+
+    // THE HOLE THE CAP DID NOT ACTUALLY CLOSE.
+    //
+    // Capping the interval beat is useless on its own, because `persistBufferedParts` ALSO
+    // writes lastHeartbeatAt — and the parts checkpoint used to run with no deadline at all.
+    // So the one generation most likely to outlive the cap (a long one, still chattering) kept
+    // refreshing its own liveness FOREVER, which is precisely the immortal ghost the cap exists
+    // to kill. And it is the worst possible ghost: by then BOTH registries have evicted it, so
+    // /active-streams advertises a live, joinable stream that no client can join and whose Stop
+    // button is a silent no-op, while the generation keeps running its tools and keeps billing.
+    it('given a stream still pushing parts past the horizon, should stop refreshing its heartbeat rather than look live forever', async () => {
+      mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart]);
+      const lifecycle = await createStreamLifecycle(params());
+
+      // Past the horizon, but still generating hard.
+      await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+      mockUpdateSet.mockClear();
+
+      for (let i = 0; i < 60; i++) lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Not one write. The row is allowed to go stale, so the next takeover can reconcile it.
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
+
+    // The second half of the same bug: past the horizon the multicast registry has EVICTED the
+    // entry, so getBufferedParts() returns [] meaning "no entry" — not "no content". The old
+    // checkpoint serialized that [] straight over the parts column, erasing the crash-recovery
+    // snapshot a client needs to restore mid-stream content after the originator's process dies.
+    it('given the registry entry is gone, should not overwrite the parts snapshot with an empty array', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      // The registry evicted it (horizon), so it reports no entry and an empty buffer.
+      mockRegistryGetMeta.mockReturnValue(undefined);
+      mockRegistryGetBufferedParts.mockReturnValue([]);
+
+      for (let i = 0; i < 40; i++) lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const wroteEmptyParts = mockUpdateSet.mock.calls.some(
+        (c) => Array.isArray((c[0] as { parts?: unknown }).parts)
+          && ((c[0] as { parts: unknown[] }).parts).length === 0,
+      );
+      expect(wroteEmptyParts).toBe(false);
+    });
+
+    it('given the stream finishes, should stop beating', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+
+      lifecycle.finish(false);
+      await vi.advanceTimersByTimeAsync(0);
+      mockUpdateSet.mockClear();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
     });
   });
 
@@ -514,6 +700,104 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalled();
       expect(mockBroadcastComplete).toHaveBeenCalled();
+    });
+  });
+
+  // A Stop pressed during the route's preflight — or landing in the narrow gap between entering
+  // createStreamLifecycle and the aiStreamSessions INSERT resolving — finds no row to mark and
+  // writes a durable pending-abort intent instead. A single check right after the row exists
+  // catches both cases: nothing else consumes the intent in between, so checking once here is
+  // equivalent to checking before AND after the INSERT, without the extra DB round-trip.
+  describe('pre-aborted: pending-abort intent consumed right after INSERT (#2028 item 1)', () => {
+    it('given a pending-abort intent exists, should return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(handle.preAborted).toBe(true);
+    });
+
+    it('given a pending-abort intent exists, should check exactly once', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockConsumePendingAbort).toHaveBeenCalledTimes(1);
+    });
+
+    it('given a pending-abort intent exists, should still register in the multicast registry (then evict it)', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockRegistryRegister).toHaveBeenCalled();
+      expect(mockRegistryFinish).toHaveBeenCalledWith('msg-1', true);
+    });
+
+    it('given a pending-abort intent exists, should NOT broadcast stream_start', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockBroadcastStart).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, should INSERT as streaming then UPDATE the row to status=aborted', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'streaming' }),
+      );
+      expect(mockUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'aborted', parts: [], abortRequestedAt: null }),
+      );
+      expect(mockUpdateWhere).toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, should return a handle whose finish is a no-op', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+      mockRegistryFinish.mockClear();
+
+      handle.finish(false);
+      await flushMicrotasks();
+
+      expect(mockRegistryFinish).not.toHaveBeenCalled();
+      expect(mockBroadcastComplete).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, pushPart should be a no-op', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+      handle.pushPart({ type: 'text', text: 'hello' });
+
+      expect(mockRegistryPush).not.toHaveBeenCalled();
+    });
+
+    it('given the pre-abort UPDATE rejects, should warn and still return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(mockLoggerWarn).toHaveBeenCalled();
+      expect(handle.preAborted).toBe(true);
+    });
+
+    it('given NO pending-abort intent, should proceed normally with preAborted=false', async () => {
+      mockConsumePendingAbort.mockResolvedValue(false);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(handle.preAborted).toBe(false);
+      expect(mockRegistryRegister).toHaveBeenCalled();
+      expect(mockBroadcastStart).toHaveBeenCalled();
+      // Not evicted — this is the normal, still-streaming path.
+      expect(mockRegistryFinish).not.toHaveBeenCalled();
     });
   });
 

@@ -21,7 +21,7 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChatConversation, useGlobalChatConfig, useGlobalChatStream } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
-import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { usePageAgentDashboardStore, selectIsAgentStreaming, selectAgentStop } from '@/stores/page-agents';
 import { usePendingStreamsStore, type PendingStream } from '@/stores/usePendingStreamsStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useAuth } from '@/hooks/useAuth';
@@ -32,9 +32,11 @@ import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
-import { parseTabPath, getStaticTabMeta } from '@/lib/tabs/tab-title';
-import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/client';
+import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
+import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
+import { abortActiveStream, abortActiveStreamByMessageId, clearActiveStreamId, reportAbortOutcome } from '@/lib/ai/core/client';
 import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
+import { holdForStream } from '@/lib/ai/streams/holdForStream';
 import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
@@ -223,7 +225,7 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Namespaced key prevents activeStreams collision when both panels view the same conversationId.
   const sidebarChatId = agentConversationId ? `sidebar:${agentConversationId}` : null;
-  const agentTransport = useChatTransport(sidebarChatId, '/api/ai/chat');
+  const agentTransport = useChatTransport(sidebarChatId, '/api/ai/chat', selectedAgent?.id ?? null);
 
   const agentChatConfig = useMemo(() => {
     if (!selectedAgent || !agentConversationId || !agentTransport) return null;
@@ -262,13 +264,38 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Dashboard Streaming State (for agent mode sync)
   // ============================================
-  const dashboardIsStreaming = usePageAgentDashboardStore(state => state.isAgentStreaming);
-  const dashboardStopStreaming = usePageAgentDashboardStore(state => state.agentStopStreaming);
+  // Scoped to THIS surface's agent. The dashboard holds a different one (its agent comes
+  // from usePageAgentDashboardStore; ours comes from useSidebarAgentStore), and
+  // GlobalAssistantView never unmounts — CenterPanel only hides it — so after one dashboard
+  // visit we are co-mounted with it on every page. Reading the slot unscoped meant a stream
+  // on the dashboard's agent B lit up OUR Stop button for agent A, and clicking it aborted
+  // B while A kept generating and kept billing.
+  // Named by (agent, conversation). The dashboard holds a different agent — and, for the
+  // SAME agent, a different conversation (each surface keeps its own; "New Chat" in either
+  // diverges them). With either half missing the store answers a question we did not ask:
+  // a dashboard stream on conv X2 lighting up OUR Stop while we are showing conv X1.
+  const dashboardStreamKey = { agentId: selectedAgent?.id, conversationId: agentConversationId };
+  const dashboardIsStreaming = usePageAgentDashboardStore(selectIsAgentStreaming(dashboardStreamKey));
+  const dashboardStopStreaming = usePageAgentDashboardStore(selectAgentStop(dashboardStreamKey));
 
   // ============================================
   // Derived State
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+  // The conversation the CURRENT stream belongs to, held from when it starts. The surface moves
+  // independently of the stream — switching conversation mid-stream does NOT abort the POST — so
+  // the abort must name the conversation the generation is actually running on. Moved up here
+  // (out of its original spot further down, next to heldStreamMsgIdRef) because the load-on-select
+  // effects below also need it: `isStreaming` reflects a stable-id useChat instance that keeps
+  // running across a conversation switch, so it cannot answer "is MY OWN stream for the
+  // conversation I'm about to load" on its own — only comparing against the conversation the
+  // stream actually started in (this ref) can.
+  const heldStreamConvIdRef = useRef<string | null>(null);
+  heldStreamConvIdRef.current = holdForStream({
+    current: heldStreamConvIdRef.current,
+    isStreaming,
+    liveValue: currentConversationId,
+  });
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
   // Identity can be 'ready' (isInitialized true) while messages for the
   // conversation just switched to are still in flight — decoupled from
@@ -279,6 +306,16 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreaming = selectedAgent
     ? (isStreaming || dashboardIsStreaming)
     : (isStreaming || contextIsStreaming);
+  // Whether MY OWN local useChat is currently producing live content for the conversation I'm
+  // about to load/refresh — narrower than displayIsStreaming, which also includes
+  // dashboardIsStreaming/contextIsStreaming (other, already conversation-scoped, streams this
+  // surface merely displays a Stop button for). `isStreaming`'s Chat instance has a stable id
+  // per surface, so it keeps reporting true across a conversation switch for the OLD
+  // conversation's still-in-flight request — comparing against `heldStreamConvIdRef` (latched
+  // when the stream started) is the only way to know whether that live stream actually belongs
+  // to the conversation now being loaded. Used by the load-on-select/refresh effects below so a
+  // switch to an idle conversation isn't blocked by an unrelated stream still running elsewhere.
+  const isOwnStreamForCurrentConversation = isStreaming && heldStreamConvIdRef.current === currentConversationId;
 
   // ============================================
   // Remote Streams (multiplayer rendering)
@@ -400,136 +437,30 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
   // Effects: Location Context Extraction
   // ============================================
+  // This effect drives the UI display only (the composer's location chip).
+  // Message sends must NOT read `locationContext` state here — it can lag a
+  // fast navigate-then-send by one async round trip. Sends call
+  // `buildFreshLocationContext()` (below) instead, which resolves fresh at
+  // send time from the current pathname/drives, same pattern as
+  // AiChatView's `buildFreshPageContext()`.
   useEffect(() => {
-    // Capture the pathname this run is resolving for, so async branches can
-    // bail if the user navigated away before they completed.
-    const activePathname = pathname;
     let ignore = false;
 
-    const resolveDrive = (driveId: string | undefined) => {
-      if (!driveId) return null;
-      const driveData = drives.find(d => d.id === driveId);
-      return driveData
-        ? { id: driveData.id, slug: driveData.slug, name: driveData.name }
-        : null;
-    };
-
-    const fetchPageContext = async (
-      pageId: string,
-      currentDrive: { id: string; slug: string; name: string } | null
-    ) => {
-      try {
-        const pageResponse = await fetchWithAuth(`/api/pages/${pageId}`);
-        if (!pageResponse.ok) return null;
-        const pageData = (await pageResponse.json()) as { id: string; title: string; type: string };
-
-        // Only prefix the drive slug when we actually have one — channel routes
-        // resolve no drive, so a bare `/${slug}` would bake "/undefined/..." into
-        // the path that gets sent to the AI.
-        const slugPrefix = currentDrive?.slug ? `/${currentDrive.slug}` : '';
-        let path = `${slugPrefix}/${pageData.title}`;
-        try {
-          const breadcrumbsResponse = await fetchWithAuth(`/api/pages/${pageId}/breadcrumbs`);
-          if (breadcrumbsResponse.ok) {
-            const breadcrumbsData = (await breadcrumbsResponse.json()) as Array<{ title: string }>;
-            const pathSegments = breadcrumbsData.map((crumb) => crumb.title);
-            path = `${slugPrefix}/${pathSegments.join('/')}`;
-          }
-        } catch {
-          // Keep the simple path fallback.
-        }
-
-        return {
-          id: pageData.id,
-          title: pageData.title,
-          type: pageData.type,
-          path,
-        };
-      } catch {
-        return null;
-      }
-    };
-
-    const extractLocationContext = async () => {
-      const parsed = parseTabPath(activePathname);
-
-      let label: string | null = null;
-      let currentPage: LocationContext['currentPage'] = null;
-      let currentDrive: LocationContext['currentDrive'] = null;
-
-      try {
-        switch (parsed.type) {
-          // Real page routes — fetch the page so the AI keeps page context.
-          case 'page':
-          case 'channel': {
-            currentDrive = parsed.type === 'page' ? resolveDrive(parsed.driveId) : null;
-            if (parsed.pageId) {
-              currentPage = await fetchPageContext(parsed.pageId, currentDrive);
-            }
-            label = currentPage?.title ?? null;
-            break;
-          }
-
-          // A whole drive — use the drive name from the store.
-          case 'drive': {
-            currentDrive = resolveDrive(parsed.driveId);
-            label = currentDrive?.name ?? null;
-            break;
-          }
-
-          // A specific DM — show the other person's name (DMs are not pages).
-          case 'dm': {
-            if (parsed.conversationId) {
-              try {
-                const res = await fetchWithAuth(`/api/messages/conversations/${parsed.conversationId}`);
-                if (res.ok) {
-                  const data = (await res.json()) as {
-                    conversation?: { otherUser?: { displayName?: string | null; name?: string | null } };
-                  };
-                  const otherUser = data?.conversation?.otherUser;
-                  label = otherUser?.displayName || otherUser?.name || null;
-                }
-              } catch {
-                // Fall through to the generic DM label below.
-              }
-            }
-            if (!label) label = 'Direct Message';
-            break;
-          }
-
-          // Everything else with a known static title (dms, channels, tasks,
-          // calendar, files/drives, activity, drive-scoped variants, …).
-          // 'unknown' routes have no meaningful label (getStaticTabMeta would
-          // echo the raw path), so fall back to the generic prompt.
-          default: {
-            label = parsed.type === 'unknown' ? null : getStaticTabMeta(parsed)?.title ?? null;
-            break;
-          }
-        }
-      } catch {
-        label = null;
-      }
-
+    resolveLocationContext(pathname, drives).then(({ label, locationContext }) => {
       if (ignore) return;
-
-      const breadcrumbs: string[] = [];
-      if (currentDrive) breadcrumbs.push(currentDrive.name);
-      if (currentPage?.path) {
-        breadcrumbs.push(...currentPage.path.split('/').filter(Boolean).slice(1));
-      }
-
       setContextLabel(label);
-      setLocationContext(
-        currentPage || currentDrive ? { currentPage, currentDrive, breadcrumbs } : null
-      );
-    };
-
-    extractLocationContext();
+      setLocationContext(locationContext);
+    });
 
     return () => {
       ignore = true;
     };
   }, [pathname, drives]);
+
+  const buildFreshLocationContext = useCallback(
+    () => resolveLocationContext(pathname, drives).then((r) => r.locationContext),
+    [pathname, drives],
+  );
 
   // ============================================
   // Effects: Global Mode Sync to Context
@@ -599,11 +530,22 @@ const SidebarChatTab: React.FC = () => {
   globalIsInitializedRef.current = globalIsInitialized;
   useEffect(() => {
     if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
-    prevSidebarRefreshSignalRef.current = refreshSignal;
-    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !displayIsStreaming) {
+    // The ref is only advanced when the refetch actually runs (see the load-on-select
+    // effects below for the full rationale) — a refreshSignal bump that arrives mid-stream
+    // must be retried once streaming ends, not marked "seen" and dropped. Without this, a
+    // remote event that fires while this surface happens to be streaming for an unrelated
+    // reason would be silently lost if no further remote event bumps refreshSignal again.
+    //
+    // Guarded on `isOwnStreamForCurrentConversation`, NOT the broader `displayIsStreaming` —
+    // switching to a different global conversation does not abort an in-flight send in the old
+    // one (stable useChat id), so displayIsStreaming can stay true for a conversation that is no
+    // longer the one being loaded. Blocking on that would strand this refetch behind an
+    // unrelated stream in a conversation the user already left.
+    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !isOwnStreamForCurrentConversation) {
+      prevSidebarRefreshSignalRef.current = refreshSignal;
       loadGlobalMessages(globalConversationId);
     }
-  }, [refreshSignal, selectedAgent, globalConversationId, displayIsStreaming, loadGlobalMessages]);
+  }, [refreshSignal, selectedAgent, globalConversationId, isOwnStreamForCurrentConversation, loadGlobalMessages]);
 
   // ============================================
   // Effects: UI State
@@ -681,22 +623,34 @@ const SidebarChatTab: React.FC = () => {
     enabled: !isStreaming && currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
   });
 
-  // Clean up stream tracking on unmount or conversation change
-  // Use ref to capture current ID so cleanup clears the correct stream
-  const prevConversationIdRef = useRef<string | null>(null);
+  // Clean up stream tracking on unmount or conversation change.
+  //
+  // Keyed by `sidebarChatId` — THE KEY THIS SURFACE ACTUALLY REGISTERED. It used to clear the bare
+  // `currentConversationId`, which this surface never writes: the sidebar's transport registers
+  // under the namespaced `sidebar:<convId>` (see sidebarChatId — the namespace exists precisely so
+  // the sidebar and the dashboard can view the same conversation without colliding). So the old
+  // cleanup did both halves of the wrong thing at once: it leaked its own `sidebar:` entry forever,
+  // and the bare id it *did* delete belongs to ANOTHER surface — in agent mode, the dashboard's
+  // transport (`useChatTransport(agentConversationId, …)`).
+  //
+  // Concretely: dashboard streaming on agent A / conversation C, sidebar open on the same agent and
+  // conversation. Collapse the sidebar → this cleanup ran → the DASHBOARD's streamId entry vanished
+  // → its pre-first-chunk Stop became a map miss and the server kept generating.
+  //
+  // A surface may only free what it allocated.
+  const prevSidebarChatIdRef = useRef<string | null>(null);
   useEffect(() => {
-    // Clear previous conversation's stream ID when switching conversations
-    if (prevConversationIdRef.current && prevConversationIdRef.current !== currentConversationId) {
-      clearActiveStreamId({ chatId: prevConversationIdRef.current });
+    if (prevSidebarChatIdRef.current && prevSidebarChatIdRef.current !== sidebarChatId) {
+      clearActiveStreamId({ chatId: prevSidebarChatIdRef.current });
     }
-    prevConversationIdRef.current = currentConversationId;
+    prevSidebarChatIdRef.current = sidebarChatId;
 
     return () => {
-      if (currentConversationId) {
-        clearActiveStreamId({ chatId: currentConversationId });
+      if (sidebarChatId) {
+        clearActiveStreamId({ chatId: sidebarChatId });
       }
     };
-  }, [currentConversationId]);
+  }, [sidebarChatId]);
 
   // ============================================
   // Effects: Initialize Settings Store
@@ -723,11 +677,29 @@ const SidebarChatTab: React.FC = () => {
   const prevSidebarGlobalMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
-    prevSidebarGlobalMessagesRef.current = globalInitialMessages;
-    if (!selectedAgent && globalIsInitialized && globalConversationId) {
+    // Guarded the same way as the refreshSignal effect above — without this, a
+    // mount/reload/conversation-switch that lands while this surface's own send is already
+    // streaming clobbers the in-progress assistant bubble with a stale DB snapshot that
+    // predates the reply.
+    //
+    // `isOwnStreamForCurrentConversation`, not the broader `displayIsStreaming`: a conversation
+    // switch does not abort an in-flight send in the conversation just left (stable useChat id),
+    // so displayIsStreaming can stay true there while `globalConversationId` has already moved
+    // on to an idle conversation — blocking on it would strand the newly-selected conversation
+    // behind an unrelated stream.
+    //
+    // The ref is only advanced INSIDE the guard. If the guard blocks (streaming), the ref
+    // stays stale on purpose — every dependency change (including isOwnStreamForCurrentConversation
+    // flipping false) re-runs the effect, and while the ref is stale this same
+    // `globalInitialMessages` reference still reads as "changed," so the load is retried
+    // instead of permanently lost. Advancing the ref unconditionally (before the guard) would
+    // mark this reference as seen even though it was never applied, silently stranding the
+    // sidebar on stale/empty history once streaming ends.
+    if (!selectedAgent && globalIsInitialized && globalConversationId && !isOwnStreamForCurrentConversation) {
+      prevSidebarGlobalMessagesRef.current = globalInitialMessages;
       loadGlobalMessages(globalConversationId);
     }
-  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, loadGlobalMessages]);
+  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, isOwnStreamForCurrentConversation, loadGlobalMessages]);
 
   // Load-on-select guarantee for agent mode: with a stable useChat id, the
   // sidebar's agent Chat instance is never recreated on conversation switch,
@@ -737,11 +709,17 @@ const SidebarChatTab: React.FC = () => {
   const prevSidebarAgentMessagesRef = useRef<UIMessage[] | null>(null);
   useEffect(() => {
     if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
-    prevSidebarAgentMessagesRef.current = agentInitialMessages;
-    if (selectedAgent) {
+    // Same guard as the global-mode load-on-select effect above (conversation-scoped, not the
+    // broader displayIsStreaming — switching agent conversations doesn't abort the old one's
+    // in-flight send either), and the same ref-advances-only-on-apply discipline: a
+    // mount/reload/agent-switch that lands mid-stream must not clobber the in-progress
+    // assistant bubble, but it also must not be forgotten once the stream ends — advancing the
+    // ref here regardless of the guard would do exactly that.
+    if (selectedAgent && !isOwnStreamForCurrentConversation) {
+      prevSidebarAgentMessagesRef.current = agentInitialMessages;
       setMessages(agentInitialMessages);
     }
-  }, [agentInitialMessages, selectedAgent, setMessages]);
+  }, [agentInitialMessages, selectedAgent, isOwnStreamForCurrentConversation, setMessages]);
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -756,14 +734,15 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
 
-  const handleSendMessage = useCallback(async () => {
-    const files = getFilesForSend();
-    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
-
-    // Derive isReadOnly from writeMode (inverted)
-    const isReadOnly = !writeMode;
-
-    const body = selectedAgent
+  // Shared shape for every sidebar send path (text, voice, ask-user-answer) —
+  // all three need "the request body for wherever we're sending right now,
+  // given a freshly-resolved location." Centralized so the agent-mode vs
+  // global-mode branch and field list can't drift between call sites.
+  const buildSidebarChatRequestBody = useCallback((
+    freshLocation: LocationContext | null,
+    isReadOnly: boolean,
+  ) => {
+    return selectedAgent
       ? {
           chatId: selectedAgent.id,
           conversationId: agentConversationId,
@@ -773,7 +752,7 @@ const SidebarChatTab: React.FC = () => {
           provider: selectedAgent.aiProvider,
           model: selectedAgent.aiModel,
           systemPrompt: selectedAgent.systemPrompt,
-          locationContext: locationContext || undefined,
+          pageContext: locationContextToPageContext(freshLocation),
           enabledTools: selectedAgent.enabledTools,
         }
       : buildGlobalChatRequestBody({
@@ -782,28 +761,50 @@ const SidebarChatTab: React.FC = () => {
           webSearchEnabled,
           imageGenEnabled,
           showPageTree,
-          locationContext,
+          locationContext: freshLocation,
           selectedProvider: currentProvider,
           selectedModel: currentModel,
         });
+  }, [
+    selectedAgent,
+    agentConversationId,
+    webSearchEnabled,
+    imageGenEnabled,
+    showPageTree,
+    currentConversationId,
+    currentProvider,
+    currentModel,
+  ]);
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage({ text: input, files: files.length > 0 ? files : undefined }, { body }));
+  const handleSendMessage = useCallback(async () => {
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
+
+    // Derive isReadOnly from writeMode (inverted)
+    const isReadOnly = !writeMode;
+
+    // Start context fetch eagerly — runs in parallel with input clear so the
+    // async wait doesn't delay sendMessage (and the optimistic bubble).
+    const contextPromise = buildFreshLocationContext();
+    const text = input;
+    const sendFiles = files.length > 0 ? files : undefined;
+
     setInput('');
     clearFiles();
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(async () => {
+      const freshLocation = await contextPromise;
+      const body = buildSidebarChatRequestBody(freshLocation, isReadOnly);
+      return sendMessage({ text, files: sendFiles }, { body });
+    });
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
     currentConversationId,
-    selectedAgent,
-    agentConversationId,
     writeMode,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    locationContext,
-    currentProvider,
-    currentModel,
+    buildFreshLocationContext,
+    buildSidebarChatRequestBody,
     sendMessage,
     getFilesForSend,
     clearFiles,
@@ -815,84 +816,31 @@ const SidebarChatTab: React.FC = () => {
     if (!text.trim() || !currentConversationId) return;
 
     const isReadOnly = !writeMode;
-
-    const body = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: agentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          provider: selectedAgent.aiProvider,
-          model: selectedAgent.aiModel,
-          systemPrompt: selectedAgent.systemPrompt,
-          locationContext: locationContext || undefined,
-          enabledTools: selectedAgent.enabledTools,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          locationContext,
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-        });
+    const contextPromise = buildFreshLocationContext();
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage({ text }, { body }));
+    wrapSend(async () => {
+      const freshLocation = await contextPromise;
+      const body = buildSidebarChatRequestBody(freshLocation, isReadOnly);
+      return sendMessage({ text }, { body });
+    });
   }, [
     currentConversationId,
-    selectedAgent,
-    agentConversationId,
     writeMode,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    locationContext,
-    currentProvider,
-    currentModel,
+    buildFreshLocationContext,
+    buildSidebarChatRequestBody,
     sendMessage,
     wrapSend,
   ]);
 
-  const buildAskUserAnswerBody = useCallback(() => {
+  const buildAskUserAnswerBody = useCallback(async () => {
     const isReadOnly = !writeMode;
-    return selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: agentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          provider: selectedAgent.aiProvider,
-          model: selectedAgent.aiModel,
-          systemPrompt: selectedAgent.systemPrompt,
-          locationContext: locationContext || undefined,
-          enabledTools: selectedAgent.enabledTools,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          locationContext,
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-        });
+    const freshLocation = await buildFreshLocationContext();
+    return buildSidebarChatRequestBody(freshLocation, isReadOnly);
   }, [
-    selectedAgent,
-    agentConversationId,
     writeMode,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    locationContext,
-    currentProvider,
-    currentModel,
-    currentConversationId,
+    buildFreshLocationContext,
+    buildSidebarChatRequestBody,
   ]);
 
   const askUserAnswering = useAskUserAnswering({
@@ -927,6 +875,32 @@ const SidebarChatTab: React.FC = () => {
       setMessages: unifiedSetMessages,
       regenerate,
     });
+
+  // The live stream's assistant messageId, captured when the first chunk lands and HELD for the
+  // rest of the stream — the STREAM's identity, not the surface's.
+  //
+  // `lastAssistantMessageId` is derived from the live `messages` array, and `handleNewConversation`
+  // below calls `setMessages([])` outright with no streaming guard. So the id vanished at exactly
+  // the moment Stop needed it: the abort fell through to the chatId fallback, keyed by the
+  // conversation the surface had just switched TO — a map miss. The local fetch stopped, the button
+  // looked like it worked, and the SERVER KEPT GENERATING (write tools, billing) against the
+  // conversation the user had already left. Streams deliberately survive a client disconnect
+  // (see the abort registry), so only an explicit, correctly-keyed abort can stop one.
+  //
+  // The live value is read ONLY during 'streaming', never 'submitted'. useChat sets
+  // status='submitted' BEFORE issuing the request and only pushes the new assistant message
+  // inside write(), which flips the status to 'streaming' in the same job. So for the whole
+  // submitted window `lastAssistantMessageId` (which has no streaming guard of its own — see
+  // useMessageActions) is THE PREVIOUS TURN'S reply. Latching that as "the stream's id" made
+  // Stop abort a message that finished minutes ago while the real generation kept running and
+  // kept billing — on every turn after the first.
+  const isActuallyStreaming = status === 'streaming';
+  const heldStreamMsgIdRef = useRef<string | null>(null);
+  heldStreamMsgIdRef.current = holdForStream({
+    current: heldStreamMsgIdRef.current,
+    isStreaming,
+    liveValue: isActuallyStreaming ? (lastAssistantMessageId ?? null) : null,
+  });
 
   // Rejoin-first recovery probe for useStreamRecovery.
   // On a network error (e.g. iOS backgrounding kills the fetch):
@@ -1014,31 +988,69 @@ const SidebarChatTab: React.FC = () => {
   // Stop handler that uses appropriate stop function based on mode
   // All stop functions call both abort endpoint (server-side) and useChat stop (client-side)
   const handleStop = useCallback(async () => {
-    // Use the appropriate stop function based on mode
-    if (!selectedAgent && contextStopStreaming) {
-      // Global mode: use context stop function (already calls abort endpoint)
+    // OUR OWN live stream wins. The shared stop (context / dashboard store) belongs to
+    // whichever surface installed it, and the two surfaces register under DIFFERENT chatIds
+    // — ours is `sidebar:<convId>`, the dashboard's is the bare convId — so the shared stop
+    // literally cannot abort a stream we started. Reaching for it first meant clicking Stop
+    // aborted the DASHBOARD's stream while ours was never stopped at all: it kept
+    // generating, and kept billing. (The dashboard's own dispatcher, useGlobalEffectiveStream,
+    // already gets this order right; this one was inverted.)
+    //
+    // The shared stop is for a stream this surface does NOT locally own — one restored by
+    // the bootstrap after a refresh, where there is no local fetch to stop.
+    if (isStreaming) {
+      // Fall through to the local path below.
+    } else if (!selectedAgent && contextStopStreaming) {
+      // Global mode, no local stream: a bootstrap-restored stream owns the context stop.
       contextStopStreaming();
+      return;
     } else if (selectedAgent && dashboardStopStreaming) {
-      // Agent mode: use dashboard store stop function (already calls abort endpoint)
+      // Agent mode, no local stream: a bootstrap-restored stream owns the dashboard stop.
       dashboardStopStreaming();
-    } else {
+      return;
+    }
+    {
       // Fallback (live stream, no bootstrap-registered stop): stop the local fetch
       // first, then abort authoritatively by the stable assistant messageId — this
       // reaches the server registry even if the conversation id shifted mid-stream
       // and tears down any multicast SSE join. Fall back to the chatId map only when
       // no assistant id exists yet (submitted, before the first chunk).
       stop();
+      // Read the HELD id at call time — see heldStreamMsgIdRef. `lastAssistantMessageId` is the
+      // live array's, and it is gone the moment the surface switches conversation mid-stream.
       const messageId = resolveActiveAssistantMessageId({
-        ownStreamMessageId: undefined,
-        isStreaming,
+        ownStreamMessageId: heldStreamMsgIdRef.current ?? undefined,
+        // 'streaming', NOT the looser isStreaming (which includes 'submitted'). During submitted
+        // the array's last assistant message is the previous turn's — see isActuallyStreaming.
+        isStreaming: isActuallyStreaming,
         lastAssistantMessageId,
       });
       if (messageId) {
-        void abortActiveStreamByMessageId({ messageId });
+        // The outcome matters now: a stream that could NOT be confirmed stopped is still
+        // generating, still calling write tools, and still billing — and the user must be told,
+        // because this UI has already flipped back to Send.
+        void abortActiveStreamByMessageId({ messageId }).then(reportAbortOutcome);
         return;
       }
-      if (currentConversationId) {
-        await abortActiveStream({ chatId: currentConversationId });
+      // Key by the TRANSPORT's chatId, not the bare conversation id. In agent mode the
+      // transport registers the streamId under `sidebar:<convId>` (see sidebarChatId — the
+      // namespace exists so the sidebar and the dashboard can view the same conversation
+      // without colliding in the activeStreams map). Aborting under the bare id was a map
+      // miss: the local fetch stopped, but the SERVER kept generating and kept billing,
+      // because the abort registry deliberately lets streams survive a client disconnect.
+      // Reachable in the pre-first-chunk window, where there is no assistant messageId yet
+      // and this fallback is the only route to a server-side abort.
+      // Name the CONVERSATION as well as the transport key. The chatId map is empty until the
+      // response headers land (0.5-3s into a real send) and is torn down by the conversation-change
+      // cleanup on a mid-stream switch — so on both of the paths a user actually takes, the chatId
+      // abort was a guaranteed no-op. It cancelled the local fetch and returned, while the server
+      // (which deliberately survives client disconnect) kept generating and kept billing.
+      const abortChatId = selectedAgent ? sidebarChatId : currentConversationId;
+      const abortConversationId = heldStreamConvIdRef.current ?? currentConversationId;
+      if (abortChatId) {
+        reportAbortOutcome(await abortActiveStream({ chatId: abortChatId, conversationId: abortConversationId }));
+      } else if (abortConversationId) {
+        reportAbortOutcome(await abortActiveStream({ chatId: abortConversationId, conversationId: abortConversationId }));
       }
     }
   }, [
@@ -1046,8 +1058,15 @@ const SidebarChatTab: React.FC = () => {
     contextStopStreaming,
     dashboardStopStreaming,
     currentConversationId,
+    sidebarChatId,
     stop,
     isStreaming,
+    // The callback READS this (it is what keeps Stop from resolving the previous turn's
+    // messageId during the submitted window). Omitting it meant the memo only happened to stay
+    // fresh because lastAssistantMessageId co-varies on the submitted -> streaming transition —
+    // an accident, not a guarantee. It is one refactor away from Stop silently capturing a stale
+    // value and aborting the wrong message while the real generation keeps billing.
+    isActuallyStreaming,
     lastAssistantMessageId,
   ]);
 

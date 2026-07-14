@@ -62,9 +62,18 @@
 # across crashes/deploys. Local-only — makes no Stripe calls.
 */10 * * * * cron-curl GET __WEB_URL__/api/cron/reconcile-credits >> /var/log/cron/reconcile-credits.log 2>&1
 
+# Machine storage reconcile - Hourly
+# Bills each Terminal Machine's persistent storage from its last persisted
+# measurement (see machine-storage-reconcile.ts in @pagespace/lib); watermarks
+# make sequential reruns and missed runs self-correcting, but CONCURRENT runs
+# can double-bill. flock -n is a best-effort guard so this container's own
+# ticks never overlap (a skipped tick is caught up by the watermark next
+# hour); in-service serialization covering ALL callers is tracked follow-up.
+0 * * * * flock -n /run/reconcile-machine-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-machine-storage.log
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
-# rate_limit_buckets in PR3). Short cadence matches the 5-minute default
+# rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default
 # service-token lifetime so the table never grows more than a few cycles deep.
 */15 * * * * cron-curl GET __WEB_URL__/api/cron/sweep-expired >> /var/log/cron/sweep-expired.log 2>&1
 

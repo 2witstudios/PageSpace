@@ -24,6 +24,12 @@
  *     status) so a deletion's modified side is forced null rather than reading
  *     an untracked file masquerading at the same path (e.g. `git rm --cached`).
  *
+ * FAILURES are `{ error, reason }` — `reason` is the machine-readable token
+ * clients switch on; `error` is a sentence fit to show a human, NEVER git's
+ * stderr (which names absolute paths inside the Sprite). The stderr goes to
+ * the server log. Same `error`/`reason` split as the Files route, but stricter
+ * on the stderr: `detail` is only ever logged here, never returned.
+ *
  * On the main branch ('master'/'main' — the literal default-branch names,
  * there is no schema flag), the 'committed' and 'branch' scopes are
  * meaningless (a merge-base with itself), so both forms return
@@ -38,6 +44,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listMachineDiffFiles, readMachineDiffPair } from '@pagespace/lib/services/sandbox/machine-diff';
 import {
   isMachineDiffFileStatus,
@@ -149,6 +156,19 @@ export async function GET(request: Request) {
   const ctx = buildDiffActorContext(scopeKey, actor);
   const deps = buildDiffGitDepsForHandle(resolved.handle);
 
+  // Every diff failure is a 5xx (see DENIAL_STATUS) and is ALWAYS logged, even
+  // when git died with empty stderr — the meta is what makes the 502
+  // diagnosable. `detail` (git stderr, naming absolute in-Sprite paths) belongs
+  // here and never in `error`, which the Diff tab renders straight at a person.
+  const logDiffFailure = (message: string, extra: Record<string, unknown>) =>
+    loggers.api.error(message, undefined, {
+      machineId: machineId.value,
+      projectName: projectName.value,
+      branchName: branchName.value,
+      scope,
+      ...extra,
+    });
+
   if (rawPath !== null && rawPath.length > 0 && workingTreePath !== null) {
     const result = await readMachineDiffPair({
       branchName: branchName.value,
@@ -164,8 +184,9 @@ export async function GET(request: Request) {
       deps,
     });
     if (!result.ok) {
+      logDiffFailure('Machine diff pair read failed', { path: rawPath, reason: result.reason, detail: result.detail });
       return NextResponse.json(
-        { error: result.detail ?? result.reason, reason: result.reason },
+        { error: 'Failed to read the diff for this file', reason: result.reason },
         { status: DENIAL_STATUS[result.reason] ?? 500 },
       );
     }
@@ -191,8 +212,9 @@ export async function GET(request: Request) {
     deps,
   });
   if (!result.ok) {
+    logDiffFailure('Machine diff list failed', { reason: result.reason, detail: result.detail });
     return NextResponse.json(
-      { error: result.detail ?? result.reason, reason: result.reason },
+      { error: 'Failed to compute the changed-file list', reason: result.reason },
       { status: DENIAL_STATUS[result.reason] ?? 500 },
     );
   }

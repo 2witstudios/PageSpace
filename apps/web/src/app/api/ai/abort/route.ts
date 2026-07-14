@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { abortStream, abortStreamByMessageId } from '@/lib/ai/core/stream-abort-registry';
+import { abortStreamAnywhere } from '@/lib/ai/core/abort-stream-anywhere';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
@@ -49,35 +49,60 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const { streamId, messageId } = body as { streamId?: string; messageId?: string };
+    const { streamId, messageId, conversationId } = body as {
+      streamId?: string;
+      messageId?: string;
+      conversationId?: string;
+    };
 
     const hasStreamId = streamId && typeof streamId === 'string' && streamId.trim();
     const hasMessageId = messageId && typeof messageId === 'string' && messageId.trim();
+    // The one name the client holds from t=0. Both streamId and messageId are minted SERVER-side
+    // and are unknown until the response headers land — so a Stop pressed inside the 0.5-3s TTFB
+    // window (auth, rate limit, DB reads, context assembly, provider connect) had NOTHING to
+    // name. It cancelled the local fetch and returned; streams are deliberately server-owned and
+    // survive a client disconnect, so the generation kept running, kept calling write tools, and
+    // kept billing, while the button flipped back to Send. See abort-conversation-streams.ts.
+    const hasConversationId =
+      conversationId && typeof conversationId === 'string' && conversationId.trim();
 
-    if (!hasStreamId && !hasMessageId) {
+    if (!hasStreamId && !hasMessageId && !hasConversationId) {
       return NextResponse.json(
-        { error: 'streamId or messageId is required' },
+        { error: 'streamId, messageId or conversationId is required' },
         { status: 400 }
       );
     }
 
-    const result = hasMessageId
-      ? abortStreamByMessageId({ messageId: messageId as string, userId })
-      : abortStream({ streamId: streamId as string, userId });
+    // Tries this instance's registry first (instant), then — because streams are server-owned and
+    // the registry is in-process — asks whichever instance actually owns the stream to abort it,
+    // and waits to find out whether it did. Precedence is unchanged: messageId, then streamId,
+    // then conversationId (the only name the client holds during the TTFB window).
+    const result = await abortStreamAnywhere({
+      messageId: hasMessageId ? (messageId as string) : undefined,
+      streamId: hasStreamId ? (streamId as string) : undefined,
+      conversationId: hasConversationId ? (conversationId as string) : undefined,
+      userId,
+    });
 
-    const resourceId = hasMessageId ? (messageId as string) : (streamId as string);
+    const resourceId = hasMessageId
+      ? (messageId as string)
+      : hasStreamId
+        ? (streamId as string)
+        : (conversationId as string);
 
     loggers.api.info('AI stream abort requested', {
       streamId,
       messageId,
       userId,
       aborted: result.aborted,
+      code: result.code,
       reason: result.reason,
     });
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'ai_chat_stream', resourceId, details: {
       action: 'abort',
       aborted: result.aborted,
+      code: result.code,
     } });
 
     return NextResponse.json(result);

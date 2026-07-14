@@ -62,6 +62,37 @@ describe('buildVolatileTurnContext', () => {
       expect(buildVolatileTurnContext(input)).toBe(buildVolatileTurnContext(input));
     });
   });
+
+  describe('given locationPrompt', () => {
+    it('is included between timestamp and mention when present', () => {
+      const result = buildVolatileTurnContext({
+        timestampPrompt: 'TIME',
+        locationPrompt: 'LOCATION',
+        mentionPrompt: 'MENTION',
+        commandPrompt: 'COMMAND',
+      });
+      expect(result).toBe('TIME\n\nLOCATION\n\nMENTION\n\nCOMMAND');
+    });
+
+    it('is omitted when undefined (backward compatible — optional field)', () => {
+      const result = buildVolatileTurnContext({
+        timestampPrompt: 'TIME',
+        mentionPrompt: 'MENTION',
+        commandPrompt: 'COMMAND',
+      });
+      expect(result).toBe('TIME\n\nMENTION\n\nCOMMAND');
+    });
+
+    it('is omitted when empty/whitespace-only', () => {
+      const result = buildVolatileTurnContext({
+        timestampPrompt: 'TIME',
+        locationPrompt: '   ',
+        mentionPrompt: 'MENTION',
+        commandPrompt: '',
+      });
+      expect(result).toBe('TIME\n\nMENTION');
+    });
+  });
 });
 
 // ─── appendTurnContextToLastUserMessage ──────────────────────────────────────

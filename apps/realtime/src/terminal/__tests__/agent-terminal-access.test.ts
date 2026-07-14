@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, it, vi } from 'vitest';
 import { assert } from './riteway';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { ResolveAgentTerminalResult } from '@pagespace/lib/services/machines/agent-terminals';
@@ -220,6 +220,152 @@ describe('resolveMachineSandbox', () => {
       actual: result,
       expected: { ok: false, reason: 'provision_failed', sandboxId: 'sbx-1' },
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // refreshBranchCredential — this IS the branch's real attach path (a
+  // branch's agent terminal opens/reattaches through resolveMachineSandbox,
+  // never through spawnBranch/attachBranch's machine-branches.ts), so it must
+  // fire on every branch-scope resolution and never for machine/project scope
+  // (those run ON the root Sprite, which already has its own credential).
+  // -------------------------------------------------------------------------
+
+  function spyRefresh() {
+    const calls: { machineId: string; sandboxId: string }[] = [];
+    const fn = async (args: { machineId: string; sandboxId: string }) => {
+      calls.push(args);
+    };
+    return { fn, calls };
+  }
+
+  it('given a BRANCH-scope target, should refresh the branch credential with the resolved machineId and sandboxId', async () => {
+    const refresh = spyRefresh();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
+      {
+        resolveAgentTerminal: async () => resolvedOk,
+        getSprite: spyGetSprite().fn,
+        refreshBranchCredential: refresh.fn,
+      },
+    );
+
+    assert({
+      given: 'a branch-scope target (projectName + branchName both set)',
+      should: 'call refreshBranchCredential exactly once with the resolved machineId + sandboxId',
+      actual: refresh.calls,
+      expected: [{ machineId: 'm-1', sandboxId: 'sbx-1' }],
+    });
+  });
+
+  it('given a MACHINE-scope target (no projectName/branchName), should NOT refresh any credential', async () => {
+    const refresh = spyRefresh();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', name: 'shell' },
+      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn, refreshBranchCredential: refresh.fn },
+    );
+
+    assert({
+      given: 'a machine-scope target',
+      should: 'never call refreshBranchCredential — the root Sprite already has its own credential',
+      actual: refresh.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('given a PROJECT-scope target (projectName set, no branchName), should NOT refresh any credential', async () => {
+    const refresh = spyRefresh();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', projectName: 'proj', name: 'shell' },
+      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn, refreshBranchCredential: refresh.fn },
+    );
+
+    assert({
+      given: 'a project-scope target',
+      should: 'never call refreshBranchCredential — project scope shares the root Sprite too',
+      actual: refresh.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('given branchName set WITHOUT projectName (malformed — a real resolveAgentTerminal would reject this as invalid_target before ever reaching here), should still NOT refresh any credential even against a permissive fake resolver', async () => {
+    // A real `resolveAgentTerminal` (agent-terminals.ts) already rejects this
+    // shape as `invalid_target` before Sprite resolution — but this test's
+    // fake resolver deliberately does NOT enforce that, to prove the gate
+    // itself checks BOTH projectName and branchName rather than relying on
+    // that upstream invariant alone.
+    const refresh = spyRefresh();
+    await resolveMachineSandbox(
+      { machineId: 'm-1', branchName: 'feature-x', name: 'claude' },
+      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn, refreshBranchCredential: refresh.fn },
+    );
+
+    assert({
+      given: 'a branchName-only target reaching a permissive fake resolver',
+      should: 'never call refreshBranchCredential — the gate requires projectName too, not branchName alone',
+      actual: refresh.calls.length,
+      expected: 0,
+    });
+  });
+
+  it('given a branch-scope target with refreshBranchCredential OMITTED, should still resolve successfully', async () => {
+    const result = await resolveMachineSandbox(
+      { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
+      { resolveAgentTerminal: async () => resolvedOk, getSprite: spyGetSprite().fn },
+    );
+
+    assert({
+      given: 'a branch-scope target with no refreshBranchCredential dep wired (e.g. a caller/test that omits it)',
+      should: 'resolve ok regardless — the dep is optional',
+      actual: result.ok,
+      expected: true,
+    });
+  });
+
+  it('given refreshBranchCredential throws, should still resolve successfully (defense in depth)', async () => {
+    const result = await resolveMachineSandbox(
+      { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
+      {
+        resolveAgentTerminal: async () => resolvedOk,
+        getSprite: spyGetSprite().fn,
+        refreshBranchCredential: async () => {
+          throw new Error('root Sprite unreachable');
+        },
+      },
+    );
+
+    assert({
+      given: 'a refreshBranchCredential implementation that violates its best-effort contract by throwing',
+      should: 'still resolve ok — the PTY open must never fail over a credential refresh hiccup',
+      actual: result.ok,
+      expected: true,
+    });
+  });
+
+  it('given a refresh that never settles (a stuck root or branch Sprite), should resolve once the bound elapses rather than hanging forever', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = resolveMachineSandbox(
+        { machineId: 'm-1', projectName: 'proj', branchName: 'feature-x', name: 'claude' },
+        {
+          resolveAgentTerminal: async () => resolvedOk,
+          getSprite: spyGetSprite().fn,
+          // Never resolves — simulates a Sprite fs op that's stuck (e.g. a
+          // hibernating Sprite mid wake-retry).
+          refreshBranchCredential: () => new Promise<void>(() => {}),
+        },
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await pending;
+
+      assert({
+        given: 'a refreshBranchCredential that never settles',
+        should: 'still resolve ok once the bound elapses, not hang indefinitely',
+        actual: result.ok,
+        expected: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

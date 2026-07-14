@@ -35,6 +35,11 @@ import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-s
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { lookupPageOwnerId } from '@pagespace/lib/billing/machine-payer';
+import {
+  isCheckpointBeforeAgentBatchEnabled,
+  getCheckpointState,
+  recordCheckpoint,
+} from '@pagespace/lib/services/sandbox/checkpoint-policy';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
   acquireCodeExecutionSlot,
@@ -47,10 +52,12 @@ import { gateSandboxToolCall } from '@pagespace/lib/services/sandbox/tool-gate';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isMachinePage } from '@pagespace/lib/content/page-types.config';
+import { decideMachineToggleAccess } from '@pagespace/lib/services/machines/machine-access';
+import type { MachineSettings } from '@pagespace/lib/services/machines/machine-settings';
 import type { PageType } from '@pagespace/lib/utils/enums';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { createSandboxTools, type MachineDirectoryDeps, type ResolveSandboxContext } from './sandbox-tools';
-import { canActorViewPage } from './actor-permissions';
+import { canActorViewPage, getAgentPageId, hasAgentUserScopedAccess } from './actor-permissions';
 import { pageAgentRepository, type MachineRef } from '@/lib/repositories/page-agent-repository';
 import { globalMachineConfigRepository } from '@/lib/repositories/global-machine-config-repository';
 import type { ToolExecutionContext } from '../core/types';
@@ -187,6 +194,17 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         handle: { exec: (args) => sandbox.runCommand(args) },
         pageId,
       }),
+    // Sprites Platform Alignment 5-2: checkpoint the sandbox filesystem before
+    // an agent bash batch runs (fail-open, at most once per turn — see
+    // checkpoint-policy.ts). State is in-process, keyed by sandboxId; a
+    // process restart simply re-checkpoints on the next batch, which is
+    // harmless (COW, ~300ms).
+    checkpoint: {
+      isEnabled: isCheckpointBeforeAgentBatchEnabled,
+      getState: getCheckpointState,
+      recordCheckpoint,
+      createCheckpoint: ({ sandbox, comment }) => sandbox.createCheckpoint(comment),
+    },
   };
 }
 
@@ -194,6 +212,21 @@ const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'bus
 
 function toTier(value: string | null | undefined): SubscriptionTier {
   return value && VALID_TIERS.has(value) ? (value as SubscriptionTier) : 'free';
+}
+
+/**
+ * Lazily stamp a stable turn id onto `context` the first time it's read, then
+ * return it. `context` is the SAME object reference for every tool call
+ * within one streamText run (see `ToolExecutionContext.activeMachine`'s doc —
+ * same guarantee, same mutate-in-place pattern), so this stamps once per
+ * agent turn and every later bash call in the run sees the value already set.
+ * Undefined `context` (no tool-execution context at all) stays undefined —
+ * there is nothing to stamp onto.
+ */
+function stampTurnId(context: ToolExecutionContext | undefined): string | undefined {
+  if (!context) return undefined;
+  context.turnId ??= crypto.randomUUID();
+  return context.turnId;
 }
 
 /**
@@ -241,6 +274,7 @@ export function createResolveSandboxActorContext(
     if (!userId) return { error: 'Code execution requires an authenticated user.' };
     if (!conversationId) return { error: 'Code execution requires a conversation.' };
 
+    const turnId = stampTurnId(context);
     const chatSourceType = context?.chatSource?.type;
     const driveId =
       context?.locationContext?.currentDrive?.id ??
@@ -256,45 +290,20 @@ export function createResolveSandboxActorContext(
       return { error: 'Code execution requires an active drive.' };
     }
 
-    // driveId present for both page AI and global AI: resolve tenantId from the
-    // drive's owning account. Both surfaces share identical resolution logic here.
-    if (driveId) {
-      const [drive, actorRow, actorInfo] = await Promise.all([
-        deps.findDrive(driveId),
-        deps.findUser(userId),
-        deps.getActorInfo(userId),
-      ]);
-      if (!drive) return { error: 'Code execution requires an active drive.' };
-
-      return {
-        userId,
-        tenantId: drive.ownerId,
-        driveId,
-        conversationId,
-        requestOrigin: context?.requestOrigin,
-        agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
-        actorEmail: actorInfo.actorEmail,
-        actorDisplayName: actorInfo.actorDisplayName,
-        aiProvider: context?.aiProvider,
-        aiModel: context?.aiModel,
-        tier: toTier(actorRow?.subscriptionTier),
-      };
-    }
-
-    // Global AI without a drive: user is their own isolation boundary.
-    // tenantId = userId keeps the session key and quota scopes user-owned.
-    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
-    // a second user-keyed window alongside code-exec:user:<userId>. This
-    // over-counts conservatively (only tightens budget) and is acceptable while
-    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
-    const [actorRow, actorInfo] = await Promise.all([
+    // One parallel fetch covers both branches below: `findDrive` only runs a
+    // real query when driveId is present (an immediately-resolved undefined
+    // otherwise), so this preserves the original concurrency — findDrive,
+    // findUser, and getActorInfo all in flight together — without duplicating
+    // the actor lookup + result-object construction per branch.
+    const [drive, actorRow, actorInfo] = await Promise.all([
+      driveId ? deps.findDrive(driveId) : Promise.resolve(undefined),
       deps.findUser(userId),
       deps.getActorInfo(userId),
     ]);
+    if (driveId && !drive) return { error: 'Code execution requires an active drive.' };
 
-    return {
+    const base = {
       userId,
-      tenantId: userId,
       conversationId,
       requestOrigin: context?.requestOrigin,
       agentPageId: context?.chatSource?.agentPageId ?? context?.parentAgentId,
@@ -303,7 +312,22 @@ export function createResolveSandboxActorContext(
       aiProvider: context?.aiProvider,
       aiModel: context?.aiModel,
       tier: toTier(actorRow?.subscriptionTier),
+      turnId,
     };
+
+    // driveId present for both page AI and global AI: tenantId is the drive's
+    // owning account. Both surfaces share identical resolution logic here.
+    if (driveId) {
+      return { ...base, tenantId: drive!.ownerId, driveId };
+    }
+
+    // Global AI without a drive: user is their own isolation boundary.
+    // tenantId = userId keeps the session key and quota scopes user-owned.
+    // Side-effect: the tenant quota bucket becomes code-exec:tenant:<userId>,
+    // a second user-keyed window alongside code-exec:user:<userId>. This
+    // over-counts conservatively (only tightens budget) and is acceptable while
+    // the feature is admin-gated. Revisit if tenant-scope quota semantics matter.
+    return { ...base, tenantId: userId };
   };
 }
 
@@ -320,11 +344,23 @@ export const resolveSandboxActorContext: ResolveSandboxContext =
   createResolveSandboxActorContext();
 
 /**
+ * The page row the machine directory needs: identity/routing fields plus the
+ * two Machine Settings access toggles (their canonical shape/docs live on
+ * `MachineSettings` in @pagespace/lib machines/machine-settings.ts).
+ */
+export type MachineDirectoryPage = {
+  title: string;
+  type: string;
+  driveId: string;
+  isTrashed: boolean;
+} & Pick<MachineSettings, 'allowPageAgents' | 'visibleToGlobalAssistant'>;
+
+/**
  * IO dependencies for the machine directory. Injected so it can be unit-tested
  * without a real database connection.
  */
 export interface MachineDirectoryRuntimeDeps {
-  findPage: (pageId: string) => Promise<{ title: string; type: string; driveId: string } | undefined>;
+  findPage: (pageId: string) => Promise<MachineDirectoryPage | undefined>;
   canViewPage: (rawContext: ToolExecutionContext, pageId: string) => Promise<boolean>;
   /** `PageAgentConfig.machineAccess`/`machines` — the canonical config source. */
   getAgentConfig: (agentPageId: string) => Promise<{ machineAccess: boolean; machines: MachineRef[] } | null>;
@@ -334,16 +370,38 @@ export interface MachineDirectoryRuntimeDeps {
   getOrCreateOwnMachinePageId: (userId: string) => Promise<string>;
   /** A page's owning drive's `ownerId` — the same lookup `resolveMachinePayerId` uses for billing attribution. */
   lookupPageOwnerId: (pageId: string) => Promise<string | null>;
+  /**
+   * Whether the page agent identified by `ownAgentPageId` (its OWN chatSource
+   * agent id — NOT a sub-agent's `parentAgentId`) has opted into user-scoped
+   * reach (`pages.userScopedAccess`). Mirrors the exact seam `canActorViewPage`
+   * already uses (`resolveActingAgentId`/`hasAgentUserScopedAccess` in
+   * actor-permissions.ts): such an agent acts with the INVOKING USER's own
+   * reach for view permissions, so it is exempt from the `allowPageAgents`
+   * toggle too — that toggle targets narrower, embedded page agents, not a
+   * personal/global-style assistant a user already has full page access to.
+   */
+  isUserScopedAgent: (ownAgentPageId: string) => Promise<boolean>;
 }
 
 const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
   findPage: async (pageId) =>
-    db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { title: true, type: true, driveId: true } }),
+    db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: {
+        title: true,
+        type: true,
+        driveId: true,
+        isTrashed: true,
+        allowPageAgents: true,
+        visibleToGlobalAssistant: true,
+      },
+    }),
   canViewPage: canActorViewPage,
   getAgentConfig: (agentPageId) => pageAgentRepository.getAgentById(agentPageId),
   getGlobalConfig: (userId) => globalMachineConfigRepository.getConfig(userId),
   getOrCreateOwnMachinePageId: (userId) => globalMachineConfigRepository.getOrCreateOwnMachinePageId(userId),
   lookupPageOwnerId,
+  isUserScopedAgent: hasAgentUserScopedAccess,
 };
 
 /**
@@ -354,6 +412,12 @@ const defaultMachineDirectoryDeps: MachineDirectoryRuntimeDeps = {
  * transparently here into the user's lazily-provisioned personal Terminal
  * page — everything downstream (routing, permissions, activity) then treats
  * it exactly like any other 'existing' machine.
+ *
+ * Machines hidden by `visibleToGlobalAssistant` are deliberately NOT filtered
+ * here: `isMachineAccessible` is the single policy site (it denies them with
+ * the toggle's reason on every call, so list_machines omits them,
+ * switch_machine explains them, and resolveActiveMachine's accessible-first
+ * fallback skips them as a default).
  */
 async function resolveGlobalConfiguredMachines(
   userId: string,
@@ -412,11 +476,48 @@ export function createMachineDirectory(
       return { name: page?.title ?? 'Terminal' };
     },
     isMachineAccessible: async (rawContext, machine) => {
-      if (machine.kind === 'own') return true;
-      if (!rawContext) return false;
+      // A page agent's 'own' machine is keyed off its own AI_CHAT page
+      // (resolveMachinePageId, machine-session.ts) — not a MACHINE page, so
+      // there are no Settings toggles to consult. The global assistant's
+      // 'own' machine never reaches here as 'own': it is resolved into an
+      // 'existing' ref (resolveGlobalConfiguredMachines) and fully checked.
+      if (machine.kind === 'own') return { allowed: true };
+      if (!rawContext) return { allowed: false };
       const page = await deps.findPage(machine.machineId);
-      if (!page || !isMachinePage(page.type as PageType)) return false;
-      return deps.canViewPage(rawContext, machine.machineId);
+      if (!page || page.isTrashed || !isMachinePage(page.type as PageType)) return { allowed: false };
+      const canView = await deps.canViewPage(rawContext, machine.machineId);
+      if (!canView) return { allowed: false };
+      // Machine access toggles (Settings tab): pure policy in @pagespace/lib
+      // machines/machine-access.ts. An agentPageId — the agent's own page or
+      // the parent's for a sub-agent — marks the actor page-scoped; without
+      // one the actor is the global assistant (the SAME discriminator
+      // resolveConfiguredMachines uses to pick whose machine list applies).
+      // EXCEPT: a page agent with userScopedAccess=true acts with the
+      // INVOKING USER's own reach for view permissions (canActorViewPage,
+      // just checked above, already resolved through that fallthrough) — such
+      // an agent is exempt from BOTH toggles. It isn't literally the global
+      // assistant (visibleToGlobalAssistant would apply an unrelated gate:
+      // its machine list comes from its own agent config, not
+      // globalMachineConfigRepository), so it bypasses the toggle decision
+      // entirely rather than being reclassified as 'global-assistant'.
+      // Checked AFTER canViewPage so a toggle reason (which names the
+      // machine) is never surfaced to an actor who can't view the page.
+      const ownAgentPageId = rawContext ? getAgentPageId(rawContext) : undefined;
+      const isUserScoped = ownAgentPageId ? await deps.isUserScopedAgent(ownAgentPageId) : false;
+      if (isUserScoped) return { allowed: true };
+      const actor = activeMachineAgentPageId(rawContext) ? ('page-agent' as const) : ('global-assistant' as const);
+      const decision = decideMachineToggleAccess({ actor, settings: page });
+      if (!decision.allowed) {
+        return {
+          allowed: false,
+          code: decision.code,
+          reason:
+            decision.code === 'page_agents_disabled'
+              ? `The machine "${page.title}" does not allow page agents ("Allow page agents" is turned off in its settings), so this agent cannot run terminal tools on it.`
+              : `The machine "${page.title}" is not visible to the global assistant ("Visible to global assistant" is turned off in its settings).`,
+        };
+      }
+      return { allowed: true };
     },
     resolveDriveId: async (_rawContext, machine, ambientDriveId) => {
       if (machine.kind === 'own') return ambientDriveId;

@@ -39,6 +39,10 @@ const captured = vi.hoisted(() => ({
   streamTextOptions: {} as MockStreamTextOptions,
 }));
 
+const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
+  mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
+}));
+
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
   createStreamLifecycle: mockCreateStreamLifecycle,
 }));
@@ -59,8 +63,16 @@ vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
 }));
 
+vi.mock('@/lib/ai/core/stream-takeover', () => ({
+  takeOverConversationStreams: mockTakeOverConversationStreams,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
+    ai: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
     api: {
       info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
       child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
@@ -284,6 +296,7 @@ vi.mock('@/lib/utils/query-params', () => ({
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
 
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',
@@ -411,6 +424,29 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     });
   });
 
+  // AC5 applied to this route too. Without it the global assistant happily starts a
+  // SECOND generation on the same conversation — two agents, two assistant rows, two
+  // bills — which is exactly what the guard on POST /api/ai/chat prevents. The gap was
+  // real: this route calls createStreamLifecycle and had no in-flight guard at all.
+  describe('per-conversation takeover guard', () => {
+    it('given a new stream, should take over any in-flight stream on this conversation BEFORE creating the lifecycle', async () => {
+      await POST(makeRequest(), makeContext());
+
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledTimes(1);
+      // Exact values. Both are known constants here, so expect.any(String) would have accepted a
+      // route that SWAPPED them — and a takeover keyed on the wrong conversation aborts the wrong
+      // streams, or none, while a second generation starts beside the first.
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: 'conv-1',
+          channelId: 'user:user-1:global',
+        }),
+      );
+      expect(mockTakeOverConversationStreams.mock.invocationCallOrder[0])
+        .toBeLessThan(mockCreateStreamLifecycle.mock.invocationCallOrder[0]);
+    });
+  });
+
   describe('createStreamLifecycle invocation', () => {
     it('given a new global stream, should construct the lifecycle with channelId user:${userId}:global and the request browserSessionId', async () => {
       await POST(makeRequest({ browserSessionId: 'session-y' }), makeContext());
@@ -423,6 +459,12 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
         userId: 'user-1',
         displayName: 'Display User',
         browserSessionId: 'session-y',
+        // Persisted on the row so an abort landing on ANY instance can resolve the streamId it was
+        // handed in X-Stream-Id back to a stream. The registry that mints it is in-process.
+        streamId: 'stream_123',
+        // Rides the stream_start broadcast so page members can tell a stream they may
+        // watch from a co-member's PRIVATE conversation, without firing a doomed join.
+        isShared: false,
       });
     });
 

@@ -17,6 +17,7 @@ import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { resolveOrThrowPageId } from './page-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
 
@@ -239,19 +240,21 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. Use lineStart/lineEnd to read specific line ranges.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
-      pageId: z.string().describe('The unique ID of the page to read'),
+      pageId: z.string().optional().describe('The unique ID of the page to read. Defaults to the page currently in view if omitted.'),
       lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning.'),
       lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end.'),
     }),
     toModelOutput: ({ output }) => toModelOutputForReadPage(output),
-    execute: async ({ title, pageId, lineStart, lineEnd }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
+
+      const pageId = resolveOrThrowPageId(pageIdArg, context as ToolExecutionContext);
 
       try {
         // Get the page directly by ID

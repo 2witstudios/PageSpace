@@ -10,7 +10,8 @@
  */
 
 import { eq } from '@pagespace/db/operators';
-import { db } from '@pagespace/db/db';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { lookupPageOwnerId } from '../../billing/machine-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
@@ -23,7 +24,11 @@ import {
   STORAGE_MEASUREMENT_THROTTLE_MS,
   type PersistStorageMeasurement,
 } from './machine-storage-measure';
-import type { ReconcileMachineStorageDeps } from './machine-storage-reconcile';
+import {
+  reconcileMachineStorage,
+  type ReconcileMachineStorageDeps,
+  type ReconcileMachineStorageResult,
+} from './machine-storage-reconcile';
 
 export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
   async listMachines() {
@@ -75,6 +80,45 @@ export const defaultReconcileMachineStorageDeps: ReconcileMachineStorageDeps = {
 
   now: () => new Date(),
 };
+
+/**
+ * Advisory-lock key for serializing `reconcileMachineStorage` across EVERY
+ * caller — a second web/worker container, or a manual/API trigger, can run
+ * the cron route concurrently with no shared state to stop it. The crontab
+ * flock (Sprites Platform Alignment, #2032) only guards one container's own
+ * scheduled ticks; it does nothing for a second container or an out-of-band
+ * invocation. `chargeStorage` and `advanceWatermark` are two separate
+ * un-transactioned writes (see machine-storage-reconcile.ts's module doc), so
+ * two overlapping runs can double-bill the same watermark window. This lock
+ * makes every caller overlap-safe, in addition to (not instead of) the flock.
+ * Acquired via `withAdvisoryLock` on `getAdvisoryLockPool()`'s dedicated
+ * pool — see that pool's doc in `@pagespace/db/db` for why it must stay
+ * separate from the main `db` pool `deps` below queries against.
+ */
+const RECONCILE_MACHINE_STORAGE_LOCK_KEY = 'reconcile-machine-storage';
+
+export type ReconcileMachineStorageRunResult =
+  | { outcome: 'lock_busy' }
+  | ({ outcome: 'reconciled' } & ReconcileMachineStorageResult);
+
+/**
+ * Serializes `reconcileMachineStorage` with a Postgres session-level advisory
+ * try-lock (see `withAdvisoryLock`): a run that cannot acquire it (another
+ * run — any process, any container — already holds it) is a clean no-op and
+ * never touches `deps.listMachines`/`chargeStorage`/`advanceWatermark`.
+ */
+export async function reconcileMachineStorageSerialized(
+  deps: ReconcileMachineStorageDeps,
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<ReconcileMachineStorageRunResult> {
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_MACHINE_STORAGE_LOCK_KEY, () =>
+    reconcileMachineStorage(deps),
+  );
+  if (locked.outcome === 'lock_busy') {
+    return { outcome: 'lock_busy' };
+  }
+  return { outcome: 'reconciled', ...locked.result };
+}
 
 /**
  * Persist an opportunistic storage measurement onto the machine's

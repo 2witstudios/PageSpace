@@ -1,0 +1,99 @@
+import { db } from '@pagespace/db/db';
+import { and, eq } from '@pagespace/db/operators';
+import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { abortStreamByMessageId } from './stream-abort-registry';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+
+/**
+ * Abort the caller's in-flight streams on a conversation, named by CONVERSATION rather than by
+ * streamId or messageId.
+ *
+ * This exists to close a window in which Stop did nothing at all.
+ *
+ * Both `streamId` and `messageId` are minted SERVER-side, and the client does not learn either
+ * until the response headers arrive (`X-Stream-Id`). But a real agent send spends 0.5-3 seconds
+ * before that — auth, rate limit, DB reads, context assembly, connecting to the provider. Press
+ * Stop in that window (exactly when a user who has spotted a typo does) and the client had no
+ * name for the stream: the abort was a guaranteed no-op, the local fetch was cancelled, and the
+ * button flipped back to Send.
+ *
+ * Streams are deliberately server-owned and survive a client disconnect — that is the entire
+ * architecture. So cancelling the fetch stops NOTHING: the generation kept running, kept calling
+ * write tools, and kept billing, while the UI told the user it had stopped.
+ *
+ * The conversationId is the one name the client holds from t=0, so Stop can name the stream long
+ * before the server tells it what the stream is called.
+ *
+ * ── THE WINDOW THIS DOES *NOT* CLOSE, WHICH THIS DOCBLOCK USED TO CLAIM IT DID ──────────────────
+ *
+ * It said "Stop can now always say something true". That is false, and stating it here is how the
+ * next person builds on a false premise.
+ *
+ * The conversationId is a name the CLIENT holds from t=0, but the thing it has to resolve against —
+ * the `ai_stream_sessions` row — is not written until `createStreamLifecycle`, which runs at the
+ * very END of the route's preflight, after auth, permissions, message persistence and context
+ * assembly. For most of that 0.5-3s window there is no row and no registry entry, so this SELECT
+ * matches nothing, the cross-instance mark matches nothing, and the caller is told `not_found` —
+ * which the UI stays SILENT about. The generation then starts a moment later and runs to
+ * completion: write tools, billing, the lot.
+ *
+ * So the window this closes is the tail between the row's INSERT and the response headers landing.
+ * The head of it — before the row exists — is still open, and it is still a silent Stop over a
+ * generation that goes on to run.
+ *
+ * Closing it needs the abort request to be able to OUTLIVE the absence of a row: a pending-abort
+ * intent, durable and keyed by conversation, that `createStreamLifecycle` consults at INSERT time
+ * (instead of unconditionally clearing `abortRequestedAt`) and honours by aborting immediately. It
+ * needs its own storage, its own expiry, and its own migration — its own change. Written down here
+ * rather than papered over.
+ *
+ * SCOPE — this is the LOCAL step only.
+ *
+ * It stops what this instance owns. Anything it could not stop lives on another web instance (the
+ * registry is in-process), and is handled by the cross-instance mark in `abortStreamAnywhere`,
+ * which calls this first. That is why this function no longer renders a verdict: it reports what
+ * it aborted, and the caller — which can see both halves — decides what the user is told.
+ *
+ * AUTHORIZATION — deliberately stricter than the takeover's.
+ *
+ * `takeOverConversationStreams` aborts as the STREAM's owner (`row.userId`), because a second
+ * send on a SHARED conversation must be able to take over a co-member's generation. This is not
+ * that. This is an explicit user Stop, so it may only ever stop the caller's OWN streams: the
+ * `userId` filter is in the query, and the registry re-checks ownership on every abort. A user
+ * cannot stop someone else's generation by naming their conversation.
+ */
+export const abortConversationStreams = async ({
+  conversationId,
+  userId,
+}: {
+  conversationId: string;
+  userId: string;
+}): Promise<{ aborted: string[] }> => {
+  let rows: { messageId: string }[];
+  try {
+    rows = await db
+      .select({ messageId: aiStreamSessions.messageId })
+      .from(aiStreamSessions)
+      .where(and(
+        eq(aiStreamSessions.conversationId, conversationId),
+        // The caller's own streams only. See the authz note above.
+        eq(aiStreamSessions.userId, userId),
+        eq(aiStreamSessions.status, 'streaming'),
+      ));
+  } catch (error) {
+    loggers.ai.warn('abort-by-conversation: lookup failed', {
+      conversationId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    return { aborted: [] };
+  }
+
+  const aborted: string[] = [];
+  for (const row of rows) {
+    // Registry re-checks ownership; passing the caller's id (not the row's) is the point.
+    const result = abortStreamByMessageId({ messageId: row.messageId, userId });
+    if (result.aborted) aborted.push(row.messageId);
+  }
+
+  return { aborted };
+};

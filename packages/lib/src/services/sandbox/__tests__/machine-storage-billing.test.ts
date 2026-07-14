@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 const mockDb = vi.hoisted(() => ({ select: vi.fn(), update: vi.fn() }));
-vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+const mockAdvisoryLockClient = vi.hoisted(() => ({ query: vi.fn(), release: vi.fn() }));
+const mockAdvisoryLockPool = vi.hoisted(() => ({ connect: vi.fn(async () => mockAdvisoryLockClient) }));
+const mockGetAdvisoryLockPool = vi.hoisted(() => vi.fn(() => mockAdvisoryLockPool));
+vi.mock('@pagespace/db/db', () => ({ db: mockDb, getAdvisoryLockPool: mockGetAdvisoryLockPool }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/machine-sessions', () => ({
   machineSessions: {
@@ -25,14 +28,20 @@ import {
   defaultReconcileMachineStorageDeps,
   persistStorageMeasurement,
   measureMachineStorageOpportunistically,
+  reconcileMachineStorageSerialized,
   __resetStorageMeasurementCachesForTests,
 } from '../machine-storage-billing';
 import { MACHINE_MARKUP_BPS } from '../../../billing/credit-pricing';
+import type { ReconcileMachineStorageDeps } from '../machine-storage-reconcile';
 
 beforeEach(() => {
   mockDb.select.mockReset();
   mockDb.update.mockReset();
   mockTrackUsage.mockReset();
+  mockAdvisoryLockPool.connect.mockClear();
+  mockAdvisoryLockClient.query.mockReset();
+  mockAdvisoryLockClient.release.mockReset();
+  mockGetAdvisoryLockPool.mockClear();
   // Clear the module-level in-process caches so cases don't bleed state.
   __resetStorageMeasurementCachesForTests();
 });
@@ -366,5 +375,139 @@ describe('measureMachineStorageOpportunistically', () => {
     await expect(
       measureMachineStorageOpportunistically({ handle: { exec }, pageId: 'throws-page' }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('reconcileMachineStorageSerialized', () => {
+  // Simulates real Postgres session-advisory-lock semantics with a single
+  // shared in-memory flag: exactly one connection can hold it at a time, and
+  // pg_advisory_unlock releases it for the next contender.
+  function makeFakeLockPool() {
+    let locked = false;
+    const clients: { query: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }[] = [];
+    const pool = {
+      connect: vi.fn(async () => {
+        const client = {
+          query: vi.fn(async (text: string, _params?: unknown[]) => {
+            if (text.includes('pg_try_advisory_lock')) {
+              if (locked) return { rows: [{ acquired: false }] };
+              locked = true;
+              return { rows: [{ acquired: true }] };
+            }
+            if (text.includes('pg_advisory_unlock')) {
+              locked = false;
+              return { rows: [] };
+            }
+            return { rows: [] };
+          }),
+          release: vi.fn(),
+        };
+        clients.push(client);
+        return client;
+      }),
+    };
+    return { pool, clients, isLocked: () => locked };
+  }
+
+  function makeDeps(overrides: Partial<ReconcileMachineStorageDeps> = {}): ReconcileMachineStorageDeps {
+    return {
+      listMachines: vi.fn(async () => []),
+      lookupPageOwnerId: vi.fn(async () => null),
+      chargeStorage: vi.fn(async () => {}),
+      advanceWatermark: vi.fn(async () => {}),
+      now: () => new Date('2026-07-13T00:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('given the lock is already held elsewhere, should no-op WITHOUT calling reconcileMachineStorage', async () => {
+    const { pool } = makeFakeLockPool();
+    // Pre-acquire the lock so this run's try-lock sees it busy.
+    await pool.connect().then((c) => c.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired', ['x']));
+    const deps = makeDeps();
+
+    const result = await reconcileMachineStorageSerialized(deps, pool);
+
+    expect(result).toEqual({ outcome: 'lock_busy' });
+    expect(deps.listMachines).not.toHaveBeenCalled();
+  });
+
+  it('given two concurrent reconcile calls, should let only one proceed while the other no-ops, and release the lock after', async () => {
+    const { pool, isLocked } = makeFakeLockPool();
+    const deps = makeDeps();
+
+    const [first, second] = await Promise.all([
+      reconcileMachineStorageSerialized(deps, pool),
+      reconcileMachineStorageSerialized(deps, pool),
+    ]);
+
+    const outcomes = [first.outcome, second.outcome].sort();
+    assert({
+      given: 'two concurrent calls racing the same advisory lock',
+      should: 'resolve exactly one reconciled and one lock_busy',
+      actual: outcomes,
+      expected: ['lock_busy', 'reconciled'],
+    });
+    expect(deps.listMachines).toHaveBeenCalledTimes(1);
+
+    // Released after the winning run: lock is free and a later run can acquire it.
+    expect(isLocked()).toBe(false);
+    const third = await reconcileMachineStorageSerialized(deps, pool);
+    expect(third.outcome).toBe('reconciled');
+    expect(deps.listMachines).toHaveBeenCalledTimes(2);
+  });
+
+  it('given no explicit pool override, should acquire the lock from the dedicated advisoryLockPool (NOT the shared db pool)', async () => {
+    // Regression test for the pool-exhaustion deadlock a reviewer flagged: at
+    // DB_POOL_MAX=1, pinning the lock connection from the SAME pool Drizzle's
+    // `db` draws from would starve `listMachines`'s own query forever, since
+    // nothing can free the one connection while the lock holds it. The lock
+    // must come from `advisoryLockPool` — a pool dedicated to holding locks,
+    // never application queries — so the two can never contend.
+    mockAdvisoryLockClient.query.mockResolvedValueOnce({ rows: [{ acquired: true }] }); // try-lock
+    mockAdvisoryLockClient.query.mockResolvedValueOnce({ rows: [] }); // unlock
+    const deps = makeDeps();
+
+    const result = await reconcileMachineStorageSerialized(deps);
+
+    expect(result.outcome).toBe('reconciled');
+    expect(mockGetAdvisoryLockPool).toHaveBeenCalledTimes(1);
+    expect(mockAdvisoryLockPool.connect).toHaveBeenCalledTimes(1);
+    expect(mockAdvisoryLockClient.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('given the unlock query itself fails, should destroy the connection instead of releasing it alive', async () => {
+    const client = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // try-lock
+        .mockRejectedValueOnce(new Error('unlock failed')), // unlock
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    const deps = makeDeps();
+
+    const result = await reconcileMachineStorageSerialized(deps, pool);
+
+    expect(result.outcome).toBe('reconciled');
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+  });
+
+  it('given the try-lock query itself throws (not just acquired:false), should destroy the connection and rethrow', async () => {
+    const client = {
+      query: vi.fn().mockRejectedValueOnce(new Error('connection reset')),
+      release: vi.fn(),
+    };
+    const pool = { connect: vi.fn(async () => client) };
+    const deps = makeDeps();
+
+    await expect(reconcileMachineStorageSerialized(deps, pool)).rejects.toThrow('connection reset');
+
+    // Never resolved acquired/not-acquired — the connection's protocol state
+    // is indeterminate, so it must be destroyed, not pooled alive.
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(deps.listMachines).not.toHaveBeenCalled();
   });
 });

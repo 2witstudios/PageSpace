@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, ReactNode, useState, useReducer, useCallback, useEffect, useMemo, useRef } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
@@ -22,7 +23,8 @@ import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
-import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
+import { abortActiveStreamByMessageId, clearActiveStreamId } from '@/lib/ai/core/stream-abort-client';
+import { shouldClaimGlobalStopSlot } from '@/lib/ai/streams/shouldClaimGlobalStopSlot';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
@@ -83,7 +85,15 @@ interface GlobalChatConfigContextValue {
     onError: (error: Error) => void;
   } | null;
   setIsStreaming: (streaming: boolean) => void;
-  setStopStreaming: (fn: (() => void) | null) => void;
+  /**
+   * The raw useState dispatch — so a FUNCTION argument is an UPDATER, not a value.
+   *
+   * Typed honestly as SetStateAction because the old signature lied: it invited callers to
+   * pass a stop fn directly, which React would then CALL as an updater — aborting the
+   * stream on the spot and storing `undefined`. To store a stop fn, wrap it:
+   * `setStopStreaming(() => stopFn)`.
+   */
+  setStopStreaming: Dispatch<SetStateAction<(() => void) | null>>;
 }
 
 // ============================================
@@ -159,7 +169,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       setInitialMessages([]);
       setIsMessagesLoading(false);
     }
-  }, []);
+  }, [dispatchIdentity]);
 
   const createNewConversation = useCallback(async () => {
     try {
@@ -177,7 +187,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to create new conversation:', error);
     }
-  }, []);
+  }, [dispatchIdentity]);
 
   useEffect(() => {
     const initializeGlobalChat = async () => {
@@ -261,16 +271,55 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // ============================================
   const { user } = useAuth();
   const userId = user?.id ?? null;
-  const channelId = userId ? globalChannelId(userId) : undefined;
+  const channelId = userId ? globalChannelId(userId) : null;
 
   const setIsStreamingRef = useRef(setIsStreaming);
   setIsStreamingRef.current = setIsStreaming;
   const setStopStreamingRef = useRef(setStopStreaming);
   setStopStreamingRef.current = setStopStreaming;
+  // The stop fn currently INSTALLED, and the one WE installed. `isStreaming`/`stopStreaming`
+  // is a single shared slot that GlobalAssistantView also writes directly from its local
+  // chat status, outside the claim protocol — so "I claimed for messageId M" does not mean
+  // the slot still holds my stop fn by the time M finalizes. Releasing on the messageId
+  // alone would kill a Stop button (and the streaming flag, and its SWR-clobber protection)
+  // belonging to a DIFFERENT, live stream. The takeover makes this deterministic: a new
+  // send aborts the bootstrapped stream M, whose chat:stream_complete then arrives while
+  // the new stream is the one on screen.
+  const currentStopStreamingRef = useRef<(() => void) | null>(stopStreaming);
+  currentStopStreamingRef.current = stopStreaming;
+  const ownedStopFnRef = useRef<(() => void) | null>(null);
+  // WHICH conversation the claim belongs to. The claim is deliberately allowed to land
+  // before this surface has resolved its identity (rejecting on a null id there would drop
+  // the very stream we are about to render) — but a claim made in ignorance must be
+  // re-examined once we know. Without this, a stream in conversation X could keep the Stop
+  // button lit for conversation Y.
+  const claimedConvIdRef = useRef<string | null>(null);
+
+  // A DIFFERENT fn installed means another, live stream owns the slot — leave both halves
+  // alone. A NULL slot means nobody owns it: it is free, and still ours to clear.
+  // (GlobalAssistantView nulls the stop fn on ordinary paths — its effect's else-branch and
+  // cleanup fire whenever the chat status is 'ready', which it is for the whole life of a
+  // BOOTSTRAPPED stream — without ever touching isStreaming. Reading that as "not ours"
+  // would strand isStreaming true and brick the composer.)
+  const releaseStopSlotIfStillOurs = () => {
+    if (claimedStopMessageIdRef.current === null) return;
+    const current = currentStopStreamingRef.current;
+    const stillOurs = current === ownedStopFnRef.current || current === null;
+    claimedStopMessageIdRef.current = null;
+    claimedConvIdRef.current = null;
+    ownedStopFnRef.current = null;
+    if (!stillOurs) return;
+    setIsStreamingRef.current(false);
+    setStopStreamingRef.current(null);
+  };
+  const releaseStopSlotRef = useRef(releaseStopSlotIfStillOurs);
+  releaseStopSlotRef.current = releaseStopSlotIfStillOurs;
   const setRefreshSignalRef = useRef(setRefreshSignal);
   setRefreshSignalRef.current = setRefreshSignal;
 
-  const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId, {
+  const claimedStopMessageIdRef = useRef<string | null>(null);
+
+  const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId ?? undefined, {
     // Cross-tab same-user events: signal surfaces to re-fetch rather than
     // updating context state that nobody renders from.
     onUserMessage: (_message, payload) => {
@@ -289,29 +338,80 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
       setRefreshSignalRef.current((n) => n + 1);
     },
-    onStreamComplete: (messageId) => {
+    onStreamComplete: (messageId, completedConvId, info) => {
       const stream = usePendingStreamsStore.getState().streams.get(messageId);
       // Remote or bootstrapped stream: signal surfaces to fetch the persisted message.
-      if (stream && stream.conversationId === currentConversationId) {
+      if (stream && stream.conversationId === currentConversationIdRef.current) {
+        setRefreshSignalRef.current((n) => n + 1);
+        return;
+      }
+      // The SSE join failed (the stream ran on another web instance), so its store entry
+      // was dropped and there is nothing here to render — but the message IS durably
+      // persisted. Without this we'd fall through to "our useChat already has it" and
+      // silently lose the reply.
+      if (info?.joinFailed && completedConvId === currentConversationIdRef.current) {
         setRefreshSignalRef.current((n) => n + 1);
         return;
       }
       // Own fresh stream: surface's useChat already has the message.
     },
-    onOwnStreamBootstrap: ({ messageId }) => {
-      setIsStreamingRef.current(true);
-      setStopStreamingRef.current(() => () => {
-        abortActiveStreamByMessageId({ messageId });
+    onOwnStreamBootstrap: ({ messageId, conversationId }) => {
+      // Conversation-scoped: an own stream in another conversation on this user's
+      // global channel must not light up the Stop button for the one on screen.
+      // Only reject a KNOWN mismatch — the DB bootstrap can land before the
+      // conversation identity has resolved, and rejecting on a null id there would
+      // drop the very stream this surface is about to render.
+      // Single-writer, and conversation-scoped. See shouldClaimGlobalStopSlot: the bootstrap sweep
+      // fires once per own in-flight stream, so two live own streams land here in one loop — and
+      // an unconditional claim let the second silently destroy the first.
+      const claimable = shouldClaimGlobalStopSlot({
+        incomingMessageId: messageId,
+        incomingConversationId: conversationId,
+        heldMessageId: claimedStopMessageIdRef.current,
+        heldConversationId: claimedConvIdRef.current,
+        activeConversationId: currentConversationIdRef.current,
       });
+      if (!claimable) return;
+
+      const stopFn = () => {
+        abortActiveStreamByMessageId({ messageId });
+      };
+      claimedStopMessageIdRef.current = messageId;
+      claimedConvIdRef.current = conversationId;
+      ownedStopFnRef.current = stopFn;
+      setIsStreamingRef.current(true);
+      setStopStreamingRef.current(() => stopFn);
     },
-    onOwnStreamFinalize: () => {
-      setIsStreamingRef.current(false);
-      setStopStreamingRef.current(null);
+    // Same reconciliation as useAgentChannelMultiplayer: a claim released only by
+    // onOwnStreamFinalize strands forever on the paths where that event cannot fire (a
+    // socket-instance swap tears the effect down without finalizing). Bootstrap is the
+    // server's word on what is still running.
+    onActiveStreamsSnapshot: (liveMessageIds) => {
+      const claimed = claimedStopMessageIdRef.current;
+      if (claimed === null || liveMessageIds.has(claimed)) return;
+      releaseStopSlotRef.current();
+    },
+    onOwnStreamFinalize: ({ messageId }) => {
+      // Only the stream that actually claimed the Stop control may release it.
+      if (claimedStopMessageIdRef.current !== messageId) return;
+      releaseStopSlotRef.current();
     },
     onGlobalConversationAdded: (payload) => {
       setLatestGlobalConversationAdded(payload);
     },
   });
+
+  // A claim made before identity resolved is a claim made in ignorance. Once we know which
+  // conversation this surface is actually showing, a claim that names a DIFFERENT one is not
+  // ours to hold: it would keep the Stop button lit, and the composer disabled, for a stream
+  // the user is not looking at. Re-examine it the moment the answer arrives.
+  useEffect(() => {
+    const claimedConvId = claimedConvIdRef.current;
+    if (claimedConvId === null) return;
+    if (currentConversationId === null) return; // still unknown — keep holding
+    if (claimedConvId === currentConversationId) return;
+    releaseStopSlotRef.current();
+  }, [currentConversationId]);
 
   const prevConversationIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -321,7 +421,18 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, [currentConversationId]);
 
   const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
-  const transport = useChatTransport(currentConversationId, apiEndpoint);
+  const transport = useChatTransport(currentConversationId, apiEndpoint, channelId);
+
+  // This context REGISTERS `currentConversationId` in the activeStreams map (the transport above),
+  // and until now nothing ever freed it — GlobalAssistantView's unmount cleanup was clearing this
+  // key, but that surface does not own it, and it is gone the moment you navigate off the
+  // dashboard while the context lives on. So: the owner frees its own key, and only its own.
+  useEffect(() => {
+    if (!currentConversationId) return;
+    return () => {
+      clearActiveStreamId({ chatId: currentConversationId });
+    };
+  }, [currentConversationId]);
 
   const chatConfig = useMemo(() => {
     if (!currentConversationId || !transport) return null;
@@ -341,7 +452,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   // same synchronous IDENTITY_SET path as loadConversation/createNewConversation.
   const setCurrentConversationId = useCallback((id: string | null) => {
     if (id) dispatchIdentity({ type: 'IDENTITY_SET', conversationId: id });
-  }, []);
+  }, [dispatchIdentity]);
 
   // ============================================
   // Context Values
@@ -359,6 +470,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     rejoinGlobalStream,
     latestGlobalConversationAdded,
   }), [
+    setCurrentConversationId,
     currentConversationId,
     initialMessages,
     isInitialized,

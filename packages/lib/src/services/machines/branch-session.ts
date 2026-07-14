@@ -9,9 +9,17 @@
  * different branch names always resolve to two DIFFERENT Sprite names, so
  * `MachineHost.provision` (which auto-resumes "same name, same filesystem")
  * can never accidentally hand two branches the same underlying Sprite.
+ *
+ * `isValidBranchName`/`normalizeBranchName` themselves live in `./branch-name`
+ * (re-exported here for existing call sites) — that module has zero
+ * node-builtin imports, so a client component can import it directly for a
+ * live-typing name preview without dragging this file's `crypto` dependency
+ * into the browser bundle.
  */
 
 import { createHmac } from 'crypto';
+
+export { isValidBranchName, normalizeBranchName } from './branch-name';
 
 export interface BranchSessionKeyInput {
   tenantId: string;
@@ -37,25 +45,4 @@ export function deriveBranchSessionKey({
   // codeql[js/insufficient-password-hash] not a password hash — a keyed HMAC over SANDBOX_SESSION_SECRET (a >=32-char server secret, never user input) deriving a deterministic Sprite-name pseudonym, same as machine-session-manager.ts's deriveMachineSessionKey
   const digest = createHmac('sha3-256', secret).update(payload).digest('hex');
   return `pgs-brn-${digest}`;
-}
-
-const MAX_BRANCH_NAME_LENGTH = 200;
-
-// Mirrors `git check-ref-format --branch` intent without shelling out: the
-// allowed charset already excludes whitespace/control chars and
-// `~^:?*[\` — the remaining checks below rule out `..`, doubled `/`, a path
-// segment starting with `.`, and a `.lock` suffix. Conservative on purpose —
-// this becomes both a Sprite name component and a literal `git checkout -b`
-// argument (never shell-interpreted, but still worth confining tightly).
-const BRANCH_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-const FORBIDDEN_SEGMENT_RE = /(^|\/)\.|\.\.|\/{2,}|\.lock$/;
-
-export function isValidBranchName(name: string): boolean {
-  if (typeof name !== 'string' || name.length === 0 || name.length > MAX_BRANCH_NAME_LENGTH) {
-    return false;
-  }
-  if (name.endsWith('/') || name.endsWith('.')) return false;
-  if (!BRANCH_NAME_RE.test(name)) return false;
-  if (FORBIDDEN_SEGMENT_RE.test(name)) return false;
-  return true;
 }

@@ -687,6 +687,49 @@ export async function broadcastThreadReplyCountUpdated(
   }
 }
 
+/**
+ * Broadcasts a `machine-workspace:*` event to a Machine's page-id room (see
+ * apps/realtime's `join_channel`/`getUserAccessLevel` — a Machine's identity
+ * IS its backing page id, so this reaches every browser/user currently
+ * viewing that Machine). Generic over `event`/`payload` rather than one
+ * function per event, unlike most broadcasters in this file, since the four
+ * `machine-workspace:*` events (`created`/`updated`/`deleted`/`bootstrapped`)
+ * share nothing beyond "something about this machine's workspace list
+ * changed" — modeled on `broadcastThreadReplyCountUpdated`'s raw-channelId
+ * shape rather than inventing four near-identical wrapper functions.
+ *
+ * Failures are logged and swallowed — the originating DB write has already
+ * committed, and a missed broadcast just means other browsers catch up on
+ * their next `GET /api/machines/workspaces` instead of live.
+ */
+export async function broadcastMachineWorkspaceEvent(
+  machineId: string,
+  event: string,
+  payload: unknown
+): Promise<void> {
+  const realtimeUrl = getEnvVar('INTERNAL_REALTIME_URL');
+  if (!realtimeUrl) {
+    realtimeLogger.warn('Realtime URL not configured, skipping machine workspace broadcast', { event });
+    return;
+  }
+
+  try {
+    const requestBody = JSON.stringify({ channelId: machineId, event, payload });
+
+    await fetch(`${realtimeUrl}/api/broadcast`, {
+      method: 'POST',
+      headers: createSignedBroadcastHeaders(requestBody),
+      body: requestBody,
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (error) {
+    realtimeLogger.error('Failed to broadcast machine workspace event', error instanceof Error ? error : undefined, {
+      event,
+      channel: maskIdentifier(machineId),
+    });
+  }
+}
+
 // ============================================================================
 // AI Stream Events
 // ============================================================================
@@ -702,6 +745,21 @@ export interface AiStreamStartPayload {
    * event without the field, and consumers degrade to a timestamp-less bubble.
    */
   startedAt?: string;
+  /**
+   * Whether the stream's conversation is explicitly shared.
+   *
+   * A page room contains every member of the page, but conversations are PRIVATE by
+   * default (`listConversations` shows you only `userId = you OR isShared`). Without
+   * this flag every member's client would try to join every stream on the page and be
+   * refused — a wasted request and an `authz.access.denied` audit row per member per
+   * assistant message, on entirely routine private chat.
+   *
+   * Optional for the same cross-version reason as `startedAt`: during a rolling deploy
+   * an originator on the previous build emits no field, so consumers must treat
+   * `undefined` as "unknown, ask the server" and only skip on an explicit `false`.
+   * The server remains the authority either way (see stream-subscription-authz.ts).
+   */
+  isShared?: boolean;
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 

@@ -20,12 +20,19 @@ import {
   acquireMachineSession,
   createDbMachineSessionStore,
   deriveMachineSessionKey,
+  findLiveMachineSandboxId,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { checkMachineRuntimeGuardrail, recordMachineActivity, acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
 import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { createSpriteMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-machine-host';
+import {
+  createSpriteTasksClient,
+  createTaskHoldController,
+  taskHoldName,
+  resolveTaskHoldConfig,
+} from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { createExecClientFromMachineHost } from '@pagespace/lib/services/sandbox/sandbox-client/machine-host-adapter';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import {
@@ -39,6 +46,7 @@ import { createTerminalSessionMap } from './terminal/terminal-session-map';
 import { openPtyShell } from './terminal/sprites-shell';
 import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
 import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
+import { propagateClaudeCredential } from '@pagespace/lib/services/machines/machine-branches';
 import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machines/agent-terminals-store';
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import {
@@ -95,6 +103,27 @@ export async function resolveActorEmail(rawEmail: string | null | undefined): Pr
 }
 
 /**
+ * A page's CURRENT driveId + that drive's owner (the `tenantId` convention
+ * `deriveMachineSessionKey` uses) — the two reads `buildMachineSandbox.acquire`
+ * already did inline, now shared with `refreshBranchCredential` below so a
+ * bare-`pageId` lookup is never substituted for deriving the exact CURRENT
+ * session key (a page moved between drives can leave its OLD drive's session
+ * row behind under a DIFFERENT key — see `findLiveMachineSandboxId`'s doc
+ * comment on `machine-session-manager.ts`).
+ */
+type DriveOwnerContextResult =
+  | { ok: true; driveId: string; tenantId: string }
+  | { ok: false; reason: 'page_not_found' | 'drive_not_found' };
+
+async function resolveDriveOwnerContext(pageId: string): Promise<DriveOwnerContextResult> {
+  const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
+  if (!pageRow) return { ok: false, reason: 'page_not_found' };
+  const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
+  if (!driveRow) return { ok: false, reason: 'drive_not_found' };
+  return { ok: true, driveId: pageRow.driveId, tenantId: driveRow.ownerId };
+}
+
+/**
  * Acquires the OWNING Machine's persistent Sprite for `AgentTerminalMachineSandbox`
  * (machine/project scope share this one Sprite — see `agent-terminals.ts`),
  * re-authorizing `actorUserId` (resume re-authz) on every call. Mirrors the
@@ -124,10 +153,9 @@ function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTermina
 
   return {
     acquire: async (machineId): Promise<AgentTerminalMachineSandboxResult> => {
-      const [pageRow] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, machineId)).limit(1);
-      if (!pageRow) return deny('page_not_found', machineId);
-      const [driveRow] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, pageRow.driveId)).limit(1);
-      if (!driveRow) return deny('drive_not_found', machineId);
+      const context = await resolveDriveOwnerContext(machineId);
+      if (!context.ok) return deny(context.reason, machineId);
+      const { driveId, tenantId } = context;
 
       const nowMs = Date.now();
       const guardrail = checkMachineRuntimeGuardrail({ machineKey: machineId, now: nowMs });
@@ -140,8 +168,8 @@ function buildMachineSandbox(actorUserId: string, sdk: SpritesSdk): AgentTermina
 
       const result = await acquireMachineSession({
         pageId: machineId,
-        driveId: pageRow.driveId,
-        tenantId: driveRow.ownerId,
+        driveId,
+        tenantId,
         userId: actorUserId,
         // Already authorized by the caller's access + canRunCode checks before
         // resolveAgentTerminal ever reaches this acquire.
@@ -235,6 +263,9 @@ async function resolveAgentTerminalSandbox({
   name: string;
 }) {
   const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+  // Construction only (no I/O) — cheap to build unconditionally even for
+  // machine/project-scope targets that never touch `refreshBranchCredential`.
+  const host = createSpriteMachineHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
   return resolveMachineSandbox(
     { machineId, projectName, branchName, name },
@@ -262,6 +293,44 @@ async function resolveAgentTerminalSandbox({
       // scope). A branch-scope target never acquires, so this is its one and only
       // read.
       getSprite: (sandboxId) => sdk.getSprite(sandboxId),
+      // Refresh the branch Sprite's Claude Code credential from the root
+      // Machine's own Sprite (see `propagateClaudeCredential`'s doc comment on
+      // `machine-branches.ts`) — this IS the branch's actual attach path for
+      // opening/reattaching its agent terminal, unlike `spawnBranch`/
+      // `attachBranch`, which this bridge never calls. `resolveMachineSandbox`
+      // only invokes this for branch-scope targets. Shares this connect's
+      // handle cache (`sdk`), so re-reading the ALREADY-fetched branch Sprite
+      // costs nothing; only the root Sprite's read is a genuinely new call.
+      refreshBranchCredential: async ({ machineId: rootMachineId, sandboxId }) => {
+        try {
+          const branchHandle = await host.attach({ machineId: sandboxId });
+          if (!branchHandle) return;
+          await propagateClaudeCredential({
+            machineId: rootMachineId,
+            branchHandle,
+            resolveRootMachineHandle: async (mid) => {
+              // Derives the CURRENT session key (driveId + drive owner), not
+              // a bare-pageId lookup — see `findLiveMachineSandboxId`'s doc
+              // comment on why that would risk resolving a STALE session
+              // left behind by a prior drive move (caught in review, P1).
+              const context = await resolveDriveOwnerContext(mid);
+              if (!context.ok) return null;
+              const rootSandboxId = await findLiveMachineSandboxId({
+                tenantId: context.tenantId,
+                driveId: context.driveId,
+                pageId: mid,
+                secret: getSandboxSessionSecret(),
+              });
+              if (!rootSandboxId) return null;
+              return host.attach({ machineId: rootSandboxId });
+            },
+          });
+        } catch {
+          // Best-effort — a credential refresh must never block or fail
+          // opening the PTY itself (see `ResolveMachineSandboxDeps.
+          // refreshBranchCredential`'s doc comment).
+        }
+      },
     },
   );
 }
@@ -1272,6 +1341,34 @@ io.on('connection', (socket: AuthSocket) => {
       await store.updateStreamSessionId({ id: agentTerminalId, streamSessionId: sessionId, now: new Date() });
     },
     billing: defaultSandboxBillingDeps,
+    // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
+    // viewer attached, a short-expiry platform task (refreshed on a
+    // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
+    // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
+    // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
+    // SPRITE_TASK_HOLD_REFRESH_MS.
+    createTaskHold: ({ sprite, sessionKey }) =>
+      createTaskHoldController({
+        client: createSpriteTasksClient({ sprite }),
+        // Per-INCARNATION name (session key + creation time), not per key: a
+        // torn-down session's queued final DELETE runs on its own serialized
+        // queue, so under a shared name it could land AFTER a quickly
+        // reopened session's CREATE and destroy the live hold. Distinct names
+        // make that race unrepresentable; an orphaned old task self-expires.
+        taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
+        ...resolveTaskHoldConfig(process.env),
+        onError: (stage, result) => {
+          // Degrade gracefully: a lost hold means a possible pause, which the
+          // checkpoint work (5-2) already survives — log and carry on.
+          // exitCode 127 = curl missing from the sprite image (feature inert
+          // for this sprite); an HTTP status = the tasks API answered.
+          loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
+            sessionKey,
+            status: result.status,
+            exitCode: result.exitCode,
+          });
+        },
+      }),
   });
 
   socket.on('agent-terminal:connect', (payload) => {

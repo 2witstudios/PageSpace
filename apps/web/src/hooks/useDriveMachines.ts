@@ -1,0 +1,92 @@
+'use client';
+
+import useSWR from 'swr';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+
+export interface DriveMachine {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface DriveMachineGroup {
+  driveId: string;
+  driveName: string;
+  machines: DriveMachine[];
+}
+
+/** Shared by both machines-fetching hooks below — the per-drive and global responses only differ in shape, not in how a failure is reported. */
+function machinesFetcher<T>(url: string): Promise<T> {
+  return fetchWithAuth(url).then(async (res) => {
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? 'Failed to fetch machines');
+    }
+    return res.json() as Promise<T>;
+  });
+}
+
+/**
+ * Every Machine page in a drive — the root tier of the Development surface's
+ * aggregated Machine → Project → Branch → session tree. Pass a `null` `driveId`
+ * (the driveless `/dashboard/development` route) to disable fetching.
+ */
+export function useDriveMachines(driveId: string | null) {
+  const key = driveId ? `/api/machines?driveId=${encodeURIComponent(driveId)}` : null;
+
+  // This list must be able to RECOVER, which is why it revalidates at all (the
+  // sibling machine hooks don't). A machine can drop out of it without having
+  // been deleted — the per-page permission check swallows DB errors and reports
+  // "cannot view" — and the surface responds by hiding that machine. Fetched
+  // once and never again, a single blip would hide a live machine for the rest
+  // of the session, and the only ways out (reload, or leave and return) both
+  // unmount the keep-alive host and disconnect every warm terminal.
+  //
+  // It also means a machine created elsewhere shows up without a reload, and
+  // (by dropping the previous `revalidateOnFocus: false`) that coming back to the
+  // tab recovers immediately rather than waiting out the interval.
+  //
+  // Cheap: one indexed query on an admin-only surface, and SWR suppresses the
+  // poll entirely while the tab is hidden. A poll cannot churn the keep-alive LRU
+  // — note that is NOT because SWR preserves the array's identity (it only does
+  // that when the whole payload is deep-equal, and `updatedAt` moves whenever a
+  // Machine page is touched). It's because the consumers key on the IDS alone:
+  // `useStickyMachineIds` and the host's `validKey` both collapse the list to its
+  // ids, so a payload that carries new timestamps but the same machines is inert.
+  const { data, error, isLoading, mutate } = useSWR(key, machinesFetcher<{ machines: DriveMachine[] }>, {
+    refreshInterval: 30_000,
+  });
+
+  return {
+    machines: data?.machines ?? [],
+    isLoading,
+    error: error as Error | undefined,
+    mutate,
+  };
+}
+
+/**
+ * Every Machine page across every drive the actor can access, grouped by
+ * drive — the GLOBAL (driveless) Development surface's root tier. `enabled`
+ * mirrors the caller's own gate (admin-only, and only in global mode) so a
+ * non-admin or a drive-scoped view never fires this request, the same way a
+ * `null` `driveId` disables `useDriveMachines`.
+ *
+ * Same polling rationale as `useDriveMachines`: a machine can drop out of the
+ * list without being deleted (a swallowed per-page permission check), so the
+ * list must be able to recover on its own.
+ */
+export function useAllMachines(enabled: boolean) {
+  const key = enabled ? '/api/machines' : null;
+
+  const { data, error, isLoading, mutate } = useSWR(key, machinesFetcher<{ drives: DriveMachineGroup[] }>, {
+    refreshInterval: 30_000,
+  });
+
+  return {
+    drives: data?.drives ?? [],
+    isLoading,
+    error: error as Error | undefined,
+    mutate,
+  };
+}

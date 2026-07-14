@@ -54,6 +54,7 @@ describe('useNotificationStore', () => {
       unreadCount: 0,
       isLoading: false,
       isDropdownOpen: false,
+      hasHydrated: false,
     });
     vi.clearAllMocks();
   });
@@ -320,9 +321,10 @@ describe('useNotificationStore', () => {
       expect(state.notifications).toEqual(mockNotifications);
       expect(state.unreadCount).toBe(5);
       expect(state.isLoading).toBe(false);
+      expect(state.hasHydrated).toBe(true);
     });
 
-    it('given API error, should set loading to false', async () => {
+    it('given API error, should set loading to false and not mark as hydrated', async () => {
       mockFetchWithAuth.mockResolvedValue({ ok: false });
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
@@ -330,10 +332,11 @@ describe('useNotificationStore', () => {
       await fetchNotifications();
 
       expect(useNotificationStore.getState().isLoading).toBe(false);
+      expect(useNotificationStore.getState().hasHydrated).toBe(false);
       consoleError.mockRestore();
     });
 
-    it('given network error, should handle gracefully', async () => {
+    it('given network error, should handle gracefully and not mark as hydrated', async () => {
       mockFetchWithAuth.mockRejectedValue(new Error('Network error'));
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => { });
 
@@ -341,6 +344,7 @@ describe('useNotificationStore', () => {
       await fetchNotifications();
 
       expect(useNotificationStore.getState().isLoading).toBe(false);
+      expect(useNotificationStore.getState().hasHydrated).toBe(false);
       expect(consoleError).toHaveBeenCalled();
       consoleError.mockRestore();
     });

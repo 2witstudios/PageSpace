@@ -2,11 +2,14 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { STREAM_MAX_LIFETIME_MS } from '@/lib/ai/core/stream-horizons';
+import { ensureStreamAbortWatcher } from '@/lib/ai/core/stream-abort-watcher';
 import { broadcastAiStreamStart, broadcastAiStreamComplete } from '@/lib/websocket';
 import {
   streamMulticastRegistry,
   type UIMessagePart,
 } from '@/lib/ai/core/stream-multicast-registry';
+import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -15,12 +18,37 @@ export interface StreamLifecycleParams {
   userId: string;
   displayName: string;
   browserSessionId: string;
+  /**
+   * The abort registry's key for this generation. Persisted on the row so that an abort landing
+   * on ANY instance can resolve the streamId it was given in the `X-Stream-Id` header back to a
+   * stream — the registry that mints it is in-process, so without this the name is meaningless
+   * anywhere but here. It is also the epoch the abort watcher checks, so a Stop aimed at a
+   * previous attempt on this messageId can never kill the current one.
+   *
+   * REQUIRED, deliberately. It was optional, and both call sites happened to pass it — but nothing
+   * enforced that, and an omission would not fail: the column would simply be NULL. Cross-instance
+   * Stop for that stream would then degrade silently, with no error at build time and none at run
+   * time either. The type is the only thing that can catch this, so let it.
+   */
+  streamId: string;
+  /**
+   * Whether the conversation is explicitly shared. Rides the stream_start broadcast so
+   * page members can tell, without asking, whether a stream is theirs to watch — see
+   * AiStreamStartPayload.isShared.
+   */
+  isShared?: boolean;
 }
 
 export interface StreamLifecycleHandle {
   finish: (aborted: boolean) => void;
   pushPart: (part: UIMessagePart) => void;
   getBufferedParts: () => UIMessagePart[];
+  /**
+   * True when a pending-abort intent was consumed immediately after INSERT time (#2028 item 1).
+   * The row was updated to 'aborted' directly; the caller should abort the controller so
+   * streamText never starts, and skip broadcastAiStreamStart.
+   */
+  preAborted: boolean;
 }
 
 // Batch DB writes rather than persisting on every token — a checkpoint every
@@ -28,10 +56,58 @@ export interface StreamLifecycleHandle {
 // keeping write amplification low.
 const PERSIST_EVERY_N_PARTS = 20;
 
+/**
+ * How often the generation writes `lastHeartbeatAt`.
+ *
+ * This is a real timer, and it has to be: the parts checkpoint above cannot serve as
+ * a heartbeat, because a stream sitting in a long tool call (sandbox exec, deep
+ * research, a slow MCP tool) pushes NO parts for minutes at a time. Riding the
+ * checkpoint would declare a perfectly healthy stream dead — it would disappear from
+ * `/active-streams` so no client could attach, and the next send would fail to abort
+ * it and would generate alongside it.
+ *
+ * Comfortably several beats inside STREAM_HEARTBEAT_STALE_MS, and it is one tiny
+ * single-row UPDATE per interval per in-flight stream.
+ */
+const HEARTBEAT_INTERVAL_MS = 20 * 1000;
+
+/**
+ * Hard ceiling on how long a lifecycle will keep beating.
+ *
+ * A backstop, not a policy. `finish()` clears the interval, and every generation path
+ * reaches it — but if one ever did not, an unbounded heartbeat would be strictly worse
+ * than no heartbeat: the row would look *live forever*, so it could never be reconciled,
+ * could never be taken over (the abort registry evicts its entry after MAX_STREAM_AGE_MS
+ * = 10 min, after which the abort is a no-op), and would be served to clients as an
+ * unjoinable phantom stream for the life of the process. Capping the beat converts that
+ * immortal ghost back into an ordinary stale row, which the next takeover reconciles.
+ *
+ * Shares STREAM_MAX_LIFETIME_MS with the abort and multicast registries — deliberately, so
+ * the three cannot drift apart again. When they disagreed (registries at 10 minutes, this
+ * at an hour), a long generation still alive at minute 15 was correctly reported as running
+ * while no client could join it and its Stop button had already become a no-op.
+ *
+ * A generation that outlives the cap stops beating while still alive, and ~2 minutes later
+ * its row reads as stale — so the next send on that conversation would drive a LIVE row
+ * terminal, the lie `decideStreamTakeover` exists to avoid. An hour buys enough headroom
+ * that the trade is academic, while still bounding a leaked interval.
+ *
+ * The parts checkpoint in `pushPart` obeys this same deadline, and MUST. It writes
+ * lastHeartbeatAt too, so an uncapped checkpoint let any still-chattering generation refresh
+ * its own liveness forever — reinstating the immortal ghost this cap exists to kill, on the
+ * one stream most likely to hit it. (An earlier version of this comment had it exactly
+ * backwards, calling the checkpoint beat a mitigation. It was the hole.)
+ */
+const MAX_HEARTBEAT_MS = STREAM_MAX_LIFETIME_MS;
+
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
 ): Promise<StreamLifecycleHandle> => {
-  const { messageId, channelId, conversationId, userId, displayName, browserSessionId } = params;
+  const { messageId, channelId, conversationId, userId, displayName, browserSessionId, isShared, streamId } = params;
+
+  // Lazily started, and it stops itself when this instance owns no more streams. An instance that
+  // never generates never polls.
+  ensureStreamAbortWatcher();
 
   try {
     streamMulticastRegistry.register(messageId, {
@@ -62,8 +138,10 @@ export const createStreamLifecycle = async (
         userId,
         displayName,
         browserSessionId,
+        streamId,
         status: 'streaming',
         startedAt,
+        lastHeartbeatAt: startedAt,
       })
       .onConflictDoUpdate({
         target: aiStreamSessions.messageId,
@@ -73,14 +151,24 @@ export const createStreamLifecycle = async (
           userId,
           displayName,
           browserSessionId,
+          streamId,
           status: 'streaming',
           startedAt,
+          lastHeartbeatAt: startedAt,
           completedAt: null,
           // A re-registered messageId gets a fresh (empty) in-memory buffer
           // above — the DB snapshot must reset with it, or a bootstrap
           // between here and the first checkpoint would serve the prior
           // attempt's stale parts as if they were a prefix of this attempt.
           parts: [],
+          // An abort request aimed at the PREVIOUS generation on this messageId must not be
+          // inherited by this one — the new stream would be killed the instant the abort watcher
+          // next ticked, by a Stop the user pressed on something else entirely. Silent, and
+          // catastrophic; there is a source-level test asserting this line still exists.
+          //
+          // The watcher independently refuses to act on a mark whose streamId names a superseded
+          // generation, so this is the braces to that belt.
+          abortRequestedAt: null,
         },
       });
   } catch (error) {
@@ -90,11 +178,71 @@ export const createStreamLifecycle = async (
     });
   }
 
+  // ── POST-INSERT PENDING-ABORT CHECK (#2028 item 1) ────────────────────────────────────────
+  //
+  // A Stop pressed during the route's preflight (auth, permissions, context assembly: 0.5-3s of
+  // TTFB) — or landing in the narrow gap between entering this function and the INSERT above
+  // resolving — found no row to mark and wrote a durable pending-abort intent instead. Checking
+  // once here, right after the row exists, catches BOTH cases: nothing else consumes the intent
+  // in between, and it persists (bounded by its TTL) regardless of when it was written. If one
+  // exists, honour it: flip the just-inserted row to 'aborted' and return a pre-finished handle.
+  // The caller aborts the controller so streamText never starts.
+  //
+  // NOT fully closed, same as the KNOWN RACE in chat/route.ts: `recordPendingAbort`'s write runs
+  // on an independent connection with no shared lock or transaction, so it can commit-visible
+  // AFTER this consume already ran — a single-digit-millisecond commit-ordering skew, not a logic
+  // bug. In that sliver, the Stop is lost (the generation it targeted runs to completion) and the
+  // orphaned intent then wrongly pre-aborts the user's NEXT, unrelated send within the 30s TTL.
+  // Bounded and self-healing (no double-billing, TTL expiry), so a same-transaction check or
+  // advisory lock is not warranted here — but do not read this as the window being absent.
+  const preAborted = await consumePendingAbort({ conversationId, userId });
+
+  if (preAborted) {
+    loggers.ai.info('stream-lifecycle: consumed pending-abort intent, stream pre-aborted', {
+      messageId,
+      conversationId,
+    });
+
+    const abortedAt = new Date();
+    try {
+      await db
+        .update(aiStreamSessions)
+        .set({
+          status: 'aborted',
+          completedAt: abortedAt,
+          parts: [],
+          abortRequestedAt: null,
+        })
+        .where(eq(aiStreamSessions.messageId, messageId));
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: pre-aborted UPDATE failed', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    // Nothing has subscribed yet — registration just happened and broadcastAiStreamStart has not
+    // fired — so evicting the entry here is a plain cleanup, not a notification to a live client.
+    try {
+      streamMulticastRegistry.finish(messageId, true);
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: registry.finish threw during pre-abort', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    // No broadcast, no heartbeat. A no-op handle whose finish is idempotent.
+    const noop = (): void => {};
+    return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
+  }
+
   broadcastAiStreamStart({
     messageId,
     pageId: channelId,
     conversationId,
     startedAt: startedAt.toISOString(),
+    isShared: isShared === true,
     triggeredBy: { userId, displayName, browserSessionId },
   }).catch(() => {});
 
@@ -110,7 +258,7 @@ export const createStreamLifecycle = async (
       try {
         await db
           .update(aiStreamSessions)
-          .set({ parts })
+          .set({ parts, lastHeartbeatAt: new Date() })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
         loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {
@@ -126,9 +274,34 @@ export const createStreamLifecycle = async (
     return attempt;
   };
 
+  // Liveness beat. Independent of pushPart on purpose — see HEARTBEAT_INTERVAL_MS.
+  // Touches only lastHeartbeatAt, so it can never race the parts writes (and a tick that
+  // lands after the terminal write cannot resurrect the row: every reader filters
+  // status='streaming').
+  const heartbeatDeadline = startedAt.getTime() + MAX_HEARTBEAT_MS;
+  const heartbeat = setInterval(() => {
+    if (finished || Date.now() > heartbeatDeadline) {
+      clearInterval(heartbeat);
+      return;
+    }
+    void db
+      .update(aiStreamSessions)
+      .set({ lastHeartbeatAt: new Date() })
+      .where(eq(aiStreamSessions.messageId, messageId))
+      .catch((error: unknown) => {
+        loggers.ai.warn('stream-lifecycle: heartbeat write failed', {
+          messageId,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+  }, HEARTBEAT_INTERVAL_MS);
+  // Never hold the process open for a heartbeat.
+  heartbeat.unref?.();
+
   const finish = (aborted: boolean): void => {
     if (finished) return;
     finished = true;
+    clearInterval(heartbeat);
 
     const priorPersist = persistInFlight;
 
@@ -196,6 +369,23 @@ export const createStreamLifecycle = async (
     partsSincePersist += 1;
     if (partsSincePersist >= PERSIST_EVERY_N_PARTS && !persistInFlight) {
       partsSincePersist = 0;
+
+      // The checkpoint obeys the SAME horizon as the interval beat. It did not, and that made
+      // it the exact hole MAX_HEARTBEAT_MS exists to close rather than (as the docblock above
+      // used to claim) a mitigation for it: `persistBufferedParts` also writes lastHeartbeatAt,
+      // so any generation still pushing parts past the horizon refreshed its own liveness
+      // FOREVER. Both registries have already evicted it by then — its Stop button is a silent
+      // no-op and no client can join it — while /active-streams went on serving the row as a
+      // live, joinable stream. An immortal ghost, which is precisely what the cap was for.
+      if (Date.now() > heartbeatDeadline) return;
+
+      // The registry entry is the source of the snapshot. Once it is gone — evicted at the
+      // horizon, or deleted by a finish() that raced us — `getBufferedParts` returns `[]`
+      // meaning "NO ENTRY", not "no content". Serializing that would overwrite the real parts
+      // snapshot with nothing, destroying exactly the crash-recovery state it exists to provide:
+      // a client restoring mid-stream content after the originator's process dies.
+      if (streamMulticastRegistry.getMeta(messageId) === undefined) return;
+
       persistBufferedParts(streamMulticastRegistry.getBufferedParts(messageId));
     }
   };
@@ -203,5 +393,5 @@ export const createStreamLifecycle = async (
   const getBufferedParts = (): UIMessagePart[] =>
     streamMulticastRegistry.getBufferedParts(messageId);
 
-  return { finish, pushPart, getBufferedParts };
+  return { finish, pushPart, getBufferedParts, preAborted: false };
 };

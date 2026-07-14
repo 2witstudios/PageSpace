@@ -244,7 +244,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     // 7. Build system prompt from agent page config
     const systemPrompt = page.systemPrompt
-      ?? buildSystemPrompt('page', undefined, false);
+      ?? buildSystemPrompt(false);
 
     // 7b. Build the final tool set and stop conditions based on the request mode:
     //   server-only (useServerTools && !hasClientTools)  — full PageSpace tools + finish tool (default)

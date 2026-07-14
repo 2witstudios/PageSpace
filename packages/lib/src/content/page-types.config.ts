@@ -7,6 +7,8 @@ export interface PageTypeCapabilities {
   supportsRealtime: boolean;
   supportsVersioning: boolean;
   supportsAI: boolean;
+  /** Content lives in pages.content and can be rendered standalone at a public URL. */
+  publishable: boolean;
 }
 
 export interface PageTypeApiValidation {
@@ -42,6 +44,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => ({ children: [] }),
     uiComponent: 'FolderView',
@@ -59,6 +62,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: false,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'DocumentView',
@@ -76,6 +80,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => ({ messages: [] }),
     uiComponent: 'ChannelView',
@@ -93,6 +98,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
+      publishable: false,
     },
     defaultContent: () => ({ messages: [] }),
     apiValidation: {
@@ -113,6 +119,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: true,
       supportsAI: false,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'CanvasPageView',
@@ -130,6 +137,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => '',
     uiComponent: 'FileViewer',
@@ -147,6 +155,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: true,
+      publishable: true,
     },
     defaultContent: () => serializeSheetContent(createEmptySheet()),
     uiComponent: 'SheetView',
@@ -164,6 +173,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
+      publishable: false,
     },
     defaultContent: () => '',
     uiComponent: 'TaskListView',
@@ -181,6 +191,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: true,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'CodePageView',
@@ -198,6 +209,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => JSON.stringify({ history: [] }),
     uiComponent: 'MachineView',
@@ -305,4 +317,12 @@ export function isMachinePage(type: PageType): boolean {
 
 export function getCreatablePageTypes(): PageType[] {
   return Object.values(PAGE_TYPE_CONFIGS).filter(c => !c.experimental).map(c => c.type);
+}
+
+export function isPublishablePageType(type: PageType): boolean {
+  return PAGE_TYPE_CONFIGS[type]?.capabilities.publishable || false;
+}
+
+export function getPublishablePageTypes(): PageType[] {
+  return Object.values(PAGE_TYPE_CONFIGS).filter(c => c.capabilities.publishable).map(c => c.type);
 }

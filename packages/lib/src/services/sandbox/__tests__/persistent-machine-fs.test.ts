@@ -29,11 +29,18 @@ function makeStore(): MachineSessionStore {
         userId: input.userId,
         sandboxId: input.sandboxId,
         lastActiveAt: input.now,
+        egressPolicyToken: input.egressPolicyToken,
       });
     },
-    touch: async ({ sessionKey, now }) => {
+    touch: async ({ sessionKey, now, egressPolicyToken }) => {
       const row = rows.get(sessionKey);
-      if (row) rows.set(sessionKey, { ...row, lastActiveAt: now });
+      if (row) {
+        rows.set(sessionKey, {
+          ...row,
+          lastActiveAt: now,
+          egressPolicyToken: egressPolicyToken ?? row.egressPolicyToken,
+        });
+      }
     },
     remove: async (sessionKey) => {
       rows.delete(sessionKey);
@@ -92,6 +99,7 @@ function makeSpriteWorld() {
         const content = fs.get(path);
         return content === undefined ? null : Buffer.from(content, 'utf8');
       },
+      createCheckpoint: async () => {},
     };
   }
 

@@ -5,16 +5,6 @@
  * The model infers tool usage from schemas; these provide context-specific rules.
  */
 
-export interface InlineInstructionsContext {
-  pageTitle?: string;
-  pageType?: string;
-  isTaskLinked?: boolean;
-  driveName?: string;
-  pagePath?: string;
-  driveSlug?: string;
-  driveId?: string;
-}
-
 // AUTHORING RULE: These sections correct format mistakes and non-intuitive workflows.
 // Do NOT list tool names here — the model already receives a flat tool list and can call tool_search.
 // Add a bullet only when the model predictably gets it wrong without explicit guidance.
@@ -79,21 +69,18 @@ export const ASK_USER_SECTION = `ASKING THE USER:
 • The result may be {"dismissed": true} — the user replied in chat instead of picking an option; treat their message as the answer`;
 
 /**
- * MENTIONS section — the @[everyone] bullet is conditional on whether a driveId
- * is available in context. Without one, instructing the model to use "DriveId from
- * CONTEXT" produces invalid mention payloads and broken notifications.
+ * MENTIONS section. This lives in the stable prompt, so it can't assume a
+ * driveId is available this turn (that's turn-volatile LOCATION data,
+ * injected separately — see location-prompt.ts) — always points the model
+ * at how to resolve one instead of claiming it's already in context.
  */
-function buildMentions(hasDriveId: boolean): string {
-  const everyoneLine = hasDriveId
-    ? `• @[everyone](driveId:everyone) — notifies all drive members (use DriveId from CONTEXT)`
-    : `• @[everyone](driveId:everyone) — notifies all drive members; requires the target drive's ID — resolve via list_drives or from the resource you're working on`;
-
+function buildMentions(): string {
   return `MENTIONS:
 When users @mention documents using @[Label](id:type) format, read them first with read_page before responding.
 When writing content that should notify people:
 • @[Name](userId:user) — notifies a specific user
 • @[Role Name](roleId:role) — notifies all members with that role
-${everyoneLine}`;
+• @[everyone](driveId:everyone) — notifies all drive members; use the driveId from your current LOCATION context if present, otherwise resolve via list_drives or from the resource you're working on`;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,23 +99,12 @@ function hasAny(availableTools: string[] | undefined, toolNames: string[]): bool
  * Pass `availableTools` (the filtered tool name list) to omit sections for
  * capabilities the agent doesn't have. Omitting `availableTools` includes
  * all sections — used by the admin prompt viewer for a complete preview.
+ *
+ * Deliberately takes no location context — "current page"/"current drive"
+ * is turn-volatile data injected separately via the volatile turn-context
+ * block (location-prompt.ts), not baked in here.
  */
-export function buildInlineInstructions(
-  context: InlineInstructionsContext,
-  availableTools?: string[]
-): string {
-  const {
-    pageTitle = 'current',
-    pageType = 'DOCUMENT',
-    isTaskLinked = false,
-    driveName = 'current',
-    pagePath = 'current-page',
-    driveSlug = 'current-drive',
-    driveId = 'current-drive-id',
-  } = context;
-
-  const taskSuffix = isTaskLinked ? ' (Task-linked page)' : '';
-
+export function buildInlineInstructions(availableTools?: string[]): string {
   const includeTaskManagement = hasAny(availableTools, ['create_task', 'update_task', 'delete_task', 'create_task_status', 'reorder_task', 'get_assigned_tasks']);
   const includeAgents = hasAny(availableTools, ['ask_agent', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
   const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']);
@@ -137,12 +113,6 @@ export function buildInlineInstructions(
 
   const sections = [
     WORKSPACE_RULES,
-    `CONTEXT:
-• Current location: "${pageTitle}" [${pageType}]${taskSuffix} at ${pagePath} in "${driveName}"
-• DriveSlug: ${driveSlug}, DriveId: ${driveId}
-• When user says "here" or "this", they mean this location
-• Explore current drive first (list_pages) before other drives${isTaskLinked ? `
-• This page is linked to a task - use task management tools to update task status` : ''}`,
     PAGE_TYPES,
     includeTaskManagement ? TASK_MANAGEMENT : null,
     includeAgents ? AGENTS : null,
@@ -150,37 +120,19 @@ export function buildInlineInstructions(
     includeSearch ? SEARCH : null,
     includeAskUser ? ASK_USER_SECTION : null,
     AFTER_TOOLS,
-    buildMentions(true),
+    buildMentions(),
   ].filter(Boolean);
 
   return '\n' + sections.join('\n\n');
 }
 
 /**
- * Build inline instructions for dashboard/global assistant context.
+ * Build inline instructions for the Global Assistant. Deliberately takes no
+ * location context — see buildInlineInstructions above for why.
  */
-export function buildGlobalAssistantInstructions(locationContext?: {
-  driveName?: string;
-  driveSlug?: string;
-  driveId?: string;
-}): string {
-  const hasDriveContext = !!locationContext?.driveName;
-
-  const contextSection = hasDriveContext
-    ? `CONTEXT:
-• Current location: ${locationContext?.driveName}
-• DriveSlug: ${locationContext?.driveSlug}, DriveId: ${locationContext?.driveId}
-• When user says "here" or "this", they mean this location
-• Explore current drive first (list_pages) before other drives`
-    : `CONTEXT:
-• Operating from dashboard - cross-workspace tasks
-• Use list_drives to discover available workspaces
-• Check existing drives before suggesting new drive creation`;
-
+export function buildGlobalAssistantInstructions(): string {
   return `
 ${WORKSPACE_RULES}
-
-${contextSection}
 
 ${PAGE_TYPES}
 
@@ -194,5 +146,5 @@ ${SEARCH}
 
 ${AFTER_TOOLS}
 
-${buildMentions(hasDriveContext)}`;
+${buildMentions()}`;
 }

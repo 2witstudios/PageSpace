@@ -1,5 +1,7 @@
-import { reconcileMachineStorage } from '@pagespace/lib/services/sandbox/machine-storage-reconcile';
-import { defaultReconcileMachineStorageDeps } from '@pagespace/lib/services/sandbox/machine-storage-billing';
+import {
+  defaultReconcileMachineStorageDeps,
+  reconcileMachineStorageSerialized,
+} from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
@@ -13,10 +15,16 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * real work), to the machine's actual page owner. It NEVER wakes a sprite to
  * measure; a never-measured machine bills a conservative 0 for that window.
  *
- * Idempotent / drift-correcting: each machine tracks its own last-billed
- * watermark, so overlapping or repeated runs never double-bill and a missed
- * run is caught up exactly on the next one — see
- * `reconcileMachineStorage` in @pagespace/lib.
+ * Idempotent / drift-correcting for SEQUENTIAL runs: each machine tracks its
+ * own last-billed watermark, so a rerun bills zero elapsed time and a missed
+ * run is caught up exactly on the next one — see `reconcileMachineStorage`
+ * in @pagespace/lib. CONCURRENT invocations are made safe by
+ * `reconcileMachineStorageSerialized`'s Postgres advisory try-lock: a run that
+ * cannot acquire it (another container, or a manual/API trigger, already
+ * holds it) no-ops cleanly instead of racing the charge + watermark-advance
+ * writes. The docker/cron crontab flock (defense in depth) still serializes
+ * this ONE container's own scheduled ticks; the advisory lock is what makes
+ * every OTHER caller overlap-safe too.
  *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce,
  * X-Cron-Signature headers.
@@ -28,10 +36,19 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await reconcileMachineStorage(defaultReconcileMachineStorageDeps);
+    const run = await reconcileMachineStorageSerialized(defaultReconcileMachineStorageDeps);
+
+    if (run.outcome === 'lock_busy') {
+      console.log('[Cron] Terminal storage reconcile: skipped — advisory lock held by another run');
+      return NextResponse.json({
+        success: true,
+        outcome: 'lock_busy',
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${result.processed}, charged ${result.charged}, skipped ${result.skipped}, failed ${result.failed}, stale ${result.staleMeasurements}, total $${result.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, stale ${run.staleMeasurements}, total $${run.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -39,18 +56,23 @@ export async function GET(request: Request) {
       resourceType: 'cron_job',
       resourceId: 'reconcile_machine_storage',
       details: {
-        processed: result.processed,
-        charged: result.charged,
-        skipped: result.skipped,
-        failed: result.failed,
-        staleMeasurements: result.staleMeasurements,
-        totalCostDollars: result.totalCostDollars,
+        processed: run.processed,
+        charged: run.charged,
+        skipped: run.skipped,
+        failed: run.failed,
+        staleMeasurements: run.staleMeasurements,
+        totalCostDollars: run.totalCostDollars,
       },
     });
 
     return NextResponse.json({
       success: true,
-      ...result,
+      processed: run.processed,
+      charged: run.charged,
+      skipped: run.skipped,
+      failed: run.failed,
+      staleMeasurements: run.staleMeasurements,
+      totalCostDollars: run.totalCostDollars,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

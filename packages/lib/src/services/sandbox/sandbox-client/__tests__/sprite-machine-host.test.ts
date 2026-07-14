@@ -2,8 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
 import { MachineStreamOpenTimeoutError } from '../../machine-host';
-import { createSpritesSandboxClient, type SpriteCommandLike, type SpriteInstanceLike, type SpritesSdk } from '../sprites';
+import {
+  createSpritesSandboxClient,
+  spawnWithSelfHealingCwd,
+  type SpriteCommandLike,
+  type SpriteInstanceLike,
+  type SpritesSdk,
+} from '../sprites';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
+import { SANDBOX_ROOT } from '../../sandbox-paths';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
@@ -70,7 +77,9 @@ function fakeSprite(over: Partial<SpriteInstanceLike> = {}): SpriteInstanceLike 
     listSessions: async () => [],
     filesystem: () => ({ readFile: async () => Buffer.from(''), writeFile: async () => {}, mkdir: async () => {} }),
     updateNetworkPolicy: async () => {},
+    createCheckpoint: async () => ({ processAll: async () => {}, close: () => {} }),
     destroy: async () => {},
+    killSession: async () => {},
     ...over,
   };
 }
@@ -203,7 +212,12 @@ describe('createSpriteMachineHost', () => {
     emitStdout('out-chunk');
     emitStderr('err-chunk');
 
-    expect(created[0]?.command).toBe('bash');
+    // The session is spawned through the self-healing-cwd wrapper (the server
+    // chdirs into cwd and fails the open if a sandbox command deleted it), which
+    // recreates + enters SANDBOX_ROOT and then execs the real command.
+    expect([created[0]?.command, created[0]?.args]).toEqual(
+      spawnWithSelfHealingCwd({ command: 'bash', args: [], cwd: SANDBOX_ROOT }),
+    );
     expect(chunks).toEqual(['out-chunk', 'err-chunk']);
   });
 
@@ -398,6 +412,31 @@ describe('createSpriteMachineHost', () => {
     expect(writes).toEqual(['ls\n']);
     expect(resizes).toEqual([[100, 40]]);
     expect(killed).toEqual(['SIGKILL']);
+  });
+
+  it('given killSession, should delegate to the underlying Sprite.killSession by id', async () => {
+    const killed: string[] = [];
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ killSession: async (id) => { killed.push(id); } }),
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await handle.killSession('sess-1');
+
+    expect(killed).toEqual(['sess-1']);
+  });
+
+  it('given killSession against an already-dead/unknown session, should resolve rather than reject — idempotent', async () => {
+    const { sdk } = makeSdk({
+      getSprite: async () => fakeSprite({ killSession: async () => {} }), // the driver already treats 404/410 as success
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+    const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+    await expect(handle.killSession('sess-dead')).resolves.toBeUndefined();
   });
 
   it('given a MachineStream with no stdin (batch command reused as a stream), should throw on write rather than silently drop input', async () => {

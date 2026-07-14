@@ -26,6 +26,12 @@ vi.mock('@/hooks/useAuth', () => ({
 // Mock socket store with proper getState
 vi.mock('@/stores/useSocketStore', () => {
   const mockState = {
+    // The hook subscribes to `state.socket`; route it through the same mock the
+    // tests already drive so their mockGetSocket.mockReturnValue setup keeps
+    // expressing "what the store currently holds".
+    get socket() {
+      return mockGetSocket();
+    },
     getSocket: mockGetSocket,
     connect: mockConnect,
     disconnect: mockDisconnect,

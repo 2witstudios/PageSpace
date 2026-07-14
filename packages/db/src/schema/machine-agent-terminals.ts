@@ -42,9 +42,9 @@ import { machineBranches } from './machine-branches';
  * treats NULL <> NULL).
  *
  * `agentType` selects a pluggable launch spec (binary + args — see
- * `services/machines/agent-terminal-types.ts`; first-party `pagespace-cli`,
- * adapters for `claude`/`codex`, and `shell` — a bare interactive shell is
- * just a machine-scope agent terminal of this type, not a separate concept).
+ * `services/machines/agent-terminal-types.ts`; adapters for `claude`/`codex`,
+ * and `shell` — a bare interactive shell is just a machine-scope agent
+ * terminal of this type, not a separate concept).
  * `command` is an OPTIONAL per-terminal program override — an agent terminal
  * can run an arbitrary command in its PTY instead of `agentType`'s default
  * binary (mirrors PurePoint's `AgentEntry.command`). `streamSessionId` is the

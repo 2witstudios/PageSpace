@@ -32,6 +32,7 @@ vi.mock('@pagespace/db/schema/ai-streams', () => ({
     channelId: 'channelId',
     status: 'status',
     startedAt: 'startedAt',
+    lastHeartbeatAt: 'lastHeartbeatAt',
   },
 }));
 
@@ -40,6 +41,14 @@ vi.mock('@/lib/auth/request-auth', () => ({
 }));
 vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn(),
+}));
+
+// Conversation-scoped subscription authorization. Page access alone would hand another
+// member's PRIVATE conversation (and its buffered parts snapshot) to anyone who can view
+// the page — see stream-subscription-authz.ts, which is unit-tested separately.
+const mockFilterSubscribableStreams = vi.fn();
+vi.mock('@/lib/ai/core/stream-subscription-authz', () => ({
+  filterSubscribableStreams: (args: { rows: unknown[] }) => mockFilterSubscribableStreams(args),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
@@ -91,6 +100,8 @@ describe('GET /api/ai/chat/active-streams', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
+    // Default: everything the liveness filter kept is subscribable (the caller's own).
+    mockFilterSubscribableStreams.mockImplementation(async ({ rows }: { rows: unknown[] }) => rows);
   });
 
   it('given rows with a persisted parts snapshot, should pass them through on each stream', async () => {
@@ -104,6 +115,7 @@ describe('GET /api/ai/chat/active-streams', () => {
         browserSessionId: 'session-2',
         parts,
         startedAt: new Date('2024-01-01T00:00:00.000Z'),
+        lastHeartbeatAt: new Date(),
       },
     ]);
 
@@ -135,6 +147,7 @@ describe('GET /api/ai/chat/active-streams', () => {
         browserSessionId: 'session-2',
         parts: null,
         startedAt: new Date('2024-01-01T00:00:00.000Z'),
+        lastHeartbeatAt: new Date(),
       },
     ]);
 
@@ -142,6 +155,97 @@ describe('GET /api/ai/chat/active-streams', () => {
     const body = await response.json();
 
     expect(body.streams[0].parts).toEqual([]);
+  });
+
+  // A crashed generation leaves status='streaming' forever — the terminal write is
+  // fire-and-forget and dies with the process. Serving that row would give every
+  // subscriber a phantom in-progress bubble, with a Stop button, for a dead stream.
+  it('given a streaming row whose heartbeat is stale (crashed process), should NOT serve it as an active stream', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-dead',
+        conversationId: 'conv-1',
+        userId: 'user-2',
+        displayName: 'Alice',
+        browserSessionId: 'session-2',
+        parts: [],
+        startedAt: new Date(Date.now() - 5 * 60 * 1000),
+        lastHeartbeatAt: new Date(Date.now() - 5 * 60 * 1000),
+      },
+    ]);
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
+  });
+
+  // The endpoint used to also cap on `startedAt >= now-10min`. That cap had to go: this
+  // response is the authoritative answer to "what is still running on this channel"
+  // (consumers release their Stop-slot claims against it), and the cap made it LIE about
+  // exactly the streams where Stop matters most — a deep-research or long tool-loop run is
+  // still very much alive at minute 12. Dropping it here told every subscriber it had
+  // ended, killing the Stop button on a stream that kept generating and kept billing.
+  it('given a stream that started LONG ago but is still beating, should serve it (liveness is the heartbeat, not age)', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-long-run',
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        displayName: 'Me',
+        browserSessionId: 'session-1',
+        parts: [],
+        startedAt: new Date(Date.now() - 45 * 60 * 1000),
+        lastHeartbeatAt: new Date(),
+      },
+    ]);
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.streams.map((s: { messageId: string }) => s.messageId)).toEqual(['msg-long-run']);
+  });
+
+  it('given a streaming row that is still checkpointing, should serve it', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-live',
+        conversationId: 'conv-1',
+        userId: 'user-2',
+        displayName: 'Alice',
+        browserSessionId: 'session-2',
+        parts: [],
+        startedAt: new Date(Date.now() - 5 * 60 * 1000),
+        lastHeartbeatAt: new Date(Date.now() - 10 * 1000),
+      },
+    ]);
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.streams.map((s: { messageId: string }) => s.messageId)).toEqual(['msg-live']);
+  });
+
+  it("given a live stream the caller may not subscribe to (another member's PRIVATE conversation), should not return it", async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-theirs',
+        conversationId: 'their-private-conv',
+        userId: 'user-other',
+        displayName: 'Alice',
+        browserSessionId: 'session-2',
+        parts: [{ type: 'text', text: 'private content' }],
+        startedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
+    ]);
+    // Conversation-scoped authorization drops it: page access is not enough.
+    mockFilterSubscribableStreams.mockResolvedValueOnce([]);
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
   });
 
   it('given no active streams, should return an empty streams array', async () => {

@@ -39,6 +39,10 @@ const captured = vi.hoisted(() => ({
   steps: [] as unknown,
 }));
 
+const { mockTakeOverConversationStreams } = vi.hoisted(() => ({
+  mockTakeOverConversationStreams: vi.fn().mockResolvedValue({ aborted: [], reconciled: [] }),
+}));
+
 vi.mock('@/lib/ai/core/stream-lifecycle', () => ({
   createStreamLifecycle: mockCreateStreamLifecycle,
 }));
@@ -59,8 +63,16 @@ vi.mock('@/lib/auth/auth-core', () => ({
   isAuthError: vi.fn((result: unknown) => typeof result === 'object' && result !== null && 'error' in result),
 }));
 
+vi.mock('@/lib/ai/core/stream-takeover', () => ({
+  takeOverConversationStreams: mockTakeOverConversationStreams,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
+    ai: {
+      info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
+      child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
+    },
     api: {
       info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
       child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
@@ -235,6 +247,7 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 vi.mock('@/lib/utils/query-params', () => ({ parseBoundedIntParam: vi.fn().mockReturnValue(50) }));
 vi.mock('@/lib/mcp', () => ({ getMCPBridge: vi.fn() }));
 vi.mock('@/lib/ai/core/stream-abort-registry', () => ({
+  attachStreamFinisher: vi.fn(),
   createStreamAbortController: vi.fn().mockReturnValue({ streamId: 'stream_123', signal: new AbortController().signal }),
   removeStream: vi.fn(),
   STREAM_ID_HEADER: 'x-stream-id',

@@ -22,7 +22,6 @@ import { CalendarEventListRenderer } from './calendar/CalendarEventListRenderer'
 import { CalendarAvailabilityRenderer, type FreeSlot } from './calendar/CalendarAvailabilityRenderer';
 import { WorkflowListRenderer } from './workflow/WorkflowListRenderer';
 import { WorkflowCard, type WorkflowData } from './workflow/WorkflowCard';
-import { GeneratedImageRenderer } from './GeneratedImageRenderer';
 
 /**
  * Tool-call renderer registry.
@@ -217,6 +216,7 @@ export const SPECIAL_HANDLED_TOOLS: Set<string> = new Set<string>([
   ...TASK_TOOL_NAMES,
   'ask_agent',
   ASK_USER_TOOL_NAME,
+  'generate_image',
 ]);
 
 // pi uses lowercase tool names — these must match exactly what the pi coding agent sends.
@@ -778,22 +778,6 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         content={parsedOutput.content as string | undefined}
         contentLength={parsedOutput.contentLength as number | undefined}
         truncated={Boolean(parsedOutput.truncated)}
-      />
-    );
-  },
-
-  // === IMAGE GENERATION ===
-  generate_image: ({ parsedInput, parsedOutput }) => {
-    if (parsedOutput.success === false) return null;
-    const viewUrl = parsedOutput.viewUrl as string | undefined;
-    if (!viewUrl) return null;
-    return (
-      <GeneratedImageRenderer
-        data={{
-          viewUrl,
-          title: parsedOutput.title as string | undefined,
-          prompt: (parsedOutput.prompt as string | undefined) ?? (parsedInput?.prompt as string | undefined),
-        }}
       />
     );
   },

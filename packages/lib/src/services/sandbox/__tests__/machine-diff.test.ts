@@ -39,6 +39,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
     },
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from(''),
+    createCheckpoint: async () => {},
   };
   const deps: GitSandboxRunDeps = {
     isEnabled: () => true,
@@ -76,10 +77,12 @@ function makeHandle(files: Record<string, string>): { handle: MachineHandle; rea
       const content = files[path];
       return content === undefined ? null : Buffer.from(content, 'utf8');
     },
+    createCheckpoint: async () => {},
     stream: async () => {
       throw new Error('not used');
     },
     listStreams: async () => [],
+    killSession: async () => {},
   };
   return { handle, reads };
 }

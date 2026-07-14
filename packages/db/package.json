@@ -7,6 +7,10 @@
       "types": "./dist/db.d.ts",
       "default": "./dist/db.js"
     },
+    "./advisory-lock": {
+      "types": "./dist/advisory-lock.d.ts",
+      "default": "./dist/advisory-lock.js"
+    },
     "./admin-db": {
       "types": "./dist/admin-db.d.ts",
       "default": "./dist/admin-db.js"
@@ -62,6 +66,14 @@
     "./schema/machine-agent-terminals": {
       "types": "./dist/schema/machine-agent-terminals.d.ts",
       "default": "./dist/schema/machine-agent-terminals.js"
+    },
+    "./schema/machine-workspaces": {
+      "types": "./dist/schema/machine-workspaces.d.ts",
+      "default": "./dist/schema/machine-workspaces.js"
+    },
+    "./schema/machine-workspace-bootstraps": {
+      "types": "./dist/schema/machine-workspace-bootstraps.d.ts",
+      "default": "./dist/schema/machine-workspace-bootstraps.js"
     },
     "./schema/share-links": {
       "types": "./dist/schema/share-links.d.ts",

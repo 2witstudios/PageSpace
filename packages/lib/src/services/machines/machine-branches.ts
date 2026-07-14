@@ -23,35 +23,41 @@
  * directly to that handle, never to a page-keyed Machine lookup.
  */
 
+import { createId } from '@paralleldrive/cuid2';
 import type { SubscriptionTier } from '../subscription-utils';
 import { runGitInSandbox, type GitSandboxRunDeps } from '../sandbox/git-tool-runners';
 import type { SandboxActorContext, SandboxQuotaDeps } from '../sandbox/tool-runners';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
+import { SANDBOX_MAX_OUTPUT_BYTES } from '../sandbox/execution-policy';
 import type { MachineHost, MachineHandle, MachineSubstrateSpec } from '../sandbox/machine-host';
 import { adaptMachineHandleToExecutableSandbox } from '../sandbox/sandbox-client/machine-host-adapter';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement, FullEgressDenialReason } from '../sandbox/containment';
 import type { CodeExecutionAuditInput } from '../sandbox/audit';
-import { deriveBranchSessionKey, isValidBranchName } from './branch-session';
+import { deriveBranchSessionKey, normalizeBranchName } from './branch-session';
+import { normalizeProjectName } from './project-paths';
 import { isUniqueViolation, type MachineBranchStore, type MachineBranchRecord } from './machine-branches-store';
 
 /** The directory on a branch-terminal's OWN Sprite the project is cloned into. */
 export const BRANCH_REPO_PATH = `${SANDBOX_ROOT}/repo`;
 
+/**
+ * Where Claude Code writes its OAuth credential/config on a Sprite's own
+ * persistent filesystem. A branch-terminal is a SEPARATE Sprite from its
+ * owning Machine (see module doc), so it never inherits whatever the user
+ * logged into on the root Sprite — these paths are copied across explicitly,
+ * see `propagateClaudeCredential` below.
+ */
+const CLAUDE_CREDENTIALS_PATH = '/home/sprite/.claude/.credentials.json';
+const CLAUDE_CONFIG_PATH = '/home/sprite/.claude.json';
+
 export type SpawnBranchDenialReason =
-  | 'invalid_branch_name'
   | 'kill_switch_off'
   | 'project_not_found'
   | 'provision_failed'
   | 'clone_failed'
   | 'checkout_failed'
   | 'error';
-
-/** Pure decision: is this branch name safe to use as a git ref / Sprite name component? */
-export function planSpawnBranch(input: { branchName: string }): { ok: true } | { ok: false; reason: 'invalid_branch_name' } {
-  if (!isValidBranchName(input.branchName)) return { ok: false, reason: 'invalid_branch_name' };
-  return { ok: true };
-}
 
 export interface MachineActorContext {
   userId: string;
@@ -80,6 +86,14 @@ export interface MachineBranchesDeps {
   /** REQUIRED full-egress enablement gate — a branch-terminal's Sprite runs open egress, same as a human Terminal. */
   checkFullEgressEnablement: () => Promise<FullEgressEnablement>;
   resolveGitHubToken: (userId: string) => Promise<string | null>;
+  /**
+   * Live handle to the OWNING Machine's own persistent Sprite (never a
+   * branch's) — the source a branch-terminal's Claude Code credential is
+   * copied from. `null` when the root Machine has no live session yet (the
+   * user hasn't opened its Terminal / isn't logged into Claude Code there),
+   * which `propagateClaudeCredential` treats as a graceful no-op.
+   */
+  resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
   quota: SandboxQuotaDeps;
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
@@ -87,7 +101,19 @@ export interface MachineBranchesDeps {
 }
 
 export type SpawnBranchResult =
-  | { ok: true; sandboxId: string; resumed: boolean }
+  /**
+   * `branchName` is the NORMALIZED name — what was persisted and checked out,
+   * which the caller must echo back rather than the text the user typed.
+   *
+   * `createdNew` says whether the branch was CREATED off the clone's default
+   * HEAD (no `origin/<branchName>` existed) or checked out from an existing
+   * upstream branch. It matters because normalization can rewrite a name that
+   * DOES exist upstream into one that doesn't (`_wip` → `wip`: git allows a
+   * leading `_`, our narrower charset does not), and git's fallback then hands
+   * the user a new empty branch. Reporting it makes that outcome visible rather
+   * than silent. `undefined` on a pure reattach, where nothing was cloned.
+   */
+  | { ok: true; sandboxId: string; branchName: string; resumed: boolean; createdNew?: boolean }
   | { ok: false; reason: SpawnBranchDenialReason | FullEgressDenialReason; detail?: string };
 
 /**
@@ -131,7 +157,10 @@ function buildGitDepsForHandle(handle: MachineHandle, deps: MachineBranchesDeps)
   };
 }
 
-type CloneResult = { ok: true } | { ok: false; reason: 'clone_failed' | 'checkout_failed'; detail?: string };
+/** `createdNew`: no `origin/<branch>` existed, so the branch was created off the clone's default HEAD. */
+type CloneResult =
+  | { ok: true; createdNew: boolean }
+  | { ok: false; reason: 'clone_failed' | 'checkout_failed'; detail?: string };
 
 async function cloneAndCheckoutBranch({
   handle,
@@ -164,7 +193,7 @@ async function cloneAndCheckoutBranch({
     ctx,
     deps: gitDeps,
   });
-  if (checkoutExisting.success && checkoutExisting.exitCode === 0) return { ok: true };
+  if (checkoutExisting.success && checkoutExisting.exitCode === 0) return { ok: true, createdNew: false };
 
   const checkoutNew = await runGitInSandbox({
     cmd: 'git',
@@ -177,7 +206,243 @@ async function cloneAndCheckoutBranch({
   if (checkoutNew.exitCode !== 0) {
     return { ok: false, reason: 'checkout_failed', detail: checkoutNew.stderr || checkoutNew.stdout };
   }
-  return { ok: true };
+  return { ok: true, createdNew: true };
+}
+
+/**
+ * Hard cap on how long a single `propagateClaudeCredential` call may run.
+ * Every direct caller in this file (`spawnBranch`'s two success paths,
+ * `attachBranch`) awaits it inline on a real HTTP response, and the
+ * realtime PTY bridge's own bound (`agent-terminal-access.ts`'s
+ * `withTimeout`) only covers ITS OWN wrapper around this call, not a
+ * guarantee this function makes for its OTHER callers — a hibernating root
+ * Sprite's fs read/write can take up to the Sprite fs API's 30s timeout,
+ * with one retry (~60s worst case), and an unbounded copy would hang a
+ * branch-attach HTTP response on that (caught in review). The timer is
+ * always cleared, and the underlying work keeps running past the bound
+ * rather than being cancelled — a slow copy still lands, just too late to
+ * have been waited on by THIS call.
+ */
+const CREDENTIAL_COPY_TIMEOUT_MS = 5_000;
+
+/**
+ * `MachineHandle.exec`'s underlying Sprite runner only installs its SIGKILL
+ * wall-clock timer when `timeoutMs` is explicitly supplied (`sprites.ts`:
+ * the kill timer is conditional on `timeoutMs && timeoutMs > 0`) — an exec
+ * call with none is genuinely unbounded at the transport level, regardless
+ * of `CREDENTIAL_COPY_TIMEOUT_MS` above (that only stops THIS function's
+ * caller from waiting; it does not touch the exec itself). Without an
+ * explicit bound, a wedged `rm`/`mv` on a cold/unreachable Sprite would
+ * never be killed, leaking its process/socket on every such attach (caught
+ * in review). Every housekeeping exec in this file passes this.
+ */
+function housekeepingExecArgs(cmd: string, args: string[]): { cmd: string; args: string[]; timeoutMs: number; maxBytes: number } {
+  return { cmd, args, timeoutMs: CREDENTIAL_COPY_TIMEOUT_MS, maxBytes: SANDBOX_MAX_OUTPUT_BYTES };
+}
+
+function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
+}
+
+/**
+ * Latest `propagateClaudeCredential` call number issued per branch Sprite
+ * machineId — see the staleness check before each `mv` below for why.
+ *
+ * PROCESS-LOCAL ONLY: `spawnBranch`/`attachBranch` (this file, called from
+ * `apps/web`) and the realtime PTY bridge's `refreshBranchCredential`
+ * (`apps/realtime/src/index.ts`) are TWO SEPARATE PROCESSES, each with its
+ * own copy of this in-memory Map — a call in one process cannot see, or
+ * detect staleness against, an overlapping call in the other (caught in
+ * review). This still closes the WITHIN-process race (e.g. two nearly
+ * simultaneous requests on the same server), and the temp-file path below
+ * is made globally unique regardless of process, so an inter-process race
+ * can never corrupt the OTHER process's in-flight temp file — but an
+ * inter-process race CAN still end with an older credential's `mv` landing
+ * last. Accepted: full cross-process mutual exclusion would need a
+ * database-backed lock or a version marker persisted on the Sprite's own
+ * filesystem, which is disproportionate for a background sync where every
+ * single refresh is already best-effort and self-heals on the next
+ * reattach in either process.
+ */
+const latestCredentialCopyGeneration = new Map<string, number>();
+
+/**
+ * Copy Claude Code's OAuth credential (and config, if present) from the root
+ * Machine's Sprite into a branch-terminal's freshly provisioned/attached one.
+ * Each file is copied independently and skipped when the root read comes
+ * back empty — most commonly because the user hasn't run `claude` there yet
+ * — so a branch-terminal always ends up usable even with no credential to
+ * copy.
+ *
+ * Deliberately does NOT delete an existing branch-side copy on an empty
+ * root read, even though that read coming back empty could also mean an
+ * explicit `claude logout` on the root (a tempting "propagate the
+ * revocation" behavior — tried and reverted, see review history). The
+ * driver's `readFile` maps EVERY read failure to the same `null` a missing
+ * file produces (`sprites.ts`'s `readFileToBuffer`: "a missing file (or ANY
+ * read failure after a wake retry) resolves to null") — there is no way,
+ * from this signal alone, to tell "confirmed gone" apart from "root Sprite
+ * was briefly unreachable." Deleting on that ambiguous signal would risk
+ * destroying a branch's perfectly valid, working credential on a transient
+ * hiccup — strictly worse than the staleness this would have closed.
+ *
+ * Best-effort: any failure (root Sprite unreachable mid-copy, etc.) is
+ * swallowed rather than failing the spawn/attach it's called from, AND the
+ * whole call is bounded by `CREDENTIAL_COPY_TIMEOUT_MS` so a slow/hibernating
+ * Sprite can't hang the caller's response. A branch without the credential
+ * still works, it just needs its own `claude` login.
+ *
+ * Exported for reuse by the realtime agent-terminal PTY bridge
+ * (`apps/realtime/src/index.ts`'s `resolveAgentTerminalSandbox`), which is
+ * the OTHER place a branch's Sprite gets attached to for real use (opening or
+ * reattaching to its Claude agent terminal) — `spawnBranch`/`attachBranch`
+ * alone only cover branch creation and the navigator's explicit attach API,
+ * neither of which the realtime PTY path calls.
+ */
+export async function propagateClaudeCredential({
+  machineId,
+  branchHandle,
+  resolveRootMachineHandle,
+}: {
+  machineId: string;
+  branchHandle: MachineHandle;
+  resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
+}): Promise<void> {
+  // This call's own generation number for this branch Sprite. `withTimeout`
+  // deliberately does NOT cancel the underlying work when its bound elapses
+  // — it keeps running in the background so a slow copy still lands rather
+  // than being aborted. But that means an OVERLAPPING call that read an
+  // OLDER root credential and then stalled could otherwise finish LATER and
+  // `mv` its stale temp file over a destination a faster, more recent call
+  // already updated with a NEWER (rotated) credential — clobbering it
+  // (caught in review). Checking, right before each `mv`, whether a NEWER
+  // call has since started for this same branch Sprite — and skipping the
+  // rename if so — is what prevents that: a self-contained per-file check
+  // rather than a lock that would need its own release/backstop logic (and
+  // the "what if the thing holding it never finishes" risk that comes with
+  // one).
+  const generation = (latestCredentialCopyGeneration.get(branchHandle.machineId) ?? 0) + 1;
+  latestCredentialCopyGeneration.set(branchHandle.machineId, generation);
+
+  await withTimeout(
+    (async () => {
+      try {
+        const rootHandle = await resolveRootMachineHandle(machineId);
+        if (!rootHandle) return;
+
+        for (const path of [CLAUDE_CREDENTIALS_PATH, CLAUDE_CONFIG_PATH]) {
+          const content = await rootHandle.readFile({ path });
+          if (!content) continue;
+          // Write to a TEMP path, then atomically rename it onto the real
+          // destination — never delete-then-write or write-then-chmod
+          // directly against the live path. Both were tried and reverted:
+          // write-then-chmod left a window where the fresh secret sat at
+          // the OLD (possibly permissive) mode until the chmod resolved,
+          // and a slow/stuck chmod could leave that window open past
+          // whatever bound the caller waited on. Delete-then-write closed
+          // THAT window but opened a worse one: if the write that follows
+          // the delete then fails (or the caller's timeout elapses in
+          // between), the branch is left with NO credential at all, even
+          // though it had a perfectly valid one moments before — a
+          // regression on exactly the transient Sprite/FS hiccups this
+          // best-effort path exists to tolerate (caught in review, twice).
+          //
+          // `writeFiles`' `mode` reliably applies to a genuine CREATION —
+          // and `mv` on the same filesystem is atomic: the destination is
+          // either the OLD valid credential or the NEW one, NEVER
+          // wrong-permission or briefly absent in between. If anything
+          // fails before the rename, the live file at `path` is completely
+          // untouched.
+          // Suffixed with a globally unique id — never shared with an
+          // overlapping call for the same branch Sprite, WITHIN this
+          // process or across the OTHER process that also calls this
+          // function (`apps/web`'s spawnBranch/attachBranch vs.
+          // `apps/realtime`'s refreshBranchCredential — see the doc comment
+          // on `latestCredentialCopyGeneration`, which is process-local and
+          // therefore cannot be used to key the temp path). A fixed temp
+          // name was tried and reverted: when an older call's stale cleanup
+          // (below) ran after a newer, overlapping call had already written
+          // ITS OWN content to that same shared path, the older cleanup
+          // deleted the newer call's temp file out from under it, making
+          // the newer (correct) refresh fail its own `mv` (caught in
+          // review, twice — once for the intra-process case, once for the
+          // inter-process one this id fixes). A globally unique path means
+          // no two overlapping calls, from either process, ever touch the
+          // same temp file, so one's cleanup can never disturb another's
+          // in-progress write.
+          const tempPath = `${path}.tmp.${createId()}`;
+          // Still clear it first — vanishingly unlikely to collide with a
+          // stale leftover (a cuid2 id, not a small counter), but a
+          // crashed-and-restarted process could in principle still hand out
+          // the same id twice given a broken/predictable random source, and
+          // clearing costs nothing extra. Writing to an ALREADY-EXISTING
+          // temp path would be an overwrite, not a
+          // creation, silently keeping whatever (possibly permissive) mode
+          // that stale file already had. Checked, not fire-and-forget: if
+          // the clear itself fails, abort BEFORE writing rather than assume
+          // the temp path is now clear — still safe either way, since
+          // nothing has touched the live file yet.
+          const clearTemp = await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
+          if (clearTemp.exitCode !== 0) {
+            throw new Error(`rm -f ${tempPath} failed: exit ${clearTemp.exitCode}`);
+          }
+          await branchHandle.writeFiles([{ path: tempPath, content, mode: 0o600 }]);
+
+          // A NEWER call already started for this branch Sprite while this
+          // one was working — it will (or already did) land more current
+          // data, so abandon this stale attempt rather than risk this one's
+          // `mv` clobbering it once it finally gets here.
+          //
+          // KNOWN, ACCEPTED RESIDUAL WINDOW (raised in review, twice): this
+          // check happens BEFORE the `mv` below, not atomically with it. A
+          // newer call could still start, read a rotated credential, and
+          // complete its OWN `mv` entirely within the time this call's own
+          // `mv` (checked as still-current a moment ago) takes to actually
+          // land — landing this stale `mv` last and overwriting the fresher
+          // one anyway. Closing that fully would need either an atomic
+          // compare-and-swap primitive this filesystem abstraction doesn't
+          // expose, or a synchronous per-branch mutex serializing every
+          // `mv` (which would then queue an unrelated caller's response
+          // behind however long a DIFFERENT in-flight refresh's Sprite I/O
+          // takes — reintroducing the unbounded-latency problem this
+          // design exists to avoid). The impact is staleness, not exposure:
+          // worst case, the branch keeps using an old-but-still-valid
+          // token a little longer, and self-heals on the next reattach in
+          // either process — consistent with every other best-effort
+          // guarantee in this function. Deliberately not chased further.
+          if (latestCredentialCopyGeneration.get(branchHandle.machineId) !== generation) {
+            await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
+            return;
+          }
+
+          const move = await branchHandle.exec(housekeepingExecArgs('mv', [tempPath, path]));
+          if (move.exitCode !== 0) {
+            // Best-effort cleanup of the orphaned temp file (itself already
+            // 0o600, so leaving it behind on a rare failure is a harmless
+            // leftover, not an exposure) — the live file at `path` was never
+            // touched by this attempt either way.
+            await branchHandle.exec(housekeepingExecArgs('rm', ['-f', tempPath]));
+            throw new Error(`mv ${tempPath} -> ${path} failed: exit ${move.exitCode}`);
+          }
+        }
+      } catch {
+        // best-effort — see doc comment above.
+      }
+    })(),
+    CREDENTIAL_COPY_TIMEOUT_MS,
+  );
 }
 
 async function safeKillSprite(host: MachineHost, machineId: string): Promise<void> {
@@ -211,10 +476,10 @@ async function reconcileProvisionCollision({
   projectName: string;
   branchName: string;
   handle: MachineHandle;
-}): Promise<{ ok: true; sandboxId: string; resumed: true } | { row: MachineBranchRecord | null }> {
+}): Promise<{ ok: true; sandboxId: string; branchName: string; resumed: true } | { row: MachineBranchRecord | null }> {
   const row = await deps.store.findByName(machineId, projectName, branchName);
   if (row && row.sandboxId === handle.machineId) {
-    return { ok: true, sandboxId: row.sandboxId, resumed: true };
+    return { ok: true, sandboxId: row.sandboxId, branchName: row.branchName, resumed: true };
   }
   await safeKillSprite(deps.host, handle.machineId);
   return { row };
@@ -226,11 +491,17 @@ async function reconcileProvisionCollision({
  * projectName, branchName) — a second call reattaches to the same Sprite
  * (or transparently re-provisions under the same name if it has since
  * vanished) instead of creating a duplicate.
+ *
+ * `branchName` is free text: it is NORMALIZED here (not rejected — see
+ * `normalizeBranchName`), and the normalized form is what gets checked out,
+ * hashed into the session key, persisted, and returned. This is the
+ * authoritative normalization point; any future client-side live preview would
+ * be a convenience, never the source of truth.
  */
 export async function spawnBranch({
   machineId,
-  projectName,
-  branchName,
+  projectName: requestedProjectName,
+  branchName: requestedBranchName,
   actor,
   deps,
 }: {
@@ -242,8 +513,13 @@ export async function spawnBranch({
 }): Promise<SpawnBranchResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'kill_switch_off' };
 
-  const plan = planSpawnBranch({ branchName });
-  if (!plan.ok) return plan;
+  // Both names are free text. `addProject` persists the CANONICAL project name,
+  // so the lookup key must be normalized the same way or free text that created
+  // a project could never spawn a branch in it. Canonical names (what the UI
+  // sends, straight from `listProjects`) pass through unchanged — normalization
+  // is idempotent.
+  const projectName = normalizeProjectName(requestedProjectName);
+  const branchName = normalizeBranchName(requestedBranchName);
 
   const project = await deps.projectStore.findByName(machineId, projectName);
   if (!project) return { ok: false, reason: 'project_not_found' };
@@ -256,7 +532,12 @@ export async function spawnBranch({
 
   if (existing) {
     const handle = await deps.host.attach({ machineId: existing.sandboxId });
-    if (handle) return { ok: true, sandboxId: handle.machineId, resumed: true };
+    if (handle) {
+      // Refresh on every reattach, not just first spawn — Claude Code OAuth
+      // credentials rotate, so a one-time copy would drift stale over time.
+      await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+      return { ok: true, sandboxId: handle.machineId, branchName, resumed: true };
+    }
     // Vanished — fall through and re-provision under the SAME session key.
   }
 
@@ -282,6 +563,15 @@ export async function spawnBranch({
     return { ok: false, reason: cloned.reason, detail: cloned.detail };
   }
 
+  // Persist the row FIRST, before the credential copy — not after. A
+  // concurrent racer's `reconcileProvisionCollision` (its own clone having
+  // failed against this same name-keyed shared Sprite) looks up this branch's
+  // row to decide whether the Sprite it's about to kill is actually the
+  // winner's. Doing the credential copy's extra network I/O (a root-Sprite
+  // read + branch-Sprite writes/execs) BEFORE that row exists would widen the
+  // window in which no matching row exists yet — during which the racer would
+  // find nothing, conclude it's *its own* redundant Sprite, and kill the very
+  // Sprite this call is about to record as the winner (caught in review).
   if (existing) {
     const updated = await deps.store.updateSandboxId({
       id: existing.id,
@@ -294,10 +584,13 @@ export async function spawnBranch({
       // branch — do not silently overwrite; the winner already wrote its own.
       const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
       if ('ok' in reconciled) return reconciled;
-      if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
+      if (reconciled.row) {
+        return { ok: true, sandboxId: reconciled.row.sandboxId, branchName: reconciled.row.branchName, resumed: true };
+      }
       return { ok: false, reason: 'error', detail: 'lost a concurrent branch-terminal spawn race' };
     }
-    return { ok: true, sandboxId: handle.machineId, resumed: false };
+    await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+    return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
   }
 
   try {
@@ -315,40 +608,69 @@ export async function spawnBranch({
       // Lost a race against a concurrent spawn of the same branch.
       const reconciled = await reconcileProvisionCollision({ deps, machineId, projectName, branchName, handle });
       if ('ok' in reconciled) return reconciled;
-      if (reconciled.row) return { ok: true, sandboxId: reconciled.row.sandboxId, resumed: true };
+      if (reconciled.row) {
+        return { ok: true, sandboxId: reconciled.row.sandboxId, branchName: reconciled.row.branchName, resumed: true };
+      }
     }
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 
-  return { ok: true, sandboxId: handle.machineId, resumed: false };
+  await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle: deps.resolveRootMachineHandle });
+  return { ok: true, sandboxId: handle.machineId, branchName, resumed: false, createdNew: cloned.createdNew };
 }
 
 export type AttachBranchResult =
-  | { ok: true; sandboxId: string }
+  | { ok: true; sandboxId: string; branchName: string }
   | { ok: false; reason: 'not_found' | 'vanished' };
 
-/** Reconnect to a branch-terminal's existing Sprite without provisioning a new one. */
+/**
+ * Reconnect to a branch-terminal's existing Sprite without provisioning a new
+ * one. The lookup key is normalized the same way `spawnBranch` normalizes
+ * before persisting, so the free text a user typed to create a branch still
+ * finds it — and a name read back from `listBranches` (already canonical)
+ * passes through untouched, because normalization is idempotent.
+ */
 export async function attachBranch({
   machineId,
-  projectName,
-  branchName,
+  projectName: requestedProjectName,
+  branchName: requestedBranchName,
   store,
   host,
+  resolveRootMachineHandle,
 }: {
   machineId: string;
   projectName: string;
   branchName: string;
   store: MachineBranchStore;
   host: MachineHost;
+  resolveRootMachineHandle: (machineId: string) => Promise<MachineHandle | null>;
 }): Promise<AttachBranchResult> {
+  // Shadow the raw params with their canonical forms, as `spawnBranch` does, so no
+  // line below can reach the untrusted text by accident.
+  const projectName = normalizeProjectName(requestedProjectName);
+  const branchName = normalizeBranchName(requestedBranchName);
+
   const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   const handle = await host.attach({ machineId: existing.sandboxId });
   if (!handle) return { ok: false, reason: 'vanished' };
-  return { ok: true, sandboxId: handle.machineId };
+
+  // Refresh on every reattach — see `propagateClaudeCredential`'s doc comment
+  // on why this isn't a one-time, spawn-only copy.
+  await propagateClaudeCredential({ machineId, branchHandle: handle, resolveRootMachineHandle });
+  return { ok: true, sandboxId: handle.machineId, branchName };
 }
 
+/**
+ * List a project's branch-terminals. Normalizes the project key like every other
+ * name-keyed lookup IN THIS MODULE. (The sibling agent-terminal / files / diff
+ * surfaces do not yet — they take these names as free-text params too, so a
+ * direct API caller can hit `project_not_found` there with text that works here.
+ * The UI is unaffected: it passes canonical names straight back from the list
+ * APIs. Closing that gap needs the realtime session-key path too, so it is a
+ * follow-up, not a drive-by.)
+ */
 export async function listBranches({
   machineId,
   projectName,
@@ -358,16 +680,21 @@ export async function listBranches({
   projectName: string;
   store: MachineBranchStore;
 }): Promise<MachineBranchRecord[]> {
-  return store.list(machineId, projectName);
+  return store.list(machineId, normalizeProjectName(projectName));
 }
 
 export type KillBranchResult = { ok: true } | { ok: false; reason: 'not_found' | 'error' };
 
-/** Tear down a branch-terminal: DELETE its Sprite through the MachineHost seam and drop the tracking row. */
+/**
+ * Tear down a branch-terminal: DELETE its Sprite through the MachineHost seam
+ * and drop the tracking row. Normalizes its lookup key for the same reason
+ * `attachBranch` does — whatever text created a branch must also be able to
+ * kill it, and a canonical name from `listBranches` passes through unchanged.
+ */
 export async function killBranch({
   machineId,
-  projectName,
-  branchName,
+  projectName: requestedProjectName,
+  branchName: requestedBranchName,
   store,
   host,
 }: {
@@ -377,15 +704,18 @@ export async function killBranch({
   store: MachineBranchStore;
   host: MachineHost;
 }): Promise<KillBranchResult> {
+  const projectName = normalizeProjectName(requestedProjectName);
+  const branchName = normalizeBranchName(requestedBranchName);
+
   const existing = await store.findByName(machineId, projectName, branchName);
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
     await host.kill({ machineId: existing.sandboxId });
   } catch {
-    // Sprite may still be running — keep the tracking row so a retry (or the
-    // idle reaper) can still find and reclaim it. An untracked-but-live
-    // Sprite would otherwise be an unkillable orphan.
+    // Sprite may still be running — keep the tracking row so a retry can still
+    // find and kill it later. There is no reaper: an untracked-but-live Sprite
+    // would otherwise be an unkillable orphan.
     return { ok: false, reason: 'error' };
   }
 

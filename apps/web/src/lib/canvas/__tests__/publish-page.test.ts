@@ -18,6 +18,8 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),
+  ne: vi.fn(),
+  inArray: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -59,6 +61,17 @@ vi.mock('@pagespace/lib/canvas/site-files', () => ({
 
 vi.mock('../render-published', () => ({
   renderPublishedPage: vi.fn(({ html }) => `<html>${html}</html>`),
+  renderPublishedDocument: vi.fn(({ html }) => `<doc>${html}</doc>`),
+  renderPublishedCode: vi.fn(({ code }) => `<code>${code}</code>`),
+  renderPublishedSheet: vi.fn(({ serializedContent }) => `<sheet>${serializedContent}</sheet>`),
+}));
+
+vi.mock('@pagespace/lib/publish/neutralize-dashboard-links', () => ({
+  neutralizeDashboardLinks: vi.fn((html: string) => html),
+}));
+
+vi.mock('marked', () => ({
+  marked: { parse: vi.fn((markdown: string) => Promise.resolve(`<p>${markdown}</p>`)) },
 }));
 
 vi.mock('../asset-pipeline', () => ({
@@ -114,8 +127,10 @@ import { putPublishedArtifact, putPublishedSiteFile, publishedArtifactExists, de
 import { publishCanvasPage, publishHomePageAtRoot, clearPublishedHomeRoot, regeneratePublishedSiteFiles, syncPublishedHomeRoot, republishDriveCanonical, PublishError } from '../publish-page';
 import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service';
 import { getActiveDomainRecords } from '../custom-domain-mirror';
-import { renderPublishedPage } from '../render-published';
-import { extractAndStripOgMeta } from '../asset-pipeline';
+import { renderPublishedPage, renderPublishedDocument, renderPublishedCode, renderPublishedSheet } from '../render-published';
+import { neutralizeDashboardLinks } from '@pagespace/lib/publish/neutralize-dashboard-links';
+import { marked } from 'marked';
+import { extractAndStripOgMeta, rewriteCanvasAssets } from '../asset-pipeline';
 
 // The mocked `db` keeps the real relational-query return types, so partial test
 // fixtures are cast through `unknown` to the row shape (never `any`).
@@ -171,9 +186,9 @@ describe('publishCanvasPage', () => {
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'my-drive', path: '', html: expect.any(String) });
   });
 
-  it('given a non-canvas page, throws a 400 PublishError', async () => {
+  it('given a non-publishable page type, throws a 400 PublishError', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-      id: 'page-1', type: 'DOCUMENT', title: 'Doc', content: '', driveId: 'drive-1',
+      id: 'page-1', type: 'CHANNEL', title: 'Chat', content: '', driveId: 'drive-1',
     }));
 
     await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' }))
@@ -309,7 +324,7 @@ describe('publishCanvasPage', () => {
 
   it('PublishError carries an HTTP status code', async () => {
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-      id: 'page-1', type: 'DOCUMENT', title: 'Doc', content: '', driveId: 'drive-1',
+      id: 'page-1', type: 'CHANNEL', title: 'Chat', content: '', driveId: 'drive-1',
     }));
 
     await expect(publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' }))
@@ -386,6 +401,87 @@ describe('publishCanvasPage', () => {
 
     expect(result.isHomePage).toBe(true);
     expect(result.url).toBe('https://www.acme.com/');
+  });
+});
+
+describe('publishCanvasPage — per-type render branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(isPublishConfigured).mockReturnValue(true);
+    vi.mocked(getActiveDomainRecords).mockResolvedValue([]);
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+      id: 'drive-1', slug: 'my-drive', publishSubdomain: 'my-drive', kind: 'STANDARD', homePageId: null,
+    }));
+    vi.mocked(db.query.publishedPages.findFirst).mockResolvedValue(undefined);
+  });
+
+  it('given an HTML-mode DOCUMENT page, rewrites assets/links, neutralizes stale dashboard links, and renders via renderPublishedDocument', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'DOCUMENT', title: 'My Doc', content: '<p>Hi</p>', contentMode: 'html', driveId: 'drive-1',
+    }));
+
+    const result = await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(marked.parse).not.toHaveBeenCalled();
+    expect(neutralizeDashboardLinks).toHaveBeenCalledWith('<p>Hi</p>');
+    expect(renderPublishedDocument).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>Hi</p>', title: 'My Doc' }));
+    expect(renderPublishedPage).not.toHaveBeenCalled();
+    expect(putPublishedArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ html: '<doc><p>Hi</p></doc>' }),
+    );
+    expect(result.path).toBe('my-doc');
+  });
+
+  it('given a markdown-mode DOCUMENT page, converts via marked.parse before the rest of the pipeline', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'DOCUMENT', title: 'My Doc', content: '# Hello', contentMode: 'markdown', driveId: 'drive-1',
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(marked.parse).toHaveBeenCalledWith('# Hello');
+    expect(neutralizeDashboardLinks).toHaveBeenCalledWith('<p># Hello</p>');
+    expect(renderPublishedDocument).toHaveBeenCalledWith(expect.objectContaining({ html: '<p># Hello</p>' }));
+  });
+
+  it('given a CODE page, passes the raw code straight to renderPublishedCode without HTML rewriting', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CODE', title: 'main.ts', content: 'const x = 1;', contentMode: 'html', driveId: 'drive-1',
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(rewriteCanvasAssets).not.toHaveBeenCalled();
+    expect(neutralizeDashboardLinks).not.toHaveBeenCalled();
+    expect(renderPublishedCode).toHaveBeenCalledWith(expect.objectContaining({ code: 'const x = 1;', title: 'main.ts' }));
+    expect(putPublishedArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ html: '<code>const x = 1;</code>' }),
+    );
+  });
+
+  it('given a CODE page with no author description, does not derive one from the raw source (would mangle generics as HTML tags)', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'CODE', title: 'main.ts', content: 'const x: Array<Map<string, number>> = [];', contentMode: 'html', driveId: 'drive-1',
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(renderPublishedCode).toHaveBeenCalledWith(expect.objectContaining({ description: '' }));
+  });
+
+  it('given a SHEET page, passes the serialized content straight to renderPublishedSheet without HTML rewriting', async () => {
+    const serialized = JSON.stringify({ cells: { A1: 'hi' } });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+      id: 'page-1', type: 'SHEET', title: 'My Sheet', content: serialized, contentMode: 'html', driveId: 'drive-1',
+    }));
+
+    await publishCanvasPage({ pageId: 'page-1', driveId: 'drive-1', userId: 'user-1' });
+
+    expect(rewriteCanvasAssets).not.toHaveBeenCalled();
+    expect(renderPublishedSheet).toHaveBeenCalledWith(expect.objectContaining({ serializedContent: serialized, title: 'My Sheet' }));
+    expect(putPublishedArtifact).toHaveBeenCalledWith(
+      expect.objectContaining({ html: `<sheet>${serialized}</sheet>` }),
+    );
   });
 });
 
@@ -605,14 +701,14 @@ describe('publishHomePageAtRoot', () => {
     expect(putPublishedArtifact).toHaveBeenCalledWith({ subdomain: 'sub', path: '', html: expect.any(String) });
   });
 
-  it('propagates a PublishError when the home page is not a canvas', async () => {
+  it('propagates a PublishError when the home page is not a publishable type', async () => {
     vi.mocked(db.query.drives.findFirst)
       .mockResolvedValueOnce(driveRow({ id: 'drive-1', homePageId: 'page-1' }))
       .mockResolvedValueOnce(driveRow({
         id: 'drive-1', slug: 'my-drive', publishSubdomain: 'sub', kind: 'STANDARD', homePageId: 'page-1',
       }));
     vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-      id: 'page-1', type: 'DOCUMENT', title: 'Doc', content: '', driveId: 'drive-1',
+      id: 'page-1', type: 'CHANNEL', title: 'Chat', content: '', driveId: 'drive-1',
     }));
 
     await expect(publishHomePageAtRoot('drive-1', 'user-1')).rejects.toMatchObject({ statusCode: 400 });
@@ -869,7 +965,7 @@ describe('regeneratePublishedSiteFiles', () => {
         name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
       }));
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-        title: 'Oops', content: '<p>custom 404 content</p>',
+        type: 'CANVAS', title: 'Oops', content: '<p>custom 404 content</p>', contentMode: 'html',
       }));
 
       await regeneratePublishedSiteFiles('drive-1');
@@ -887,7 +983,7 @@ describe('regeneratePublishedSiteFiles', () => {
         name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
       }));
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-        title: 'Internal Page Name', content: '<p>custom 404 with og:title</p>',
+        type: 'CANVAS', title: 'Internal Page Name', content: '<p>custom 404 with og:title</p>', contentMode: 'html',
       }));
       vi.mocked(extractAndStripOgMeta).mockReturnValueOnce({
         meta: { ogTitle: 'Author-Chosen Title', faviconHref: undefined, ogImageUrl: undefined, ogDescription: undefined },
@@ -917,7 +1013,7 @@ describe('regeneratePublishedSiteFiles', () => {
         name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
       }));
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-        title: 'Oops', content: '<p>boom</p>',
+        type: 'CANVAS', title: 'Oops', content: '<p>boom</p>', contentMode: 'html',
       }));
       vi.mocked(renderPublishedPage).mockImplementationOnce(() => {
         throw new Error('render failed');
@@ -935,13 +1031,28 @@ describe('regeneratePublishedSiteFiles', () => {
         publishFaviconUrl: 'https://cdn.example.com/assets/drive-favicon.png',
       }));
       vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
-        title: 'Oops', content: '<p>custom 404</p>',
+        type: 'CANVAS', title: 'Oops', content: '<p>custom 404</p>', contentMode: 'html',
       }));
 
       await regeneratePublishedSiteFiles('drive-1');
 
       const renderInput = vi.mocked(renderPublishedPage).mock.calls.find((c) => c[0].html === '<p>custom 404</p>')?.[0];
       expect(renderInput?.faviconHref).toBe('https://cdn.example.com/assets/drive-favicon.png');
+    });
+
+    it('renders a DOCUMENT page as the custom 404 (a non-canvas page makes a fine 404)', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue(driveRow({
+        name: 'Acme', publishSubdomain: 'acme', homePageId: null, notFoundPageId: 'nf-page', ownerId: 'owner-1', publishFaviconUrl: null,
+      }));
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue(pageRow({
+        type: 'DOCUMENT', title: 'Oops', content: '<p>document 404</p>', contentMode: 'html',
+      }));
+
+      await regeneratePublishedSiteFiles('drive-1');
+
+      expect(renderPublishedDocument).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>document 404</p>', robots: 'noindex' }));
+      const notFoundCall = vi.mocked(putPublishedSiteFile).mock.calls.find((c) => c[0].file === '404.html');
+      expect(notFoundCall?.[0].body).toBe('<doc><p>document 404</p></doc>');
     });
   });
 });

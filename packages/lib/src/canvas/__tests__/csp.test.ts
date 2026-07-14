@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildBaselineCsp } from '../csp';
+import { buildBaselineCsp, buildDocumentCsp } from '../csp';
 
 describe('buildBaselineCsp', () => {
   it('defaults to form-action \'none\' when no origin is given', () => {
@@ -25,5 +25,27 @@ describe('buildBaselineCsp', () => {
     expect(withOrigin).toContain("object-src 'none'");
     expect(withOrigin).toContain("base-uri 'none'");
     expect(withOrigin).toContain("script-src 'unsafe-inline'");
+  });
+});
+
+describe('buildDocumentCsp', () => {
+  it('blocks scripts entirely', () => {
+    const csp = buildDocumentCsp();
+    expect(csp).toContain("script-src 'none'");
+  });
+
+  it('blocks form submission entirely', () => {
+    const csp = buildDocumentCsp();
+    expect(csp).toContain("form-action 'none'");
+  });
+
+  it('keeps the baseline asset/image/font/object/base-uri directives', () => {
+    const csp = buildDocumentCsp();
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain('img-src data: https:');
+    expect(csp).toContain("style-src 'unsafe-inline' https://fonts.googleapis.com");
+    expect(csp).toContain('font-src https://fonts.gstatic.com');
+    expect(csp).toContain("object-src 'none'");
+    expect(csp).toContain("base-uri 'none'");
   });
 });

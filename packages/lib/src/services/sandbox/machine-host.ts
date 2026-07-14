@@ -95,11 +95,43 @@ export interface MachineStream {
 /** A provisioned/attached machine session — the full surface a caller drives. */
 export interface MachineHandle {
   readonly machineId: string;
+  /**
+   * Proof of the egress lockdown confirmed for THIS VM, for the caller to persist
+   * and hand back on the next provision (see `egress-lockdown.ts`). Undefined when
+   * unproven — the caller then records nothing and the next hand-back re-applies.
+   */
+  readonly egressPolicyToken?: string;
   exec(args: RunCommandArgs): Promise<SandboxRunResult>;
   writeFiles(files: WriteFileEntry[]): Promise<void>;
   readFile(args: { path: string }): Promise<Buffer | null>;
   stream(args: MachineStreamOptions): Promise<MachineStream>;
   listStreams(): Promise<MachineStreamSessionInfo[]>;
+  /**
+   * Terminate a specific interactive-stream session server-side, by id —
+   * reaches a session regardless of whether the caller currently holds a live
+   * `MachineStream` to it (unlike `MachineStream.kill()`, a signal delivered
+   * over that stream's own transport, which reaches nothing once the
+   * transport is closed or was never opened). This is what a genuine
+   * termination (an explicit kill request, or the detached-idle reap) must
+   * call — see `apps/realtime/src/terminal/sprites-shell.ts`'s
+   * `planTeardown`.
+   *
+   * MUST be idempotent: killing an id the machine no longer recognizes
+   * (already dead, or never existed) resolves successfully rather than
+   * rejecting.
+   */
+  killSession(sessionId: string): Promise<void>;
+  /**
+   * Create a filesystem checkpoint tagged with `comment` (Sprites Platform
+   * Alignment 5-2) — see `sprite-machine-host.ts` for the (today, only)
+   * implementation. Required: `MachineHost` has exactly one backend
+   * (Sprite) as of this writing, so an optional-with-runtime-fallback here
+   * would be a guard against a hypothetical future backend that does not
+   * exist yet — code review on PR #2025 flagged that as premature
+   * abstraction. Add it back as optional only when a second backend that
+   * genuinely cannot support checkpoints is introduced.
+   */
+  createCheckpoint(comment: string): Promise<void>;
 }
 
 /**
@@ -113,6 +145,13 @@ export interface MachineHost {
     name: string;
     substrate: MachineSubstrateSpec;
     options: SandboxCreateOptions;
+    /**
+     * The lockdown token recorded for this machine — proof that a policy was
+     * applied to a specific VM instance (see `egress-lockdown.ts`). Absent, stale,
+     * or naming a VM that has since been replaced → the backend re-applies the
+     * lockdown; still valid → it skips the redundant push on a warm resume.
+     */
+    appliedEgressToken?: string | null;
   }): Promise<MachineHandle>;
   attach(args: { machineId: string }): Promise<MachineHandle | null>;
   kill(args: { machineId: string }): Promise<void>;

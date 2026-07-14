@@ -32,6 +32,7 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
+import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -58,6 +59,7 @@ import { buildSystemPrompt, buildPersonalizationPrompt } from '@/lib/ai/core/sys
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
+import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
@@ -85,7 +87,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
 import { userProfiles } from '@pagespace/db/schema/members';
-import { createId } from '@paralleldrive/cuid2';
+import { createId, isCuid } from '@paralleldrive/cuid2';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -97,6 +99,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import { expandMentionsToUserIds } from '@/lib/channels/expand-group-mentions';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
+  attachStreamFinisher,
   createStreamAbortController,
   removeStream,
   STREAM_ID_HEADER,
@@ -386,6 +389,79 @@ export async function POST(request: Request) {
       includeDrivePrompt: page.includeDrivePrompt,
       hasDrivePrompt: !!drivePromptPrefix
     });
+
+    // conversationId is caller-supplied, and the history load below is keyed on
+    // (pageId, conversationId) with NO user filter — so an id that resolves to
+    // someone else's conversation reads their private history into the model context
+    // and appends this user's message to it. Two rules, both enforced here:
+    //
+    //  1. A conversation may only ever be CREATED from a cuid. The client used to
+    //     send a `${pageId}-default` sentinel for a brand-new chat and this route
+    //     accepted it unvalidated, minting a real conversations row under it — which
+    //     the client then refused to load, stranding the history. Those rows exist in
+    //     production and the client now loads and keeps using them, so a bare isCuid
+    //     reject would lock those users out of the history we just gave them back.
+    //     Hence: a non-cuid id is accepted only if its row ALREADY exists.
+    //
+    //  2. An EXISTING conversation must be one this user may actually write to —
+    //     their own, or an explicitly shared one — and must belong to this page.
+    //     Without this, `${pageId}-default` is a guessable id (it is derived from the
+    //     page id) that any member with edit access could use to read a co-member's
+    //     private conversation. Conversations are private by default.
+    let existingConversation: Awaited<ReturnType<typeof conversationRepository.getConversation>> = null;
+    if (requestConversationId) {
+      // Deliberately un-caught. A DB error here must not degrade into "no row exists",
+      // which is the branch that lets a fresh cuid through — an authorization check that
+      // fails open on a blip is not a check. A throw lands in the route's 500 handler.
+      existingConversation = await conversationRepository.getConversation(requestConversationId);
+
+      if (!existingConversation) {
+        if (!isCuid(requestConversationId)) {
+          loggers.ai.warn('AI Chat API: rejected non-cuid conversationId with no existing row', {
+            userId,
+            requestConversationId,
+          });
+          return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 });
+        }
+        // No `conversations` row does NOT prove the conversation is new. A LEGACY
+        // conversation (messages written before the conversations table was populated)
+        // has messages under its id and no row — and the ownership check below would be
+        // skipped for it entirely, so a caller supplying someone else's legacy cuid would
+        // read that history into their model context, append to it, and now (since
+        // takeover aborts as the stream's owner) be able to abort its stream too. Fail
+        // closed on the same signal `createConversation` uses for the row itself.
+        // No `.catch(() => false)` here: this is an authorization check, and swallowing a
+        // DB error into "no conflict" would fail OPEN on exactly the blip an attacker
+        // would like to cause. A throw here lands in the route's 500 handler.
+        const hasConflictingOwner = await conversationRepository
+          .hasConflictingMessageOwner(requestConversationId, userId!);
+        if (hasConflictingOwner) {
+          loggers.ai.warn('AI Chat API: rejected legacy conversationId owned by another user', {
+            userId,
+            requestConversationId,
+          });
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      } else {
+        const ownsIt = existingConversation.userId === userId;
+        const isSharedConversation = existingConversation.isShared === true;
+        // contextId is nullable in the schema (null for global conversations), so only
+        // enforce the page match when it is actually set — an owner must never be
+        // locked out of their own row by a historically-unset column.
+        const belongsToThisPage =
+          !existingConversation.contextId || existingConversation.contextId === chatId;
+        if ((!ownsIt && !isSharedConversation) || !belongsToThisPage) {
+          loggers.ai.warn('AI Chat API: rejected conversationId the caller may not write to', {
+            userId,
+            requestConversationId,
+            ownsIt,
+            isSharedConversation,
+            belongsToThisPage,
+          });
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        }
+      }
+    }
 
     // Auto-generate conversationId if not provided (seamless UX)
     conversationId = requestConversationId || createId();
@@ -935,14 +1011,14 @@ export async function POST(request: Request) {
     }
 
     // Build system prompt for Page AI - use custom system prompt if available, otherwise use default
+    // Note: "current page/drive" is turn-volatile — it's built separately as
+    // `locationPrompt` below and injected via buildVolatileTurnContext, NOT
+    // baked in here, so this string stays byte-identical across turns.
     let systemPrompt: string;
     if (customSystemPrompt) {
       // Use custom system prompt with page context injected
       // Prepend drive prompt if enabled and available
       systemPrompt = drivePromptPrefix + customSystemPrompt;
-      if (pageContext) {
-        systemPrompt += `\n\nYou are operating within the page "${pageContext.pageTitle}" in the "${pageContext.driveName}" drive. Your current location: ${pageContext.pagePath}`;
-      }
       // Add user personalization if enabled
       const personalizationPrompt = buildPersonalizationPrompt(personalization ?? undefined);
       if (personalizationPrompt) {
@@ -955,33 +1031,28 @@ export async function POST(request: Request) {
     } else {
       // Fallback to default PageSpace system prompt with read-only mode and personalization
       systemPrompt = buildSystemPrompt(
-        'page',
-        pageContext ? {
-          driveName: pageContext.driveName,
-          driveSlug: pageContext.driveSlug,
-          driveId: pageContext.driveId,
-          pagePath: pageContext.pagePath,
-          pageType: pageContext.pageType,
-          breadcrumbs: pageContext.breadcrumbs,
-        } : undefined,
         readOnlyMode,
         personalization ?? undefined,
         isCodeExecutionEnabled()
       );
 
       // Append workspace knowledge (tool-aware). Custom systemPrompt = opt-out (blank slate).
-      systemPrompt += buildInlineInstructions(
-        {
-          pageTitle: pageContext?.pageTitle,
-          pageType: pageContext?.pageType,
-          driveName: pageContext?.driveName,
-          pagePath: pageContext?.pagePath,
-          driveSlug: pageContext?.driveSlug,
-          driveId: pageContext?.driveId,
-        },
-        allowedToolNames
-      );
+      systemPrompt += buildInlineInstructions(allowedToolNames);
     }
+
+    const locationPrompt = buildLocationTurnPrompt(pageContext ? {
+      currentPage: {
+        title: pageContext.pageTitle,
+        type: pageContext.pageType,
+        path: pageContext.pagePath,
+      },
+      currentDrive: pageContext.driveId ? {
+        id: pageContext.driveId,
+        name: pageContext.driveName,
+        slug: pageContext.driveSlug,
+      } : undefined,
+      breadcrumbs: pageContext.breadcrumbs,
+    } : undefined);
 
     // Cross-drive membership context applies uniformly regardless of whether
     // a custom system prompt is set (unlike drivePromptPrefix above, which is
@@ -1093,17 +1164,21 @@ export async function POST(request: Request) {
 
     serverAssistantMessageId = createId();
 
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
 
     const [userProfile] = await userProfilePromise;
     const displayName = userProfile?.displayName ?? user?.name ?? 'Someone';
 
+    // Reuse the row the conversationId validation above already fetched. A conversation
+    // that did NOT exist then was created by this request, so it is private by
+    // definition (createConversation inserts isShared: false) — which is also the
+    // fail-closed answer. Saves a second (and third) read of the same row per message.
+    isConversationShared = existingConversation?.isShared === true;
+
     if (userMessage && userMessage.role === 'user') {
       // Only broadcast to the page channel if the conversation is explicitly shared.
       // Fail closed: no broadcast if the row is missing or private.
-      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
-      isConversationShared = convRow?.isShared === true;
       const shouldBroadcast = isConversationShared;
       if (shouldBroadcast) {
         broadcastChatUserMessage({
@@ -1113,15 +1188,31 @@ export async function POST(request: Request) {
           triggeredBy: { userId: userId!, displayName, browserSessionId },
         }).catch(() => {});
       }
-    } else if (userMessage?.role === 'assistant') {
-      // ask_user resume turn: no new user message to broadcast, but
-      // isConversationShared still gates the mention-notify call below for
-      // the agent's reply — must still be computed here, or it silently
-      // stays at its initial `false` and mention notifications are dropped
-      // for every turn that follows an answered ask_user question.
-      const convRow = await conversationRepository.getConversation(conversationId!).catch(() => null);
-      isConversationShared = convRow?.isShared === true;
     }
+
+    // Per-conversation in-flight guard. A second send takes the conversation OVER — aborts
+    // whatever is live, reconciles its row — rather than being rejected, because a row whose
+    // terminal write never landed (crashed process; the write is fire-and-forget) would
+    // otherwise lock the user out of their own chat. See stream-liveness.ts.
+    //
+    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
+    // comment used to claim that it did. It is a check-then-act with no serialization: the SELECT
+    // inside takeOverConversationStreams and the INSERT inside createStreamLifecycle (a few
+    // statements below) are not atomic together. Two near-simultaneous sends can BOTH see zero
+    // in-flight rows and BOTH proceed — two generations, two sets of tool calls, two bills.
+    //
+    // Deliberately not closed here: it needs DB-level serialization (an advisory lock spanning
+    // takeover+insert, or a partial unique index on (conversation_id) WHERE status='streaming' —
+    // whose migration would fail outright on any pre-existing duplicate rows, so it needs a
+    // reconciliation step first). That is its own change with its own migration risk, and `master`
+    // has no takeover at all — concurrent sends there ALWAYS double-generate — so this is a strict
+    // improvement, not a regression.
+    //
+    // Do not read what follows as if the race were closed. It is narrow, not absent.
+    await takeOverConversationStreams({
+      conversationId: conversationId!,
+      channelId: chatId,
+    });
 
     lifecycle = await createStreamLifecycle({
       messageId: serverAssistantMessageId,
@@ -1130,13 +1221,33 @@ export async function POST(request: Request) {
       userId: userId!,
       displayName,
       browserSessionId,
+      streamId,
+      isShared: isConversationShared,
     });
+
+    // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
+    // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
+    // this row to settle before deciding what to tell the user. See attachStreamFinisher.
+    attachStreamFinisher({ streamId, finish: lifecycle.finish });
+
+    // Pre-aborted: a pending-abort intent was consumed in createStreamLifecycle (#2028 item 1).
+    // The user pressed Stop during the preflight window. Abort the controller so streamText
+    // never starts; the lifecycle handle is already finished and its finish() is a no-op.
+    if (lifecycle.preAborted) {
+      abortController.abort();
+      removeStream({ streamId });
+    }
 
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
+          // Pre-aborted (#2028 item 1, see StreamLifecycleHandle.preAborted) — nothing past this
+          // point can ever reach the model. Skip straight to onFinish rather than relying on the
+          // already-aborted signal to short-circuit streamText's underlying fetch.
+          if (lifecycle!.preAborted) return;
+
           // Execution feedback (UX spec §7): announce one command indicator
           // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
           // the first parts of the assistant message, in the same order the
@@ -1169,12 +1280,14 @@ export async function POST(request: Request) {
             startTimeMs: startTime,
             logger: loggers.ai,
             buildStreamText: (messages) => {
-              // Volatile per-turn data (timestamp/mention/command) is appended
-              // to the last user message so the system prefix stays byte-stable
-              // and provider prefix caches (Anthropic/OpenAI/Gemini) are not
-              // invalidated on every turn.
+              // Volatile per-turn data (timestamp/location/mention/command) is
+              // appended to the last user message so the system prefix stays
+              // byte-stable and provider prefix caches (Anthropic/OpenAI/Gemini)
+              // are not invalidated on every turn — including turns where only
+              // the user's current page/drive changed.
               const turnContext = buildVolatileTurnContext({
                 timestampPrompt: timestampSystemPrompt,
+                locationPrompt,
                 mentionPrompt: mentionSystemPrompt,
                 commandPrompt: commandSystemPrompt,
               });
@@ -1222,6 +1335,15 @@ export async function POST(request: Request) {
                     slug: pageContext.driveSlug,
                   } : undefined,
                   breadcrumbs: pageContext.breadcrumbs,
+                } : undefined,
+                // Turn-start snapshot of the agent's working page — tools that
+                // shift focus (e.g. create_page) mutate this in place so later
+                // tool calls in the same turn track the agent's own actions
+                // rather than staying pinned to the turn-start snapshot.
+                currentWorkingPage: pageContext ? {
+                  id: pageContext.pageId,
+                  title: pageContext.pageTitle,
+                  type: pageContext.pageType,
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
@@ -1420,7 +1542,10 @@ export async function POST(request: Request) {
               conversationId, // Use actual conversation ID instead of pageId
               messageId,
               pageId: chatId,
-              driveId: pageContext?.driveId,
+              // Empty string (no drive in view) must read as "no drive", not a
+              // literal '' driveId — matches the truthy-guards used elsewhere
+              // in this file for the same pageContext.driveId field.
+              driveId: pageContext?.driveId || undefined,
               // 'exhausted' = retry shell gave up (failure); clean/terminal = a real
               // completion. Cost still settles regardless (the provider charged us).
               success: agentRun?.finalOutcome !== 'exhausted',

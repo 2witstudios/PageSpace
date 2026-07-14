@@ -2,9 +2,9 @@
  * Prompt assembly helpers for prefix-stable, cache-friendly AI requests.
  *
  * Key invariants enforced here:
- * - Volatile per-turn data (timestamp, mention, command) lives on the last
- *   user message, NOT in the system prompt, so the system prefix stays
- *   byte-identical across turns and provider prefix caches survive.
+ * - Volatile per-turn data (timestamp, location, mention, command) lives on
+ *   the last user message, NOT in the system prompt, so the system prefix
+ *   stays byte-identical across turns and provider prefix caches survive.
  * - Cache breakpoints are placed at message-level via providerOptions so
  *   OpenRouter's Anthropic prefix cache can be activated per turn/step.
  * - Nothing in this module reads the clock or mutates its inputs.
@@ -18,12 +18,20 @@ export interface VolatileTurnContextInput {
   timestampPrompt: string;
   mentionPrompt: string;
   commandPrompt: string;
+  /**
+   * The user's current page/drive, rebuilt fresh every turn (see
+   * location-prompt.ts). Lives here — not the stable system prompt — so a
+   * turn where only the user's location changed doesn't bust the provider
+   * prompt-cache prefix, and so a long tool-call loop still reflects
+   * wherever the user actually was when they sent this turn's message.
+   */
+  locationPrompt?: string;
 }
 
 // ─── Volatile context assembly ────────────────────────────────────────────────
 
 /**
- * Build the volatile per-turn context block from the three prompt fragments.
+ * Build the volatile per-turn context block from the prompt fragments.
  * Empty/whitespace-only fragments are omitted. The result is suitable for
  * appending to the last user message (not the system prompt).
  *
@@ -33,6 +41,7 @@ export function buildVolatileTurnContext(input: VolatileTurnContextInput): strin
   const parts: string[] = [];
 
   if (input.timestampPrompt.trim()) parts.push(input.timestampPrompt.trim());
+  if (input.locationPrompt?.trim()) parts.push(input.locationPrompt.trim());
   if (input.mentionPrompt.trim()) parts.push(input.mentionPrompt.trim());
   if (input.commandPrompt.trim()) parts.push(input.commandPrompt.trim());
 

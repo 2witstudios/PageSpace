@@ -11,6 +11,7 @@
 
 import type { PageType } from '../../utils/enums';
 import { isMachinePage } from '../../content/page-types.config';
+import type { MachineSettings } from './machine-settings';
 
 export interface MachineAccessDeps {
   /** Looks up a page's type by id — returns null if the page doesn't exist. */
@@ -42,4 +43,38 @@ export async function canEditMachine(
 ): Promise<boolean> {
   if (!(await isMachine(deps, machineId))) return false;
   return deps.canUserEditPage(actorUserId, machineId);
+}
+
+/**
+ * The actor kinds the Machine Settings access toggles discriminate between.
+ * A 'page-agent' is any agent acting under an agent page identity (its own
+ * `agentPageId`, or a parent's for a sub-agent); 'global-assistant' is the
+ * user-level assistant with no agent page.
+ */
+export type MachineToggleActor = 'page-agent' | 'global-assistant';
+
+export type MachineToggleDenialCode = 'page_agents_disabled' | 'hidden_from_global';
+
+export type MachineToggleDecision = { allowed: true } | { allowed: false; code: MachineToggleDenialCode };
+
+/**
+ * Pure policy for the two per-Machine access toggles persisted by the
+ * Settings tab (see `MachineSettings` in machine-settings.ts):
+ * `allowPageAgents` gates page-scoped agents, `visibleToGlobalAssistant`
+ * gates the global assistant. Each toggle applies ONLY to its own actor kind.
+ * This is the single source of the toggle semantics — enforcement boundaries
+ * (the AI sandbox machine directory today, any future Machine surface) call
+ * this instead of re-deriving the actor-kind × toggle matrix.
+ */
+export function decideMachineToggleAccess(input: {
+  actor: MachineToggleActor;
+  settings: Pick<MachineSettings, 'allowPageAgents' | 'visibleToGlobalAssistant'>;
+}): MachineToggleDecision {
+  if (input.actor === 'page-agent' && !input.settings.allowPageAgents) {
+    return { allowed: false, code: 'page_agents_disabled' };
+  }
+  if (input.actor === 'global-assistant' && !input.settings.visibleToGlobalAssistant) {
+    return { allowed: false, code: 'hidden_from_global' };
+  }
+  return { allowed: true };
 }

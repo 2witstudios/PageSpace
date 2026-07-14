@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
-import { and, asc, eq, gte } from '@pagespace/db/operators';
+import { and, asc, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { isStreamRowLive } from '@/lib/ai/core/stream-liveness';
+import { filterSubscribableStreams } from '@/lib/ai/core/stream-subscription-authz';
 import { authenticateRequestWithOptions } from '@/lib/auth/request-auth';
 import { isAuthError } from '@/lib/auth/auth-core';
 
@@ -61,8 +63,21 @@ export async function GET(request: Request) {
       }
     }
 
-    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-    const streams = await db
+    // Liveness is the heartbeat, and ONLY the heartbeat.
+    //
+    // There used to also be a `startedAt >= now - 10min` cap here, from before the
+    // heartbeat existed — a crude proxy for "probably not a crashed row". It has to go:
+    // this response is the authoritative answer to "what is still running on this
+    // channel" (consumers reconcile their Stop-slot claims against it), and the cap made
+    // that answer LIE about exactly the streams where it matters most. A deep-research or
+    // long tool-loop generation is still very much alive at minute 12 — and dropping it
+    // here would tell every subscriber it had ended, releasing the Stop button on a stream
+    // that keeps generating and keeps billing.
+    //
+    // The heartbeat already covers what the cap was for: a crashed process stops beating,
+    // and isStreamRowLive filters it out within STREAM_HEARTBEAT_STALE_MS.
+    const now = Date.now();
+    const rows = await db
       .select({
         messageId: aiStreamSessions.messageId,
         conversationId: aiStreamSessions.conversationId,
@@ -71,16 +86,24 @@ export async function GET(request: Request) {
         browserSessionId: aiStreamSessions.browserSessionId,
         parts: aiStreamSessions.parts,
         startedAt: aiStreamSessions.startedAt,
+        lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
       })
       .from(aiStreamSessions)
       .where(
         and(
           eq(aiStreamSessions.channelId, channelId),
           eq(aiStreamSessions.status, 'streaming'),
-          gte(aiStreamSessions.startedAt, tenMinutesAgo),
         )
       )
       .orderBy(asc(aiStreamSessions.startedAt), asc(aiStreamSessions.messageId));
+
+    // Page access is not enough. A page channel carries EVERY conversation on the page,
+    // and conversations are private by default — so returning every streaming row (with
+    // its buffered `parts` snapshot!) to anyone who can view the page hands one member's
+    // private conversation to all the others. Narrow to what this user may subscribe to:
+    // their own streams, plus streams in explicitly shared conversations.
+    const live = rows.filter((r) => isStreamRowLive(r, now));
+    const streams = await filterSubscribableStreams({ userId, rows: live });
 
     return NextResponse.json({
       streams: streams.map((s) => ({

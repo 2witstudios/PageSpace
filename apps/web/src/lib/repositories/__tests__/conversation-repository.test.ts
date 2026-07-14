@@ -172,6 +172,38 @@ describe('conversationRepository.createConversation', () => {
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
+  // THE SQUAT. The ownership guard used to be scoped to the caller's page — which is the one
+  // page an attacker would simply not stand on:
+  //
+  //   1. Victim has a legacy conversation C (real messages under page X, no conversations row).
+  //   2. Attacker, on their OWN page Y, sends with conversationId=C. Scoped to page Y the guard
+  //      saw nothing, so the row was INSERTED with the ATTACKER as owner.
+  //   3. The victim's next send on page X finds a row it does not own and that is not shared:
+  //      403, PERMANENTLY. Locked out of their own history, and deletion now trusts the
+  //      attacker's userId.
+  //
+  // "Who owns this conversation" is not a per-page question. The predicate must not mention the
+  // page at all — asserted here on the WHERE clause itself, because mocking the row lookup (as
+  // the tests above do) cannot see the scoping bug that let the wrong rows through.
+  it('asks who owns the conversation ACROSS ALL PAGES — a page-scoped guard let an attacker squat it from outside', async () => {
+    const chatMessagesWhere = vi.fn().mockResolvedValue([]);
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => ({ where: chatMessagesWhere }));
+    mockDb.insert = vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) }),
+    });
+
+    await conversationRepository.createConversation('conv-victim', 'attacker-user', 'attacker-page');
+
+    const predicate = chatMessagesWhere.mock.calls[0][0] as { kind: string; conds: Array<{ field?: string }> };
+    const fields = predicate.conds.map((c) => c.field);
+    expect(fields).toContain('chatMessages.conversationId');
+    expect(fields).toContain('chatMessages.isActive');
+    // The page must NOT narrow it — that narrowing IS the vulnerability.
+    expect(fields).not.toContain('chatMessages.pageId');
+  });
+
   it('creates the row when prior messages exist but all belong to the caller', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))

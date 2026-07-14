@@ -90,6 +90,51 @@ export interface ResolveMachineSandboxDeps {
    * `sdk.getSprite`, not three.
    */
   getSprite: (sandboxId: string) => Promise<SpriteInstanceLike>;
+  /**
+   * BRANCH-scope only (never machine/project — those run ON the root
+   * Sprite, which already has its own credential): refresh the branch
+   * Sprite's Claude Code credential from the root Machine's Sprite before
+   * handing back a fresh PTY resolution. This is the actual attach path a
+   * user's branch agent terminal goes through — `spawnBranch`/`attachBranch`
+   * (`machine-branches.ts`) only cover branch creation and the navigator's
+   * explicit attach API, neither of which this realtime PTY bridge calls.
+   *
+   * Optional so tests that don't exercise branch scope (or don't care about
+   * credential propagation) can omit it. Awaited by `resolveMachineSandbox`,
+   * but bounded by `CREDENTIAL_REFRESH_TIMEOUT_MS` (`withTimeout`) rather
+   * than either fully blocking or fire-and-forget — see the inline comment
+   * at that call site for why both extremes were tried and reverted. MUST
+   * still be best-effort on the implementation side — swallow its own
+   * failures — as defense in depth against an unhandled rejection.
+   */
+  refreshBranchCredential?: (args: { machineId: string; sandboxId: string }) => Promise<void>;
+}
+
+/**
+ * Hard cap on how long `refreshBranchCredential` may delay a fresh branch
+ * PTY open. Long enough for the common case (warm root + branch Sprite,
+ * normally well under a second) to complete reliably; short enough that a
+ * cold/hibernating Sprite's fs-timeout tail (up to ~60s, see the doc comment
+ * on `machine-branches.ts`'s `propagateClaudeCredential`) never turns into a
+ * near-minute-long terminal-open stall.
+ */
+const CREDENTIAL_REFRESH_TIMEOUT_MS = 5_000;
+
+/** Resolve once `promise` settles OR `timeoutMs` elapses, whichever first — never rejects. The timer is always cleared, and `promise` keeps running past the bound rather than being cancelled (a slow settle still lands, just too late to have been waited on). */
+function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+    );
+  });
 }
 
 export type ResolveMachineSandboxResult =
@@ -130,6 +175,35 @@ export async function resolveMachineSandbox(
     sprite = await deps.getSprite(resolved.sandboxId);
   } catch {
     return { ok: false, reason: 'provision_failed', sandboxId: resolved.sandboxId };
+  }
+
+  // Both `projectName` AND `branchName` must be set for true branch scope —
+  // matching `resolveScopeKey`/`resolveScopeLocation`'s own discriminator
+  // (`agent-terminals.ts`), rather than relying on the implicit invariant
+  // that a real `resolveAgentTerminal` already rejects `branchName` without
+  // `projectName` as `invalid_target` before ever reaching here. Checking
+  // both explicitly means this gate stays correct even if that upstream
+  // validation ever changes, or a caller wires a resolver that doesn't
+  // enforce it (e.g. a test double).
+  if (target.projectName !== undefined && target.branchName !== undefined && deps.refreshBranchCredential) {
+    // Awaited, but bounded — NOT fire-and-forget (tried that, reverted: a
+    // fresh branch-scoped Claude terminal calls `openShell` with `claude`
+    // immediately after this resolves, and copying the credential moments
+    // later does nothing for a process that already started without it —
+    // see review history). Also NOT unbounded: a cold/hibernating Sprite's
+    // fs read/write can take up to the Sprite fs API's 30s timeout, WITH one
+    // retry (so up to ~60s), and blocking every branch PTY open on that
+    // would regress this codebase's Sprite invariant that opening a PTY is
+    // itself the wake and nothing upstream waits long on it. The bound
+    // covers the common case (warm root + branch Sprite, sub-second)
+    // reliably while capping the cold-Sprite worst case to a few seconds —
+    // still slower than ideal, but nowhere near a minute-long stall. The
+    // refresh keeps running past the bound rather than being cancelled — a
+    // slow copy still lands, just too late to help THIS launch.
+    await withTimeout(
+      deps.refreshBranchCredential({ machineId: target.machineId, sandboxId: resolved.sandboxId }),
+      CREDENTIAL_REFRESH_TIMEOUT_MS,
+    );
   }
 
   return {

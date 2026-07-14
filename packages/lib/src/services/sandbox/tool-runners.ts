@@ -31,6 +31,12 @@ import { truncateToBytes } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
+import {
+  shouldCheckpoint,
+  checkpointComment,
+  coalesceCheckpointAttempt,
+  type CheckpointState,
+} from './checkpoint-policy';
 import { getValidatedEnv } from '../../config/env-validation';
 import {
   resolveMachinePageId,
@@ -60,6 +66,15 @@ export interface SandboxActorContext {
   tier: SubscriptionTier;
   /** The ACTIVE machine this call routes to (Terminal epics); undefined defaults to 'own'. */
   activeMachine?: MachineRefLike;
+  /**
+   * Stable id for the CURRENT agent turn (one streamText run) — the same value
+   * for every tool call within that run, a fresh value for the next one.
+   * Threads into the pre-batch checkpoint's throttle (`deps.checkpoint`, Sprites
+   * Platform Alignment 5-2): at most one checkpoint per turnId. Undefined → no
+   * reliable turn boundary to key the throttle on, so checkpointing is skipped
+   * for that call rather than guessed at.
+   */
+  turnId?: string;
 }
 
 export interface SandboxQuotaDeps {
@@ -114,6 +129,32 @@ export interface TerminalActivityNotification {
   agentLabel: string;
 }
 
+/**
+ * Pre-batch checkpoint seam (Sprites Platform Alignment 5-2): before an agent
+ * bash batch runs, optionally snapshot the sandbox's writable filesystem so a
+ * destructive command (the canonical worry: an agent `rm -rf`ing /workspace —
+ * see `sprites.ts`'s `spawnWithSelfHealingCwd` doc) is a restore, not a
+ * bricked machine. Restore itself stays a manual/admin action — this seam only
+ * ever CREATES checkpoints, never restores one.
+ *
+ * `getState`/`recordCheckpoint` are the bookkeeping the pure `shouldCheckpoint`
+ * policy (`checkpoint-policy.ts`) needs to enforce "at most once per turn" +
+ * the rapid-batch throttle; production wires them to an in-process Map keyed
+ * by sandboxId (mirrors `quota.ts`'s `machineActivityByKey` — no persistence,
+ * no reaper). `createCheckpoint` is the actual SDK call against a live,
+ * already-awake sandbox handle.
+ */
+export interface SandboxCheckpointDeps {
+  /** The feature flag, re-checked fresh per batch. */
+  isEnabled: () => boolean;
+  /** Read the last-checkpoint bookkeeping for `sandboxId` (empty state if never recorded). */
+  getState: (sandboxId: string) => CheckpointState;
+  /** Persist that `sandboxId` was just checkpointed, per the pure policy's decision. */
+  recordCheckpoint: (sandboxId: string, state: CheckpointState) => void;
+  /** Create the checkpoint itself against a live sandbox handle, tagged with `comment`. */
+  createCheckpoint: (input: { sandbox: ExecutableSandbox; comment: string }) => Promise<void>;
+}
+
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
   /** Pre-bound `acquireMachineSandbox` (lifecycle deps already injected). */
@@ -152,6 +193,12 @@ export interface SandboxRunDeps {
    * must never affect the tool result; omitting it disables measurement.
    */
   measureStorage?: (input: { sandbox: ExecutableSandbox; pageId: string }) => Promise<void>;
+  /**
+   * Optional pre-batch checkpoint seam (Sprites Platform Alignment 5-2). Omitted
+   * → no checkpointing (the seam is fully optional, matching every other
+   * optional seam in this file). See `SandboxCheckpointDeps`.
+   */
+  checkpoint?: SandboxCheckpointDeps;
   now: () => Date;
   logger?: {
     warn?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -468,6 +515,93 @@ async function openSession(
   }
 }
 
+/**
+ * Wall-clock cap on the checkpoint SDK call, so a stalled checkpoint can never
+ * violate `maybeCheckpointBeforeBatch`'s fail-open guarantee below (P2 review
+ * finding, PR #2025: without this, an `await` on a hung checkpoint stream
+ * never reaches the `catch`, so the bash command never starts and the
+ * quota/billing slot stays held until the outer request times out — the
+ * opposite of "never block agent work on checkpoint availability"). Generous
+ * relative to the platform's documented ~300ms COW checkpoint time, but far
+ * short of a bash command's own timeout (`SANDBOX_TIMEOUT_MS`, 120s) so a
+ * hang can't eat meaningfully into the user's command budget. This bounds the
+ * PROMISE from the caller's perspective regardless of what `deps.checkpoint`
+ * happens to be wired to; the production Sprites driver (`sprites.ts`)
+ * additionally bounds and cleans up the underlying stream itself.
+ */
+export const CHECKPOINT_TIMEOUT_MS = 10_000;
+
+function withCheckpointTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Checkpoint timed out after ${ms}ms`)), ms);
+    p.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/**
+ * Best-effort, fail-open pre-batch checkpoint: if `deps.checkpoint` is wired,
+ * the flag is on, and the pure `shouldCheckpoint` policy says this turn hasn't
+ * been checkpointed yet, snapshot the sandbox's filesystem BEFORE the bash
+ * batch executes (never after — the whole point is a state to restore TO).
+ *
+ * A missing `ctx.turnId` skips checkpointing outright rather than guessing at
+ * a turn boundary. Any failure (state read, a timeout, the checkpoint SDK
+ * call itself) is logged and swallowed — this must never block or fail the
+ * caller's batch on checkpoint availability (bounded by
+ * `CHECKPOINT_TIMEOUT_MS` above). On success the bookkeeping is recorded so a
+ * later batch in the SAME turn does not re-checkpoint; on failure nothing is
+ * recorded, so a later batch in the same turn gets another attempt.
+ *
+ * The actual attempt is wrapped in `coalesceCheckpointAttempt` so concurrent
+ * tool calls in one turn (the AI SDK can execute several bash calls from one
+ * agent step in parallel) share a single checkpoint instead of each
+ * independently passing the synchronous `shouldCheckpoint` check and racing
+ * to create their own — see that function's doc for why this closes the race
+ * regardless of exact timing between callers.
+ */
+async function maybeCheckpointBeforeBatch({
+  ctx,
+  deps,
+  sandbox,
+}: {
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+  sandbox: ExecutableSandbox;
+}): Promise<void> {
+  const checkpoint = deps.checkpoint;
+  if (!checkpoint || !ctx.turnId) return;
+  const turnId = ctx.turnId;
+
+  try {
+    const state = checkpoint.getState(sandbox.sandboxId);
+    if (
+      !shouldCheckpoint({
+        flagEnabled: checkpoint.isEnabled(),
+        turnId,
+        lastCheckpointTurnId: state.lastCheckpointTurnId,
+      })
+    ) {
+      return;
+    }
+    await coalesceCheckpointAttempt(sandbox.sandboxId, async () => {
+      await withCheckpointTimeout(
+        checkpoint.createCheckpoint({ sandbox, comment: checkpointComment(turnId) }),
+        CHECKPOINT_TIMEOUT_MS,
+      );
+      checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: deps.now(), lastCheckpointTurnId: turnId });
+    });
+  } catch (error) {
+    safeLogWarn(deps.logger, 'Pre-agent checkpoint failed (proceeding without one)', {
+      sandboxId: sandbox.sandboxId,
+      turnId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function runBashInSandbox({
   command,
   cwd,
@@ -521,6 +655,8 @@ export async function runBashInSandbox({
   }>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
+
+  await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
 
   try {
     const startedAt = deps.now();

@@ -11,6 +11,7 @@ const {
   mockCanViewMachine,
   mockCreateDbMachineSettingsStore,
   mockCreateMachineSpriteTeardown,
+  mockCreateDbMachineRefScrub,
   mockGetMachineSettings,
   mockUpdateMachineSettings,
   mockDeleteMachine,
@@ -23,6 +24,7 @@ const {
   mockCanViewMachine: vi.fn(),
   mockCreateDbMachineSettingsStore: vi.fn(),
   mockCreateMachineSpriteTeardown: vi.fn(),
+  mockCreateDbMachineRefScrub: vi.fn(),
   mockGetMachineSettings: vi.fn(),
   mockUpdateMachineSettings: vi.fn(),
   mockDeleteMachine: vi.fn(),
@@ -46,6 +48,7 @@ vi.mock('@/lib/machines/machine-settings-runtime', () => ({
   canViewMachine: (...args: unknown[]) => mockCanViewMachine(...args),
   createDbMachineSettingsStore: (...args: unknown[]) => mockCreateDbMachineSettingsStore(...args),
   createMachineSpriteTeardown: (...args: unknown[]) => mockCreateMachineSpriteTeardown(...args),
+  createDbMachineRefScrub: (...args: unknown[]) => mockCreateDbMachineRefScrub(...args),
 }));
 
 vi.mock('@pagespace/lib/services/machines/machine-settings', () => ({
@@ -68,12 +71,14 @@ const SETTINGS = {
 
 const FAKE_STORE = {} as never;
 const FAKE_SPRITE = {} as never;
+const FAKE_REFS = {} as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequest.mockResolvedValue(AUTH_OK);
   mockCreateDbMachineSettingsStore.mockReturnValue(FAKE_STORE);
   mockCreateMachineSpriteTeardown.mockReturnValue(FAKE_SPRITE);
+  mockCreateDbMachineRefScrub.mockReturnValue(FAKE_REFS);
 });
 
 describe('GET /api/machines/settings', () => {
@@ -235,23 +240,26 @@ describe('DELETE /api/machines/settings', () => {
     expect(res.status).toBe(404);
   });
 
-  it('given a successful delete, returns 200 with the teardown outcome and audits the delete', async () => {
+  it('given a successful delete, returns 200 with the teardown/scrub outcomes and audits the delete', async () => {
     mockCanDeleteMachine.mockResolvedValue(true);
-    mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: true });
+    mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: true, agentRefsScrubbed: true });
     const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ success: true, spriteTornDown: true });
+    expect(body).toEqual({ success: true, spriteTornDown: true, agentRefsScrubbed: true });
     expect(mockDeleteMachine).toHaveBeenCalledWith(
-      expect.objectContaining({ machineId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE }),
+      expect.objectContaining({ machineId: 't1', store: FAKE_STORE, sprite: FAKE_SPRITE, refs: FAKE_REFS }),
     );
+    // The canonical trash + ref scrub both act AS the deleting user.
+    expect(mockCreateDbMachineSettingsStore).toHaveBeenCalledWith('user-1');
+    expect(mockCreateDbMachineRefScrub).toHaveBeenCalledWith('user-1');
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         eventType: 'data.delete',
         userId: 'user-1',
         resourceId: 't1',
-        details: { spriteTornDown: true },
+        details: { spriteTornDown: true, agentRefsScrubbed: true },
       }),
     );
   });
@@ -271,10 +279,19 @@ describe('DELETE /api/machines/settings', () => {
 
   it('given a delete where Sprite teardown failed, still returns 200 (page trashed)', async () => {
     mockCanDeleteMachine.mockResolvedValue(true);
-    mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: false });
+    mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: false, agentRefsScrubbed: true });
     const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ success: true, spriteTornDown: false });
+    expect(body).toEqual({ success: true, spriteTornDown: false, agentRefsScrubbed: true });
+  });
+
+  it('given a delete where the ref scrub failed, still returns 200 and reports it', async () => {
+    mockCanDeleteMachine.mockResolvedValue(true);
+    mockDeleteMachine.mockResolvedValue({ ok: true, spriteTornDown: true, agentRefsScrubbed: false });
+    const res = await DELETE(new Request('https://x.test/api/machines/settings?machineId=t1', { method: 'DELETE' }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ success: true, spriteTornDown: true, agentRefsScrubbed: false });
   });
 });

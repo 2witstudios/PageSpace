@@ -1,4 +1,5 @@
 import {
+  withKillSession,
   resolveSpritesToken,
   type SpritesSdk,
   type SpriteInstanceLike,
@@ -36,9 +37,11 @@ export async function getRealtimeSpritesSdk(): Promise<SpritesSdk> {
   const importEsm = new Function('s', 'return import(s)') as <T = unknown>(s: string) => Promise<T>;
   const { SpritesClient } = await importEsm<typeof import('@fly/sprites')>('@fly/sprites');
   const client = new SpritesClient(resolveSpritesToken());
+  // withKillSession bolts the REST kill-session method onto the raw SDK
+  // instance — see its doc (sprites.ts) for why the SDK needs this at all.
   cachedSdk = {
-    getSprite: (name) => client.getSprite(name) as unknown as Promise<SpriteInstanceLike>,
-    createSprite: (name, config) => client.createSprite(name, config) as unknown as Promise<SpriteInstanceLike>,
+    getSprite: async (name) => withKillSession(await client.getSprite(name)) as unknown as SpriteInstanceLike,
+    createSprite: async (name, config) => withKillSession(await client.createSprite(name, config)) as unknown as SpriteInstanceLike,
     deleteSprite: (name) => client.deleteSprite(name),
   };
   return cachedSdk;

@@ -1,0 +1,2 @@
+ALTER TABLE "ai_stream_sessions" ADD COLUMN "last_heartbeat_at" timestamp DEFAULT now() NOT NULL;--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "ai_stream_sessions_conversation_status_idx" ON "ai_stream_sessions" USING btree ("conversation_id","status");

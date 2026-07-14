@@ -11,10 +11,17 @@
  * Session-only (no MCP/agent tokens) — this is a human/UI surface; the agent
  * has its own `git_clone` tool. Every request re-checks access for the named
  * page (view-level for GET, edit-level for POST/DELETE).
+ *
+ * `name` on POST is FREE TEXT. The server normalizes it into a valid directory
+ * slug (`normalizeProjectName`, inside `addProject`) rather than rejecting it,
+ * and the response echoes the canonical name — clients should render THAT, not
+ * what the user typed. (A client-side live preview of the same normalization is
+ * a separate follow-up; it would be a convenience, never the authority.)
  */
 
 import { NextResponse } from 'next/server';
 import { addProject, listProjects, removeProject } from '@pagespace/lib/services/machines/machine-projects';
+import { hasNameContent } from '@pagespace/lib/services/machines/name-slug';
 import {
   buildMachineProjectsDeps,
   canAccessMachine,
@@ -32,6 +39,11 @@ function requireMachineId(machineId: unknown): { ok: true; machineId: string } |
     return { ok: false, error: NextResponse.json({ error: 'machineId is required' }, { status: 400 }) };
   }
   return { ok: true, machineId };
+}
+
+/** One message for both fields, so the two guards below cannot drift apart. */
+function missingNameOrRepoUrl(): NextResponse {
+  return NextResponse.json({ error: 'name and repoUrl are required non-empty strings' }, { status: 400 });
 }
 
 const ADD_PROJECT_DENIAL_STATUS: Record<string, number> = {
@@ -76,9 +88,23 @@ export async function POST(request: Request) {
   const parsed = requireMachineId(body.machineId);
   if (!parsed.ok) return parsed.error;
 
-  if (typeof body.name !== 'string' || typeof body.repoUrl !== 'string') {
-    return NextResponse.json({ error: 'name and repoUrl are required strings' }, { status: 400 });
-  }
+  // A NAMELESS name is a MISSING field, not free text to be normalized — accepting
+  // it would silently clone the repo into a directory called `project`. And
+  // "nameless" is broader than "blank": `"   "`, `"."`, `".."` and `"//"` all
+  // normalize to that same fallback, so the guard uses the normalizer's own
+  // `hasNameContent` rather than a `.trim()` that only catches whitespace. The
+  // branches route draws the same line (`requireName`).
+  //
+  // `repoUrl` is NOT normalized (there is no way to turn a non-HTTPS remote into an
+  // HTTPS one), so it is only checked for PRESENCE here — `isValidRepoUrl`, inside
+  // `addProject`, remains the real validator. It still has to be non-empty for the
+  // message below to be true of it.
+  //
+  // Two separate statements rather than one `||` over aliased booleans: TypeScript's
+  // narrowing does not flow out of that form, so `body.name` would still be `unknown`
+  // at the `addProject` call.
+  if (typeof body.name !== 'string' || !hasNameContent(body.name)) return missingNameOrRepoUrl();
+  if (typeof body.repoUrl !== 'string' || body.repoUrl.trim().length === 0) return missingNameOrRepoUrl();
 
   if (!(await canAccessMachine(auth.userId, parsed.machineId))) {
     return NextResponse.json({ error: 'You do not have access to this machine' }, { status: 403 });
@@ -110,8 +136,12 @@ export async function DELETE(request: Request) {
   const parsed = requireMachineId(url.searchParams.get('machineId'));
   if (!parsed.ok) return parsed.error;
 
+  // This guard matters MORE than the one on POST: `removeProject` normalizes its
+  // lookup key, so a nameless `?name=` resolves to the FALLBACK and would `rm -rf`
+  // a real project called `project`. `..` and `//` are nameless too, not just
+  // whitespace — hence `hasNameContent` and not `.trim()`.
   const name = url.searchParams.get('name');
-  if (!name) {
+  if (!name || !hasNameContent(name)) {
     return NextResponse.json({ error: 'name is required' }, { status: 400 });
   }
 

@@ -13,11 +13,13 @@ import { decryptField } from '../encryption/field-crypto';
 // Export types and guards
 export * from './types';
 export * from './guards';
+export * from './derive-badge-count';
 import type { NotificationType } from './types';
+import { deriveBadgeCount } from './derive-badge-count';
 
 async function sendBadgedPush(userId: string, payload: PushNotificationPayload) {
   try {
-    const badge = await getUnreadNotificationCount(userId);
+    const badge = deriveBadgeCount(await getUnreadNotificationCount(userId));
     await sendPushNotification(userId, { ...payload, badge });
   } catch (error) {
     console.error('Failed to send badged push notification:', error);
@@ -26,7 +28,7 @@ async function sendBadgedPush(userId: string, payload: PushNotificationPayload) 
 
 async function sendSilentBadgeUpdate(userId: string) {
   try {
-    const badge = await getUnreadNotificationCount(userId);
+    const badge = deriveBadgeCount(await getUnreadNotificationCount(userId));
     await sendPushNotification(userId, { silent: true, badge });
   } catch (error) {
     console.error('Failed to send silent badge update:', error);

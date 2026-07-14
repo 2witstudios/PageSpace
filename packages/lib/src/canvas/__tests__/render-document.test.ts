@@ -188,6 +188,16 @@ describe('renderCanvasDocument — theme bridge', () => {
     const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true });
     expect(out).toContain("'dark'");
   });
+
+  // Regression: the in-app iframe inherits the dashboard's outer nonce-based CSP
+  // (see the `nonce` doc comment on RenderCanvasDocumentInput). Without a matching
+  // nonce on the theme-bridge script itself, the browser blocks it even though
+  // author <script> tags are correctly stamped — "Refused to execute inline
+  // script" for the theme bridge specifically.
+  it('given injectThemeBridge: true AND a nonce, should stamp the nonce onto the theme-bridge script too', () => {
+    const out = renderCanvasDocument({ html: '<p>x</p>', injectThemeBridge: true, nonce: 'app-nonce==' });
+    expect(out).toContain('<script nonce="app-nonce==">(function(){');
+  });
 });
 
 describe('renderCanvasDocument — favicon', () => {
@@ -874,5 +884,23 @@ describe('renderCanvasDocument — Twitter Card', () => {
       expect(out.slice(0, headEnd)).toContain('body { color: red; }');
       expect(out).toContain('<nav>hi</nav>');
     });
+  });
+});
+
+describe('renderCanvasDocument — cspOverride', () => {
+  it('given no cspOverride, should stay byte-identical to the buildBaselineCsp-derived output', () => {
+    const input = { html: '<p>x</p>', title: 'T', pageUrl: 'https://acme.pagespace.site/x' };
+    expect(renderCanvasDocument(input)).toBe(renderCanvasDocument(input));
+    expect(renderCanvasDocument({ html: '<p>x</p>' })).toContain(`content="${BASELINE_CSP}"`);
+  });
+
+  it('given a cspOverride, should use it verbatim instead of buildBaselineCsp', () => {
+    const out = renderCanvasDocument({
+      html: '<p>x</p>',
+      formActionOrigin: 'https://ignored.example',
+      cspOverride: "default-src 'none'; script-src 'none';",
+    });
+    expect(out).toContain('content="default-src \'none\'; script-src \'none\';"');
+    expect(out).not.toContain('ignored.example');
   });
 });

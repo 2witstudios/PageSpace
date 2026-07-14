@@ -7,7 +7,11 @@ import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-te
 
 export interface AgentTerminal {
   name: string;
-  agentType: AgentRuntimeType;
+  // A raw DB value, not narrowed to AgentRuntimeType — a row can carry an
+  // agentType from a since-retired AGENT_LAUNCH_SPECS entry (e.g. the removed
+  // 'pagespace-cli'). Callers check `isAgentRuntimeType(agentType)` before
+  // treating it as a launchable one (see WorkspaceLeaves.tsx).
+  agentType: string;
   createdAt: string;
 }
 

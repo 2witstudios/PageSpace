@@ -1,0 +1,202 @@
+/**
+ * The slug primitive shared by Machine name normalization (pure, no I/O).
+ *
+ * Branch names (`branch-session.ts`) and Project directory names
+ * (`project-paths.ts`) are both "normalize-and-accept": a user types free text
+ * and we slugify it into something their respective `isValid*` predicate
+ * accepts, instead of rejecting them with an error. The one rule the two share
+ * is what a single ref/path SEGMENT may contain — lowercase ASCII
+ * alphanumerics plus `.` and `-` — so that rule lives here, and each caller
+ * layers its own structure on top (a branch is `/`-joined segments; a project
+ * is exactly one segment).
+ *
+ * Deliberately NOT `utils/utils.ts`'s `slugify`: that one drops `.` and `/`
+ * outright and keeps `_`, which is wrong for a git ref, where `release/v1.2`
+ * must survive intact.
+ */
+
+/** Combining marks, left behind by the NFKD decomposition below (`é` → `e` + U+0301). */
+const DIACRITICS_RE = /[\u0300-\u036f]/g;
+
+/** Every character outside the segment charset — whitespace, `_`, `/`, emoji, and git's forbidden `~^:?*[\`. */
+const OUTSIDE_CHARSET_RE = /[^a-z0-9.-]+/g;
+
+/** A run of two or more separators. Collapsing these also destroys `..`, a token git forbids in a ref. */
+const SEPARATOR_RUN_RE = /[.-]{2,}/g;
+
+const LEADING_SEPARATORS_RE = /^[.-]+/;
+const TRAILING_SEPARATORS_RE = /[.-]+$/;
+
+/**
+ * Slugify one segment: fold accents down to ASCII, lowercase, replace every
+ * out-of-charset character with `-`, collapse separator runs, and trim the
+ * separators off both edges. Returns `''` when nothing survives — the caller
+ * decides what an empty slug means.
+ *
+ * Idempotent by construction: the output holds only charset characters, no
+ * separator runs, and no edge separators, so a second pass changes nothing.
+ */
+export function slugifySegment(input: string): string {
+  return input
+    .normalize('NFKD')
+    .replace(DIACRITICS_RE, '')
+    .toLowerCase()
+    .replace(OUTSIDE_CHARSET_RE, '-')
+    .replace(SEPARATOR_RUN_RE, '-')
+    .replace(LEADING_SEPARATORS_RE, '')
+    .replace(TRAILING_SEPARATORS_RE, '');
+}
+
+/** Nothing but separators and whitespace — structural noise (`..`, `.`, `   `, `//`), not a name. */
+const NOISE_ONLY_RE = /^[\s./-]*$/;
+
+/**
+ * Did the user type ANYTHING here, as opposed to pure path structure? `..`, `.`,
+ * `/` and `   ` are structure. `日本語`, `🚀`, `___` and `!!!` are all *something*
+ * the user typed, even when the slug charset annihilates them entirely.
+ *
+ * Only consulted when NOTHING survived slugification, to choose between dropping
+ * the segment and keeping a `slugDigest` token — and it is deliberately more
+ * eager than `destroysNameContent`. Losing `!` from `a!b` is harmless (it still
+ * says `a-b`), but `!!!` slugifies to nothing, and dropping it would put the name
+ * in the shared fallback alongside every OTHER unsluggable input — including
+ * `日本語`, which is a real name that must not land there.
+ *
+ * The token is not a promise of uniqueness for punctuation: `!!!` and `###` have
+ * the same (empty) `nameIdentity` and so share one token, exactly as `a!b` and
+ * `a#b` share one slug. What it guarantees is that a name with real identity
+ * never collides with one that has none.
+ */
+export function hasNameContent(input: string): boolean {
+  return !NOISE_ONLY_RE.test(input);
+}
+
+/** Survives slugification unchanged. */
+const CHARSET_RE = /[a-z0-9.-]/;
+/** ASCII whitespace and punctuation — STRUCTURE. Losing it does not change which name was meant. */
+const ASCII_STRUCTURE_RE = /[\s!-/:-@[-`{-~]/;
+/** The same class, as a run — for canonicalizing structure down to one separator. */
+const ASCII_STRUCTURE_RUN_RE = /[\s!-/:-@[-`{-~]+/g;
+const EDGE_DASHES_RE = /^-+|-+$/g;
+
+/**
+ * The canonical IDENTITY of a name: fold to ASCII where possible, lowercase, and
+ * collapse every run of ASCII structure to a single `-`. Characters no ASCII
+ * charset can express (`日本語`, `🚀`) are KEPT, because they are exactly what
+ * distinguishes one name from another.
+ *
+ * This — not the raw text — is what `slugDigest` hashes, and the distinction is
+ * load-bearing. The design promises that case and ASCII punctuation do not split
+ * a name in two (`MY FEATURE`, `my feature` and `my!feature` are one branch).
+ * Hashing raw text would keep that promise only for pure-ASCII names and quietly
+ * break it for everyone else: `MY 🚀 FEATURE` and `my 🚀 feature` would hash
+ * differently and mint two branches, two Sprites, two clones — for precisely the
+ * non-ASCII users the digest exists to protect.
+ */
+function nameIdentity(input: string): string {
+  return input
+    .normalize('NFKD')
+    .replace(DIACRITICS_RE, '')
+    .toLowerCase()
+    .replace(ASCII_STRUCTURE_RUN_RE, '-')
+    .replace(EDGE_DASHES_RE, '');
+}
+
+/**
+ * Did slugification DESTROY identity-bearing content — a letter, digit, or
+ * symbol from a script the ASCII charset cannot express (`日本語`, `Ω`, `🚀`)?
+ *
+ * This is the difference between a lossless tidy-up and a lossy one. Dropping
+ * ASCII punctuation is lossless in the sense that matters: `a b` and `a!b` were
+ * always going to mean one branch, and the design accepts that. Dropping `日本語`
+ * is NOT — it silently turns `日本語 feature` into plain `feature`, which is a
+ * DIFFERENT branch that may already exist and belong to someone else. The caller
+ * appends `slugDigest` whenever this returns true, so the two stay apart.
+ */
+export function destroysNameContent(input: string): boolean {
+  const folded = input.normalize('NFKD').replace(DIACRITICS_RE, '').toLowerCase();
+  for (const character of folded) {
+    if (CHARSET_RE.test(character)) continue;
+    if (ASCII_STRUCTURE_RE.test(character)) continue;
+    return true;
+  }
+  return false;
+}
+
+const FNV_OFFSET_BASIS = 2166136261;
+const FNV_PRIME = 16777619;
+
+/**
+ * A short, deterministic, charset-safe token derived from text the ASCII slug
+ * charset wiped out entirely.
+ *
+ * This exists for CORRECTNESS, not cosmetics. A branch name IS a
+ * branch-terminal's identity — it is hashed into the Sprite session key and is
+ * the store's lookup key — so if every non-Latin name collapsed onto one
+ * fallback, `spawnBranch('日本語')` followed by `spawnBranch('한국어')` would
+ * report `resumed: true` and hand the second user the FIRST user's Sprite and
+ * filesystem. Likewise `feature/日本語` must not silently become plain
+ * `feature` and collide with a real `feature` branch.
+ *
+ * Hashes the name's IDENTITY (see `nameIdentity`), never the raw text — so it
+ * splits `日本語` from `한국어` without also splitting `MY 🚀 FEATURE` from
+ * `my 🚀 feature`.
+ *
+ * FNV-1a/base36, not a crypto hash: it disambiguates, it does not authenticate
+ * (the Sprite name is a keyed HMAC — see `deriveBranchSessionKey`). Kept pure
+ * and dependency-free on purpose, because the live-preview sub-task must run
+ * this exact function in the browser.
+ */
+export function slugDigest(input: string): string {
+  let hash = FNV_OFFSET_BASIS;
+  const text = nameIdentity(input);
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, FNV_PRIME);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * Decide what to do about content the ASCII charset ate, so a lossy rewrite can
+ * never collide two DIFFERENT names onto one key. `slug` is whatever the caller's
+ * own pipeline produced — a branch segment has already had its `.lock` ending
+ * rewritten, which must happen BEFORE the digest is appended or `foo.lock` plus a
+ * non-ASCII character would yield `foo.lock-<digest>` instead of `foo-lock-<digest>`.
+ *
+ * This is the single most safety-critical rule in name normalization, which is why
+ * it lives here once rather than in both normalizers. A name IS the identity of the
+ * thing it names — a branch name is hashed into a Sprite session key and used as the
+ * store's lookup key — so dropping `日本語` and calling the result `feature` does not
+ * produce an ugly name, it produces SOMEONE ELSE'S BRANCH. `日本語` and `한국어` must
+ * not both become `branch`, and `日本語 feature` must not become plain `feature`.
+ *
+ * The one loss we accept is ASCII punctuation: `a b` and `a!b` were always going to
+ * mean one name, and insisting otherwise would make the common case (`My Cool
+ * Feature`) ugly for no safety gain.
+ *
+ * Returns `''` when the input carried no name at all (`..`, `.`, `   `), leaving the
+ * caller to decide what namelessness means — a branch segment vanishes (which is what
+ * turns `../escape` into `escape`), a project name falls back.
+ */
+export function disambiguateSlug(input: string, slug: string): string {
+  if (slug.length === 0) return hasNameContent(input) ? `x${slugDigest(input)}` : '';
+  return destroysNameContent(input) ? `${slug}-${slugDigest(input)}` : slug;
+}
+
+/** Every separator a name may carry, for trimming an edge the length cut exposed. */
+const TRAILING_NAME_SEPARATORS_RE = /[./-]+$/;
+
+/**
+ * Cut an over-long name to fit, reserving room for a digest of the ORIGINAL input.
+ *
+ * The cut is itself lossy: two different over-long names would otherwise cut to the
+ * SAME key and cross-attach. The digest keeps them apart. Because it is alphanumeric,
+ * the cut also can no longer strand a `.lock` ending or a trailing separator.
+ */
+export function truncateWithDigest(name: string, source: string, maxLength: number): string {
+  if (name.length <= maxLength) return name;
+  const digest = slugDigest(source);
+  const room = maxLength - digest.length - 1;
+  return `${name.slice(0, room).replace(TRAILING_NAME_SEPARATORS_RE, '')}-${digest}`;
+}

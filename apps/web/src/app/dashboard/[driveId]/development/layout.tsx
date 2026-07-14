@@ -1,0 +1,73 @@
+'use client';
+
+import { useParams, usePathname } from 'next/navigation';
+import MachineKeepAliveHost from '@/components/layout/middle-content/MachineKeepAliveHost';
+import { useAuth } from '@/hooks/useAuth';
+import { useDriveMachines } from '@/hooks/useDriveMachines';
+import { parseSelectedMachineId } from '@/lib/development/development-route';
+import { useStickyMachineIds } from '@/lib/development/use-sticky-machine-ids';
+import { useDrainPendingWorkspace } from '@/lib/development/use-drain-pending-workspace';
+import { DetailState } from '@/lib/development/DetailState';
+import { resolveDisplayedMachine } from '@/lib/development/displayed-machine';
+
+/**
+ * The Development surface's detail region.
+ *
+ * Machines are rendered by {@link MachineKeepAliveHost}, NOT by the
+ * `[machineId]` route — exactly as the drive view does it (see `CenterPanel`,
+ * which likewise refuses to render `MachineView` inline). The route segment
+ * remounts on every machine-to-machine navigation, so a `MachineView` rendered
+ * from it would tear its xterm buffer, its socket, and its workspace down each
+ * time you clicked another machine — on the one surface whose entire purpose is
+ * keeping terminals alive. The host instead keeps a bounded LRU of machines
+ * mounted and CSS-hides the inactive ones, so switching machines is instant and
+ * the sessions you left running are still running.
+ *
+ * This layout sits ABOVE the `[machineId]` segment, so it (and the host, and
+ * every warm machine) survives that navigation.
+ */
+export default function DevelopmentLayout({ children }: { children: React.ReactNode }) {
+  const params = useParams();
+  const pathname = usePathname() ?? '';
+  const driveIdParams = params.driveId;
+  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
+  const selectedMachineId = parseSelectedMachineId(pathname, driveId);
+
+  const { user, isLoading: authLoading } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
+  // Same SWR key (and same admin gate) as the sidebar, so this is a cache read
+  // rather than a second request — and a non-admin still fires none. It is also
+  // the host's source of truth for what counts as a machine (its `machineIds`
+  // prop): the surface must not disagree with itself about which machines exist.
+  const { machines, isLoading, error } = useDriveMachines(isAdmin ? driveId ?? null : null);
+  // Add-only within this drive; resets if the drive changes (see the hook's
+  // doc comment) — a PTY stream must not outlive its drive context.
+  const stickyMachineIds = useStickyMachineIds(machines, driveId);
+
+  // The notice IS transient when a machine vanishes, because `useDriveMachines`
+  // polls (without that, a single blip would hide a live machine for the rest
+  // of the session, and both ways out — reload, or leave and return — unmount
+  // this host and kill every warm terminal).
+  const { isKnownMachine, displayedMachineId } = resolveDisplayedMachine(machines, selectedMachineId);
+
+  useDrainPendingWorkspace(displayedMachineId);
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {children}
+
+      {selectedMachineId && (
+        <DetailState
+          authLoading={authLoading}
+          isAdmin={isAdmin}
+          isLoading={isLoading}
+          error={error}
+          isKnownMachine={isKnownMachine}
+        />
+      )}
+
+      <MachineKeepAliveHost driveId={driveId} activePageId={displayedMachineId} machineIds={stickyMachineIds} embedded />
+    </div>
+  );
+}

@@ -1,14 +1,20 @@
 import { describe, test, vi, beforeEach, type Mock } from 'vitest';
+import { isCuid } from '@paralleldrive/cuid2';
 import { render, act, waitFor, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
-const { mockFetchWithAuth, mockSetMessages, mockLocalStop, mockAbortByMessageId } = vi.hoisted(() => ({
+const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockSetMessages: vi.fn(),
+  mockSendMessage: vi.fn(),
   mockLocalStop: vi.fn(),
-  mockAbortByMessageId: vi.fn(),
+  mockAbortByMessageId: vi.fn(async (_args: { messageId: string }) => ({
+    aborted: true,
+    code: 'aborted' as const,
+    reason: '',
+  })),
 }));
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -25,7 +31,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('@ai-sdk/react', () => {
   const chatState = {
     messages: [] as unknown[],
-    sendMessage: vi.fn(),
+    sendMessage: mockSendMessage,
     status: 'idle' as const,
     error: undefined as Error | undefined,
     regenerate: vi.fn(),
@@ -97,9 +103,14 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
 }));
 
 vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+// The abort functions must RESOLVE: Stop now chains the outcome into reportAbortOutcome, so that
+// a stream which could not be confirmed stopped (still running, still billing) reaches the user.
+const NOT_FOUND = { aborted: false, code: 'not_found' as const, reason: 'nothing in flight' };
 vi.mock('@/lib/ai/core/stream-abort-client', () => ({
-  abortActiveStream: vi.fn(),
+  abortActiveStream: vi.fn(async () => NOT_FOUND),
   abortActiveStreamByMessageId: mockAbortByMessageId,
+  reportAbortOutcome: vi.fn(),
+  reportAbortOutcomes: vi.fn(),
 }));
 vi.mock('@/lib/ai/core/vision-models', () => ({ hasVisionCapability: vi.fn(() => false) }));
 
@@ -280,8 +291,16 @@ const latestMcpConversationId = (): string | null => {
 // fires inside that window, isPlaceholderConversationId() is false, the
 // late-joiner branch is skipped, and the sync fetch never starts — under CI
 // load this window is wide enough to hit. Wait for the resolved identity.
-const waitForPlaceholderIdentity = (pageId: string) =>
-  waitFor(() => expect(latestMcpConversationId()).toBe(`${pageId}-default`));
+// A page with no conversations yet resolves to a freshly minted cuid — NOT the old
+// `${pageId}-default` sentinel, which the server accepted unvalidated and wrote real
+// conversation rows under, and which both client load paths then hard-bailed on (so
+// the messages persisted and were never loaded back).
+const waitForUnpersistedIdentity = (pageId: string) =>
+  waitFor(() => {
+    const id = latestMcpConversationId();
+    expect(id).not.toBe(`${pageId}-default`);
+    expect(id !== null && isCuid(id)).toBe(true);
+  });
 
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
@@ -337,6 +356,201 @@ const wasPostCalled = (url: string) =>
   (mockFetchWithAuth.mock.calls as Parameters<typeof fetchWithAuth>[]).some(([callUrl, opts]) =>
     callUrl === url && opts?.method === 'POST'
   );
+
+// AC3 step 1 — the migration-free recovery path.
+//
+// The client used to send a `${pageId}-default` sentinel as the conversation id for a
+// brand-new chat. The server accepted it unvalidated and minted a REAL conversations row
+// under that id, stamping every message to it. Both client load paths then hard-bailed on
+// that exact string, and loadMessagesForConversation was the only setMessages writer — so
+// the messages were persisted and then never loaded. Every such page rendered an empty
+// chat after any reload.
+//
+// Those rows exist in production. Identity now carries `isPersisted` instead of pattern-
+// matching the id, so a sentinel conversation coming back from the list loads like any
+// other one. That is what gives existing users their history back, with no data migration.
+describe('AiChatView — legacy `${pageId}-default` conversation (no migration)', () => {
+  const page = makePage();
+  const LEGACY_CONV_ID = `${PAGE_ID}-default`;
+  const LEGACY_MESSAGES_URL = `${CONVERSATIONS_URL}/${LEGACY_CONV_ID}/messages`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const strandedMessages = [
+    { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'what did we decide?' }] },
+    { id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'the stranded reply' }] },
+  ];
+
+  const setupLegacyConversation = () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [{ id: LEGACY_CONV_ID, title: 'Legacy', preview: '' }] });
+      }
+      if (url === LEGACY_MESSAGES_URL && !opts?.method) {
+        return makeOkResponse({ messages: strandedMessages });
+      }
+      return makeErrorResponse();
+    });
+  };
+
+  test('given a persisted conversation whose id is the old `${pageId}-default` sentinel, should fetch its messages instead of bailing on the id string', async () => {
+    setupLegacyConversation();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'a persisted conversation whose id happens to be the legacy sentinel',
+        should: 'fetch its messages (the old code hard-bailed on this exact string)',
+        actual: wasGetCalled(LEGACY_MESSAGES_URL),
+        expected: true,
+      });
+    });
+  });
+
+  test('given the legacy conversation loads, should write its stranded history into the chat', async () => {
+    setupLegacyConversation();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'a legacy sentinel conversation with persisted messages',
+        should: 'setMessages with the recovered history',
+        actual: mockSetMessages.mock.calls.some(
+          (args) => Array.isArray(args[0]) && (args[0] as Array<{ id: string }>).some((m) => m.id === 'm2'),
+        ),
+        expected: true,
+      });
+    });
+  });
+
+  test('given the legacy conversation is active, should adopt it as the conversation identity (so a send continues it rather than forking a new one)', async () => {
+    setupLegacyConversation();
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'a legacy sentinel conversation returned by the list',
+        should: 'use it as the active conversation id',
+        actual: latestMcpConversationId(),
+        expected: LEGACY_CONV_ID,
+      });
+    });
+  });
+});
+
+// AC3 step 2 + the hazard it creates.
+//
+// A brand-new chat resolves to a freshly minted cuid that has no server-side
+// conversation yet, so the loaders skip it. The first send creates that conversation
+// row under exactly this id — the id becomes real, and the loaders must stop skipping
+// it. But flipping that flag re-runs the load-on-select effect for the SAME id, and if
+// it were allowed to fetch, it would pull a conversation whose first message has not
+// been written yet and setMessages([]) straight over the optimistic user bubble and the
+// in-flight stream. Sending must claim the skip token before flipping.
+describe('AiChatView — first send on a freshly minted conversation', () => {
+  const page = makePage();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const setupNoConversations = () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [] });
+      }
+      // The freshly-minted conversation exists but has no messages yet — the exact
+      // window a stray load-on-select fetch would blank the chat in.
+      if (url.includes('/messages') && !opts?.method) return makeOkResponse({ messages: [] });
+      return makeErrorResponse();
+    });
+  };
+
+  const lastChatLayoutProps = () => {
+    const calls = (ChatLayout as unknown as Mock).mock.calls;
+    return calls[calls.length - 1]?.[0] as { onSend: () => void; input: string } | undefined;
+  };
+
+  test('given the first send on a freshly minted conversation, should NOT fetch messages for it (a stray load would blank the optimistic bubble)', async () => {
+    setupNoConversations();
+    render(<AiChatView page={page} />);
+
+    await waitForUnpersistedIdentity(PAGE_ID);
+    const mintedId = latestMcpConversationId();
+
+    // Type something, then send.
+    act(() => {
+      (ChatLayout as unknown as Mock).mock.calls[
+        (ChatLayout as unknown as Mock).mock.calls.length - 1
+      ][0].onInputChange?.('hello');
+    });
+    act(() => {
+      lastChatLayoutProps()?.onSend();
+    });
+
+    await waitFor(() => {
+      assert({
+        given: 'a first send on a freshly minted conversation',
+        should: 'hand the message to useChat',
+        actual: mockSendMessage.mock.calls.length > 0,
+        expected: true,
+      });
+    });
+
+    assert({
+      given: 'the conversation flipping to persisted on send',
+      should: 'not fetch that conversation\'s messages (the skip token was claimed first)',
+      actual: wasGetCalled(`${CONVERSATIONS_URL}/${mintedId}/messages`),
+      expected: false,
+    });
+  });
+
+  test('given the first send, should never blank the messages array', async () => {
+    setupNoConversations();
+    render(<AiChatView page={page} />);
+
+    await waitForUnpersistedIdentity(PAGE_ID);
+
+    const blanksBefore = mockSetMessages.mock.calls.filter(
+      (args) => Array.isArray(args[0]) && (args[0] as unknown[]).length === 0,
+    ).length;
+
+    act(() => {
+      (ChatLayout as unknown as Mock).mock.calls[
+        (ChatLayout as unknown as Mock).mock.calls.length - 1
+      ][0].onInputChange?.('hello');
+    });
+    act(() => {
+      lastChatLayoutProps()?.onSend();
+    });
+
+    await waitFor(() => {
+      assert({
+        given: 'a first send',
+        should: 'hand the message to useChat',
+        actual: mockSendMessage.mock.calls.length > 0,
+        expected: true,
+      });
+    });
+
+    const blanksAfter = mockSetMessages.mock.calls.filter(
+      (args) => Array.isArray(args[0]) && (args[0] as unknown[]).length === 0,
+    ).length;
+
+    assert({
+      given: 'the conversation flipping to persisted mid-send',
+      should: 'never call setMessages([]) over the optimistic user bubble',
+      actual: blanksAfter,
+      expected: blanksBefore,
+    });
+  });
+});
 
 describe('AiChatView initializeChat', () => {
   const page = makePage();
@@ -863,7 +1077,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -906,7 +1120,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     // The page-scoped placeholder id must not trigger a refresh (nothing persisted yet).
     assert({
@@ -957,7 +1171,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1001,7 +1215,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1043,7 +1257,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1086,7 +1300,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1159,7 +1373,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI from page A' }], conversationId: REAL_CONV_ID }]]),
@@ -1209,7 +1423,7 @@ describe('AiChatView late-joiner conversation sync', () => {
         expected: true,
       });
     });
-    await waitForPlaceholderIdentity(PAGE_ID);
+    await waitForUnpersistedIdentity(PAGE_ID);
 
     (usePendingStreamsStore as unknown as { getState: Mock }).getState.mockReturnValue({
       streams: new Map([[MESSAGE_ID, { parts: [{ type: 'text', text: 'AI response' }], conversationId: REAL_CONV_ID }]]),
@@ -1396,7 +1610,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
   type StoreState = {
     streams: Map<string, unknown>;
     getRemotePageStreams: (pageId: string) => unknown[];
-    getOwnStreams: (pageId: string) => Array<{ messageId: string; pageId: string; isOwn: true }>;
+    getOwnStreams: (pageId: string) => Array<{ messageId: string; pageId: string; isOwn: true; conversationId: string }>;
   };
 
   const setStoreSelectors = ({
@@ -1404,7 +1618,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
     own = [],
   }: {
     remote?: unknown[];
-    own?: Array<{ messageId: string; pageId: string; isOwn: true }>;
+    own?: Array<{ messageId: string; pageId: string; isOwn: true; conversationId: string }>;
   }) => {
     const state: StoreState = {
       streams: new Map(),
@@ -1449,10 +1663,125 @@ describe('AiChatView stop button for reconnected own streams', () => {
     setStoreSelectors({ remote: [], own: [] });
   });
 
+  // PRIVACY. It is tempting to drop the conversation filter while the conversation is
+  // still unpersisted ("a fresh chat owns no streams, so there is nothing to confuse it
+  // with"), in order to restore the one deliberate property of the old
+  // `${pageId}-default` sentinel: two openers of a fresh page shared an id, so each
+  // could watch the other's stream. That property WAS a leak. Conversations are private
+  // by default and the page channel carries all of them, so an unfiltered surface
+  // renders another member's PRIVATE conversation to anyone who opens the page.
+  test('given a NOT-YET-PERSISTED conversation, another user\'s stream on this page must NOT render (it may be their private conversation)', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [] });
+      }
+      return makeErrorResponse();
+    });
+    setStoreSelectors({
+      remote: [{
+        messageId: 'msg-someone-elses-private-stream',
+        pageId: PAGE_ID,
+        isOwn: false,
+        conversationId: 'their-private-conversation',
+        parts: [{ type: 'text', text: 'secret' }],
+      }],
+    });
+    render(<AiChatView page={page} />);
+
+    await waitForUnpersistedIdentity(PAGE_ID);
+
+    assert({
+      given: 'a fresh, unpersisted conversation and another user streaming on the same page',
+      should: 'render none of their stream',
+      actual: lastChatLayoutProps()?.remoteStreams,
+      expected: [],
+    });
+  });
+
+  // The same unscoping would also mistarget Stop: hitting "New Chat" mid-stream leaves an
+  // own stream in the OLD conversation, and an unscoped selector would light up the blank
+  // chat's Stop button pointing at it.
+  test('given a NOT-YET-PERSISTED conversation and an own stream still running in the OLD one, should not show this chat as streaming', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
+      if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
+      if (url === AGENT_CONFIG_URL) return makeOkResponse({});
+      if (url === `${CONVERSATIONS_URL}?pageSize=1` && !opts?.method) {
+        return makeOkResponse({ conversations: [] });
+      }
+      return makeErrorResponse();
+    });
+    setStoreSelectors({
+      own: [{ messageId: 'msg-old-conv', pageId: PAGE_ID, isOwn: true, conversationId: 'the-previous-conversation' }],
+    });
+    render(<AiChatView page={page} />);
+
+    await waitForUnpersistedIdentity(PAGE_ID);
+
+    assert({
+      given: 'an own stream still running in a different (previous) conversation',
+      should: 'not light up isStreaming for the blank chat (its Stop would abort the wrong stream)',
+      actual: lastChatLayoutProps()?.isStreaming,
+      expected: false,
+    });
+  });
+
+  // AC6. A page channel carries every conversation's streams. Without a conversation
+  // filter, a stream running in a DIFFERENT conversation on this page renders into the
+  // one on screen — which on its own looks exactly like duplication.
+  test('given an own stream in a DIFFERENT conversation on this page, ChatLayout must NOT treat it as this conversation streaming', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'msg-other-conv', pageId: PAGE_ID, isOwn: true, conversationId: 'some-other-conversation' }],
+    });
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with an existing conversation',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    assert({
+      given: 'a pending own stream belonging to another conversation on the same page',
+      should: 'not light up isStreaming for the conversation on screen',
+      actual: lastChatLayoutProps()?.isStreaming,
+      expected: false,
+    });
+  });
+
+  test('given a remote stream in a DIFFERENT conversation on this page, ChatLayout should not receive it', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      remote: [{ messageId: 'msg-remote-other', pageId: PAGE_ID, isOwn: false, conversationId: 'some-other-conversation', parts: [] }],
+    });
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      assert({
+        given: 'init with an existing conversation',
+        should: 'load conversation messages',
+        actual: wasGetCalled(MESSAGES_URL),
+        expected: true,
+      });
+    });
+
+    assert({
+      given: 'a remote stream belonging to another conversation on the same page',
+      should: 'not render it into the conversation on screen',
+      actual: lastChatLayoutProps()?.remoteStreams,
+      expected: [],
+    });
+  });
+
   test('given an own stream is pending and useChat status is idle, ChatLayout receives isStreaming=true (so stop button renders after refresh)', async () => {
     setupHappyInit();
     setStoreSelectors({
-      own: [{ messageId: 'msg-own-1', pageId: PAGE_ID, isOwn: true }],
+      own: [{ messageId: 'msg-own-1', pageId: PAGE_ID, isOwn: true, conversationId: CONV_ID }],
     });
 
     render(<AiChatView page={page} />);
@@ -1485,7 +1814,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
   test('given useChat status is idle but an own stream is pending, calling ChatLayout.onStop calls abortActiveStreamByMessageId with the own stream messageId', async () => {
     setupHappyInit();
     setStoreSelectors({
-      own: [{ messageId: 'msg-own-7', pageId: PAGE_ID, isOwn: true }],
+      own: [{ messageId: 'msg-own-7', pageId: PAGE_ID, isOwn: true, conversationId: CONV_ID }],
     });
 
     render(<AiChatView page={page} />);
@@ -1521,7 +1850,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
   test('given useChat is actively streaming, calling ChatLayout.onStop stops the local fetch AND aborts the server stream by the stable messageId', async () => {
     setupHappyInit();
     setStoreSelectors({
-      own: [{ messageId: 'msg-own-2', pageId: PAGE_ID, isOwn: true }],
+      own: [{ messageId: 'msg-own-2', pageId: PAGE_ID, isOwn: true, conversationId: CONV_ID }],
     });
     const { useChat } = await import('@ai-sdk/react');
     const useChatMock = useChat as unknown as Mock;
@@ -1574,7 +1903,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
   test('given voice mode is active and an own stream is pending, VoiceCallPanel receives isAIStreaming=true and a stop handler that aborts by messageId', async () => {
     setupHappyInit();
     setStoreSelectors({
-      own: [{ messageId: 'msg-own-voice', pageId: PAGE_ID, isOwn: true }],
+      own: [{ messageId: 'msg-own-voice', pageId: PAGE_ID, isOwn: true, conversationId: CONV_ID }],
     });
     vi.mocked(useVoiceModeStore).mockImplementation(
       ((selector: (state: { isEnabled: boolean; owner: string; enable: () => void; disable: () => void }) => unknown) =>

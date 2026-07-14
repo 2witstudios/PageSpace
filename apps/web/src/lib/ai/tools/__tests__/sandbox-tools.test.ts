@@ -23,7 +23,7 @@ function okMachines(): MachineDirectoryDeps {
   return {
     listMachines: async () => [{ kind: 'own' }],
     describeMachine: async () => ({ name: 'My Machine' }),
-    isMachineAccessible: async () => true,
+    isMachineAccessible: async () => ({ allowed: true }),
   };
 }
 
@@ -36,6 +36,7 @@ function fakeRunDeps(): SandboxRunDeps {
       runCommand: async () => ({ exitCode: 0, stdout: 'hi', stderr: '' }),
       writeFiles: async () => {},
       readFileToBuffer: async () => Buffer.from('data'),
+      createCheckpoint: async () => {},
     }),
     quota: {
       acquireSlot: () => true,
@@ -72,11 +73,105 @@ describe('createSandboxTools', () => {
     const machines: MachineDirectoryDeps = {
       listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
       describeMachine: async () => ({ name: 'Shared Terminal' }),
-      isMachineAccessible: async () => false,
+      isMachineAccessible: async () => ({ allowed: false }),
     };
     const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
     const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
     expect(result).toMatchObject({ success: false });
+    expect(acquired).toBe(false);
+  });
+
+  it('bash: given the access denial carries a reason (e.g. allowPageAgents off), should surface that reason to the model', async () => {
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
+      describeMachine: async () => ({ name: 'Locked Machine' }),
+      isMachineAccessible: async () => ({
+        allowed: false,
+        reason: 'The machine "Locked Machine" does not allow page agents.',
+      }),
+    };
+    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toEqual({
+      success: false,
+      error: 'The machine "Locked Machine" does not allow page agents.',
+    });
+  });
+
+  it('bash: given the default machines[0] is blocked but a later configured machine is usable, should fall back to the usable one instead of dead-ending', async () => {
+    const seenAcquisitions: Array<{ activeMachine?: unknown }> = [];
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async (input) => {
+      seenAcquisitions.push(input as { activeMachine?: unknown });
+      return { ok: true, sandboxId: 'sbx', resumed: false };
+    };
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [
+        { kind: 'existing', machineId: 'locked-1' },
+        { kind: 'existing', machineId: 'open-2' },
+      ],
+      describeMachine: async () => ({ name: 'Machine' }),
+      isMachineAccessible: async (_c, m) =>
+        m.kind === 'existing' && m.machineId === 'open-2'
+          ? { allowed: true }
+          : { allowed: false, reason: 'The machine "Locked Machine" does not allow page agents.' },
+    };
+    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toMatchObject({ success: true });
+    expect(seenAcquisitions).toEqual([
+      expect.objectContaining({ activeMachine: { kind: 'existing', machineId: 'open-2' } }),
+    ]);
+  });
+
+  it('bash: given EVERY configured machine is blocked, should surface the FIRST machine\'s specific denial reason (not the misleading "Terminal access is not enabled")', async () => {
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [
+        { kind: 'existing', machineId: 'hidden-1' },
+        { kind: 'existing', machineId: 'hidden-2' },
+      ],
+      describeMachine: async () => ({ name: 'Hidden' }),
+      isMachineAccessible: async (_c, m) => ({
+        allowed: false,
+        reason: `The machine "${m.kind === 'existing' ? m.machineId : 'own'}" is not visible to the global assistant.`,
+      }),
+    };
+    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+    const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+    expect(result).toEqual({
+      success: false,
+      error: 'The machine "hidden-1" is not visible to the global assistant.',
+    });
+  });
+
+  it('bash: given an explicitly SWITCHED machine becomes blocked, should deny with its reason rather than silently rerouting to another machine', async () => {
+    let acquired = false;
+    const runDeps = fakeRunDeps();
+    runDeps.acquireSandbox = async () => {
+      acquired = true;
+      return { ok: true, sandboxId: 'sbx', resumed: false };
+    };
+    const machines: MachineDirectoryDeps = {
+      listMachines: async () => [
+        { kind: 'existing', machineId: 'open-1' },
+        { kind: 'existing', machineId: 'locked-2' },
+      ],
+      describeMachine: async () => ({ name: 'Machine' }),
+      isMachineAccessible: async (_c, m) =>
+        m.kind === 'existing' && m.machineId === 'locked-2'
+          ? { allowed: false, reason: 'The machine "Locked" does not allow page agents.' }
+          : { allowed: true },
+    };
+    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
+    const rawContext: ToolExecutionContext = {
+      userId: 'u1',
+      activeMachine: { kind: 'existing', machineId: 'locked-2' },
+    };
+    const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
+    expect(result).toEqual({
+      success: false,
+      error: 'The machine "Locked" does not allow page agents.',
+    });
     expect(acquired).toBe(false);
   });
 
@@ -94,7 +189,7 @@ describe('createSandboxTools', () => {
     const machines: MachineDirectoryDeps = {
       listMachines: async () => [],
       describeMachine: async () => ({ name: 'My Machine' }),
-      isMachineAccessible: async () => true,
+      isMachineAccessible: async () => ({ allowed: true }),
     };
     const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
     const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
@@ -148,6 +243,7 @@ describe('createSandboxTools', () => {
         wrote = true;
       },
       readFileToBuffer: async () => Buffer.from(''),
+      createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
       runDeps,
@@ -229,6 +325,7 @@ describe('createSandboxTools', () => {
         wrote = true;
       },
       readFileToBuffer: async () => Buffer.from('data'),
+      createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
       runDeps,
@@ -264,7 +361,7 @@ describe('createSandboxTools', () => {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) =>
           m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal', description: 'Team box' },
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       const result = (await exec(tools.list_machines, {}, {})) as {
@@ -281,7 +378,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       const rawContext: ToolExecutionContext = { userId: 'u1', activeMachine: { kind: 'existing', machineId: 't1' } };
@@ -297,12 +394,49 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 'revoked' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Should Not Appear' }),
-        isMachineAccessible: async (_c, m) => m.kind === 'own',
+        isMachineAccessible: async (_c, m) => ({ allowed: m.kind === 'own' }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       const result = (await exec(tools.list_machines, {}, {})) as { success: true; machines: Array<{ id: string }> };
       expect(result.machines).toEqual([{ id: 'own', name: 'My Machine', active: true }]);
       expect(result.machines.find((m) => m.id === 'revoked')).toBeUndefined();
+    });
+
+    it('given machines[0] is blocked, should mark the fallback machine as active — consistent with where bash will actually route', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [
+          { kind: 'existing', machineId: 'locked-1' },
+          { kind: 'existing', machineId: 'open-2' },
+        ],
+        describeMachine: async () => ({ name: 'Machine' }),
+        isMachineAccessible: async (_c, m) =>
+          m.kind === 'existing' && m.machineId === 'open-2'
+            ? { allowed: true }
+            : { allowed: false, reason: 'blocked' },
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      const result = (await exec(tools.list_machines, {}, {})) as {
+        success: true;
+        machines: Array<{ id: string; active: boolean }>;
+      };
+      expect(result.machines).toEqual([{ id: 'open-2', name: 'Machine', active: true }]);
+    });
+
+    it('given N configured machines, should call isMachineAccessible exactly N times — once each, not once for active-selection plus once for the display filter', async () => {
+      const isMachineAccessible = vi.fn(async (_c: unknown, m: { kind: string; machineId?: string }) =>
+        m.kind === 'existing' && m.machineId === 'open-2' ? { allowed: true } : { allowed: false, reason: 'blocked' },
+      );
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [
+          { kind: 'existing', machineId: 'locked-1' },
+          { kind: 'existing', machineId: 'open-2' },
+        ],
+        describeMachine: async () => ({ name: 'Machine' }),
+        isMachineAccessible,
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      await exec(tools.list_machines, {}, {});
+      expect(isMachineAccessible).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -311,7 +445,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       const rawContext: ToolExecutionContext = { userId: 'u1' };
@@ -324,7 +458,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       const rawContext: ToolExecutionContext = { userId: 'u1' };
@@ -347,7 +481,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async () => ({ name: 'Shared Terminal' }),
-        isMachineAccessible: async (_c, m) => m.kind === 'own',
+        isMachineAccessible: async (_c, m) => ({ allowed: m.kind === 'own' }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       const rawContext: ToolExecutionContext = { userId: 'u1' };
@@ -356,11 +490,52 @@ describe('createSandboxTools', () => {
       expect(rawContext.activeMachine).toBeUndefined();
     });
 
+    it('given the access denial carries a reason, should surface that reason instead of the generic message', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
+        describeMachine: async () => ({ name: 'Locked Machine' }),
+        isMachineAccessible: async () => ({
+          allowed: false,
+          reason: 'The machine "Locked Machine" does not allow page agents.',
+        }),
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      const rawContext: ToolExecutionContext = { userId: 'u1' };
+      const result = await exec(tools.switch_machine, { machine: 't1' }, rawContext);
+      expect(result).toEqual({
+        success: false,
+        error: 'The machine "Locked Machine" does not allow page agents.',
+        reason: 'inaccessible',
+      });
+      expect(rawContext.activeMachine).toBeUndefined();
+    });
+
+    it('given a toggle denial carrying a code, should return that code as the machine-readable reason (not "inaccessible")', async () => {
+      const machines: MachineDirectoryDeps = {
+        listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
+        describeMachine: async () => ({ name: 'Locked Machine' }),
+        isMachineAccessible: async () => ({
+          allowed: false,
+          code: 'page_agents_disabled',
+          reason: 'The machine "Locked Machine" does not allow page agents.',
+        }),
+      };
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
+      const rawContext: ToolExecutionContext = { userId: 'u1' };
+      const result = await exec(tools.switch_machine, { machine: 't1' }, rawContext);
+      expect(result).toEqual({
+        success: false,
+        error: 'The machine "Locked Machine" does not allow page agents.',
+        reason: 'page_agents_disabled',
+      });
+      expect(rawContext.activeMachine).toBeUndefined();
+    });
+
     it('given a switch_machine call followed by bash, should route the acquire request to the switched machine', async () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'own' }, { kind: 'existing', machineId: 't1' }],
         describeMachine: async (_c, m) => (m.kind === 'own' ? { name: 'My Machine' } : { name: 'Shared Terminal' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
       };
       const seenAcquisitions: unknown[] = [];
       const runDeps = fakeRunDeps();
@@ -423,7 +598,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
         describeMachine: async () => ({ name: 'Shared Terminal' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
         resolveDriveId: async () => 'home-drive-1',
       };
       const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines });
@@ -453,7 +628,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines: async () => [{ kind: 'existing', machineId: 't1' }],
         describeMachine: async () => ({ name: 'Shared Terminal' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
         resolveDriveId: async () => 'home-drive-1',
         resolveTenantId: async () => 'real-drive-owner',
       };
@@ -471,7 +646,7 @@ describe('createSandboxTools', () => {
       const machines: MachineDirectoryDeps = {
         listMachines,
         describeMachine: async () => ({ name: 'My Machine' }),
-        isMachineAccessible: async () => true,
+        isMachineAccessible: async () => ({ allowed: true }),
       };
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate, machines });
       await exec(tools.bash, { command: 'echo hi' }, {});
