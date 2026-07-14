@@ -388,10 +388,15 @@ async function settleAccruedWindow(
   // window instead of retrying it.
   //
   // No fresh hold is placed either: a hold RESERVES the payer's credits for the
-  // next window, and there is no next window until they come back. Skipping the
-  // gate also means an insolvent payer's quiesced terminal is not torn down
-  // while it sits there costing nothing — they are gated on resume, which is the
-  // moment they would start consuming again.
+  // next window, and there is no next window until they come back.
+  //
+  // Skipping the gate does mean an insolvent payer's quiesced terminal is not
+  // torn down while it sits there — correct, since it is consuming nothing — and
+  // that they are re-gated at the first heartbeat AFTER they resume rather than
+  // at the instant of resume. That is the same bounded exposure any mid-window
+  // insolvency already carries (a payer who runs out with nine minutes left in a
+  // ten-minute window keeps those nine minutes), not a new one: the settle
+  // cadence, not this branch, is what bounds it.
   if (stopClock) {
     session.connectedAt = undefined;
     return true;
