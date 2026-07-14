@@ -1039,11 +1039,18 @@ const SidebarChatTab: React.FC = () => {
         await handleAppResume();
         return;
       }
-      // Native. Whether a turn was actually in flight when we went away. iOS froze JS at that
-      // moment, so this render-time value is a faithful record of it — which is exactly what it
-      // is used for here, and why it is safe even though it is useless for deciding whether the
-      // TRANSPORT is still alive (that is resolveResumeAction's job, and the answer is "no").
-      const hadTurnInFlight = displayIsStreaming;
+      // Native. Whether a turn of OUR OWN was in flight, for the conversation on screen, when we
+      // went away. iOS froze JS at that moment, so this render-time value is a faithful record of
+      // it — which is exactly what it is used for here, and why it is safe even though it is
+      // useless for deciding whether the TRANSPORT is still alive (that is resolveResumeAction's
+      // job, and the answer is "no").
+      //
+      // Conversation-scoped, NOT the broader displayIsStreaming: that also reports true for a
+      // stream still running against a conversation the user has since navigated away from (the
+      // useChat id is stable across a switch), and regenerating on the strength of it would fire
+      // a generation for the turn the user is now LOOKING at rather than the one that was
+      // actually interrupted.
+      const hadTurnInFlight = isOwnStreamForCurrentConversation;
 
       // Local-only useChat stop: it does NOT signal the server (that is done separately via
       // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It also
@@ -1069,7 +1076,14 @@ const SidebarChatTab: React.FC = () => {
       // Gated on a turn actually having been in flight, so an ordinary resume on an idle
       // conversation can never fire a spurious generation.
       if (hadTurnInFlight) await handleRetry();
-    }, [displayIsStreaming, stop, tryRecover, handleAppResume, handleRetry]),
+    }, [
+      displayIsStreaming,
+      isOwnStreamForCurrentConversation,
+      stop,
+      tryRecover,
+      handleAppResume,
+      handleRetry,
+    ]),
     enabled: resumeEnabled,
   });
 
