@@ -152,6 +152,19 @@ describe('chunkToPart', () => {
     ).toBeNull();
   });
 
+  it('given a tool-error chunk whose error is not JSON-serializable (circular reference), should fall back to the generic errorText', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const part = chunkToPart({
+      type: 'tool-error',
+      toolCallId: 'tc4',
+      toolName: 'list_pages',
+      input: { driveId: 'd1' },
+      error: circular,
+    } as never);
+    expect(part).toMatchObject({ errorText: 'Tool execution failed' });
+  });
+
   it('given a tool-error chunk missing toolCallId, should return null (idempotency key required so the error replaces the in-flight tool part)', () => {
     expect(
       chunkToPart({

@@ -46,9 +46,17 @@ for (const pkg of packages) {
     statements: Math.floor(t.statements.pct),
   };
 
-  // Match the thresholds block and replace values
-  const thresholdRegex = /thresholds:\s*\{[^}]+\}/s;
-  const match = config.match(thresholdRegex);
+  // Match the sentinel-marked ratchet region first — packages with per-glob
+  // threshold keys after the four ratcheted scalars (e.g. apps/web's 100%
+  // gates on new pure modules) would otherwise have `[^}]+` stop at the
+  // glob sub-objects' first `}`, truncating the match and corrupting the
+  // rewrite. Fall back to the plain block match for packages with no
+  // sentinel, so processor/realtime/db/lib keep working unchanged.
+  const sentinelRegex = /\/\* ratchet:start \*\/[\s\S]*?\/\* ratchet:end \*\//;
+  const plainRegex = /thresholds:\s*\{[^}]+\}/s;
+  const sentinelMatch = config.match(sentinelRegex);
+  const match = sentinelMatch ?? config.match(plainRegex);
+  const thresholdRegex = sentinelMatch ? sentinelRegex : plainRegex;
 
   if (!match) {
     console.log(`[skip] ${pkg.name}: no thresholds block found in vitest config`);
@@ -80,7 +88,12 @@ for (const pkg of packages) {
     continue;
   }
 
-  const newBlock = `thresholds: {\n        lines: ${finalThresholds.lines},\n        branches: ${finalThresholds.branches},\n        functions: ${finalThresholds.functions},\n        statements: ${finalThresholds.statements},\n      }`;
+  // The sentinel rewrite preserves everything after `ratchet:end` (the
+  // per-glob 100% keys) — only the four ratcheted scalars inside the markers
+  // are replaced.
+  const newBlock = sentinelMatch
+    ? `/* ratchet:start */\n        lines: ${finalThresholds.lines},\n        branches: ${finalThresholds.branches},\n        functions: ${finalThresholds.functions},\n        statements: ${finalThresholds.statements},\n        /* ratchet:end */`
+    : `thresholds: {\n        lines: ${finalThresholds.lines},\n        branches: ${finalThresholds.branches},\n        functions: ${finalThresholds.functions},\n        statements: ${finalThresholds.statements},\n      }`;
 
   config = config.replace(thresholdRegex, newBlock);
 
