@@ -6,6 +6,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { canConcludeTurnIsLost } from '@/lib/ai/streams/recoveryAttempt';
+import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
+import { evictStalePartial } from '@/lib/ai/streams/evictStalePartial';
 
 // ============================================
 // Test Helpers - Display Logic Extraction
@@ -129,20 +131,6 @@ function isOwnStreamForConversation(
   targetConversationId: string | null,
 ): boolean {
   return isStreaming && heldStreamConvId === targetConversationId;
-}
-
-/**
- * Mirrors `resumeEnabled` — the `enabled` gate passed to useAppStateRecovery.
- *
- * Deliberately takes NO streaming argument, which is the whole point. The gate used to be a
- * render-time boolean folding in `!isStreaming`; iOS freezes JS the moment the app backgrounds,
- * so the value that gated the resume was whatever was true when the app went away — streaming —
- * and recovery was disabled in exactly the case it was written for. The gate must be a callback
- * (evaluated at fire time) considering only the conversation and user-editing; the streaming
- * decision belongs to resolveResumeAction.
- */
-function resumeEnabled(currentConversationId: string | null, isAnyEditing: boolean): boolean {
-  return currentConversationId !== null && !isAnyEditing;
 }
 
 /**
@@ -666,45 +654,18 @@ describe('SidebarChatTab Display Logic', () => {
     });
   });
 
-/**
- * Mirrors the rejoin branch of `tryRecover`: the live stream's messageId is used to evict the
- * half-streamed assistant bubble useChat is still holding, so the rejoined pending stream is not
- * deduped away.
- *
- * `Chat.stop()` "keeps the generated tokens", and a dropped fetch leaves them too — so `messages`
- * still holds an assistant message whose id IS the live stream's messageId (the server mints one
- * id and uses it for BOTH the UI message and the stream registry row). The rejoin re-adds that
- * same stream to the pending store, and the surfaces drop a pending stream whose messageId
- * already appears in `messages` (dedupRemoteStreams / ChatMessagesArea.visibleRemoteStreams).
- * Leave the stale bubble in place and the rejoined stream is filtered straight back out — not one
- * token renders, and the user stares at a frozen partial.
- */
-function evictStalePartial<T extends { id: string }>(
-  messages: T[],
-  liveMessageId: string,
-  serverPartsCount: number,
-): T[] {
-  // Only when the server has something to put in its place. `parts` from /active-streams is the
-  // registry's DEBOUNCED checkpoint, so it is empty for a stream only a few parts old. Evicting
-  // against an empty checkpoint and then failing the SSE join (the multi-instance case, where the
-  // multicast lives in another process) removes the stream and leaves the user with NOTHING —
-  // strictly worse than the frozen partial we started with.
-  if (serverPartsCount === 0) return messages;
-  return messages.filter((m) => m.id !== liveMessageId);
-}
-
   describe('app-state resume recovery (useAppStateRecovery wiring)', () => {
     describe('resumeEnabled (the gate)', () => {
       it('given a conversation and no active editing, should enable recovery', () => {
-        expect(resumeEnabled('conv-A', false)).toBe(true);
+        expect(canResumeRecovery('conv-A', false)).toBe(true);
       });
 
       it('given no conversation, should NOT enable recovery (nothing to rejoin)', () => {
-        expect(resumeEnabled(null, false)).toBe(false);
+        expect(canResumeRecovery(null, false)).toBe(false);
       });
 
       it('given the user is actively editing, should NOT enable recovery (would clobber their edit)', () => {
-        expect(resumeEnabled('conv-A', true)).toBe(false);
+        expect(canResumeRecovery('conv-A', true)).toBe(false);
       });
 
     });
@@ -850,6 +811,8 @@ function evictStalePartial<T extends { id: string }>(
 
     describe('evictStalePartial (why the rejoin renders at all)', () => {
       const liveId = 'srv-msg-1';
+      // A checkpoint the bootstrap would actually seed from (survives isValidPartFrame).
+      const SEEDED_PARTS = [{ type: 'text', text: 'partial reply' }];
       const messages = [
         { id: 'u1', role: 'user' },
         { id: liveId, role: 'assistant' }, // the frozen half-streamed bubble
@@ -858,11 +821,11 @@ function evictStalePartial<T extends { id: string }>(
       it('given a rejoined live stream the server has parts for, should drop the local partial carrying that same messageId', () => {
         // Without this the pending stream the rejoin adds under `liveId` is deduped away,
         // because `liveId` is still present in `messages`. The bubble would never update.
-        expect(evictStalePartial(messages, liveId, 12)).toEqual([{ id: 'u1', role: 'user' }]);
+        expect(evictStalePartial(messages, liveId, SEEDED_PARTS)).toEqual([{ id: 'u1', role: 'user' }]);
       });
 
       it('given the partial is evicted, the rejoined stream is no longer deduped out', () => {
-        const remaining = evictStalePartial(messages, liveId, 12);
+        const remaining = evictStalePartial(messages, liveId, SEEDED_PARTS);
         const seen = new Set(remaining.map((m) => m.id));
         expect(seen.has(liveId)).toBe(false);
       });
@@ -872,15 +835,15 @@ function evictStalePartial<T extends { id: string }>(
         // and the SSE join then failed (multi-instance: the multicast lives in another process),
         // the bootstrap removes the stream and the user is left with nothing at all — worse than
         // the frozen partial. Keep what they had; the rejoin can still attach and take over.
-        expect(evictStalePartial(messages, liveId, 0)).toEqual(messages);
+        expect(evictStalePartial(messages, liveId, [])).toEqual(messages);
       });
 
       it('given messages with no matching id, should leave them untouched', () => {
-        expect(evictStalePartial(messages, 'some-other-id', 12)).toEqual(messages);
+        expect(evictStalePartial(messages, 'some-other-id', SEEDED_PARTS)).toEqual(messages);
       });
 
       it('should only ever drop the ONE message the server named — never the user turn', () => {
-        const out = evictStalePartial(messages, liveId, 12);
+        const out = evictStalePartial(messages, liveId, SEEDED_PARTS);
         expect(out.some((m) => m.role === 'user')).toBe(true);
       });
     });

@@ -86,7 +86,8 @@ import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemote
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 import { canConcludeTurnIsLost, type RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
-import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
+import { evictStalePartial } from '@/lib/ai/streams/evictStalePartial';
+import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
   ProviderSetupCard,
@@ -651,41 +652,28 @@ const GlobalAssistantView: React.FC = () => {
           stillOnThisConversation() &&
           decideRecovery({ hasLiveStream: true, hasPersistedReply: false }) === 'rejoin'
         ) {
-          // Evict the half-streamed assistant bubble useChat is still holding for this run.
-          //
-          // This is load-bearing, not tidy-up. `Chat.stop()` "keeps the generated tokens", and a
-          // dropped fetch leaves them too — so `messages` still contains an assistant message
-          // whose id IS the live stream's messageId (the server mints one id and uses it for both
-          // the UI message and the stream registry row). The rejoin re-adds that same stream to
-          // the pending store, and BOTH surfaces drop a pending stream whose messageId already
-          // appears in `messages` (dedupRemoteStreams / ChatMessagesArea.visibleRemoteStreams) —
-          // so the rejoined stream would be filtered straight back out and not one token of it
-          // would ever render. The user would sit in front of a frozen partial reply.
-          //
-          // Only when the server has something to put in its place, though. `parts` here is the
-          // registry's DEBOUNCED checkpoint (persisted every N parts), so it is empty for a stream
-          // that is only a few parts old. Evict against an empty checkpoint and, if the SSE join
-          // then fails — the documented multi-instance case, where the multicast lives in another
-          // process — the bootstrap removes the stream and the user is left with NOTHING, which is
-          // strictly worse than the frozen partial we started with. In that case keep the partial:
-          // the rejoin can still attach and take over, and if it cannot, the user keeps what they
-          // had.
+          // Evict the half-streamed assistant bubble useChat is still holding for this run — see
+          // evictStalePartial for why that is load-bearing (without it the rejoined stream is
+          // deduped straight back out and renders nothing) and why it is conditional.
           const staleId = liveStream.messageId;
-          // Counted with isValidPartFrame, the SAME predicate the bootstrap seeds with — it is
-          // `persistedParts.length` (post-filter) that becomes skipReplayCount, and a
-          // skipReplayCount of 0 is what makes a failed join drop the stream. A raw
-          // `parts.length > 0` would say "safe to evict" for a checkpoint of malformed frames
-          // that seeds nothing.
-          const hasServerParts = (liveStream.parts ?? []).filter(isValidPartFrame).length > 0;
-          const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
-          // Via agentSetMessages / globalSetMessages, not the raw useChat setters: agent mode
-          // must drop the stale partial from the dashboard store as well, or the store keeps
+          // evictStalePartial owns BOTH halves of the rule — why the stale bubble must go, and why
+          // only when the server's (debounced, isValidPartFrame-filtered) checkpoint can render in
+          // its place. It returns the same array reference when it is not safe, so this is a no-op
+          // write in that case.
+          const before = currentMessagesRef.current;
+          const evicted = evictStalePartial(before, staleId, liveStream.parts);
+          // Written via agentSetMessages / globalSetMessages, not the raw useChat setters: agent
+          // mode must drop the stale partial from the dashboard store as well, or the store keeps
           // serving it back to a co-mounted surface (and hands it to the sidebar on navigation).
+          // Skipped entirely when the helper declined to evict — it returns the same reference,
+          // and there is no reason to push an identical array through two setters.
+          if (evicted !== before) {
+            if (selectedAgent) agentSetMessages(evicted);
+            else globalSetMessages(evicted);
+          }
           if (selectedAgent) {
-            if (hasServerParts) agentSetMessages(evictStale);
             rejoinAgentStreamRef.current();
           } else {
-            if (hasServerParts) globalSetMessages(evictStale);
             rejoinGlobalStream();
           }
           return { recovered: true, probeAnswered, dbAnswered };
@@ -863,7 +851,7 @@ const GlobalAssistantView: React.FC = () => {
   //   already persisted  → refetch the completed reply (the stream finished while backgrounded)
   //   neither            → falls through to handlePullUpRefresh below
   const resumeEnabled = useCallback(
-    () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
+    () => canResumeRecovery(currentConversationId, useEditingStore.getState().isAnyEditing()),
     [currentConversationId],
   );
 
