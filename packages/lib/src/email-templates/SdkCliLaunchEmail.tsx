@@ -32,11 +32,18 @@ interface SdkCliLaunchEmailProps {
   postalAddress?: string;
 }
 
-// Eyebrow above the main heading: small, uppercase, brand-tinted.
+// This launch email uses a black accent in place of the shared PageSpace blue,
+// as a LOCAL override — shared-styles.ts (every other transactional email) stays
+// on brand. INK is a near-black with a faint cool-neutral bias so it reads as a
+// chosen color rather than a flat #000.
+const INK = '#17181C';
+const INK_LIFT = '#2C2E36';
+
+// Eyebrow above the main heading: small, uppercase, accent color.
 const eyebrow = {
   fontSize: typography.tiny,
   fontWeight: typography.semibold,
-  color: colors.primary,
+  color: INK,
   letterSpacing: '0.6px',
   textTransform: 'uppercase' as const,
   margin: `0 0 ${spacing.xs} 0`,
@@ -95,9 +102,24 @@ const inlineCode = {
 
 const secondaryLink = {
   fontSize: typography.small,
-  color: colors.link,
+  color: INK,
   textDecoration: 'underline',
 };
+
+// Local black-accent overrides of the shared (blue) header, button, and footer
+// link — spread the shared style so only the color changes.
+const darkHeader = {
+  ...emailStyles.header,
+  background: `linear-gradient(135deg, ${INK} 0%, ${INK_LIFT} 100%)`,
+};
+
+const darkButton = {
+  ...emailStyles.button,
+  background: `linear-gradient(135deg, ${INK} 0%, ${INK_LIFT} 100%)`,
+  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.18)',
+};
+
+const darkFooterLink = { ...emailStyles.link, color: INK };
 
 export function SdkCliLaunchEmail({
   userName,
@@ -110,53 +132,54 @@ export function SdkCliLaunchEmail({
     <Html>
       <Head />
       {/* The inbox snippet. Without it, clients scrape the first body text and
-          show "New PageSpace now has an SDK and a CLI Hi Ada…". */}
-      <Preview>Build on PageSpace from your own code and your terminal</Preview>
+          show "New Browser for you… Hi Ada…". */}
+      <Preview>Reach PageSpace from the browser, the terminal, or your own code</Preview>
       <Body style={emailStyles.main}>
         <Container style={emailStyles.container}>
-          <Section style={emailStyles.header}>
+          <Section style={darkHeader}>
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
             <Text style={eyebrow}>New</Text>
             <Text style={emailStyles.contentHeading}>
-              PageSpace now has an SDK and a CLI
+              Browser for you. CLI for your agents. SDK for your apps.
             </Text>
             <Text style={emailStyles.paragraph}>Hi {userName},</Text>
             <Text style={emailStyles.paragraph}>
-              Everything you do in PageSpace — pages, drives, tasks, search,
-              files — is now something you can do from your own code and from
-              your terminal. Two new packages are live on npm.
+              You&apos;ve always worked in PageSpace through the browser. Now the
+              same workspace — pages, drives, tasks, search, files — opens two
+              more ways in: a command-line tool your agents can drive, and a
+              TypeScript SDK your apps can build on. Both are live on npm.
             </Text>
 
             <Section style={calloutCard}>
-              <Text style={calloutHeading}>@pagespace/sdk</Text>
+              <Text style={calloutHeading}>@pagespace/cli — for your agents</Text>
               <Text style={calloutText}>
-                A typed TypeScript client for the PageSpace API. Read and write
-                pages, move things around a drive, create and update tasks, run
-                a search — from a script, a backend service, or an agent you
-                build yourself. Authentication is an API key you scope to the
-                drives it&apos;s allowed to touch.
-              </Text>
-            </Section>
-
-            <Section style={calloutCard}>
-              <Text style={calloutHeading}>@pagespace/cli</Text>
-              <Text style={calloutText}>
-                The same capabilities from your terminal, so PageSpace can be a
-                step in a shell script, a cron job, or a CI pipeline — and a
-                coding agent that already has a shell, like Claude Code, can
-                drive it directly. It also ships an MCP server (
+                Your terminal, and the coding agents that live in it. A
+                shell-capable agent like Claude Code drives PageSpace by running
+                commands directly: read and write pages, run searches, manage
+                tasks. It also ships an MCP server (
                 <code style={inlineCode}>pagespace mcp</code>) that connects
                 assistants without a terminal, like Claude Desktop and Cursor,
                 to the same tools.
               </Text>
             </Section>
 
+            <Section style={calloutCard}>
+              <Text style={calloutHeading}>@pagespace/sdk — for your apps</Text>
+              <Text style={calloutText}>
+                The apps and services you build. A typed TypeScript client for
+                the PageSpace API — read and write pages, move things around a
+                drive, create and update tasks, run a search, from a script or a
+                backend. Authentication is an API key you scope to the drives
+                it&apos;s allowed to touch.
+              </Text>
+            </Section>
+
             <Section style={codeBlock}>
-              <Text style={codeLine}>npm install @pagespace/sdk</Text>
               <Text style={codeLine}>npm install -g @pagespace/cli</Text>
               <Text style={codeLine}>pagespace login</Text>
+              <Text style={codeLine}>npm install @pagespace/sdk</Text>
             </Section>
 
             <Text style={emailStyles.paragraph}>
@@ -167,8 +190,8 @@ export function SdkCliLaunchEmail({
             </Text>
 
             <Section style={emailStyles.buttonContainer}>
-              <Button style={emailStyles.button} href={sdkDocsUrl}>
-                Get started with the SDK
+              <Button style={darkButton} href={cliDocsUrl}>
+                Get started with the CLI
               </Button>
             </Section>
 
@@ -179,8 +202,8 @@ export function SdkCliLaunchEmail({
                 marginTop: spacing.sm,
               }}
             >
-              <Link href={cliDocsUrl} style={secondaryLink}>
-                Or start with the CLI
+              <Link href={sdkDocsUrl} style={secondaryLink}>
+                Or build with the SDK
               </Link>
             </Text>
 
@@ -195,7 +218,7 @@ export function SdkCliLaunchEmail({
             </Text>
             {unsubscribeUrl ? (
               <Text style={emailStyles.footerText}>
-                <Link href={unsubscribeUrl} style={emailStyles.link}>
+                <Link href={unsubscribeUrl} style={darkFooterLink}>
                   Unsubscribe from product update emails
                 </Link>
               </Text>
