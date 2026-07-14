@@ -52,6 +52,7 @@ function makeStore(seed: MachineBranchRecord[] = []) {
         branchName: input.branchName,
         sessionKey: input.sessionKey,
         sandboxId: input.sandboxId,
+        spriteTornDownAt: null,
         createdAt: input.now,
         updatedAt: input.now,
       };
@@ -62,7 +63,10 @@ function makeStore(seed: MachineBranchRecord[] = []) {
       for (const [k, row] of rows) {
         if (row.id === id) {
           if (row.sandboxId !== previousSandboxId) return false;
-          rows.set(k, { ...row, sandboxId, updatedAt: now });
+          // Mirrors the real store: recording a live replacement Sprite clears
+          // the torn-down stamp, or the new Sprite would be invisible to the
+          // orphan reconciler and the hard-purge guard.
+          rows.set(k, { ...row, sandboxId, spriteTornDownAt: null, updatedAt: now });
           return true;
         }
       }
@@ -433,6 +437,46 @@ describe('spawnBranch', () => {
     expect(provisionCalls).toHaveLength(1);
     expect(killCalls).toHaveLength(1);
     expect(killCalls).not.toContain('sbx-other-winner');
+  });
+
+  it('given a branch whose Sprite was TORN DOWN (machine trashed, then restored), should re-provision and CLEAR the torn-down stamp', async () => {
+    // The subtlest invariant in the orphan-reconcile design: a re-provisioned
+    // branch Sprite is LIVE again, so its row must stop looking reclaimed. If the
+    // stamp survived here, the new Sprite would be invisible to BOTH the orphan
+    // reconciler and the hard-purge guard — i.e. it could be orphaned and billed
+    // forever, the exact bug the reconciler exists to prevent.
+    const sessionKey = deriveBranchSessionKey({
+      tenantId: actor.tenantId,
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      secret: SECRET,
+    });
+    const { store } = makeStore([
+      {
+        id: 'branch-torndown',
+        ownerId: actor.userId,
+        machineId: TERMINAL_ID,
+        projectName: PROJECT_NAME,
+        branchName: 'main',
+        sessionKey,
+        // Not registered with the fake host → attach returns null, i.e. the
+        // Sprite the reconciler killed is genuinely gone.
+        sandboxId: 'sbx-reclaimed',
+        spriteTornDownAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const { host } = makeFakeHost();
+    const { deps } = makeDeps({ host, store });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+
+    expect(result.ok).toBe(true);
+    const row = await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main');
+    expect(row?.spriteTornDownAt).toBeNull();
+    expect(row?.sandboxId).not.toBe('sbx-reclaimed');
   });
 
   it('given a concurrent re-provision-after-vanish race, should not overwrite the winner\'s row and should kill its own redundant Sprite', async () => {

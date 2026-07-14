@@ -14,17 +14,21 @@ import { machineBranches } from '@pagespace/db/schema/machine-branches';
 export type PageTypeValue = PageTypeEnum;
 
 /**
- * True for a page that still has a Sprite-tracking row — a `machine_sessions`
- * row (the Machine's own persistent Sprite) or a `machine_branches` row (a
- * branch-terminal's own Sprite) pointing at it.
+ * True for a page that still points at a Sprite we believe is LIVE — a
+ * `machine_sessions` row (the Machine's own persistent Sprite; the row exists
+ * only while its Sprite is believed live) or a `machine_branches` row whose
+ * `spriteTornDownAt` is still NULL (that row OUTLIVES its Sprite on purpose — it
+ * is re-creatable branch config — so its existence alone proves nothing).
  *
- * Both tables delete their row ONLY after a CONFIRMED kill, so a surviving row
- * means a live-or-unconfirmed microVM, still billing. Both FK-cascade off
- * `pages.id` — so hard-deleting the page would take the row with it and destroy
- * the only record of that Sprite's `sandboxId`, leaving it permanently
- * unreachable and permanently billing. The 30-day purge therefore skips such a
- * page (`not(...)`) and leaves it for the orphan reconcile cron, which normally
- * clears the row within 30 minutes and lets the next nightly purge take the page.
+ * Both tables FK-cascade off `pages.id`, so hard-deleting the page would take
+ * the row with it and destroy the only record of that Sprite's `sandboxId`,
+ * leaving a still-running microVM permanently unreachable and permanently
+ * billing. The 30-day purge therefore skips such a page (`not(...)`) and leaves
+ * it for the orphan reconcile cron, which normally reclaims the Sprite within 30
+ * minutes; the next nightly purge then takes the page. An ALREADY-reclaimed
+ * branch row never blocks the purge (its Sprite is gone — there is nothing left
+ * to strand), so a torn-down Machine cannot become unpurgeable, which would turn
+ * this guard into a GDPR Art. 17 retention bug.
  *
  * A no-op filter for the overwhelming majority of pages: neither table is ever
  * populated for a non-Machine page.
@@ -35,7 +39,11 @@ export type PageTypeValue = PageTypeEnum;
 function hasLiveSpriteTrackingRow(): SQL {
   return sql`(
     EXISTS (SELECT 1 FROM ${machineSessions} WHERE ${machineSessions.pageId} = ${pages.id})
-    OR EXISTS (SELECT 1 FROM ${machineBranches} WHERE ${machineBranches.machineId} = ${pages.id})
+    OR EXISTS (
+      SELECT 1 FROM ${machineBranches}
+      WHERE ${machineBranches.machineId} = ${pages.id}
+        AND ${machineBranches.spriteTornDownAt} IS NULL
+    )
   )`;
 }
 

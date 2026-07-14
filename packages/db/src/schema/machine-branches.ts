@@ -43,6 +43,32 @@ export const machineBranches = pgTable('machine_branches', {
   sessionKey: text('sessionKey').notNull().unique(),
   sandboxId: text('sandboxId').notNull(),
 
+  /**
+   * When this row's `sandboxId` Sprite was CONFIRMED destroyed (Machine page
+   * trashed, or the orphan reconciler reclaimed it). NULL = we believe a live
+   * Sprite exists under `sandboxId`.
+   *
+   * This is the pending-teardown signal, and it is a COLUMN rather than the
+   * row's mere existence because the row outlives its Sprite ON PURPOSE. A
+   * branch row is re-creatable CONFIGURATION, not just a pointer: `spawnBranch`
+   * re-provisions a vanished branch under the same `sessionKey` and re-clones
+   * from the project's `repoUrl`. Deleting the row on teardown would therefore
+   * destroy the user's branch-terminal config on a REVERSIBLE soft-delete — and
+   * would cascade-delete its branch-scoped `machine_agent_terminals` rows
+   * (FK `onDelete: 'cascade'`) along with it, so a restore would bring the
+   * Machine back without its branch terminals.
+   *
+   * So: teardown kills the Sprite and STAMPS this column, keeping the row. The
+   * orphan reconciler
+   * (`@pagespace/lib/services/machines/machine-orphan-reconcile`) reclaims rows
+   * that are still NULL under a trashed page, and the 30-day hard purge blocks
+   * only on those — a torn-down row never blocks the purge, and its eventual
+   * FK-cascade at hard-purge time is correct (the page is being erased).
+   * Cleared back to NULL by `updateSandboxId` when a re-provision records a new
+   * live Sprite.
+   */
+  spriteTornDownAt: timestamp('spriteTornDownAt', { mode: 'date' }),
+
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({

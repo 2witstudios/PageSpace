@@ -38,18 +38,24 @@
  * own-Sprite kill failures govern `spriteTornDown`; branch kills and the
  * tracking-row removal are best-effort so they never invert that flag.
  *
- * The Machine's CONFIGURED-METADATA rows (`machine_projects` /
+ * The Machine's dependent metadata ROWS (`machine_projects` / `machine_branches` /
  * `machine_agent_terminals`) are intentionally left in place — they FK-cascade on
  * the page's eventual HARD purge, so a reversible soft-delete never destroys the
  * user's configured-repo metadata (killing the Sprites frees the compute; the rows
- * stay for a restore).
+ * stay for a restore). `machine_branches` rows are STAMPED
+ * (`spriteTornDownAt`) rather than deleted for exactly this reason: they are
+ * re-creatable config, and deleting one would cascade away its branch-scoped
+ * `machine_agent_terminals` too.
  *
- * `machine_branches` is NOT metadata in that sense — it is a live-Sprite pointer
- * (a branch-terminal's own Sprite id), and `killBranch` already deletes the row
- * on a confirmed kill. So the teardown below does the same: kill, then drop the
- * row. A row that SURVIVES the teardown therefore means its Sprite was never
- * confirmed dead — the pending-teardown signal the orphan reconciler
- * (`machine-orphan-reconcile.ts`) reclaims on, uniform with `machine_sessions`.
+ * `machine_sessions` is the one row that IS deleted on a confirmed kill: it is a
+ * pure live-Sprite pointer, and the storage reconcile bills every row it finds,
+ * so a row outliving its Sprite would bill storage for a destroyed VM. A restore
+ * simply provisions a fresh Sprite under the same derived session key.
+ *
+ * Either way, a Sprite we still believe is LIVE under a TRASHED page (a
+ * `machine_sessions` row that still exists; a `machine_branches` row still
+ * unstamped) is the pending-teardown signal the orphan reconciler
+ * (`machine-orphan-reconcile.ts`) reclaims on.
  *
  * NOT handled here (deliberate scope): PATCH (`updateSettings`) still writes the
  * settings fields via raw `db.update` — a Machine rename/toggle does not bump the
@@ -332,22 +338,28 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   const host = await getMachineHostForBranches();
 
   // Branch Sprites: best-effort. A failure must not fail the delete or invert
-  // spriteTornDown — the branch row STAYS so the orphan reconciler
+  // spriteTornDown — the branch row is left UNSTAMPED so the orphan reconciler
   // (@pagespace/lib/services/machines/machine-orphan-reconcile, wired in
   // ./machine-orphan-reconcile-runtime) can find the sandboxId and retry.
   //
-  // The row is removed only after a CONFIRMED kill, mirroring the
-  // machine_sessions removal below. That is what makes "tracking row still
-  // exists + owning page trashed" a uniform pending-teardown signal across both
-  // tables — the reconciler's entire candidate query rests on it, and leaving a
-  // row behind after a successful kill would make a healthy Machine look
-  // perpetually orphaned.
+  // On a CONFIRMED kill we STAMP `spriteTornDownAt` — we never delete the row.
+  // The row is re-creatable config, not just a pointer (`spawnBranch`
+  // re-provisions a vanished branch under the same sessionKey and re-clones),
+  // and its branch-scoped `machine_agent_terminals` FK-cascade off it, so
+  // deleting it here would destroy the user's branch terminals on a REVERSIBLE
+  // soft-delete. "Live Sprite" is therefore `spriteTornDownAt IS NULL`, not the
+  // row's existence — which is exactly the signal the reconciler reclaims on.
   for (const branch of branchRows) {
     try {
       await host.kill({ machineId: branch.sandboxId });
-      await db.delete(machineBranches).where(eq(machineBranches.id, branch.id));
+      await db
+        .update(machineBranches)
+        .set({ spriteTornDownAt: new Date() })
+        // CAS on sandboxId: never stamp a Sprite we did not just kill (a
+        // concurrent re-provision may already have written a live replacement).
+        .where(and(eq(machineBranches.id, branch.id), eq(machineBranches.sandboxId, branch.sandboxId)));
     } catch {
-      // Best-effort; leave the row for the reconciler to retry.
+      // Best-effort; leave the row unstamped for the reconciler to retry.
     }
   }
 

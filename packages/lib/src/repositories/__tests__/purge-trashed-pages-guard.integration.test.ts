@@ -9,6 +9,13 @@
  * `pages.id` and the purge would destroy the only pointer (`sandboxId`) to a
  * live, billing microVM.
  *
+ * It also pins the OTHER half of the guard, which is just as load-bearing: a
+ * branch row whose Sprite was already reclaimed (`spriteTornDownAt` stamped)
+ * still EXISTS — it is the user's re-creatable branch config — and must NOT hold
+ * the page back. A guard keyed on row existence alone would make every
+ * torn-down Machine permanently unpurgeable, silently breaking the 30-day
+ * GDPR Art. 17 retention promise.
+ *
  * Requires DATABASE_URL to point at a running Postgres with migrations applied
  * (see scripts/test-with-db.sh); self-skips otherwise, like the other
  * *.integration.test.ts suites here.
@@ -29,7 +36,8 @@ const PLAIN_PAGE = 'purge-guard-plain';
 const SESSION_MACHINE = 'purge-guard-session-machine';
 const BRANCH_MACHINE = 'purge-guard-branch-machine';
 const RECLAIMED_MACHINE = 'purge-guard-reclaimed-machine';
-const ALL_PAGES = [PLAIN_PAGE, SESSION_MACHINE, BRANCH_MACHINE, RECLAIMED_MACHINE];
+const TORNDOWN_BRANCH_MACHINE = 'purge-guard-torndown-branch-machine';
+const ALL_PAGES = [PLAIN_PAGE, SESSION_MACHINE, BRANCH_MACHINE, RECLAIMED_MACHINE, TORNDOWN_BRANCH_MACHINE];
 
 const NOW = Date.now();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -82,8 +90,22 @@ async function seed() {
     sandboxId: 'pgs-sbx-orphan-branch',
   });
 
-  // RECLAIMED_MACHINE is a Machine page whose Sprites WERE torn down: the orphan
-  // reconciler (or a clean delete) removed its tracking rows, so it has none.
+  // A Machine whose branch Sprite WAS confirmed killed: the branch row survives
+  // (it is re-creatable config, and its agent terminals cascade off it) but is
+  // STAMPED, so it points at no live Sprite and must NOT block the purge — the
+  // GDPR Art. 17 retention path depends on a reclaimed Machine staying purgeable.
+  await db.insert(machineBranches).values({
+    ownerId: USER_ID,
+    machineId: TORNDOWN_BRANCH_MACHINE,
+    projectName: 'repo',
+    branchName: 'done',
+    sessionKey: `${TORNDOWN_BRANCH_MACHINE}-key`,
+    sandboxId: 'pgs-sbx-dead',
+    spriteTornDownAt: new Date(NOW - 39 * DAY_MS),
+  });
+
+  // RECLAIMED_MACHINE is a Machine page whose Sprites WERE torn down and whose
+  // machine_sessions row was released, so it has no tracking row at all.
 }
 
 beforeAll(async () => {
@@ -119,7 +141,9 @@ describe('purgeExpiredTrashedPages — Sprite-tracking guard', () => {
       const survivorIds = survivors.map((row) => row.id).sort();
 
       // Held back: killing the page would cascade-delete the only pointer to a
-      // Sprite that is still running and still billing.
+      // Sprite that is still running and still billing. Note TORNDOWN_BRANCH_MACHINE
+      // is NOT held back — its branch row survives as config but its Sprite is
+      // confirmed dead, so there is nothing left to strand.
       expect(survivorIds).toEqual([BRANCH_MACHINE, SESSION_MACHINE].sort());
 
       // And the tracking rows themselves survive intact — the sandboxIds the
@@ -151,6 +175,17 @@ describe('purgeExpiredTrashedPages — Sprite-tracking guard', () => {
     },
   );
 
+  it('purges a Machine whose branch Sprite was already torn down — a stamped row never blocks erasure', async () => {
+    if (!dbAvailable) return;
+    // The GDPR Art. 17 counterpart of the guard: the branch row still EXISTS (it
+    // is the user's config), so a guard keyed on row-existence alone would hold
+    // this page back forever and silently break the 30-day retention promise.
+    await pageRepository.purgeExpiredTrashedPages(PURGE_CUTOFF);
+
+    const survivors = await db.select({ id: pages.id }).from(pages).where(inArray(pages.id, ALL_PAGES));
+    expect(survivors.map((row) => row.id)).not.toContain(TORNDOWN_BRANCH_MACHINE);
+  });
+
   it('leaves a page that is NOT yet past the purge cutoff alone', async () => {
     if (!dbAvailable) return;
     const purged = await pageRepository.purgeExpiredTrashedPages(new Date(NOW - 90 * DAY_MS));
@@ -179,6 +214,7 @@ describe('countStaleBlockedTrashedPages', () => {
       // Both blocked pages were trashed 40 days ago, so a 35-day-old cutoff
       // catches them and the un-blocked pages are never counted.
       const stale = await pageRepository.countStaleBlockedTrashedPages(new Date(NOW - 35 * DAY_MS));
+      // The torn-down branch page is NOT counted — it is not blocked at all.
       expect(stale).toBe(2);
     },
   );

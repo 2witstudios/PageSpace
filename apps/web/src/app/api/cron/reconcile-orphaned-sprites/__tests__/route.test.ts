@@ -47,17 +47,17 @@ describe('/api/cron/reconcile-orphaned-sprites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockReconcile.mockResolvedValue({ processed: 0, torndown: 0, failed: 0 });
+    mockReconcile.mockResolvedValue({ processed: 0, torndown: 0, skipped: 0, failed: 0 });
   });
 
   it('given valid HMAC, should run the reconcile and surface its counts', async () => {
-    mockReconcile.mockResolvedValue({ processed: 3, torndown: 2, failed: 1 });
+    mockReconcile.mockResolvedValue({ processed: 3, torndown: 2, skipped: 0, failed: 1 });
 
     const response = await GET(makeRequest());
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toMatchObject({ success: true, processed: 3, torndown: 2, failed: 1 });
+    expect(body).toMatchObject({ success: true, processed: 3, torndown: 2, skipped: 0, failed: 1 });
     expect(body.timestamp).toBeDefined();
   });
 
@@ -72,7 +72,7 @@ describe('/api/cron/reconcile-orphaned-sprites', () => {
   });
 
   it('should write an audit entry recording what was reclaimed', async () => {
-    mockReconcile.mockResolvedValue({ processed: 2, torndown: 2, failed: 0 });
+    mockReconcile.mockResolvedValue({ processed: 2, torndown: 2, skipped: 0, failed: 0 });
 
     await GET(makeRequest());
 
@@ -81,7 +81,7 @@ describe('/api/cron/reconcile-orphaned-sprites', () => {
         eventType: 'data.write',
         resourceType: 'cron_job',
         resourceId: 'reconcile_orphaned_sprites',
-        details: { processed: 2, torndown: 2, failed: 0 },
+        details: { processed: 2, torndown: 2, skipped: 0, failed: 0 },
       }),
     );
   });
@@ -98,7 +98,7 @@ describe('/api/cron/reconcile-orphaned-sprites', () => {
   });
 
   it('POST should delegate to GET', async () => {
-    mockReconcile.mockResolvedValue({ processed: 1, torndown: 1, failed: 0 });
+    mockReconcile.mockResolvedValue({ processed: 1, torndown: 1, skipped: 0, failed: 0 });
 
     const body = await (await POST(makeRequest())).json();
 

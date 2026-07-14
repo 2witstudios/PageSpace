@@ -19,6 +19,14 @@ export interface MachineBranchRecord {
   branchName: string;
   sessionKey: string;
   sandboxId: string;
+  /**
+   * When `sandboxId`'s Sprite was CONFIRMED destroyed; NULL while we believe it
+   * is live. The row deliberately OUTLIVES its Sprite — it is re-creatable
+   * config (`spawnBranch` re-provisions under the same `sessionKey`), so a
+   * teardown stamps this instead of deleting the row. See the column's doc in
+   * `@pagespace/db/schema/machine-branches`.
+   */
+  spriteTornDownAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,6 +55,12 @@ export interface MachineBranchStore {
    * replacement Sprite for the same vanished one must not silently
    * last-write-wins (the loser's win would orphan its own live Sprite,
    * untracked) — the loser instead sees `updated: false` and can react.
+   *
+   * Recording a live replacement Sprite also CLEARS `spriteTornDownAt`: this is
+   * the sole re-provision write path, so if it left a stale torn-down stamp
+   * behind, the brand-new Sprite would be invisible to both the orphan
+   * reconciler and the hard-purge guard — i.e. it could be orphaned and billed
+   * forever, the exact bug this all exists to prevent.
    */
   updateSandboxId(input: { id: string; previousSandboxId: string; sandboxId: string; now: Date }): Promise<boolean>;
   remove(machineId: string, projectName: string, branchName: string): Promise<void>;
@@ -116,7 +130,8 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
     async updateSandboxId({ id, previousSandboxId, sandboxId, now }) {
       const updated = await db
         .update(machineBranches)
-        .set({ sandboxId, updatedAt: now })
+        // spriteTornDownAt: null — this row now points at a LIVE Sprite again.
+        .set({ sandboxId, spriteTornDownAt: null, updatedAt: now })
         .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, previousSandboxId)))
         .returning({ id: machineBranches.id });
       return updated.length > 0;

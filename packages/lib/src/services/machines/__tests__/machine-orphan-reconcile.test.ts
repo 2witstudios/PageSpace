@@ -8,64 +8,80 @@ import {
 function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   deps: ReconcileOrphanSpritesDeps;
   killed: string[];
-  removedSessions: string[];
-  removedBranches: string[];
+  releasedSessions: string[];
+  stampedBranches: string[];
 } {
   const killed: string[] = [];
-  const removedSessions: string[] = [];
-  const removedBranches: string[] = [];
+  const releasedSessions: string[] = [];
+  const stampedBranches: string[] = [];
   const deps: ReconcileOrphanSpritesDeps = {
     listOrphanCandidates: async () => [],
+    isStillTrashed: async () => true,
     killSprite: async (sandboxId) => {
       killed.push(sandboxId);
       return { ok: true };
     },
-    removeSessionRow: async (sessionKey) => {
-      removedSessions.push(sessionKey);
+    releaseSessionRow: async ({ sessionKey }) => {
+      releasedSessions.push(sessionKey);
+      return true;
     },
-    removeBranchRow: async (id) => {
-      removedBranches.push(id);
+    markBranchTornDown: async ({ id }) => {
+      stampedBranches.push(id);
+      return true;
     },
     ...over,
   };
-  return { deps, killed, removedSessions, removedBranches };
+  return { deps, killed, releasedSessions, stampedBranches };
 }
 
-const sessionRow: OrphanRow = { kind: 'session', sessionKey: 'sk-1', sandboxId: 'pgs-sbx-1' };
-const branchRow: OrphanRow = { kind: 'branch', id: 'branch-1', sandboxId: 'pgs-sbx-2' };
+const sessionRow: OrphanRow = {
+  kind: 'session',
+  pageId: 'machine-1',
+  sessionKey: 'sk-1',
+  sandboxId: 'pgs-sbx-1',
+};
+const branchRow: OrphanRow = {
+  kind: 'branch',
+  pageId: 'machine-2',
+  id: 'branch-1',
+  sandboxId: 'pgs-sbx-2',
+};
 
 describe('reconcileOrphanSprites', () => {
-  it('kills a never-torn-down Machine Sprite and removes its machine_sessions row', async () => {
-    const { deps, killed, removedSessions, removedBranches } = makeDeps({
+  it('kills a never-torn-down Machine Sprite and releases its machine_sessions row', async () => {
+    const { deps, killed, releasedSessions, stampedBranches } = makeDeps({
       listOrphanCandidates: async () => [sessionRow],
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 1, failed: 0 });
+    expect(result).toEqual({ processed: 1, torndown: 1, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-sbx-1']);
-    expect(removedSessions).toEqual(['sk-1']);
-    expect(removedBranches).toEqual([]);
+    expect(releasedSessions).toEqual(['sk-1']);
+    expect(stampedBranches).toEqual([]);
   });
 
-  it('kills an orphaned branch Sprite and removes its machine_branches row by id', async () => {
-    const { deps, killed, removedSessions, removedBranches } = makeDeps({
+  it('kills an orphaned branch Sprite and STAMPS its row rather than deleting it', async () => {
+    // The branch row is re-creatable config, and its branch-scoped
+    // machine_agent_terminals FK-cascade off it — deleting it would destroy the
+    // user's branch terminals on a reversible soft-delete.
+    const { deps, killed, stampedBranches, releasedSessions } = makeDeps({
       listOrphanCandidates: async () => [branchRow],
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 1, failed: 0 });
+    expect(result).toEqual({ processed: 1, torndown: 1, skipped: 0, failed: 0 });
     expect(killed).toEqual(['pgs-sbx-2']);
-    expect(removedBranches).toEqual(['branch-1']);
-    expect(removedSessions).toEqual([]);
+    expect(stampedBranches).toEqual(['branch-1']);
+    expect(releasedSessions).toEqual([]);
   });
 
-  it('removes the row for a Sprite that is ALREADY gone — the idempotent kill reports ok', async () => {
+  it('releases the row for a Sprite that is ALREADY gone — the idempotent kill reports ok', async () => {
     // MachineHost.kill maps a not-found Sprite to a successful kill, so an
-    // already-destroyed Sprite must CLEAR its tracking row rather than being
-    // retried forever (the row is otherwise a permanent phantom candidate).
-    const { deps, removedSessions } = makeDeps({
+    // already-destroyed Sprite must RELEASE its row rather than being retried
+    // forever (it would otherwise be a permanent phantom candidate).
+    const { deps, releasedSessions } = makeDeps({
       listOrphanCandidates: async () => [sessionRow],
       killSprite: async () => ({ ok: true }),
     });
@@ -73,11 +89,45 @@ describe('reconcileOrphanSprites', () => {
     const result = await reconcileOrphanSprites(deps);
 
     expect(result).toMatchObject({ torndown: 1, failed: 0 });
-    expect(removedSessions).toEqual(['sk-1']);
+    expect(releasedSessions).toEqual(['sk-1']);
   });
 
-  it('LEAVES the tracking row in place when the kill fails — it is the only pointer to the Sprite', async () => {
-    const { deps, removedSessions, removedBranches } = makeDeps({
+  it('NEVER kills the Sprite of a page restored since the candidate list was read', async () => {
+    // The one irreversible mistake this cron could make: destroying a live,
+    // restored Machine's filesystem.
+    const killSprite = vi.fn(async () => ({ ok: true }) as const);
+    const { deps, releasedSessions, stampedBranches } = makeDeps({
+      listOrphanCandidates: async () => [sessionRow, branchRow],
+      isStillTrashed: async (pageId) => pageId !== 'machine-1', // machine-1 was restored mid-run
+      killSprite,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 2, torndown: 1, skipped: 1, failed: 0 });
+    expect(killSprite).toHaveBeenCalledTimes(1);
+    expect(killSprite).toHaveBeenCalledWith('pgs-sbx-2'); // only the still-trashed one
+    expect(releasedSessions).toEqual([]);
+    expect(stampedBranches).toEqual(['branch-1']);
+  });
+
+  it('counts a CAS that loses to a concurrent restore/re-provision as skipped, not torn down', async () => {
+    // The release write is conditional on (page still trashed, sandboxId
+    // unchanged). Losing it means a LIVE Sprite now owns that row — it must not
+    // be recorded as dead, or it would be invisible to this cron AND to the
+    // hard-purge guard.
+    const { deps } = makeDeps({
+      listOrphanCandidates: async () => [branchRow],
+      markBranchTornDown: async () => false,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, torndown: 0, skipped: 1, failed: 0 });
+  });
+
+  it('LEAVES the row untouched when the kill fails — it is the only pointer to the Sprite', async () => {
+    const { deps, releasedSessions, stampedBranches } = makeDeps({
       listOrphanCandidates: async () => [sessionRow, branchRow],
       killSprite: async (sandboxId) =>
         sandboxId === 'pgs-sbx-1' ? { ok: false, error: new Error('sprite unreachable') } : { ok: true },
@@ -85,10 +135,10 @@ describe('reconcileOrphanSprites', () => {
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 2, torndown: 1, failed: 1 });
+    expect(result).toEqual({ processed: 2, torndown: 1, skipped: 0, failed: 1 });
     // The failed row keeps its sandboxId on record so the next run retries it.
-    expect(removedSessions).toEqual([]);
-    expect(removedBranches).toEqual(['branch-1']);
+    expect(releasedSessions).toEqual([]);
+    expect(stampedBranches).toEqual(['branch-1']);
   });
 
   it('isolates a failing row — one bad Sprite never aborts the rest of the batch', async () => {
@@ -96,45 +146,45 @@ describe('reconcileOrphanSprites', () => {
       if (sandboxId === 'boom') throw new Error('host exploded');
       return { ok: true } as const;
     });
-    const { deps, removedSessions } = makeDeps({
+    const { deps, releasedSessions } = makeDeps({
       listOrphanCandidates: async () => [
-        { kind: 'session', sessionKey: 'sk-a', sandboxId: 'ok-a' },
-        { kind: 'session', sessionKey: 'sk-boom', sandboxId: 'boom' },
-        { kind: 'session', sessionKey: 'sk-b', sandboxId: 'ok-b' },
+        { kind: 'session', pageId: 'p-a', sessionKey: 'sk-a', sandboxId: 'ok-a' },
+        { kind: 'session', pageId: 'p-boom', sessionKey: 'sk-boom', sandboxId: 'boom' },
+        { kind: 'session', pageId: 'p-b', sessionKey: 'sk-b', sandboxId: 'ok-b' },
       ],
       killSprite,
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 3, torndown: 2, failed: 1 });
+    expect(result).toEqual({ processed: 3, torndown: 2, skipped: 0, failed: 1 });
     expect(killSprite).toHaveBeenCalledTimes(3);
-    expect(removedSessions).toEqual(['sk-a', 'sk-b']);
+    expect(releasedSessions).toEqual(['sk-a', 'sk-b']);
   });
 
-  it('counts a post-kill row-removal failure as failed, leaving the row for the next (idempotent) run', async () => {
+  it('counts a post-kill release failure as failed, leaving the row for the next (idempotent) run', async () => {
     const { deps, killed } = makeDeps({
       listOrphanCandidates: async () => [sessionRow],
-      removeSessionRow: async () => {
+      releaseSessionRow: async () => {
         throw new Error('db write failed');
       },
     });
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 1, torndown: 0, failed: 1 });
-    // The Sprite IS dead; the next run's kill is idempotent, so it simply drops the row then.
+    expect(result).toEqual({ processed: 1, torndown: 0, skipped: 0, failed: 1 });
+    // The Sprite IS dead; the next run's kill is idempotent, so it simply releases the row then.
     expect(killed).toEqual(['pgs-sbx-1']);
   });
 
-  it('is a clean no-op when nothing is orphaned — no kills, no row removals', async () => {
-    const { deps, killed, removedSessions, removedBranches } = makeDeps();
+  it('is a clean no-op when nothing is orphaned — no kills, no writes', async () => {
+    const { deps, killed, releasedSessions, stampedBranches } = makeDeps();
 
     const result = await reconcileOrphanSprites(deps);
 
-    expect(result).toEqual({ processed: 0, torndown: 0, failed: 0 });
+    expect(result).toEqual({ processed: 0, torndown: 0, skipped: 0, failed: 0 });
     expect(killed).toEqual([]);
-    expect(removedSessions).toEqual([]);
-    expect(removedBranches).toEqual([]);
+    expect(releasedSessions).toEqual([]);
+    expect(stampedBranches).toEqual([]);
   });
 });
