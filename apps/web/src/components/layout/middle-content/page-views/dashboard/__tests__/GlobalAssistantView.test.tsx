@@ -144,12 +144,20 @@ function resumeEnabled(currentConversationId: string | null, isAnyEditing: boole
  */
 type ResumeEffect = 'stop' | 'try-recover' | 'refresh' | 'regenerate';
 
+/**
+ * One tryRecover outcome. `recovered` and `probeAnswered` are separate because "we recovered
+ * nothing" is NOT the same claim as "the server told us there was nothing to recover".
+ */
+interface Attempt {
+  recovered: boolean;
+  probeAnswered: boolean;
+}
+
 function planResume({
   native,
   isStreaming,
   ownTurnInFlight = isStreaming,
-  recovered = true,
-  probeAnswered = true,
+  attempts = [{ recovered: true, probeAnswered: true }],
 }: {
   native: boolean;
   /** The broad display/effective streaming flag — what resolveResumeAction sees. */
@@ -162,10 +170,8 @@ function planResume({
    * rather than the one that was interrupted.
    */
   ownTurnInFlight?: boolean;
-  /** What tryRecover returned: it rejoined a live stream, or refetched a persisted reply. */
-  recovered?: boolean;
-  /** Whether the /active-streams probe actually reached the server and answered. */
-  probeAnswered?: boolean;
+  /** Successive tryRecover outcomes, one per probe the resume handler makes (up to 3). */
+  attempts?: Attempt[];
 }): ResumeEffect[] {
   const action = resolveResumeAction({ native, isStreaming });
   if (action === 'noop') return [];
@@ -174,11 +180,18 @@ function planResume({
   // body, which releases the channel's `consuming` mark. Without that the rejoin's bootstrap
   // treats the stream as one we are already reading off the POST and skips attaching it.
   const effects: ResumeEffect[] = ['stop', 'try-recover'];
-  if (recovered) return effects;
-  // Nothing recovered. NOT a DB refresh (unsafe: it would erase an in-progress bubble or the
-  // user's own prompt). Regenerate — but only on an ANSWERED probe, and only if a turn of ours was
-  // really in flight for this conversation.
-  if (ownTurnInFlight && probeAnswered) effects.push('regenerate');
+  let attempt: Attempt = attempts[0] ?? { recovered: false, probeAnswered: false };
+  if (attempt.recovered) return effects;
+
+  // An unanswered probe is not an answer. Re-probe (bounded) before concluding anything.
+  for (let i = 1; !attempt.probeAnswered && i <= 2; i++) {
+    effects.push('try-recover');
+    attempt = attempts[i] ?? { recovered: false, probeAnswered: false };
+    if (attempt.recovered) return effects;
+  }
+
+  // Regenerate only on an ANSWERED probe, and only for a turn of ours on this conversation.
+  if (ownTurnInFlight && attempt.probeAnswered) effects.push('regenerate');
   return effects;
 }
 
@@ -436,25 +449,64 @@ function evictStalePartial<T extends { id: string }>(
         // screen rather than the interrupted one — a spurious reply, and a spurious charge, on an
         // untouched conversation.
         expect(
-          planResume({ native: true, isStreaming: true, ownTurnInFlight: false, recovered: false }),
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: false,
+            attempts: [{ recovered: false, probeAnswered: true }],
+          }),
         ).toEqual(['stop', 'try-recover']);
       });
 
-      it('given native and the probe never ANSWERED, should NOT regenerate', () => {
+      it('given native and the probe never ANSWERED, should re-probe and then NOT regenerate', () => {
         // Silence is not an answer. Every generation start calls takeOverConversationStreams, so a
         // regenerate issued while the run is in fact still live does not race it — it ABORTS it.
         // We would kill a healthy generation, re-run write tools it had already executed, bill the
         // discarded tokens, and strand its partial in the DB. Doing nothing is safe: the stop
         // released the `consuming` mark, so the socket-reconnect bootstrap picks a live run up.
+        const plan = planResume({
+          native: true,
+          isStreaming: true,
+          ownTurnInFlight: true,
+          attempts: [
+            { recovered: false, probeAnswered: false },
+            { recovered: false, probeAnswered: false },
+            { recovered: false, probeAnswered: false },
+          ],
+        });
+        expect(plan).toEqual(['stop', 'try-recover', 'try-recover', 'try-recover']);
+        expect(plan).not.toContain('regenerate');
+      });
+
+      it('given the probe answers only on a LATER attempt, should still regenerate — a cold radio must not strand the turn', () => {
+        // The first request after a foreground is the one most likely to fail. Concluding from that
+        // single silence would leave the user's prompt unanswered forever; re-probing lets the
+        // radio come back and gives us a real answer to act on.
         expect(
           planResume({
             native: true,
             isStreaming: true,
             ownTurnInFlight: true,
-            recovered: false,
-            probeAnswered: false,
+            attempts: [
+              { recovered: false, probeAnswered: false },
+              { recovered: false, probeAnswered: true },
+            ],
           }),
-        ).toEqual(['stop', 'try-recover']);
+        ).toEqual(['stop', 'try-recover', 'try-recover', 'regenerate']);
+      });
+
+      it('given a re-probe finds the live stream, should rejoin and never regenerate', () => {
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            attempts: [
+              { recovered: false, probeAnswered: false },
+              { recovered: true, probeAnswered: true },
+            ],
+          }),
+        ).toEqual(['stop', 'try-recover', 'try-recover']);
       });
 
       it('given native, a turn in flight, an ANSWERED probe, and NOTHING to recover, should regenerate — never a DB refresh', () => {
@@ -463,14 +515,14 @@ function evictStalePartial<T extends { id: string }>(
         // used to drive the fallback. Without regenerating here, a turn whose POST died on the
         // background transition (a radio drop right then is common) finds no stream, no reply and
         // no error, and the user's prompt sits unanswered forever.
-        const plan = planResume({ native: true, isStreaming: true, recovered: false });
+        const plan = planResume({ native: true, isStreaming: true, attempts: [{ recovered: false, probeAnswered: true }] });
         expect(plan).toEqual(['stop', 'try-recover', 'regenerate']);
         expect(plan).not.toContain('refresh');
       });
 
       it('given native, NO turn in flight, and nothing to recover, should NOT regenerate', () => {
         // An ordinary resume on an idle conversation must never fire a spurious generation.
-        expect(planResume({ native: true, isStreaming: false, recovered: false })).toEqual([
+        expect(planResume({ native: true, isStreaming: false, attempts: [{ recovered: false, probeAnswered: true }] })).toEqual([
           'stop',
           'try-recover',
         ]);

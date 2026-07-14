@@ -51,6 +51,7 @@ import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMes
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
+import type { RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
 import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
@@ -400,12 +401,6 @@ const SidebarChatTab: React.FC = () => {
   const [globalMessagesLoadError, setGlobalMessagesLoadError] = useState<Error | null>(null);
   // Stale-request guard: holds the conversationId of the most recent load request.
   const globalLoadRequestedIdRef = useRef<string | null>(null);
-  // Whether the LAST /active-streams probe actually reached the server and answered.
-  //
-  // tryRecover returns false for two semantically opposite outcomes — "the server says nothing is
-  // live" and "the probe never got an answer" — and the resume path must not treat silence as an
-  // answer. See the regenerate gate in useAppStateRecovery below.
-  const probeAnsweredRef = useRef(false);
   // Synchronously updated each render — lets tryRecover read the live message
   // count without adding messages to its useCallback deps.
   const currentMessagesRef = useRef(messages);
@@ -901,20 +896,21 @@ const SidebarChatTab: React.FC = () => {
   //   1. Check /api/ai/chat/active-streams — if the original run is still live, rejoin it.
   //   2. Else fetch messages from the DB — if the run persisted a reply, surface it.
   //   3. Only fall through to regenerate() when neither path finds anything to recover.
-  const tryRecover = useCallback(async (): Promise<boolean> => {
-    if (!currentConversationId) return false;
+  const tryRecover = useCallback(async (): Promise<RecoveryAttempt> => {
+    // `probeAnswered` is RETURNED, never stashed in a ref. tryRecover has two callers — this
+    // surface's resume handler and useStreamRecovery's network-error retry — and they can be in
+    // flight together. A single shared slot would let one caller's probe answer the other's
+    // question, which on this path means regenerating over a run we never actually asked about.
+    let probeAnswered = false;
+    if (!currentConversationId) return { recovered: false, probeAnswered };
     const channelId = selectedAgent?.id ?? channelIdForGlobal;
-    if (!channelId) return false;
+    if (!channelId) return { recovered: false, probeAnswered };
 
     // Step 1: live stream check
-    probeAnsweredRef.current = false;
     try {
       const res = await fetchWithAuth(
         `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
       );
-      // Reachability, recorded separately from the verdict: only a 2xx means the server actually
-      // TOLD us what is live. A throw or a non-ok leaves us knowing nothing.
-      probeAnsweredRef.current = res.ok;
       if (res.ok) {
         const data = (await res.json()) as {
           streams?: Array<{
@@ -924,6 +920,11 @@ const SidebarChatTab: React.FC = () => {
             triggeredBy: { userId: string };
           }>;
         };
+        // Only NOW do we know the server told us something. Setting this off `res.ok` alone would
+        // be a lie: res.json() can still throw on a body that dies mid-read — which is exactly the
+        // cold-radio-after-foreground case this whole path exists for — and the catch below would
+        // swallow it while we went on believing we had an answer.
+        probeAnswered = true;
         const liveStream = (data.streams ?? []).find(
           (s) => s.conversationId === currentConversationId && s.triggeredBy.userId === user?.id,
         );
@@ -962,7 +963,7 @@ const SidebarChatTab: React.FC = () => {
             if (hasServerParts) setGlobalMessages(evictStale);
             rejoinGlobalStream();
           }
-          return true;
+          return { recovered: true, probeAnswered };
         }
       }
     } catch { /* network error — fall through to DB check */ }
@@ -987,17 +988,21 @@ const SidebarChatTab: React.FC = () => {
           msgs[msgs.length - 1].role === 'assistant' &&
           dbUserCount >= localUserCount;
         if (decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch') {
+          // Write the SAME normalized array the guards above were computed from. Reading
+          // defensively and then writing `data.messages` raw would blank the surface outright if
+          // the route ever answered with a bare array.
+          const serverMessages = msgs as unknown as UIMessage[];
           if (selectedAgent) {
-            setMessages(data.messages);
+            setMessages(serverMessages);
           } else {
-            setGlobalMessages(data.messages);
+            setGlobalMessages(serverMessages);
           }
-          return true;
+          return { recovered: true, probeAnswered };
         }
       }
     } catch { /* network error — fall through to regenerate */ }
 
-    return false;
+    return { recovered: false, probeAnswered };
   }, [
     currentConversationId,
     selectedAgent,
@@ -1010,7 +1015,10 @@ const SidebarChatTab: React.FC = () => {
   ]);
 
   // Auto-retry on network errors — rejoin-first, regenerate only as last resort
-  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2, tryRecover });
+  // useStreamRecovery only asks "did you recover?" — the probe-reachability half of the answer is
+  // for the resume path, which is the one that would otherwise regenerate over a live run.
+  const tryRecoverForError = useCallback(async () => (await tryRecover()).recovered, [tryRecover]);
+  useStreamRecovery({ error, status, clearError, handleRetry, maxRetries: 2, tryRecover: tryRecoverForError });
 
   // App state recovery — deterministic stream rejoin on mobile.
   //
@@ -1068,20 +1076,22 @@ const SidebarChatTab: React.FC = () => {
       // that the rejoin's bootstrap would classify the stream as one we are already reading off
       // the POST and skip attaching it.
       stop();
-      if (await tryRecover()) return;
+      let attempt = await tryRecover();
+      if (attempt.recovered) return;
 
-      // tryRecover came up empty — but that means one of two OPPOSITE things, and only one of them
-      // is an answer:
+      // Came up empty — but that means one of two OPPOSITE things, and only one of them is an
+      // answer:
       //
-      //   "the server says nothing is live"  → the run died; regenerating is the recovery.
+      //   "the server says nothing is live"    → the run died; regenerating is the recovery.
       //   "the probe never reached the server" → we know NOTHING; a run may well still be live.
       //
       // The first request after a foreground is the one most likely to fail (cold radio), so on
       // this path the second case is common. Re-probe a couple of times before concluding: the
       // radio comes back well inside a few seconds.
-      for (let attempt = 1; !probeAnsweredRef.current && attempt <= 2; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
-        if (await tryRecover()) return;
+      for (let i = 1; !attempt.probeAnswered && i <= 2; i++) {
+        await new Promise((resolve) => setTimeout(resolve, i * 1000));
+        attempt = await tryRecover();
+        if (attempt.recovered) return;
       }
 
       // Regenerate ONLY on an answered probe, and only if a turn of ours really was in flight.
@@ -1100,7 +1110,7 @@ const SidebarChatTab: React.FC = () => {
       // Doing nothing there is safe: the stop released this channel's `consuming` mark, so a live
       // run is picked up by the socket-reconnect bootstrap once the network returns, and a dead one
       // leaves the user their prompt and the retry action on it.
-      if (hadTurnInFlight && probeAnsweredRef.current) await handleRetry();
+      if (hadTurnInFlight && attempt.probeAnswered) await handleRetry();
     }, [
       displayIsStreaming,
       isOwnStreamForCurrentConversation,
