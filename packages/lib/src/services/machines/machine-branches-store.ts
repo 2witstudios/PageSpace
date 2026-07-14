@@ -88,10 +88,11 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineBranchStore(): Promise<MachineBranchStore> {
-  const [{ db }, { eq, and }, { machineBranches }] = await Promise.all([
+  const [{ db }, { eq, and }, { machineBranches }, { machineSpriteReclaims }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-branches'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
   ]);
 
   return {
@@ -163,11 +164,19 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
     },
 
     async removeIfSandbox({ id, sandboxId }) {
-      const deleted = await db
-        .delete(machineBranches)
-        .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, sandboxId)))
-        .returning({ id: machineBranches.id });
-      return deleted.length > 0;
+      // One transaction — see the identical note in `createDbMachineSessionStore`.
+      // The AFTER DELETE trigger rescues this row's sandboxId into the reclaim
+      // outbox as it goes; here the Sprite is already CONFIRMED dead, so we drop
+      // the rescued pointer with it rather than pay a redundant kill next tick.
+      return db.transaction(async (tx) => {
+        const deleted = await tx
+          .delete(machineBranches)
+          .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, sandboxId)))
+          .returning({ id: machineBranches.id });
+        if (deleted.length === 0) return false;
+        await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+        return true;
+      });
     },
   };
 }

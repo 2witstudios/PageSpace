@@ -496,10 +496,11 @@ export async function findLiveMachineSandboxId(input: MachineSessionKeyInput): P
  * that inject a fake (in tests) never load the DB module graph.
  */
 export async function createDbMachineSessionStore(): Promise<MachineSessionStore> {
-  const [{ db }, { eq, and }, { machineSessions }] = await Promise.all([
+  const [{ db }, { eq, and }, { machineSessions }, { machineSpriteReclaims }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-sessions'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
   ]);
 
   return {
@@ -548,11 +549,22 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
     },
 
     async removeIfSandbox({ sessionKey, sandboxId }) {
-      const deleted = await db
-        .delete(machineSessions)
-        .where(and(eq(machineSessions.sessionKey, sessionKey), eq(machineSessions.sandboxId, sandboxId)))
-        .returning({ id: machineSessions.id });
-      return deleted.length > 0;
+      // One transaction, because the AFTER DELETE trigger will rescue this row's
+      // sandboxId into the reclaim outbox as we delete it (it cannot know WHY the
+      // row is going). Here we know: the Sprite was already CONFIRMED dead, so the
+      // rescued pointer is not needed and would only cost a redundant kill on the
+      // next cron tick. Deleting both together keeps that self-cleaning — and if
+      // this transaction rolls back, the pointer survives, which is the safe way
+      // to be wrong.
+      return db.transaction(async (tx) => {
+        const deleted = await tx
+          .delete(machineSessions)
+          .where(and(eq(machineSessions.sessionKey, sessionKey), eq(machineSessions.sandboxId, sandboxId)))
+          .returning({ id: machineSessions.id });
+        if (deleted.length === 0) return false;
+        await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+        return true;
+      });
     },
   };
 }

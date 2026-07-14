@@ -4,15 +4,19 @@
  * real `machine_sessions` / `machine_branches` tables and the Sprite
  * `MachineHost`. Mirrors `machine-storage-billing.ts`'s default-deps pattern.
  *
- * The candidate query is the design. Join each tracking table to `pages`, keep
- * the rows whose owning page `isTrashed` AND whose Sprite we still believe is
- * live — a `machine_sessions` row (which exists only while we believe that) or a
- * `machine_branches` row whose `spriteTornDownAt` is still NULL (that row
- * outlives its Sprite on purpose — it is re-creatable config) — AND which is
- * reclaimable at all: either a teardown was REQUESTED, or the page is past the
- * hard-purge cutoff. That last condition is the one that stops this cron from
- * irreversibly destroying the disk of every Machine a user merely dragged to the
- * trash. See `machine-orphan-reconcile.ts`'s module doc.
+ * Two sources, per `machine-orphan-reconcile.ts`'s module doc:
+ *
+ *   (A) `machine_sprite_reclaims` — the outbox. Pointers rescued by the AFTER
+ *       DELETE triggers as their tracking row was cascaded away (page purged,
+ *       drive deleted, account erased). No page, nothing to restore: kill.
+ *
+ *   (B) Tracking rows under a TRASHED page whose Sprite we still believe is live
+ *       AND whose teardown was REQUESTED — a `deleteMachine` whose kill failed.
+ *       The intent stamp is essential: keying on `isTrashed` alone would
+ *       irreversibly destroy the disk of every Machine a user merely dragged to
+ *       the trash (those Sprites just hibernate, and a restore is expected to
+ *       hand the disk back). Such a Sprite is reclaimed only if its page is
+ *       eventually PURGED — at which point the trigger routes it through (A).
  *
  * Both release writes are COMPARE-AND-SWAPs against (page still trashed,
  * sandboxId unchanged). A restore or a concurrent re-provision that commits
@@ -21,16 +25,16 @@
  * it permanently.
  */
 
-import { and, asc, eq, exists, isNotNull, isNull, lt, or, sql } from '@pagespace/db/operators';
+import { and, asc, eq, exists, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import type {
   OrphanRow,
   ReconcileOrphanSpritesDeps,
 } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
-import { trashPurgeCutoff } from '@pagespace/lib/repositories/page-repository';
 import { getMachineHostForBranches } from './machine-branches-runtime';
 
 /** The owning page is still trashed — the precondition every release write is conditional on. */
@@ -62,17 +66,16 @@ export const MAX_CANDIDATES_PER_TABLE = 200;
 export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   async listOrphanCandidates(): Promise<{ rows: OrphanRow[]; capped: boolean }> {
     // A kill is an irreversible DESTROY, so "the page is trashed" is never enough
-    // on its own — trashing is reversible, and the generic page-trash paths tear
-    // down nothing. A row is reclaimable only under one of the two tiers (see
-    // `machine-orphan-reconcile.ts`): a teardown was REQUESTED, or the page is
-    // past the point of restore and about to be erased anyway.
-    const purgeCutoff = trashPurgeCutoff();
-    const reclaimable = (
-      teardownRequestedAt: typeof machineSessions.teardownRequestedAt | typeof machineBranches.teardownRequestedAt,
-    ) =>
-      or(isNotNull(teardownRequestedAt), lt(pages.trashedAt, purgeCutoff));
-
-    const [sessionRows, branchRows] = await Promise.all([
+    // on its own — a trash is reversible, and the generic page-trash paths tear
+    // down nothing. Only an explicit teardown INTENT licenses destroying a
+    // tracking row's Sprite (see `machine-orphan-reconcile.ts`). Outbox rows need
+    // no such check: their page is already gone.
+    const [reclaimRows, sessionRows, branchRows] = await Promise.all([
+      db
+        .select({ sandboxId: machineSpriteReclaims.sandboxId })
+        .from(machineSpriteReclaims)
+        .orderBy(asc(machineSpriteReclaims.recordedAt))
+        .limit(MAX_CANDIDATES_PER_TABLE),
       db
         .select({
           pageId: machineSessions.pageId,
@@ -81,7 +84,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
         })
         .from(machineSessions)
         .innerJoin(pages, eq(machineSessions.pageId, pages.id))
-        .where(and(eq(pages.isTrashed, true), reclaimable(machineSessions.teardownRequestedAt)))
+        .where(and(eq(pages.isTrashed, true), isNotNull(machineSessions.teardownRequestedAt)))
         // Oldest-trashed first: the longest-billing orphans go first, and a
         // capped run can never starve a row indefinitely.
         .orderBy(asc(pages.trashedAt))
@@ -100,7 +103,7 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
           and(
             eq(pages.isTrashed, true),
             isNull(machineBranches.spriteTornDownAt),
-            reclaimable(machineBranches.teardownRequestedAt),
+            isNotNull(machineBranches.teardownRequestedAt),
           ),
         )
         .orderBy(asc(pages.trashedAt))
@@ -109,13 +112,18 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
 
     return {
       rows: [
+        // Outbox first: these Sprites have NO pointer left anywhere else, so they
+        // are the ones that bill forever if this run does not get to them.
+        ...reclaimRows.map((row): OrphanRow => ({ kind: 'reclaim', ...row })),
         ...sessionRows.map((row): OrphanRow => ({ kind: 'session', ...row })),
         ...branchRows.map((row): OrphanRow => ({ kind: 'branch', ...row })),
       ],
-      // Either table hitting its cap means a backlog remains — report it rather
+      // Any source hitting its cap means a backlog remains — report it rather
       // than letting a partial sweep look like a clean one.
       capped:
-        sessionRows.length >= MAX_CANDIDATES_PER_TABLE || branchRows.length >= MAX_CANDIDATES_PER_TABLE,
+        reclaimRows.length >= MAX_CANDIDATES_PER_TABLE ||
+        sessionRows.length >= MAX_CANDIDATES_PER_TABLE ||
+        branchRows.length >= MAX_CANDIDATES_PER_TABLE,
     };
   },
 
@@ -146,17 +154,45 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   },
 
   async releaseSessionRow({ sessionKey, sandboxId }) {
-    const released = await db
-      .delete(machineSessions)
-      .where(
-        and(
-          eq(machineSessions.sessionKey, sessionKey),
-          eq(machineSessions.sandboxId, sandboxId),
-          owningPageStillTrashed(machineSessions.pageId),
-        ),
-      )
-      .returning({ id: machineSessions.id });
-    return released.length > 0;
+    // One transaction: the AFTER DELETE trigger rescues this row's sandboxId into
+    // the outbox as it goes (it cannot know why the row is going). Here the Sprite
+    // is already CONFIRMED dead, so the rescued pointer would only cost a
+    // redundant kill next tick — drop it with the row. A rollback keeps the
+    // pointer, which is the safe way to be wrong.
+    return db.transaction(async (tx) => {
+      const released = await tx
+        .delete(machineSessions)
+        .where(
+          and(
+            eq(machineSessions.sessionKey, sessionKey),
+            eq(machineSessions.sandboxId, sandboxId),
+            owningPageStillTrashed(machineSessions.pageId),
+          ),
+        )
+        .returning({ id: machineSessions.id });
+      if (released.length === 0) return false;
+      await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+      return true;
+    });
+  },
+
+  async releaseReclaim(sandboxId) {
+    // The Sprite is confirmed gone, so the rescued pointer has done its job.
+    await db.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+  },
+
+  async noteReclaimFailure({ sandboxId, error }) {
+    // Kept, never dropped — the outbox row is the last pointer to this Sprite.
+    // The attempt count is the health signal: a row with a high `attempts` is a
+    // VM that cannot be killed and is still billing.
+    await db
+      .update(machineSpriteReclaims)
+      .set({
+        attempts: sql`${machineSpriteReclaims.attempts} + 1`,
+        lastAttemptAt: new Date(),
+        lastError: error instanceof Error ? error.message : String(error),
+      })
+      .where(eq(machineSpriteReclaims.sandboxId, sandboxId));
   },
 
   async markBranchTornDown({ id, sandboxId }) {

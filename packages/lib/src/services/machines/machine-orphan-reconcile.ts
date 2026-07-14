@@ -13,32 +13,41 @@
  * for a trashed page. We found exactly one of these in production — a `pgs-sbx-…`
  * Sprite stuck `running`, unreferenced by any live page, quietly billing RAM.
  *
- * WHAT MAKES A SPRITE RECLAIMABLE — and, just as important, what does NOT.
+ * TWO SOURCES OF WORK, because a Sprite can be orphaned in two different ways.
  *
- * A `host.kill` is an IRREVERSIBLE DESTROY: the VM's whole filesystem (repos,
- * uncommitted work, installed packages, credentials) is gone, with no undo. So
- * "the owning page is trashed" is NOT, on its own, a licence to kill. Trashing
- * is REVERSIBLE, and `pageService.trashPage` — the generic page DELETE, the bulk
- * delete, and the cascade-trash of any ancestor folder — trashes a MACHINE page
- * with NO teardown at all. Its Sprite simply hibernates, and a restore is
- * expected to hand back a Machine with its disk intact. A reconciler keyed on
- * `isTrashed` alone would quietly wipe the disk of every Machine anyone ever
- * dragged to the trash. Hence two tiers, and a row is a candidate only if it
- * matches one of them:
+ * (A) THE RECLAIM OUTBOX (`machine_sprite_reclaims`) — the pointer already lost
+ *     its page. `machine_sessions`/`machine_branches` FK-cascade off `pages.id`
+ *     (and off `users.id`), so EVERY hard delete of a page destroys the only
+ *     record of a VM that may still be running: the 30-day purge, "delete
+ *     permanently" from the trash, a permanent drive delete, the account-erasure
+ *     worker, and whatever path someone writes next. Guarding each of those is
+ *     unenforceable — there is always one more — and it cannot work for erasure
+ *     at all, since GDPR Art. 17 must never be blocked by a Sprite we failed to
+ *     kill. So we do not guard the deletes: an AFTER DELETE trigger on each
+ *     tracking table copies the `sandboxId` into an outbox table that has NO
+ *     foreign keys, inside the deleting transaction (Postgres fires row triggers
+ *     for CASCADE-deleted rows too). The pointer OUTLIVES the resource, and this
+ *     cron kills whatever lands there. Rows leave the outbox only on a CONFIRMED
+ *     kill, so a failure is retried forever rather than forgotten.
  *
- *   1. TEARDOWN WAS REQUESTED (`teardownRequestedAt IS NOT NULL`) — `deleteMachine`
- *      ran and meant to destroy this Sprite; its kill is the one that failed.
- *      This is the orphan we are hunting, and it is reclaimed on the next tick.
+ * (B) TRACKING ROWS WHOSE TEARDOWN WAS REQUESTED BUT NEVER CONFIRMED — the page
+ *     still exists (trashed), so nothing was cascaded and the outbox never saw
+ *     it. `deleteMachine` stamps `teardownRequestedAt` BEFORE it kills, so a
+ *     failed kill (or a process that died mid-teardown) is reclaimable here on
+ *     the next tick, instead of waiting ~30 days for the page to be purged.
  *
- *   2. THE PAGE IS PAST THE HARD-PURGE CUTOFF — nobody ever asked for a teardown,
- *      but the page is now beyond the trash-retention window, so it is about to
- *      be erased for good. Its Sprite must die with it: the tracking row
- *      FK-cascades off `pages.id`, so letting the purge take the page first would
- *      strand a live, billing VM with no pointer to it, forever. Killing here is
- *      safe precisely because the page is already past the point of restore.
+ * WHAT IS *NOT* RECLAIMABLE, and why (B) needs the intent stamp at all: a
+ * `host.kill` is an IRREVERSIBLE DESTROY — the VM's whole filesystem (repos,
+ * uncommitted work, credentials) is gone with no undo. But a TRASH is reversible,
+ * and `pageService.trashPage` (the generic page DELETE, bulk delete, and folder
+ * cascade-trash) trashes a MACHINE page with NO teardown: its Sprite simply
+ * hibernates, and a restore is expected to hand the disk back intact. Keying on
+ * `pages.isTrashed` alone would therefore wipe the disk of every Machine anyone
+ * ever dragged to the trash. Those Sprites are left alone; if the page is
+ * eventually purged, the trigger captures them into (A) and they die then.
  *
- * THE PENDING-TEARDOWN SIGNAL — "a Sprite we still believe is LIVE" — is then
- * expressed differently per table, because the two rows mean different things:
+ * THE LIVE-SPRITE SIGNAL for (B) is expressed differently per table, because the
+ * two rows mean different things:
  *
  *   • `machine_sessions`: the row IS the live-Sprite pointer and nothing else.
  *     It is deleted on a confirmed kill (`teardownOneMachine`), and the storage
@@ -77,11 +86,14 @@
  *
  * Per-row failure isolation mirrors the storage reconcile: one unreachable
  * Sprite must never abort the batch, and a row whose kill failed is deliberately
- * LEFT UNTOUCHED so the next run retries it — the row is the only pointer to the
- * orphaned `sandboxId`, so dropping it on failure would strand the Sprite
- * forever. That is also why the 30-day hard purge refuses to delete a page that
- * still has a live-Sprite row (see `purgeExpiredTrashedPages`): the FK cascade
- * would otherwise destroy the pointer.
+ * LEFT UNTOUCHED so the next run retries it — that row is the only pointer to the
+ * orphaned `sandboxId`, so dropping it on failure would strand the Sprite forever.
+ *
+ * Note what the outbox makes UNNECESSARY: the hard purge needs no guard against
+ * deleting a page whose Sprite is still live, because the cascade can no longer
+ * lose the pointer. Erasure always proceeds, no page is ever unpurgeable (which a
+ * guard would have risked — an Art. 17 retention bug), and the Sprite it orphans
+ * is reclaimed on the next tick.
  */
 
 import { loggers } from '../../logging/logger-config';
@@ -94,6 +106,13 @@ import { loggers } from '../../logging/logger-config';
  * different things (see module doc).
  */
 export type OrphanRow =
+  /**
+   * A pointer rescued from the reclaim outbox: its tracking row was destroyed
+   * (page purged, drive deleted, account erased…), so there is no page to check
+   * and nothing to restore — the Sprite is unreachable by definition and must
+   * die. See source (A) in the module doc.
+   */
+  | { kind: 'reclaim'; sandboxId: string }
   | { kind: 'session'; pageId: string; sessionKey: string; sandboxId: string }
   | { kind: 'branch'; pageId: string; id: string; sandboxId: string };
 
@@ -117,6 +136,10 @@ export interface ReconcileOrphanSpritesDeps {
   releaseSessionRow: (input: { sessionKey: string; sandboxId: string }) => Promise<boolean>;
   /** CAS-stamp `spriteTornDownAt` on the branch row (never delete it — it is re-creatable config): only if the page is STILL trashed and `sandboxId` is still the one we killed. Reports whether it actually wrote. */
   markBranchTornDown: (input: { id: string; sandboxId: string }) => Promise<boolean>;
+  /** Drop an outbox row — ONLY after its Sprite is confirmed gone. */
+  releaseReclaim: (sandboxId: string) => Promise<void>;
+  /** Record a failed kill against its outbox row (attempts/lastError) so a Sprite that cannot be killed becomes visible rather than silently retried forever. */
+  noteReclaimFailure: (input: { sandboxId: string; error: unknown }) => Promise<void>;
 }
 
 export interface ReconcileOrphanSpritesResult {
@@ -148,10 +171,11 @@ export async function reconcileOrphanSprites(
 
   for (const row of rows) {
     try {
-      // Guard 1: a restore that landed since the candidate list was read. Killing
-      // a restored Machine's Sprite would destroy a live VM's filesystem — the
-      // one genuinely irreversible mistake this cron could make.
-      if (!(await deps.isStillTrashed(row.pageId))) {
+      // Guard 1 (tracking rows only): a restore that landed since the candidate
+      // list was read. Killing a restored Machine's Sprite would destroy a live
+      // VM's filesystem — the one genuinely irreversible mistake this cron could
+      // make. An outbox row has no page left to restore, so it skips this.
+      if (row.kind !== 'reclaim' && !(await deps.isStillTrashed(row.pageId))) {
         skipped += 1;
         continue;
       }
@@ -161,8 +185,14 @@ export async function reconcileOrphanSprites(
         // Leave the row EXACTLY as it is: it is the only pointer to this
         // sandboxId. The next run retries it.
         failed += 1;
+        if (row.kind === 'reclaim') {
+          // Record the failure ON the outbox row, so a Sprite that cannot be
+          // killed surfaces as a growing attempt count instead of being retried
+          // silently forever.
+          await deps.noteReclaimFailure({ sandboxId: row.sandboxId, error: killed.error });
+        }
         loggers.ai.error(
-          'Orphan sprite teardown failed; leaving tracking row for retry',
+          'Orphan sprite teardown failed; leaving pointer for retry',
           killed.error instanceof Error ? killed.error : new Error(String(killed.error)),
           { sandboxId: row.sandboxId, kind: row.kind },
         );
@@ -173,6 +203,14 @@ export async function reconcileOrphanSprites(
       // idempotent). Only NOW release the row — and only via a CAS (guard 2), so
       // a restore or re-provision that raced us cannot have a LIVE Sprite marked
       // dead.
+      if (row.kind === 'reclaim') {
+        // No page, no CAS to lose: the Sprite is confirmed gone, so the pointer
+        // has done its job.
+        await deps.releaseReclaim(row.sandboxId);
+        torndown += 1;
+        continue;
+      }
+
       const released =
         row.kind === 'session'
           ? await deps.releaseSessionRow({ sessionKey: row.sessionKey, sandboxId: row.sandboxId })

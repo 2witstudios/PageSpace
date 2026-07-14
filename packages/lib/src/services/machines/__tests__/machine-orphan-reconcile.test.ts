@@ -10,10 +10,14 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
   killed: string[];
   releasedSessions: string[];
   stampedBranches: string[];
+  releasedReclaims: string[];
+  notedFailures: string[];
 } {
   const killed: string[] = [];
   const releasedSessions: string[] = [];
   const stampedBranches: string[] = [];
+  const releasedReclaims: string[] = [];
+  const notedFailures: string[] = [];
   const deps: ReconcileOrphanSpritesDeps = {
     listOrphanCandidates: async () => ({ rows: [], capped: false }),
     isStillTrashed: async () => true,
@@ -29,9 +33,15 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
       stampedBranches.push(id);
       return true;
     },
+    releaseReclaim: async (sandboxId) => {
+      releasedReclaims.push(sandboxId);
+    },
+    noteReclaimFailure: async ({ sandboxId }) => {
+      notedFailures.push(sandboxId);
+    },
     ...over,
   };
-  return { deps, killed, releasedSessions, stampedBranches };
+  return { deps, killed, releasedSessions, stampedBranches, releasedReclaims, notedFailures };
 }
 
 const sessionRow: OrphanRow = {
@@ -46,6 +56,40 @@ const branchRow: OrphanRow = {
   id: 'branch-1',
   sandboxId: 'pgs-sbx-2',
 };
+
+const reclaimRow: OrphanRow = { kind: 'reclaim', sandboxId: 'pgs-sbx-orphaned' };
+
+describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose page is already gone)', () => {
+  it('kills an outbox Sprite and drops its row, WITHOUT any trash check — there is no page left to restore', async () => {
+    const isStillTrashed = vi.fn(async () => true);
+    const { deps, killed, releasedReclaims } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
+      isStillTrashed,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(killed).toEqual(['pgs-sbx-orphaned']);
+    expect(releasedReclaims).toEqual(['pgs-sbx-orphaned']);
+    // The page was hard-deleted (purge / drive delete / account erasure) — asking
+    // whether it is "still trashed" is meaningless, and the row must not be skipped.
+    expect(isStillTrashed).not.toHaveBeenCalled();
+  });
+
+  it('KEEPS the outbox row when the kill fails, recording the failure — it is the last pointer in existence', async () => {
+    const { deps, releasedReclaims, notedFailures } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow], capped: false }),
+      killSprite: async () => ({ ok: false, error: new Error('sprite unreachable') }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toMatchObject({ torndown: 0, failed: 1 });
+    expect(releasedReclaims).toEqual([]); // dropping it would strand the Sprite forever
+    expect(notedFailures).toEqual(['pgs-sbx-orphaned']); // surfaced, not silently retried
+  });
+});
 
 describe('reconcileOrphanSprites', () => {
   it('kills a never-torn-down Machine Sprite and releases its machine_sessions row', async () => {

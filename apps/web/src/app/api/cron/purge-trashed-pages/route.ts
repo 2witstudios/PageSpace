@@ -11,16 +11,6 @@ import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
  * Implements Art. 17 GDPR erasure: trashed pages are soft-deleted immediately,
  * then permanently removed after the 30-day retention window.
  *
- * The purge SKIPS a page that still has a live Sprite-tracking row
- * (`machine_sessions` / `machine_branches`, both FK-cascading off `pages.id`):
- * deleting the page would take the row with it and destroy the only pointer
- * (`sandboxId`) to a microVM that may still be running and billing. Those rows
- * are cleared by the orphan reconcile cron (every 30 minutes), so a held-back
- * page is normally purged on the very next nightly run. `staleBlocked` counts
- * the ones still blocked 15 days PAST the purge cutoff (~45 days trashed) — far
- * beyond the reconciler's reach, so a non-zero value means a Sprite that cannot
- * be killed, and it stays visible instead of being silently destroyed.
- *
  * Authentication: HMAC-signed request with X-Cron-Timestamp, X-Cron-Nonce, X-Cron-Signature headers.
  */
 export async function GET(request: Request) {
@@ -32,19 +22,8 @@ export async function GET(request: Request) {
   try {
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    // Purge cutoff + a generous 15-day grace: a page still blocked at ~45 days
-    // trashed has survived ~720 orphan-reconcile ticks, so it is not a transient
-    // retry — it is a Sprite that cannot be killed.
-    const staleBlockedCutoff = new Date(thirtyDaysAgo.getTime() - 15 * 24 * 60 * 60 * 1000);
 
     const pagesPurged = await pageRepository.purgeExpiredTrashedPages(thirtyDaysAgo);
-    const staleBlocked = await pageRepository.countStaleBlockedTrashedPages(staleBlockedCutoff);
-
-    if (staleBlocked > 0) {
-      console.warn(
-        `[Cron] ${staleBlocked} trashed page(s) held back from purge by a live Sprite-tracking row for 45+ days — an orphaned Sprite is likely still billing and cannot be killed. See reconcile-orphaned-sprites.`,
-      );
-    }
 
     // Purging the page rows orphans the files they backed. Reap inline so the
     // 30-day purge frees the uploader's storage cap immediately instead of
@@ -64,14 +43,13 @@ export async function GET(request: Request) {
       eventType: 'data.delete',
       resourceType: 'cron_job',
       resourceId: 'purge_trashed_pages',
-      details: { pagesPurged, filesReaped, staleBlocked },
+      details: { pagesPurged, filesReaped },
     });
 
     return NextResponse.json({
       success: true,
       pagesPurged,
       filesReaped,
-      staleBlocked,
       timestamp: now.toISOString(),
     });
   } catch (error) {

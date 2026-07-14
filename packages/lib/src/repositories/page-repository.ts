@@ -6,65 +6,10 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, and, desc, isNull, inArray, isNotNull, lt, not, count, sql, type SQL } from '@pagespace/db/operators';
+import { eq, and, desc, isNull, inArray, isNotNull, lt } from '@pagespace/db/operators';
 import { pages, type PageTypeEnum } from '@pagespace/db/schema/core';
-import { machineSessions } from '@pagespace/db/schema/machine-sessions';
-import { machineBranches } from '@pagespace/db/schema/machine-branches';
 
 export type PageTypeValue = PageTypeEnum;
-
-/**
- * How long a trashed page is retained before the hard purge erases it for good
- * (GDPR Art. 17 — see the `purge-trashed-pages` cron).
- *
- * Exported because it is not only the purge's business: it is the exact moment a
- * page stops being restorable, which is what makes it SAFE for the orphan
- * reconciler to destroy a Machine's Sprite that nobody ever asked it to tear
- * down (see `machine-orphan-reconcile.ts`'s tier 2). The two must never drift —
- * a reconciler cutoff SHORTER than this would wipe the disk of a Machine the
- * user could still restore; a LONGER one would let the purge cascade the
- * tracking row away first, stranding a live, billing Sprite forever.
- */
-export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-
-/** The cutoff a trashed page must predate to be hard-purged (and, past it, to be safe for Sprite reclamation). */
-export function trashPurgeCutoff(now: Date = new Date()): Date {
-  return new Date(now.getTime() - TRASH_RETENTION_MS);
-}
-
-/**
- * True for a page that still points at a Sprite we believe is LIVE — a
- * `machine_sessions` row (the Machine's own persistent Sprite; the row exists
- * only while its Sprite is believed live) or a `machine_branches` row whose
- * `spriteTornDownAt` is still NULL (that row OUTLIVES its Sprite on purpose — it
- * is re-creatable branch config — so its existence alone proves nothing).
- *
- * Both tables FK-cascade off `pages.id`, so hard-deleting the page would take
- * the row with it and destroy the only record of that Sprite's `sandboxId`,
- * leaving a still-running microVM permanently unreachable and permanently
- * billing. The 30-day purge therefore skips such a page (`not(...)`) and leaves
- * it for the orphan reconcile cron, which normally reclaims the Sprite within 30
- * minutes; the next nightly purge then takes the page. An ALREADY-reclaimed
- * branch row never blocks the purge (its Sprite is gone — there is nothing left
- * to strand), so a torn-down Machine cannot become unpurgeable, which would turn
- * this guard into a GDPR Art. 17 retention bug.
- *
- * A no-op filter for the overwhelming majority of pages: neither table is ever
- * populated for a non-Machine page.
- *
- * Built lazily (a function, not a module constant) so importing this repository
- * never evaluates a query builder at module scope.
- */
-function hasLiveSpriteTrackingRow(): SQL {
-  return sql`(
-    EXISTS (SELECT 1 FROM ${machineSessions} WHERE ${machineSessions.pageId} = ${pages.id})
-    OR EXISTS (
-      SELECT 1 FROM ${machineBranches}
-      WHERE ${machineBranches.machineId} = ${pages.id}
-        AND ${machineBranches.spriteTornDownAt} IS NULL
-    )
-  )`;
-}
 
 // Types for repository operations
 export interface PageRecord {
@@ -326,10 +271,6 @@ export const pageRepository = {
   /**
    * Hard-delete pages that have been in the trash for longer than the cutoff date.
    * Returns the count of deleted pages.
-   *
-   * Excludes any page that still has a live Sprite-tracking row (see
-   * {@link hasLiveSpriteTrackingRow}) — without that guard this purge silently
-   * destroys the ONLY pointer to an orphaned, still-billing microVM.
    */
   purgeExpiredTrashedPages: async (olderThan: Date): Promise<number> => {
     const result = await db
@@ -338,42 +279,12 @@ export const pageRepository = {
         and(
           eq(pages.isTrashed, true),
           isNotNull(pages.trashedAt),
-          lt(pages.trashedAt, olderThan),
-          not(hasLiveSpriteTrackingRow())
+          lt(pages.trashedAt, olderThan)
         )
       )
       .returning({ id: pages.id });
 
     return result.length;
-  },
-
-  /**
-   * Health signal for the purge guard: how many trashed pages are OLD enough to
-   * have been purged well past their cutoff (`staleOlderThan` — the caller
-   * passes an extra grace window on top of the purge cutoff) and are STILL being
-   * held back by a live Sprite-tracking row.
-   *
-   * The orphan reconcile cron normally clears such a row within 30 minutes, so a
-   * page still blocked days later means a Sprite that cannot be killed — a
-   * genuinely stuck orphan, quietly billing. Surfacing it as a growing number is
-   * the whole point: the alternative (what this code used to do) was to
-   * cascade-delete the tracking row along with the page, which made the orphan
-   * both unbillable-to-anyone and permanently unreachable.
-   */
-  countStaleBlockedTrashedPages: async (staleOlderThan: Date): Promise<number> => {
-    const [row] = await db
-      .select({ value: count() })
-      .from(pages)
-      .where(
-        and(
-          eq(pages.isTrashed, true),
-          isNotNull(pages.trashedAt),
-          lt(pages.trashedAt, staleOlderThan),
-          hasLiveSpriteTrackingRow()
-        )
-      );
-
-    return row?.value ?? 0;
   },
 
   /**
