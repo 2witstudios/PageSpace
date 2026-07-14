@@ -141,9 +141,13 @@ function resumeEnabled(currentConversationId: string | null, isAnyEditing: boole
 }
 
 /**
- * Mirrors the side effects of the `onResume` body, in order. The decision itself is NOT
- * mirrored — it calls the real `resolveResumeAction`, so this pins the wiring (which stop,
- * which rejoin, and that the DB refresh runs last) against the real policy.
+ * Mirrors the side effects of the `onResume` body, IN ORDER. The decision itself is NOT
+ * mirrored — it calls the real `resolveResumeAction`, so this pins the wiring against the
+ * real policy.
+ *
+ * The order is the point: stop → refresh → rejoin. The refresh is awaited BEFORE the rejoin
+ * so that no DB request is outstanding when the rejoined stream completes; see the
+ * ordering tests below.
  */
 type ResumeEffect = 'stop' | 'rejoin-agent' | 'rejoin-global' | 'refresh';
 
@@ -158,14 +162,10 @@ function planResume({
 }): ResumeEffect[] {
   const action = resolveResumeAction({ native, isStreaming });
   if (action === 'noop') return [];
-  const effects: ResumeEffect[] = [];
-  if (action === 'rejoin-and-refresh') {
-    // `stop` is local-only — it clears useChat state so the rejoin attaches cleanly.
-    // It does NOT signal the server; the run keeps generating and is rejoined below.
-    effects.push('stop', selectedAgent ? 'rejoin-agent' : 'rejoin-global');
-  }
-  effects.push('refresh');
-  return effects;
+  if (action !== 'rejoin-and-refresh') return ['refresh'];
+  // `stop` is local-only — it clears useChat state so the refresh and rejoin write cleanly.
+  // It does NOT signal the server; the run keeps generating and is rejoined below.
+  return ['stop', 'refresh', selectedAgent ? 'rejoin-agent' : 'rejoin-global'];
 }
 
 // ============================================
@@ -615,33 +615,44 @@ describe('SidebarChatTab Display Logic', () => {
         expect(resumeEnabled('conv-A', true)).toBe(false);
       });
 
-      it('given a stream is in flight, should STILL enable recovery — streaming is not an input to the gate', () => {
+      it('given the gate signature, streaming must not be an input at all', () => {
         // THE REGRESSION. The gate used to be a render-time boolean that folded in
         // `!isStreaming`. iOS freezes JS the moment the app backgrounds, so the value
         // that gated the resume was whatever was true when the app went away — i.e.
         // streaming — which disabled recovery in exactly the case it was written for.
-        // The gate takes no streaming argument at all now; there is no way to express
-        // that bug in this signature. The streaming decision belongs to
-        // resolveResumeAction, at fire time.
-        expect(resumeEnabled('conv-A', false)).toBe(true);
+        // The streaming decision belongs to resolveResumeAction, evaluated at fire time;
+        // the gate must only ever consider the conversation and user-editing. Pinned on
+        // arity so a third `isStreaming` parameter cannot be reintroduced silently.
+        expect(resumeEnabled.length).toBe(2);
       });
     });
 
     describe('planResume (the onResume body)', () => {
-      it('given native mid-stream (the orphaned-stream bug), should stop the local fetch, rejoin the global stream, then refresh', () => {
+      it('given native mid-stream (the orphaned-stream bug), should stop the local fetch, refresh, then rejoin the global stream', () => {
         expect(planResume({ native: true, isStreaming: true, selectedAgent: null })).toEqual([
           'stop',
-          'rejoin-global',
           'refresh',
+          'rejoin-global',
         ]);
       });
 
       it('given native mid-stream with an agent selected, should rejoin the AGENT stream', () => {
         expect(planResume({ native: true, isStreaming: true, selectedAgent: mockAgent })).toEqual([
           'stop',
-          'rejoin-agent',
           'refresh',
+          'rejoin-agent',
         ]);
+      });
+
+      it('given native, should await the refresh BEFORE the rejoin — never after it', () => {
+        // Order is the fix for a reply-wiping race. The reply is not persisted until the run
+        // completes, so a refresh issued alongside a live stream returns a snapshot with no
+        // assistant message. Fired AFTER the rejoin, that request could still be in flight when
+        // the rejoined stream completed — landing last and overwriting the just-completed reply
+        // with the pre-reply snapshot.
+        const plan = planResume({ native: true, isStreaming: true, selectedAgent: mockAgent });
+        expect(plan.indexOf('refresh')).toBeLessThan(plan.indexOf('rejoin-agent'));
+        expect(plan.indexOf('stop')).toBeLessThan(plan.indexOf('refresh'));
       });
 
       it('given native and NOT streaming, should still stop and rejoin — the recovery is deterministic, not flag-gated', () => {
@@ -650,8 +661,8 @@ describe('SidebarChatTab Display Logic', () => {
         // on whether a stream is actually live; no client flag gates the rejoin.
         expect(planResume({ native: true, isStreaming: false, selectedAgent: null })).toEqual([
           'stop',
-          'rejoin-global',
           'refresh',
+          'rejoin-global',
         ]);
       });
 

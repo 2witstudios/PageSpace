@@ -40,6 +40,7 @@
  */
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import type { UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -82,6 +83,8 @@ import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
+import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
@@ -197,6 +200,9 @@ const GlobalAssistantView: React.FC = () => {
   // Populated after useAgentChannelMultiplayer runs (called further down); used
   // in tryRecover via ref so the callback doesn't depend on hook ordering.
   const rejoinAgentStreamRef = useRef<() => void>(() => {});
+  // The conversation the most recent message load was requested for. Lets a response that
+  // resolves after the user switched conversation be dropped instead of clobbering the new one.
+  const loadRequestedIdRef = useRef<string | null>(null);
 
   // ============================================
   // SHARED HOOKS
@@ -690,22 +696,48 @@ const GlobalAssistantView: React.FC = () => {
     setGlobalLocalMessages,
   ]);
 
-  // Pull-up refresh to check for missed messages (when real-time may have failed)
+  // Pull-up / resume refresh: check for messages this surface missed (real-time may have failed,
+  // or the app was backgrounded).
+  //
+  // This runs DURING an active own stream on the resume path (see useAppStateRecovery below:
+  // native resume rejoins the live server stream and then refreshes). A raw
+  // `setMessages(serverMessages)` would clobber the in-progress assistant bubble with a snapshot
+  // that predates the reply — the reply is not persisted until the run completes. So this funnels
+  // through the same two guards as the authoritative loaders elsewhere in the app
+  // (AiChatView.loadMessagesForConversation, SidebarChatTab.loadGlobalMessages):
+  //
+  //   1. shouldApplyLoadedMessages — drop the response if the user switched conversation while
+  //      the fetch was in flight, so it cannot clobber the conversation they moved to.
+  //   2. mergeServerAndPending — re-attach the in-flight own stream's bubble, which by definition
+  //      is absent from the DB snapshot while the run is still generating.
   const handlePullUpRefresh = useCallback(async () => {
-    if (!currentConversationId) return;
+    const conversationId = currentConversationId;
+    if (!conversationId) return;
+    loadRequestedIdRef.current = conversationId;
     try {
       const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`
-        : `/api/ai/global/${currentConversationId}/messages`;
+        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
+        : `/api/ai/global/${conversationId}/messages`;
       const res = await fetchWithAuth(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (selectedAgent) {
-          setAgentMessages(data.messages);
-          setAgentStoreMessages(data.messages);
-        } else {
-          setGlobalLocalMessages(data.messages);
-        }
+      if (!res.ok) return;
+      // Stale check after the await — the user may have switched conversation/agent.
+      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+      const data = await res.json();
+      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+
+      const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
+      const ownStream = Array.from(usePendingStreamsStore.getState().streams.values()).find(
+        (s) => s.isOwn && s.conversationId === conversationId,
+      );
+      const merged = ownStream
+        ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
+        : serverMessages;
+
+      if (selectedAgent) {
+        setAgentMessages(merged);
+        setAgentStoreMessages(merged);
+      } else {
+        setGlobalLocalMessages(merged);
       }
     } catch (error) {
       console.error('Failed to refresh messages:', error);
@@ -726,9 +758,19 @@ const GlobalAssistantView: React.FC = () => {
   // for — `!isStreaming` was false (streaming), and the recovery hook was gated off.
   //
   // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh'
-  // (the local fetch is dead after backgrounding), so we stop the local useChat state,
-  // rejoin the server-owned stream, then refresh from DB to catch a stream that finished
-  // while backgrounded.
+  // (the local fetch is dead after backgrounding).
+  //
+  // ORDER IS LOAD-BEARING: stop → await refresh → rejoin.
+  //
+  // The refresh must be AWAITED BEFORE the rejoin, not fired after it. The reply is not
+  // persisted until the run completes, so a refresh issued alongside a live stream returns a
+  // snapshot with no assistant message. If that request were still in flight when the rejoined
+  // stream completed, its response would land last and overwrite the freshly-completed reply
+  // with the pre-reply snapshot — and in agent mode nothing would heal it (there is no
+  // completion-triggered refetch there), leaving the reply invisible until the user reselects
+  // the conversation. Awaiting the refresh first means no DB request is ever outstanding when
+  // the stream completes: the refresh catches a run that finished while backgrounded, and the
+  // rejoin then attaches to one that is still live.
   const resumeEnabled = useCallback(
     () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
     [currentConversationId],
@@ -738,20 +780,22 @@ const GlobalAssistantView: React.FC = () => {
     onResume: useCallback(async () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
       if (action === 'noop') return;
-      if (action === 'rejoin-and-refresh') {
-        // rawStop is the local-only useChat stop; it does NOT signal the server (that is
-        // done separately via abortActiveStreamByMessageId). We only clear the local
-        // streaming state so the rejoin can attach cleanly.
-        rawStop();
-        // Agent rejoin goes through the ref: useAgentChannelMultiplayer is called further
-        // down, so the callback would otherwise close over a temporal-dead-zone binding.
-        if (selectedAgent) {
-          rejoinAgentStreamRef.current();
-        } else {
-          rejoinGlobalStream();
-        }
+      if (action !== 'rejoin-and-refresh') {
+        await handlePullUpRefresh();
+        return;
       }
+      // rawStop is the local-only useChat stop; it does NOT signal the server (that is
+      // done separately via abortActiveStreamByMessageId). We only clear the local
+      // streaming state so the refresh and rejoin can write cleanly.
+      rawStop();
       await handlePullUpRefresh();
+      // Agent rejoin goes through the ref: useAgentChannelMultiplayer is called further
+      // down, so the callback would otherwise close over a temporal-dead-zone binding.
+      if (selectedAgent) {
+        rejoinAgentStreamRef.current();
+      } else {
+        rejoinGlobalStream();
+      }
     }, [
       effectiveIsStreaming,
       selectedAgent,

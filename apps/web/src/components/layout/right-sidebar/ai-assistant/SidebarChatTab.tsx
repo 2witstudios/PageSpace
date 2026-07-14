@@ -604,21 +604,23 @@ const SidebarChatTab: React.FC = () => {
 
   // App state recovery - refresh messages when returning from background
   // This catches completed AI responses that finished while the app was backgrounded
+  // Refresh this surface from the DB after a background resume.
+  //
+  // Global mode funnels through `loadGlobalMessages` — the single writer for the global-mode
+  // server→view path — rather than doing its own fetch. This runs DURING an active own stream
+  // on the resume path (see useAppStateRecovery below), and only that loader carries the two
+  // guards that make a mid-stream DB read safe: a stale-response check (so a response arriving
+  // after a conversation switch cannot clobber the conversation the user moved to) and
+  // `mergeServerAndPending` (which re-attaches the in-flight assistant bubble, absent from the
+  // DB snapshot because the reply is not persisted until the run completes). The raw fetch this
+  // replaced had neither, so it wrote a pre-reply snapshot straight over the live bubble.
   const handleAppResume = useCallback(async () => {
     if (selectedAgent) {
       await refreshAgentConversation();
     } else if (globalConversationId && globalIsInitialized) {
-      try {
-        const res = await fetchWithAuth(`/api/ai/global/${globalConversationId}/messages`);
-        if (res.ok) {
-          const data = await res.json();
-          setGlobalMessages(data.messages);
-        }
-      } catch (err) {
-        console.error('Failed to refresh global messages after resume:', err);
-      }
+      loadGlobalMessages(globalConversationId);
     }
-  }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, setGlobalMessages]);
+  }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, loadGlobalMessages]);
 
   // App state recovery — deterministic stream rejoin on mobile.
   //
@@ -628,9 +630,17 @@ const SidebarChatTab: React.FC = () => {
   // for — `!isStreaming` was false (streaming), and the recovery hook was gated off.
   //
   // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh'
-  // (the local fetch is dead after backgrounding), so we stop the local useChat state,
-  // rejoin the server-owned stream, then refresh from DB to catch a stream that finished
-  // while backgrounded.
+  // (the local fetch is dead after backgrounding).
+  //
+  // ORDER IS LOAD-BEARING: stop → await refresh → rejoin.
+  //
+  // The refresh must be AWAITED BEFORE the rejoin, not fired after it. The reply is not
+  // persisted until the run completes, so a refresh issued alongside a live stream returns a
+  // snapshot with no assistant message. If that request were still in flight when the rejoined
+  // stream completed, its response would land last and overwrite the freshly-completed reply
+  // with the pre-reply snapshot. Awaiting the refresh first means no DB request is ever
+  // outstanding when the stream completes: the refresh catches a run that finished while
+  // backgrounded, and the rejoin then attaches to one that is still live.
   const resumeEnabled = useCallback(
     () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
     [currentConversationId],
@@ -640,18 +650,20 @@ const SidebarChatTab: React.FC = () => {
     onResume: useCallback(async () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
       if (action === 'noop') return;
-      if (action === 'rejoin-and-refresh') {
-        // `stop` is the local-only useChat stop; it does NOT signal the server (that is
-        // done separately via abortActiveStreamByMessageId). We only clear the local
-        // streaming state so the rejoin can attach cleanly.
-        stop();
-        if (selectedAgent) {
-          rejoinAgentStream();
-        } else {
-          rejoinGlobalStream();
-        }
+      if (action !== 'rejoin-and-refresh') {
+        await handleAppResume();
+        return;
       }
+      // `stop` is the local-only useChat stop; it does NOT signal the server (that is
+      // done separately via abortActiveStreamByMessageId). We only clear the local
+      // streaming state so the refresh and rejoin can write cleanly.
+      stop();
       await handleAppResume();
+      if (selectedAgent) {
+        rejoinAgentStream();
+      } else {
+        rejoinGlobalStream();
+      }
     }, [
       displayIsStreaming,
       stop,
