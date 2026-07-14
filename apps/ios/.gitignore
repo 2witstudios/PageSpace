@@ -1,0 +1,13 @@
+# Fastlane build output and reports
+build/
+*.ipa
+*.dSYM.zip
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/
+fastlane/screenshots/**/*.png
+fastlane/metadata/review_information/
+
+# App Store Connect API key — NEVER commit
+*.p8
+AuthKey_*.p8

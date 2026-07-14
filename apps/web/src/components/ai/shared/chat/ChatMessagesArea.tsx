@@ -19,6 +19,7 @@ import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
 import { VirtualizedMessageList, VirtualizedMessageListRef } from './VirtualizedMessageList';
@@ -172,6 +173,12 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       [remoteStreams]
     );
 
+    const areaMode = selectMessagesAreaMode({
+      isLoading,
+      messageCount: messages.length,
+      streamCount: visibleRemoteStreams.length,
+    });
+
     // Memoized render function for virtualized list
     const renderMessage = useCallback((message: UIMessage, _idx: number) => (
       <MessageRenderer
@@ -242,7 +249,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         >
           {isLoadingOlder && LoadingOlderIndicator}
 
-          {isLoading ? (
+          {areaMode === 'skeleton' ? (
             LoadingSkeleton
           ) : messages.length === 0 && visibleRemoteStreams.length === 0 ? (
             EmptyState
@@ -264,7 +271,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             messages.map((message, idx) => renderMessage(message, idx))
           )}
 
-          {!isLoading && visibleRemoteStreams.map((stream) => (
+          {areaMode !== 'skeleton' && visibleRemoteStreams.map((stream) => (
             <MessageRenderer
               key={stream.messageId}
               message={{
@@ -275,7 +282,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             />
           ))}
 
-          {(isStreaming || hasRemoteStream) && !isLoading && (
+          {(isStreaming || hasRemoteStream) && areaMode !== 'skeleton' && (
             <StreamingIndicator />
           )}
         </ConversationContent>

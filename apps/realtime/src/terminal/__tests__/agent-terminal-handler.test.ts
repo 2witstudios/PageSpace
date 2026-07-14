@@ -49,8 +49,18 @@ function makeShell(): PtyShell & {
   resize: ReturnType<typeof vi.fn>;
   kill: ReturnType<typeof vi.fn>;
   setViewerAttached: ReturnType<typeof vi.fn>;
+  /** Stands in for the shell swallowing a watchdog trip (detach-quiet / attach-quiet). */
+  setQuiesced: (quiesced: boolean) => void;
 } {
-  return { write: vi.fn(), resize: vi.fn(), kill: vi.fn(), setViewerAttached: vi.fn() };
+  let quiesced = false;
+  return {
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    setViewerAttached: vi.fn(),
+    isQuiesced: () => quiesced,
+    setQuiesced: (next: boolean) => { quiesced = next; },
+  };
 }
 
 function makeSprite(sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }> = []) {
@@ -1140,6 +1150,92 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(billing.releaseHold).toHaveBeenCalledWith('hold-1');
       expect(billing.trackUsage).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Billing must track SANDBOX RESIDENCY, not tab-open time. Once the watchdog
+     * quiesces an idle shell, its task hold is released and the Sprite pauses —
+     * costing us nothing. An ATTACHED session is never reaped (`DETACHED_IDLE_MS`
+     * only arms on disconnect), so billing wall-clock through a quiesce would
+     * charge the payer, without bound, for a sandbox that is not running: leave a
+     * tab open overnight, get billed for the night.
+     */
+    it('given the shell quiesced, settles the window so far and then STOPS the clock (a paused sprite is not billable)', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+
+      // Ten minutes of real, live session — billable.
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      expect(billing.trackUsage).toHaveBeenCalledTimes(1);
+      expect(billing.trackUsage.mock.calls[0][0]).toMatchObject({ activeSeconds: SETTLE_HEARTBEAT_MS / 1000 });
+
+      // The viewer goes idle; the watchdog quiets the shell and the sprite pauses.
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+      // That beat bills the window that ended at the quiesce…
+      expect(billing.trackUsage).toHaveBeenCalledTimes(2);
+
+      // …and every beat after it bills NOTHING, however long the tab stays open.
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS * 5);
+      expect(billing.trackUsage).toHaveBeenCalledTimes(2);
+    });
+
+    it('given a quiesced shell, does not reserve the payer\'s credits for a window that is not running', async () => {
+      const billing = makeBilling();
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await onConnect(validPayload);
+      const gatesAtConnect = billing.gate.mock.calls.length;
+
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS * 3);
+
+      expect(billing.gate).toHaveBeenCalledTimes(gatesAtConnect); // no re-hold while paused
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ connectedAt: undefined });
+    });
+
+    it('given a keystroke resumes a quiesced shell, restarts the clock AT THE KEYSTROKE, not at the next heartbeat', async () => {
+      // The heartbeat is ten minutes wide. Restarting the clock on the next beat
+      // would hand the payer up to ten minutes of a live, running sandbox free.
+      const billing = makeBilling();
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await handlers.onConnect(validPayload);
+
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // clock stops
+      const settlesWhileQuiet = billing.trackUsage.mock.calls.length;
+
+      // The viewer types: the shell resumes, the sprite wakes, consumption starts.
+      shell.setQuiesced(false);
+      handlers.onInput({ data: 'ls\n' });
+
+      // Nine minutes of live sandbox BEFORE the next beat — all of it billable.
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+      expect(billing.trackUsage).toHaveBeenCalledTimes(settlesWhileQuiet + 1);
+      const resumed = billing.trackUsage.mock.calls[settlesWhileQuiet][0] as { activeSeconds: number };
+      expect(resumed.activeSeconds).toBe(SETTLE_HEARTBEAT_MS / 1000); // the whole window, not zero
+    });
+
+    it('given a viewer returns to a quiesced shell, restarts the clock on the reattach', async () => {
+      const billing = makeBilling();
+      const handlers = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId, billing });
+      await handlers.onConnect(validPayload);
+
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ connectedAt: undefined });
+
+      handlers.onDisconnect();
+      shell.setQuiesced(false);
+
+      const socket2 = makeSocket('sock2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId, billing });
+      await handlers2.onConnect(validPayload); // tab-back -> attachToLiveSession
+
+      const session = sessionMap.getByKey('branch1:agent:cli') as { connectedAt?: number };
+      expect(session.connectedAt).toBeTypeOf('number'); // clock running again
     });
 
     it('given the END-of-session settle rejects, should log and still tear the session down (billing never blocks cleanup)', async () => {

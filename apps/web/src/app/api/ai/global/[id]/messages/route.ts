@@ -25,6 +25,7 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
+import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
@@ -76,6 +77,7 @@ import {
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -311,7 +313,8 @@ export async function POST(
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
-      locationContext,
+      locationContext: legacyLocationContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
+      contextRef,
       isReadOnly,
       webSearchEnabled,
       imageGenEnabled,
@@ -324,8 +327,27 @@ export async function POST(
       loggers.api.debug('Global Assistant Chat API: No messages provided', {});
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
-    
+
     loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // null here rather than trusting whatever the client claimed. Falls back to the
+    // legacy client-computed locationContext only for old clients that never sent a
+    // contextRef at all. Deferred until after the required-field check above so an
+    // invalid request (no messages) fails fast without an extra DB round-trip.
+    const locationContext = contextRef
+      ? await resolveRequestContext(auth, contextRef, (denied) => {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId,
+            resourceType: denied.routeType === 'drive' ? 'drive' : 'page',
+            resourceId: denied.routeType === 'drive' ? denied.driveId : denied.pageId,
+            details: { reason: 'context_ref_denied', method: 'POST', conversationId },
+            riskScore: 0.3,
+          });
+        })
+      : legacyLocationContext;
 
     // Image security validation — validate file parts in the user message
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
@@ -1075,26 +1097,35 @@ MENTION PROCESSING:
     // assistant rows, two bills. Takeover, not 409; see stream-liveness.ts for why rejecting
     // would self-lock the conversation.
     //
-    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
-    // comment used to claim that it did. See the docblock on takeOverConversationStreams: the
-    // SELECT there and the INSERT in createStreamLifecycle are not atomic together, so two
-    // near-simultaneous sends can both find nothing in flight and both proceed. It narrows the
-    // window; it does not close it.
-    await takeOverConversationStreams({
+    // BEST-EFFORT, not an invariant — named honestly. `startGenerationExclusive` closes the
+    // check-then-act race documented here previously (the SELECT inside
+    // takeOverConversationStreams and the INSERT inside createStreamLifecycle are not atomic on
+    // their own) by holding a per-conversation Postgres advisory lock across both. On lock_busy
+    // it retries briefly, then proceeds UNLOCKED rather than blocking the send — availability
+    // wins over serialization, so a rare contention/pool-exhaustion case can still double-generate.
+    // See start-generation-exclusive.ts and the PR 4 board page.
+    const generation = await startGenerationExclusive({
       conversationId,
-      channelId,
+      run: async () => {
+        await takeOverConversationStreams({
+          conversationId,
+          channelId,
+        });
+
+        return createStreamLifecycle({
+          messageId: serverAssistantMessageId,
+          channelId,
+          conversationId,
+          userId,
+          displayName,
+          browserSessionId,
+          streamId,
+          isShared: conversation.isShared === true,
+        });
+      },
     });
 
-    lifecycle = await createStreamLifecycle({
-      messageId: serverAssistantMessageId,
-      channelId,
-      conversationId,
-      userId,
-      displayName,
-      browserSessionId,
-      streamId,
-      isShared: conversation.isShared === true,
-    });
+    lifecycle = generation.result;
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for

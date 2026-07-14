@@ -632,6 +632,38 @@ describe('createTaskHoldController', () => {
   /** Let the controller's internal op queue drain. */
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+  /**
+   * Exposed for the same reason as `tickIntervalMs`: the terminal watchdog's
+   * `attach-quiet` decides "may this sprite pause?" alongside this controller
+   * and must decide it on the SAME window. `refreshMs` is configurable, so the
+   * effective window is not always the `TASK_HOLD_AGENT_IDLE_MS` default — a
+   * consumer that assumed the constant would diverge the moment it was tuned.
+   */
+  it('reports the EFFECTIVE idle window it judges activity on', () => {
+    const { client } = fakeClient();
+
+    assert({
+      given: 'a controller left on the default refresh cadence',
+      should: 'report the default idle window (two refresh intervals)',
+      actual: createTaskHoldController({ client, taskName: 'ps-hold-x' }).agentIdleMs,
+      expected: TASK_HOLD_AGENT_IDLE_MS,
+    });
+
+    assert({
+      given: 'a controller whose refresh cadence was tuned down',
+      should: 'report two of ITS OWN refresh intervals, not the module default',
+      actual: createTaskHoldController({ client, taskName: 'ps-hold-x', refreshMs: 15_000 }).agentIdleMs,
+      expected: 30_000,
+    });
+
+    assert({
+      given: 'a controller given an explicit agentIdleMs',
+      should: 'report exactly that',
+      actual: createTaskHoldController({ client, taskName: 'ps-hold-x', agentIdleMs: 7_000 }).agentIdleMs,
+      expected: 7_000,
+    });
+  });
+
   it('creates on the first attached tick and refreshes on the cadence', async () => {
     let now = T0;
     const { client, calls } = fakeClient();
