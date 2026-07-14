@@ -107,7 +107,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
@@ -151,6 +151,12 @@ export async function POST(request: Request) {
   // createUIMessageStream even finishes constructing) must not leave the placeholder stuck at
   // 'streaming' forever (excluded from reads, 409s on edit/delete).
   let assistantMessagePersisted = false;
+  // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
+  // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
+  // from, so by the time the outer catch below runs, a fresh getBufferedParts() call would
+  // always see an empty buffer. Falls back to a fresh (empty) capture in the outer catch when
+  // this was never set (i.e. the throw happened somewhere else, before finish() ever ran).
+  let bufferedPartsAtStreamError: ReturnType<StreamLifecycleHandle['getBufferedParts']> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // True once the stream/error handler owns the hold's release. Any earlier
@@ -1474,7 +1480,7 @@ export async function POST(request: Request) {
           // row. See Server Stream Durability epic PR 2 — Codex review.
           if (chatId && serverAssistantMessageId) {
             const bufferedParts = lifecycle!.getBufferedParts();
-            const aborted = agentRun?.terminalReason === 'aborted' || abortSignal.aborted;
+            const aborted = isRunAborted({ agentRun, abortSignal });
             if (bufferedParts.length > 0 || aborted) {
               const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
               try {
@@ -1500,7 +1506,7 @@ export async function POST(request: Request) {
 
           // Computed once and reused below (persist status + lifecycle.finish's aborted flag)
           // so the two can never disagree about whether this run was stopped.
-          const aborted = agentRun?.terminalReason === 'aborted' || abortSignal.aborted;
+          const aborted = isRunAborted({ agentRun, abortSignal });
 
           loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
           
@@ -1696,6 +1702,10 @@ export async function POST(request: Request) {
       };
     } catch (streamError) {
       removeStream({ streamId });
+      // Captured BEFORE finish() for the same reason as the outer catch below — this inner
+      // catch's own finish() call would otherwise clear the buffer before the outer catch's
+      // cleanup ever gets a chance to read it.
+      bufferedPartsAtStreamError = lifecycle.getBufferedParts();
       lifecycle.finish(true);
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
@@ -1715,6 +1725,14 @@ export async function POST(request: Request) {
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
+    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
+    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
+    // silently discard any real partial content the cleanup write below is meant to preserve.
+    // Prefers bufferedPartsAtStreamError (captured by the INNER catch above, before ITS OWN
+    // finish() call already cleared the registry) when set — a fresh getBufferedParts() call
+    // here would otherwise always see [] for exactly the createUIMessageStream-threw case this
+    // cleanup exists for.
+    const bufferedPartsAtError = bufferedPartsAtStreamError ?? lifecycle?.getBufferedParts() ?? [];
     lifecycle?.finish(true);
 
     // Last-resort cleanup: something threw before execute-end or onFinish ever got a chance to
@@ -1732,7 +1750,7 @@ export async function POST(request: Request) {
           conversationId,
           userId: null,
           role: 'assistant',
-          ...buildAssistantPersistencePayload(serverAssistantMessageId, lifecycle?.getBufferedParts() ?? []),
+          ...buildAssistantPersistencePayload(serverAssistantMessageId, bufferedPartsAtError),
           status: 'interrupted',
         });
       } catch (cleanupError) {

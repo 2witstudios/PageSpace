@@ -933,6 +933,36 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
     });
 
+    // Regression guard: getBufferedParts() MUST be read before lifecycle.finish() is called —
+    // finish() deletes the multicast registry entry backing it, so reading it afterward always
+    // sees an empty buffer. This mock reproduces that real ordering dependency (getBufferedParts
+    // returns [] once mockLifecycleFinish has been called), so a regression that swaps the two
+    // calls back would silently drop real partial content and this test would catch it.
+    it('given createUIMessageStream throws with real buffered content, should preserve that content (not lose it to finish() clearing the buffer)', async () => {
+      const bufferedParts = [{ type: 'text', text: 'partial reply before the crash' }];
+      let finished = false;
+      mockLifecycleFinish.mockImplementationOnce(() => { finished = true; });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn(() => (finished ? [] : bufferedParts)),
+      });
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('stream creation failed');
+      });
+
+      await POST(makeRequest());
+
+      const saveCalls = mockSaveMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      // extractMessageContent is fixture-mocked (always 'test content'), so assert on the
+      // synthesized uiMessage's parts instead — synthesizeAssistantMessage is NOT mocked and
+      // reflects exactly what buildAssistantPersistencePayload was called with.
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted' });
+      expect((assistantSave?.[0] as { uiMessage?: { parts?: unknown[] } })?.uiMessage?.parts).toEqual(bufferedParts);
+    });
+
     it('given the outer route handler errors after lifecycle init, should call lifecycle.finish(true)', async () => {
       const { createUIMessageStream } = await import('ai');
       vi.mocked(createUIMessageStream).mockImplementationOnce(() => {

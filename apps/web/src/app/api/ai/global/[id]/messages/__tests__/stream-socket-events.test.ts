@@ -361,6 +361,7 @@ import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
 import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
+import { db } from '@pagespace/db/db';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -754,6 +755,25 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
     });
 
+    // Line-by-line review finding: the aborted/no-responseMessage fallback branch must bump
+    // conversations.lastMessageAt the same way the responseMessage branch does above it —
+    // otherwise a conversation-list view sorted by lastMessageAt never surfaces a conversation
+    // whose only new activity was an interrupted, no-responseMessage assistant row.
+    it('given the run was aborted with NO responseMessage, should still bump conversations.lastMessageAt', async () => {
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([{ type: 'text', text: 'partial reply' }]),
+      });
+
+      await POST(makeRequest(), makeContext());
+      const updateCallsBeforeOnFinish = vi.mocked(db.update).mock.calls.length;
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
+
+      expect(vi.mocked(db.update).mock.calls.length).toBeGreaterThan(updateCallsBeforeOnFinish);
+    });
+
     it('given a normal (non-aborted) run with NO responseMessage, should NOT persist an assistant row', async () => {
       await POST(makeRequest(), makeContext());
       await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
@@ -789,6 +809,31 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
       const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
+    });
+
+    // Regression guard: getBufferedParts() MUST be read before lifecycle.finish() is called —
+    // finish() deletes the multicast registry entry backing it, so reading it afterward always
+    // sees an empty buffer. This mock reproduces that real ordering dependency.
+    it('given an error throws after lifecycle creation with real buffered content, should preserve that content', async () => {
+      const bufferedParts = [{ type: 'text', text: 'partial reply before the crash' }];
+      let finished = false;
+      mockLifecycleFinish.mockImplementationOnce(() => { finished = true; });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn(() => (finished ? [] : bufferedParts)),
+      });
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('post-lifecycle boom');
+      });
+
+      await POST(makeRequest(), makeContext());
+
+      const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
+      const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted' });
+      expect((assistantSave?.[0] as { uiMessage?: { parts?: unknown[] } })?.uiMessage?.parts).toEqual(bufferedParts);
     });
   });
 });

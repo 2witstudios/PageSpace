@@ -77,7 +77,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
@@ -1313,7 +1313,7 @@ MENTION PROCESSING:
 
         // Computed once and reused below (persist status + lifecycle.finish's aborted flag) so
         // the two can never disagree about whether this run was stopped.
-        const aborted = agentRun?.terminalReason === 'aborted' || abortSignal.aborted;
+        const aborted = isRunAborted({ agentRun, abortSignal });
 
         // Extract tool calls/results with safe defaults — responseMessage is absent on
         // exhausted/no-content runs, but usage settlement below still has to run.
@@ -1378,6 +1378,18 @@ MENTION PROCESSING:
               status: 'interrupted',
             });
             assistantMessagePersisted = true;
+
+            // Same lastMessageAt bump as the responseMessage branch above — a conversation with
+            // a newly-written (even empty-content, interrupted) assistant row must still surface
+            // as recently active in a list sorted/filtered by lastMessageAt.
+            await db
+              .update(conversations)
+              .set({
+                lastMessageAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(conversations.id, conversationId));
+
             loggers.api.debug('Global Assistant Chat API: terminalized aborted placeholder with no responseMessage', {});
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: failed to terminalize aborted placeholder', error as Error);
@@ -1472,6 +1484,10 @@ MENTION PROCESSING:
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
+    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
+    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
+    // silently discard any real partial content the cleanup write below is meant to preserve.
+    const bufferedPartsAtError = lifecycle?.getBufferedParts() ?? [];
     lifecycle?.finish(true);
 
     // Last-resort cleanup: something threw before onFinish ever got a chance to settle the
@@ -1482,7 +1498,7 @@ MENTION PROCESSING:
     // request. Best-effort: must not itself throw or block the error response.
     if (!assistantMessagePersisted && cleanupContext && !lifecycle?.preAborted) {
       try {
-        const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, lifecycle?.getBufferedParts() ?? []);
+        const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, bufferedPartsAtError);
         await saveGlobalAssistantMessageToDatabase({
           messageId: cleanupContext.serverAssistantMessageId,
           conversationId: cleanupContext.conversationId,
