@@ -27,13 +27,13 @@ export const canEvictStalePartial = (serverParts: readonly unknown[] | undefined
  * and the rejoined stream is filtered straight back out — not one token of it renders, and the
  * user sits in front of a frozen partial reply.
  *
- * WHY ONLY WHEN THE SERVER HAS PARTS. `serverParts` is the stream registry's DEBOUNCED checkpoint,
- * persisted every N parts, so it is empty for a stream that is only a few parts old. It is also
- * what the bootstrap seeds from — after the same isValidPartFrame filter — and a seed of zero
- * parts is exactly what makes a failed SSE join drop the stream entirely (the documented
- * multi-instance case, where the multicast lives in another process). Evict against an empty
- * checkpoint and lose the join, and the user is left with NOTHING: strictly worse than the frozen
- * partial. So the same predicate the bootstrap seeds with decides whether it is safe to evict.
+ * WHY ONLY WHEN THE SERVER HAS PARTS. `serverParts` is the stream registry's periodic checkpoint,
+ * which lags the live stream, so it is empty for a stream in its first moments. It is also what the
+ * bootstrap seeds from — after the same isValidPartFrame filter — and a seed of zero parts is
+ * exactly what makes a failed SSE join drop the stream entirely (the documented multi-instance
+ * case, where the multicast lives in another process). Evict against an empty checkpoint and lose
+ * the join, and the user is left with NOTHING: strictly worse than the frozen partial. So the same
+ * predicate the bootstrap seeds with decides whether it is safe to evict.
  *
  * Returns `messages` unchanged (same reference) when it is not safe, so callers can pass this
  * straight to a setMessages updater without forcing a needless write.

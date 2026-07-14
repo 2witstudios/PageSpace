@@ -639,7 +639,7 @@ describe('GlobalAssistantView load-on-select effects', () => {
       });
 
       it('given the server checkpoint is EMPTY, should KEEP the local partial', () => {
-        // The debounced checkpoint is empty for a stream only a few parts old. If we evicted here
+        // The checkpoint lags the live stream, so it is empty for a stream in its first moments. If we evicted here
         // and the SSE join then failed (multi-instance: the multicast lives in another process),
         // the bootstrap removes the stream and the user is left with nothing at all — worse than
         // the frozen partial. Keep what they had; the rejoin can still attach and take over.
