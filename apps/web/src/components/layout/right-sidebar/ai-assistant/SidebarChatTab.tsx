@@ -41,6 +41,8 @@ import { useChatTransport, useStreamingRegistration, useSendHandoff, useMessageA
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
+import { isCapacitorApp } from '@/hooks/useCapacitor';
+import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -639,6 +641,9 @@ const SidebarChatTab: React.FC = () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
       if (action === 'noop') return;
       if (action === 'rejoin-and-refresh') {
+        // `stop` is the local-only useChat stop; it does NOT signal the server (that is
+        // done separately via abortActiveStreamByMessageId). We only clear the local
+        // streaming state so the rejoin can attach cleanly.
         stop();
         if (selectedAgent) {
           rejoinAgentStream();

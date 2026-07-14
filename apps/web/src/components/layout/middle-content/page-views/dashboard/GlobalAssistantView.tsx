@@ -739,11 +739,15 @@ const GlobalAssistantView: React.FC = () => {
       const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
       if (action === 'noop') return;
       if (action === 'rejoin-and-refresh') {
+        // rawStop is the local-only useChat stop; it does NOT signal the server (that is
+        // done separately via abortActiveStreamByMessageId). We only clear the local
+        // streaming state so the rejoin can attach cleanly.
+        rawStop();
+        // Agent rejoin goes through the ref: useAgentChannelMultiplayer is called further
+        // down, so the callback would otherwise close over a temporal-dead-zone binding.
         if (selectedAgent) {
-          agentStop();
-          rejoinAgentStream();
+          rejoinAgentStreamRef.current();
         } else {
-          globalStop();
           rejoinGlobalStream();
         }
       }
@@ -751,9 +755,7 @@ const GlobalAssistantView: React.FC = () => {
     }, [
       effectiveIsStreaming,
       selectedAgent,
-      agentStop,
-      rejoinAgentStream,
-      globalStop,
+      rawStop,
       rejoinGlobalStream,
       handlePullUpRefresh,
     ]),
