@@ -107,8 +107,19 @@ vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
   consumePendingAbort: mockConsumePendingAbort,
 }));
 
-import { createStreamLifecycle } from '../stream-lifecycle';
+import { createStreamLifecycle as createStreamLifecycleUntracked } from '../stream-lifecycle';
 import { CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '../checkpoint-scheduler';
+
+// The 1s checkpoint interval (unlike the old 20s-only heartbeat) is short enough to reliably
+// fire mid-suite on REAL timers if a test never calls finish() — polluting whichever later
+// test happens to be running when it lands. Track every handle so a single top-level
+// afterEach can finish() them all, real timers or fake, regardless of what each test does.
+let activeLifecycles: Array<{ finish: (aborted: boolean) => void }> = [];
+const createStreamLifecycle: typeof createStreamLifecycleUntracked = async (p) => {
+  const handle = await createStreamLifecycleUntracked(p);
+  activeLifecycles.push(handle);
+  return handle;
+};
 
 const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> = {}) => ({
   messageId: 'msg-1',
@@ -147,6 +158,17 @@ describe('createStreamLifecycle', () => {
     mockUpdateWhere.mockResolvedValue(undefined);
     mockBroadcastStart.mockResolvedValue(undefined);
     mockBroadcastComplete.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    for (const handle of activeLifecycles) {
+      try {
+        handle.finish(true);
+      } catch {
+        // best-effort cleanup only — a throw here must not fail an unrelated test
+      }
+    }
+    activeLifecycles = [];
   });
 
   describe('register / insert / broadcastStart on creation', () => {
@@ -333,6 +355,10 @@ describe('createStreamLifecycle', () => {
     });
 
     afterEach(() => {
+      // Tests that don't call finish() leave the heartbeat and checkpoint intervals armed —
+      // clear them explicitly, or a leftover setInterval fires (with THIS test's stale mock
+      // return values) during a later test's fake-timer advance and pollutes its assertions.
+      vi.clearAllTimers();
       vi.useRealTimers();
     });
 
@@ -511,6 +537,10 @@ describe('createStreamLifecycle', () => {
     });
 
     afterEach(() => {
+      // Tests that don't call finish() leave the heartbeat and checkpoint intervals armed —
+      // clear them explicitly, or a leftover setInterval fires (with THIS test's stale mock
+      // return values) during a later test's fake-timer advance and pollutes its assertions.
+      vi.clearAllTimers();
       vi.useRealTimers();
     });
 
@@ -537,6 +567,9 @@ describe('createStreamLifecycle', () => {
     // min), and would be served to clients as an unjoinable phantom stream for the life
     // of the process. Capping the beat turns that immortal ghost back into an ordinary
     // stale row.
+    // The 1s checkpoint interval means simulating ~2h of fake time here fires thousands of
+    // timer callbacks (vs. hundreds for the 20s heartbeat alone) — genuinely more real work
+    // for vi.advanceTimersByTimeAsync to process, hence the longer wall-clock timeout.
     it('given a lifecycle that never finishes, should stop beating after the cap rather than looking live forever', async () => {
       await createStreamLifecycle(params());
 
@@ -553,7 +586,7 @@ describe('createStreamLifecycle', () => {
       await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
 
       expect(mockUpdateSet).not.toHaveBeenCalled();
-    });
+    }, 20_000);
 
     // THE HOLE THE CAP DID NOT ACTUALLY CLOSE.
     //
@@ -568,7 +601,9 @@ describe('createStreamLifecycle', () => {
       mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart]);
       const lifecycle = await createStreamLifecycle(params());
 
-      // Past the horizon, but still generating hard.
+      // Past the horizon, but still generating hard. The 1s checkpoint interval makes this
+      // ~61 minutes of fake time genuinely more timer-callback work than the 20s heartbeat
+      // alone used to be, hence the longer wall-clock timeout below.
       await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
       mockUpdateSet.mockClear();
 
@@ -577,7 +612,7 @@ describe('createStreamLifecycle', () => {
 
       // Not one write. The row is allowed to go stale, so the next takeover can reconcile it.
       expect(mockUpdateSet).not.toHaveBeenCalled();
-    });
+    }, 20_000);
 
     // The second half of the same bug: past the horizon the multicast registry has EVICTED the
     // entry, so getBufferedParts() returns [] meaning "no entry" — not "no content". The old
@@ -771,6 +806,7 @@ describe('createStreamLifecycle', () => {
       });
 
       mockRegistryGetBufferedParts.mockReturnValue([]);
+      vi.clearAllTimers();
       vi.useRealTimers();
     });
   });
