@@ -686,9 +686,16 @@ describe('viewer attach/detach gates the watchdog reconnect (leaf 3-2)', () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(sprite.createSession).toHaveBeenCalledTimes(2); // initial + fresh fallback
+    freshCmd._emitter.emit('spawn');
     freshCmd._stdout.emit('data', 'fresh prompt\r\n');
     expect(onOutput).toHaveBeenCalledWith('fresh prompt\r\n');
     expect(onExit).not.toHaveBeenCalled();
+    // The accepted consequence of letting an idle sprite actually pause: the old
+    // exec session did not survive it, so the keystroke that woke the shell lands
+    // in the REPLACEMENT one. Asserted rather than assumed — it is the behavior a
+    // user sees (their `cd` is gone and their command runs in a fresh bash), and
+    // it is exactly what the detached tab-back path has always done (leaf 3-2).
+    expect(freshCmd.stdin!.write).toHaveBeenCalledWith('echo hi\n');
   });
 
   /**
