@@ -1365,6 +1365,7 @@ const GlobalAssistantView: React.FC = () => {
       {/* Chat Interface - unified for both modes with floating input */}
       <ChatLayout
         ref={chatLayoutRef}
+        conversationId={currentConversationId}
         messages={messages}
         input={input}
         onInputChange={setInput}

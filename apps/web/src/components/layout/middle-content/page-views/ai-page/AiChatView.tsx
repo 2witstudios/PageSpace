@@ -1279,6 +1279,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           )}
           <ChatLayout
             ref={chatLayoutRef}
+            conversationId={currentConversationId}
             messages={messages}
             input={input}
             onInputChange={setInput}

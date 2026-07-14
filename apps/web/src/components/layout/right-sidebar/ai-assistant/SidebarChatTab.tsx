@@ -46,6 +46,7 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
+import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 
@@ -1105,10 +1106,23 @@ const SidebarChatTab: React.FC = () => {
   // SidebarChatTab each manage their own useChat and sync via explicit fetch + setMessages.
   const displayMessages = messages;
 
+  // Two independent "messages not ready yet" signals feed the same in-place indicator:
+  // identity-level isMessagesLoading (both modes) and the global-mode direct fetch flag.
+  const messagesAreaMode = selectMessagesAreaMode({
+    isLoading: isMessagesLoading || (!selectedAgent && isLoadingGlobalMessages),
+    messageCount: displayMessages.length,
+    streamCount: remoteStreams.length,
+  });
+
   // ============================================
   // Render
   // ============================================
-  if (!isInitialized || isMessagesLoading) {
+  // Only identity resolution gates the whole tab (header/input included) — a full
+  // subtree swap. Once identity is known, `isMessagesLoading` becomes an in-place
+  // indicator inside the messages pane (below), matching `selectMessagesAreaMode`'s
+  // "skeleton only when loading AND no messages AND no streams" rule so a switch
+  // between two non-empty conversations never blanks the header, input, or list.
+  if (!isInitialized) {
     return (
       <div className="flex flex-col h-full p-4">
         <div className="flex-grow flex items-center justify-center">
@@ -1174,8 +1188,9 @@ const SidebarChatTab: React.FC = () => {
 
       {/* Messages - using use-stick-to-bottom for pinned scrolling */}
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden" style={{ contain: 'layout' }}>
-        {/* Loading indicator during global-mode message fetch (prevents blank). */}
-        {!selectedAgent && isLoadingGlobalMessages && displayMessages.length === 0 ? (
+        {/* In-place loading indicator (identity is already resolved above) — never a
+            full subtree swap. */}
+        {messagesAreaMode === 'skeleton' ? (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
