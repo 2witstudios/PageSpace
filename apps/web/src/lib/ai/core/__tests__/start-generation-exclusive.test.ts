@@ -172,4 +172,73 @@ describe('startGenerationExclusive', () => {
       vi.useRealTimers();
     }
   });
+
+  describe('lock machinery failure (pool.connect()/try-lock query throws — NOT a resolved lock_busy)', () => {
+    it('given pool.connect() rejects, should proceed unlocked (never propagate) and run fn exactly once', async () => {
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => { throw new Error('connection refused'); }) };
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      const result = await startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep });
+
+      expect(result).toEqual({ outcome: 'degraded', result: 'lifecycle-handle' });
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the try-lock query itself throws (poisoned connection), should proceed unlocked (never propagate) and run fn exactly once', async () => {
+      const client = { query: vi.fn().mockRejectedValueOnce(new Error('connection reset')), release: vi.fn() } satisfies AdvisoryLockClient;
+      const pool = makePool(client);
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      const result = await startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep });
+
+      expect(result).toEqual({ outcome: 'degraded', result: 'lifecycle-handle' });
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the lock machinery fails, should NOT retry/sleep (unlike lock_busy) — it degrades immediately', async () => {
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => { throw new Error('pool exhausted'); }) };
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      await startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep });
+
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    it('given the lock machinery fails, should emit telemetry naming it distinctly from a lock_busy degrade — never silently', async () => {
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => { throw new Error('pool exhausted'); }) };
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      await startGenerationExclusive({ conversationId: 'conv-77', run, pool, sleep });
+
+      expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+      const [warnMessage, warnMeta] = mockLoggerWarn.mock.calls[0];
+      expect(String(warnMessage).toLowerCase()).toMatch(/degrad|unlocked|best-effort/);
+      expect(warnMeta).toMatchObject({ conversationId: 'conv-77', reason: 'lock_error' });
+
+      expect(mockLogPerformance).toHaveBeenCalledTimes(1);
+      const [metricName, metricValue, metricUnit, metricMeta] = mockLogPerformance.mock.calls[0];
+      expect(metricName).toEqual(expect.stringContaining('advisory_lock'));
+      expect(metricValue).toBe(1);
+      expect(metricUnit).toBe('count');
+      expect(metricMeta).toMatchObject({ conversationId: 'conv-77', reason: 'lock_error' });
+    });
+
+    it('given the lock-busy degrade path, telemetry should carry reason "lock_busy" (distinguishable from lock_error)', async () => {
+      const client = makeClient([false, false, false, false]);
+      const pool = makePool(client);
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      await startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep });
+
+      const [, warnMeta] = mockLoggerWarn.mock.calls[0];
+      expect(warnMeta).toMatchObject({ reason: 'lock_busy' });
+      const [, , , metricMeta] = mockLogPerformance.mock.calls[0];
+      expect(metricMeta).toMatchObject({ reason: 'lock_busy' });
+    });
+  });
 });
