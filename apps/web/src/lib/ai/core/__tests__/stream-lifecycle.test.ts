@@ -108,6 +108,7 @@ vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
 }));
 
 import { createStreamLifecycle } from '../stream-lifecycle';
+import { CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '../checkpoint-scheduler';
 
 const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> = {}) => ({
   messageId: 'msg-1',
@@ -121,6 +122,16 @@ const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> 
 });
 
 const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+const textPart = { type: 'text' as const, text: 'hello' };
+const toolPart = {
+  type: 'tool-list_pages' as const,
+  toolCallId: 'tc1',
+  toolName: 'list_pages',
+  state: 'output-available' as const,
+  input: { driveId: 'd1' },
+  output: { pages: [] },
+};
 
 describe('createStreamLifecycle', () => {
   beforeEach(() => {
@@ -269,8 +280,6 @@ describe('createStreamLifecycle', () => {
   });
 
   describe('pushPart', () => {
-    const textPart = { type: 'text' as const, text: 'hello' };
-
     it('given a part, should forward it to the multicast registry under the messageId', async () => {
       const lifecycle = await createStreamLifecycle(params());
 
@@ -289,7 +298,7 @@ describe('createStreamLifecycle', () => {
       expect(mockRegistryPush).not.toHaveBeenCalled();
     });
 
-    it('given finish() already ran, should not count toward the periodic-persist checkpoint (would otherwise race the final write with an empty snapshot)', async () => {
+    it('given finish() already ran, should not count toward the checkpoint (would otherwise race the final write with an empty snapshot)', async () => {
       const lifecycle = await createStreamLifecycle(params());
       lifecycle.finish(false);
       mockUpdateSet.mockClear();
@@ -318,62 +327,114 @@ describe('createStreamLifecycle', () => {
     });
   });
 
-  describe('pushPart — periodic parts persistence', () => {
-    const textPart = { type: 'text' as const, text: 'hello' };
+  describe('pushPart — time-based checkpoint cadence', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
 
-    it('given fewer than 20 pushes, should not persist parts to the DB', async () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('given a part pushed right after start, should not persist immediately (throttled to the dirty-flush window)', async () => {
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 19; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
+      lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).not.toHaveBeenCalled();
     });
 
-    it('given exactly 20 pushes, should persist the buffered parts snapshot once', async () => {
-      const fakeParts = [textPart, textPart];
-      // Once: only the 20th push triggers the threshold's getBufferedParts read.
-      mockRegistryGetBufferedParts.mockReturnValueOnce(fakeParts);
+    it('given a dirty buffer and at least 1s elapsed since the last checkpoint, should persist on the next pushed part', async () => {
+      const fakeParts = [textPart];
+      mockRegistryGetBufferedParts.mockReturnValue(fakeParts);
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
+      lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+      lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
-      // The parts checkpoint ALSO refreshes lastHeartbeatAt, on top of the independent
-      // heartbeat timer (see the 'heartbeat' describe below) — so a busy stream's liveness
-      // is never staler than its most recent checkpoint. The timer is what covers a stream
-      // that pushes no parts at all, which no checkpoint-driven heartbeat could.
       expect(mockUpdateSet).toHaveBeenCalledWith({
         parts: fakeParts,
         lastHeartbeatAt: expect.any(Date),
       });
     });
 
-    it('given 40 pushes across two batches, should persist once per batch', async () => {
+    it('given a tool-boundary part, should persist immediately even inside the 1s throttle window', async () => {
+      const fakeParts = [toolPart];
+      mockRegistryGetBufferedParts.mockReturnValue(fakeParts);
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      // Let the first (resolved) write settle before the next batch arrives —
-      // otherwise the in-flight guard correctly folds both batches into one
-      // write (see "should skip scheduling another until it settles" below).
-      await flushMicrotasks();
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
 
-      expect(mockUpdateSet).toHaveBeenCalledTimes(2);
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        parts: fakeParts,
+        lastHeartbeatAt: expect.any(Date),
+      });
     });
 
-    it('given the periodic persist rejects, should warn and not throw', async () => {
+    it('given a tool-boundary flush just landed, should still throttle the very next text part for 1s', async () => {
+      const lifecycle = await createStreamLifecycle(params());
+
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
+      mockUpdateSet.mockClear();
+
+      lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
+
+    // The whole reason for a dedicated interval, independent of pushPart: a stream sitting in a
+    // long tool call pushes exactly one part (tool-input-available) and then nothing for minutes
+    // — a rejoining client should still see that the tool started, not a snapshot frozen from
+    // before the call began.
+    it('given a dirty buffer and no further parts pushed, the unref\'d 1s interval should flush it mid-tool-call', async () => {
+      const fakeParts = [toolPart];
+      mockRegistryGetBufferedParts.mockReturnValue(fakeParts);
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      // A non-boundary text part first, so the tool-boundary bypass isn't what causes the
+      // flush below — the throttle must still be respected...
+      lifecycle.pushPart(textPart);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+
+      // ...until the interval ticks past the 1s window with nothing else pushed.
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        parts: fakeParts,
+        lastHeartbeatAt: expect.any(Date),
+      });
+    });
+
+    it('given no parts pushed at all, the 1s interval should never persist (nothing dirty to flush)', async () => {
+      await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      await vi.advanceTimersByTimeAsync(10 * CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+    });
+
+    it('given the checkpoint persist rejects, should warn and not throw', async () => {
       mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
       const lifecycle = await createStreamLifecycle(params());
       mockLoggerWarn.mockClear();
 
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockLoggerWarn).toHaveBeenCalled();
     });
@@ -386,16 +447,56 @@ describe('createStreamLifecycle', () => {
       const lifecycle = await createStreamLifecycle(params());
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
-      // Second batch arrives while the first write is still in flight.
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
+      // A second tool-boundary part arrives while the first write is still in flight — the
+      // in-flight guard must fold it into the next opportunity rather than race a second write.
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
 
       expect(mockUpdateSet).toHaveBeenCalledTimes(1);
 
       resolveFirst();
-      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    it('given consecutive text-delta parts pushed before a checkpoint, should merge them into one text part on the persisted snapshot', async () => {
+      mockRegistryGetBufferedParts.mockReturnValue([
+        { type: 'text', text: 'hel' },
+        { type: 'text', text: 'lo' },
+        { type: 'text', text: ' world' },
+      ]);
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockUpdateSet).toHaveBeenCalledWith({
+        parts: [{ type: 'text', text: 'hello world' }],
+        lastHeartbeatAt: expect.any(Date),
+      });
+    });
+
+    it('given a buffered snapshot over the ~5MB serialized cap, should truncate the oldest parts and warn exactly once across repeated checkpoints', async () => {
+      const huge = { type: 'text' as const, text: 'x'.repeat(6 * 1024 * 1024) };
+      const recent = { type: 'text' as const, text: 'recent' };
+      mockRegistryGetBufferedParts.mockReturnValue([huge, toolPart, recent]);
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+      mockLoggerWarn.mockClear();
+
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+
+      expect(mockUpdateSet).toHaveBeenCalledTimes(2);
+      for (const call of mockUpdateSet.mock.calls) {
+        const written = call[0] as { parts: unknown[] };
+        expect(written.parts).not.toContainEqual(huge);
+      }
+      expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -405,8 +506,6 @@ describe('createStreamLifecycle', () => {
   // vanish from /active-streams so no client could attach, and the next send would fail
   // to abort it and would generate alongside it.
   describe('heartbeat — an independent timer, not the parts checkpoint', () => {
-    const textPart = { type: 'text' as const, text: 'hello' };
-
     beforeEach(() => {
       vi.useFakeTimers();
     });
@@ -423,6 +522,7 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalled();
       // Heartbeat-only: it must never touch `parts`, or it could race the checkpoint writes.
+      // Nothing was ever pushed, so the checkpoint interval has nothing dirty to flush either.
       for (const call of mockUpdateSet.mock.calls) {
         expect(call[0]).toEqual({ lastHeartbeatAt: expect.any(Date) });
       }
@@ -445,7 +545,8 @@ describe('createStreamLifecycle', () => {
       await vi.advanceTimersByTimeAsync(45 * 60 * 1000);
       expect(mockUpdateSet).toHaveBeenCalled();
 
-      // Past the cap: the interval must have cancelled itself.
+      // Past the cap: both the heartbeat interval and the checkpoint interval must have
+      // cancelled themselves.
       await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
       mockUpdateSet.mockClear();
 
@@ -456,13 +557,13 @@ describe('createStreamLifecycle', () => {
 
     // THE HOLE THE CAP DID NOT ACTUALLY CLOSE.
     //
-    // Capping the interval beat is useless on its own, because `persistBufferedParts` ALSO
-    // writes lastHeartbeatAt — and the parts checkpoint used to run with no deadline at all.
-    // So the one generation most likely to outlive the cap (a long one, still chattering) kept
-    // refreshing its own liveness FOREVER, which is precisely the immortal ghost the cap exists
-    // to kill. And it is the worst possible ghost: by then BOTH registries have evicted it, so
-    // /active-streams advertises a live, joinable stream that no client can join and whose Stop
-    // button is a silent no-op, while the generation keeps running its tools and keeps billing.
+    // Capping the interval beat is useless on its own, because a parts checkpoint ALSO writes
+    // lastHeartbeatAt — and the parts checkpoint used to run with no deadline at all. So the one
+    // generation most likely to outlive the cap (a long one, still chattering) kept refreshing
+    // its own liveness FOREVER, which is precisely the immortal ghost the cap exists to kill. And
+    // it is the worst possible ghost: by then BOTH registries have evicted it, so /active-streams
+    // advertises a live, joinable stream that no client can join and whose Stop button is a
+    // silent no-op, while the generation keeps running its tools and keeps billing.
     it('given a stream still pushing parts past the horizon, should stop refreshing its heartbeat rather than look live forever', async () => {
       mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart]);
       const lifecycle = await createStreamLifecycle(params());
@@ -471,7 +572,7 @@ describe('createStreamLifecycle', () => {
       await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
       mockUpdateSet.mockClear();
 
-      for (let i = 0; i < 60; i++) lifecycle.pushPart(textPart);
+      for (let i = 0; i < 60; i++) lifecycle.pushPart(toolPart);
       await vi.advanceTimersByTimeAsync(0);
 
       // Not one write. The row is allowed to go stale, so the next takeover can reconcile it.
@@ -490,7 +591,9 @@ describe('createStreamLifecycle', () => {
       mockRegistryGetMeta.mockReturnValue(undefined);
       mockRegistryGetBufferedParts.mockReturnValue([]);
 
-      for (let i = 0; i < 40; i++) lifecycle.pushPart(textPart);
+      // Tool-boundary parts force an immediate checkpoint attempt, which is exactly the case
+      // that must still respect the "entry gone" guard rather than write parts: [].
+      lifecycle.pushPart(toolPart);
       await vi.advanceTimersByTimeAsync(0);
 
       const wroteEmptyParts = mockUpdateSet.mock.calls.some(
@@ -619,7 +722,6 @@ describe('createStreamLifecycle', () => {
 
   describe('finish — parts cleared on completion', () => {
     it('given a stream with buffered parts, should clear parts to empty in the final write rather than persist the full content', async () => {
-      const textPart = { type: 'text' as const, text: 'hello' };
       mockRegistryGetBufferedParts.mockReturnValue([textPart, textPart, textPart]);
       const lifecycle = await createStreamLifecycle(params());
 
@@ -640,27 +742,27 @@ describe('createStreamLifecycle', () => {
     });
 
     it('given a periodic persist is in flight when finish() is called, should await it before writing the final (cleared) snapshot', async () => {
+      vi.useFakeTimers();
       let resolvePeriodic!: () => void;
       mockUpdateWhere.mockImplementationOnce(
         () => new Promise<void>((res) => { resolvePeriodic = res; }),
       );
-      const textPart = { type: 'text' as const, text: 'hello' };
-      mockRegistryGetBufferedParts.mockReturnValue([textPart]);
+      mockRegistryGetBufferedParts.mockReturnValue([toolPart]);
       const lifecycle = await createStreamLifecycle(params());
 
-      for (let i = 0; i < 20; i++) lifecycle.pushPart(textPart);
-      await flushMicrotasks();
+      lifecycle.pushPart(toolPart);
+      await vi.advanceTimersByTimeAsync(0);
 
       mockUpdateSet.mockClear();
       lifecycle.finish(false);
-      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(0);
 
       // The final write must not have landed yet — it's waiting on the
       // in-flight periodic persist to settle first.
       expect(mockUpdateSet).not.toHaveBeenCalled();
 
       resolvePeriodic();
-      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockUpdateSet).toHaveBeenCalledWith({
         status: 'complete',
@@ -669,6 +771,7 @@ describe('createStreamLifecycle', () => {
       });
 
       mockRegistryGetBufferedParts.mockReturnValue([]);
+      vi.useRealTimers();
     });
   });
 
