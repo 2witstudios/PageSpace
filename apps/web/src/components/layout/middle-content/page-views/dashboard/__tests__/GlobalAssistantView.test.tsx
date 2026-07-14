@@ -166,6 +166,7 @@ function planResume({
   native,
   isStreaming,
   ownTurnInFlight = isStreaming,
+  stillOnInterruptedConversation = true,
   attempts = [RECOVERED],
 }: {
   native: boolean;
@@ -179,6 +180,13 @@ function planResume({
    * rather than the one that was interrupted.
    */
   ownTurnInFlight?: boolean;
+  /**
+   * Whether we are still on the conversation the interrupted turn belongs to. The recovery spans
+   * seconds of network and the user can switch conversation inside that window; handleRetry always
+   * acts on the LIVE conversation, so regenerating after a switch would fire a generation for the
+   * turn they moved TO rather than the one that was interrupted.
+   */
+  stillOnInterruptedConversation?: boolean;
   /** Successive tryRecover outcomes, one per attempt the resume handler makes (up to 3). */
   attempts?: Attempt[];
 }): ResumeEffect[] {
@@ -201,7 +209,9 @@ function planResume({
   }
 
   // The REAL predicate, not a copy of it.
-  if (ownTurnInFlight && canConcludeTurnIsLost(attempt)) effects.push('regenerate');
+  if (ownTurnInFlight && stillOnInterruptedConversation && canConcludeTurnIsLost(attempt)) {
+    effects.push('regenerate');
+  }
   return effects;
 }
 
@@ -482,6 +492,21 @@ function evictStalePartial<T extends { id: string }>(
         });
         expect(plan).toEqual(['stop', 'try-recover', 'try-recover', 'try-recover']);
         expect(plan).not.toContain('regenerate');
+      });
+
+      it('given the user switched conversation during the recovery, should NOT regenerate', () => {
+        // handleRetry acts on the LIVE conversation. The recovery spans seconds of network, so a
+        // switch inside that window would make it fire a generation for the turn the user moved
+        // TO, not the interrupted one.
+        expect(
+          planResume({
+            native: true,
+            isStreaming: true,
+            ownTurnInFlight: true,
+            stillOnInterruptedConversation: false,
+            attempts: [ANSWERED_NOTHING],
+          }),
+        ).toEqual(['stop', 'try-recover']);
       });
 
       it('given the probe answered but the DB GET did NOT, should NOT regenerate', () => {

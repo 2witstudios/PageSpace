@@ -890,6 +890,12 @@ const GlobalAssistantView: React.FC = () => {
       const hadTurnInFlight = selectedAgent
         ? isOwnAgentStreamForCurrentConversation
         : isOwnGlobalStreamForCurrentConversation;
+      // The conversation that turn belongs to. The recovery below spans up to a few seconds of
+      // network, and the user can switch conversation inside that window — at which point
+      // regenerating would fire a generation for the turn they moved TO, not the one that was
+      // interrupted. `handleRetry` always acts on the live conversation, so the only way to keep
+      // it honest is to re-check that we are still on the one we started from.
+      const conversationAtResume = currentConversationId;
 
       // Local-only useChat stop: it does NOT signal the server (that is done separately via
       // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It also
@@ -937,9 +943,14 @@ const GlobalAssistantView: React.FC = () => {
       // live run is picked up by the socket-reconnect bootstrap once the network returns, a
       // persisted reply is picked up by the next load, and a genuinely dead turn leaves the user
       // their prompt and the retry action on it.
-      if (hadTurnInFlight && canConcludeTurnIsLost(attempt)) await handleRetry();
+      const stillOnTheInterruptedConversation =
+        currentConversationIdRef.current === conversationAtResume;
+      if (hadTurnInFlight && stillOnTheInterruptedConversation && canConcludeTurnIsLost(attempt)) {
+        await handleRetry();
+      }
     }, [
       effectiveIsStreaming,
+      currentConversationId,
       selectedAgent,
       isOwnAgentStreamForCurrentConversation,
       isOwnGlobalStreamForCurrentConversation,
