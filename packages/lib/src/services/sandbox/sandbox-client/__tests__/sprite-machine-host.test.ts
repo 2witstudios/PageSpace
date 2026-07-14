@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
-import { MachineStreamOpenTimeoutError } from '../../machine-host';
+import { MachineSpriteReplacedError, MachineStreamOpenTimeoutError } from '../../machine-host';
 import {
   createSpritesSandboxClient,
   spawnWithSelfHealingCwd,
@@ -181,6 +181,30 @@ describe('createSpriteMachineHost', () => {
 
     await host.kill({ machineId: 'session-key' });
     expect(calls.deleted).toEqual(['session-key']);
+  });
+
+  it('given expectedInstanceId that MATCHES the sprite at the name, should kill it', async () => {
+    const { sdk, calls } = makeSdk({ getSprite: async () => fakeSprite({ id: 'inst-A' }) });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await host.kill({ machineId: 'session-key', expectedInstanceId: 'inst-A' });
+    expect(calls.deleted).toEqual(['session-key']);
+  });
+
+  it('given a DIFFERENT VM holds the name now, should THROW MachineSpriteReplacedError and NOT destroy it', async () => {
+    // The kill is name-keyed and names are reused across re-creates, so a
+    // replacement Sprite must not be destroyed in place of the one we meant. And it
+    // must THROW, not return success: callers treat success as "confirmed dead" and
+    // release the last pointer — if the id were stale, that would strand the live VM.
+    const { sdk, calls } = makeSdk({ getSprite: async () => fakeSprite({ id: 'inst-B' }) });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await expect(
+      host.kill({ machineId: 'session-key', expectedInstanceId: 'inst-A' }),
+    ).rejects.toThrow(MachineSpriteReplacedError);
+    expect(calls.deleted).toEqual([]); // the newcomer was NOT destroyed
   });
 
   it('given kill of an ALREADY-GONE sprite, should resolve as a successful (idempotent) kill', async () => {

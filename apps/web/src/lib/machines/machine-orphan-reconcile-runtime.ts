@@ -35,6 +35,7 @@ import type {
   OrphanRow,
   ReconcileOrphanSpritesDeps,
 } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
+import { MachineSpriteReplacedError } from '@pagespace/lib/services/sandbox/machine-host';
 import { getMachineHostForBranches } from './machine-branches-runtime';
 
 /** The owning page is still trashed — the precondition every release write is conditional on. */
@@ -169,15 +170,19 @@ export const defaultReconcileOrphanSpritesDeps: ReconcileOrphanSpritesDeps = {
   async killSprite({ sandboxId, spriteInstanceId }) {
     try {
       const host = await getMachineHostForBranches();
-      // Idempotent AND identity-guarded: an already-destroyed Sprite is a
-      // successful kill, and a DIFFERENT VM now holding this name means our target
-      // is already gone — so we leave the newcomer alone rather than destroying
-      // someone's live machine (`sandboxId` is a reused name, not an identity).
+      // Idempotent: an already-destroyed Sprite is a successful kill.
       await host.kill({ machineId: sandboxId, expectedInstanceId: spriteInstanceId ?? undefined });
       return { ok: true };
     } catch (error) {
-      // Reported, never thrown: the reconciler decides what to do with a failed
-      // row (leave it exactly as-is for the next run) and must keep the batch going.
+      // A DIFFERENT VM holds this name now, so the instance we were tracking is
+      // already GONE — which is exactly the outcome we wanted. Treat it as SUCCESS,
+      // so the outbox row / tracking row is released. Treating it as a failure
+      // instead would retry this row forever (growing `attempts`) against a target
+      // that no longer exists, and could never drop the pointer. The live newcomer
+      // has its OWN fresh tracking row, so releasing ours never orphans it.
+      if (error instanceof MachineSpriteReplacedError) return { ok: true };
+      // Any other failure (unreachable host, 5xx) genuinely leaves our target's
+      // fate unknown — report it so the row is kept and retried next run.
       return { ok: false, error };
     }
   },
