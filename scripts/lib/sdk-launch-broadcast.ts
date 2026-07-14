@@ -131,6 +131,17 @@ export function resolveMarketingBase(env: NodeJS.ProcessEnv = process.env): stri
   }
 }
 
+export class LedgerCorruptError extends Error {
+  constructor(logPath: string, lineNumber: number, why: string, line: string) {
+    super(
+      `Malformed ledger entry at ${logPath}:${lineNumber} (${why}): ${line.slice(0, 120)}\n` +
+        '   This line may record a recipient who was already emailed. Refusing to run rather than\n' +
+        '   risk emailing them twice — repair or remove the line, then re-run.',
+    );
+    this.name = 'LedgerCorruptError';
+  }
+}
+
 /**
  * Load the set of already-emailed addresses (normalized) from the ledger.
  *
@@ -170,17 +181,6 @@ export async function loadSentEmails(logPath: string): Promise<Set<string>> {
   return sent;
 }
 
-export class LedgerCorruptError extends Error {
-  constructor(logPath: string, lineNumber: number, why: string, line: string) {
-    super(
-      `Malformed ledger entry at ${logPath}:${lineNumber} (${why}): ${line.slice(0, 120)}\n` +
-        '   This line may record a recipient who was already emailed. Refusing to run rather than\n' +
-        '   risk emailing them twice — repair or remove the line, then re-run.',
-    );
-    this.name = 'LedgerCorruptError';
-  }
-}
-
 /**
  * Open the ledger for appending, creating its parent directory first. Validating
  * writability UP FRONT (before any email is sent) turns a bad --log path or a
@@ -202,16 +202,20 @@ export async function recordSent(handle: FileHandle, entry: SentLedgerEntry): Pr
   await handle.sync();
 }
 
-export interface RecipientDecision {
-  /** 'send' or the reason we're skipping this row. */
-  outcome: 'send' | 'invalid-email' | 'already-sent' | 'suppressed' | 'opted-out';
-}
+export type SkipReason = 'invalid-email' | 'already-sent' | 'suppressed' | 'opted-out';
+
+export type RecipientDecision =
+  /** Carries the trimmed address and its normalized ledger key, so the caller
+   *  never has to re-derive (or re-assert the non-nullness of) what we validated. */
+  | { outcome: 'send'; email: string; emailKey: string }
+  | { outcome: SkipReason };
 
 /**
- * Decide whether one (decrypted) user should receive the broadcast. Ordered so
- * the cheapest, most absolute exclusions win: a suppressed address is never
- * mailed even if the ledger is empty, and an already-sent address is never
- * mailed twice even if it later lands in the suppression list.
+ * Decide whether one (decrypted) user should receive the broadcast.
+ *
+ * Order matters: an address already in the ledger is never mailed twice even if
+ * it later lands in the suppression list, and a suppressed address is never
+ * mailed even when the ledger is empty.
  */
 export function decideRecipient(input: {
   email: string | null | undefined;
@@ -224,9 +228,9 @@ export function decideRecipient(input: {
   const email = input.email?.trim();
   if (!email || !input.isValidEmail(email)) return { outcome: 'invalid-email' };
 
-  const key = email.toLowerCase();
-  if (input.alreadySent.has(key)) return { outcome: 'already-sent' };
-  if (input.suppressed?.has(key)) return { outcome: 'suppressed' };
+  const emailKey = email.toLowerCase();
+  if (input.alreadySent.has(emailKey)) return { outcome: 'already-sent' };
+  if (input.suppressed?.has(emailKey)) return { outcome: 'suppressed' };
   if (input.optedOut.has(input.userId)) return { outcome: 'opted-out' };
-  return { outcome: 'send' };
+  return { outcome: 'send', email, emailKey };
 }

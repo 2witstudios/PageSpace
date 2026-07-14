@@ -169,6 +169,23 @@ describe('decideRecipient', () => {
     expect(decide()).toBe('send');
   });
 
+  it('given a send, should hand back the trimmed address and its normalized ledger key', () => {
+    const decision = decideRecipient({
+      email: '  Ada@Example.com  ',
+      userId: 'u1',
+      isValidEmail: alwaysValid,
+      alreadySent: new Set(),
+      suppressed: new Set(),
+      optedOut: new Set(),
+    });
+
+    expect(decision).toEqual({
+      outcome: 'send',
+      email: 'Ada@Example.com',
+      emailKey: 'ada@example.com',
+    });
+  });
+
   it('given an address in the erasure-suppression audience, should skip it', () => {
     expect(decide({ suppressed: new Set(['ada@example.com']) })).toBe('suppressed');
   });

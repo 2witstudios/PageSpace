@@ -184,7 +184,7 @@ async function main(): Promise<void> {
 
   for (const encryptedUser of rows) {
     const user = await decryptUserRow(encryptedUser);
-    const { outcome } = decideRecipient({
+    const decision = decideRecipient({
       email: user.email,
       userId: user.id,
       isValidEmail,
@@ -193,14 +193,12 @@ async function main(): Promise<void> {
       optedOut,
     });
 
-    if (outcome !== 'send') {
-      skipped[outcome]++;
+    if (decision.outcome !== 'send') {
+      skipped[decision.outcome]++;
       continue;
     }
 
-    // The decision above proved the address is present and valid.
-    const email = user.email!.trim();
-    const emailKey = email.toLowerCase();
+    const { email, emailKey } = decision;
 
     // Count ATTEMPTS, not just successes, against --limit: a provider outage must
     // not let a `--limit=25` canary still try the whole audience. Checked after the
