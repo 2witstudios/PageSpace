@@ -26,10 +26,21 @@ export default defineConfig({
         '**/node_modules/**',
       ],
       thresholds: {
+        /* ratchet:start */
         lines: 44,
         branches: 85,
         functions: 56,
         statements: 44,
+        /* ratchet:end */
+        // Store-first rendering foundations (E1 PR3): new pure modules gated
+        // at 100% branch. Single-star globs deliberately exclude __tests__/
+        // subdirectories — test files carry their own incidental branches
+        // (e.g. it.each fixtures) that have no bearing on source coverage.
+        'src/lib/ai/streams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/stores/pendingStreams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
   },
