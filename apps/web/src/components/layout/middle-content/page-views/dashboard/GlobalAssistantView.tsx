@@ -85,6 +85,7 @@ import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
+import { isValidPartFrame } from '@/lib/ai/streams/isValidPartFrame';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
   ProviderSetupCard,
@@ -647,7 +648,12 @@ const GlobalAssistantView: React.FC = () => {
           // the rejoin can still attach and take over, and if it cannot, the user keeps what they
           // had.
           const staleId = liveStream.messageId;
-          const hasServerParts = (liveStream.parts?.length ?? 0) > 0;
+          // Counted with isValidPartFrame, the SAME predicate the bootstrap seeds with — it is
+          // `persistedParts.length` (post-filter) that becomes skipReplayCount, and a
+          // skipReplayCount of 0 is what makes a failed join drop the stream. A raw
+          // `parts.length > 0` would say "safe to evict" for a checkpoint of malformed frames
+          // that seeds nothing.
+          const hasServerParts = (liveStream.parts ?? []).filter(isValidPartFrame).length > 0;
           const evictStale = (prev: UIMessage[]) => prev.filter((m) => m.id !== staleId);
           // Via agentSetMessages / globalSetMessages, not the raw useChat setters: agent mode
           // must drop the stale partial from the dashboard store as well, or the store keeps
@@ -822,25 +828,37 @@ const GlobalAssistantView: React.FC = () => {
         await handlePullUpRefresh();
         return;
       }
-      // Native. Local-only useChat stop: it does NOT signal the server (that is done separately
-      // via abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It
-      // also ends the dead response body, which releases this channel's `consuming` mark —
-      // without that the rejoin's bootstrap would classify the stream as one we are already
-      // reading off the POST and skip attaching it.
+      // Native. Whether a turn was actually in flight when we went away. iOS froze JS at that
+      // moment, so this render-time value is a faithful record of it — which is exactly what it
+      // is used for here, and why it is safe even though it is useless for deciding whether the
+      // TRANSPORT is still alive (that is resolveResumeAction's job, and the answer is "no").
+      const hadTurnInFlight = effectiveIsStreaming;
+
+      // Local-only useChat stop: it does NOT signal the server (that is done separately via
+      // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It also
+      // ends the dead response body, which releases this channel's `consuming` mark — without
+      // that the rejoin's bootstrap would classify the stream as one we are already reading off
+      // the POST and skip attaching it.
       rawStop();
-      // tryRecover is the whole recovery here, and there is deliberately NO DB-refresh fallback
-      // after it. It already refetches when the run finished while we were away (its step 2). A
-      // fallback refresh would only run in the cases where a DB write is UNSAFE:
-      //   - the /active-streams probe failed (first request after a foreground is the likeliest
-      //     to, with the radio still coming up) — a stream may well be live, and the DB snapshot,
-      //     which cannot contain an unpersisted reply, would erase the in-progress bubble;
-      //   - the DB is behind our local state (step 2's dbUserCount >= localUserCount guard
-      //     rejected it) — e.g. a send whose POST never reached the server, where refreshing
-      //     would erase the user's own prompt.
-      // In both, doing nothing is correct: local state is newer than anything we could fetch, and
-      // the socket reconnect / refreshSignal path heals it.
-      await tryRecover();
-    }, [effectiveIsStreaming, rawStop, tryRecover, handlePullUpRefresh]),
+      if (await tryRecover()) return;
+
+      // Nothing live on the server, and nothing persisted for this turn. Deliberately NOT a DB
+      // refresh — that is unsafe here (the probe may simply have failed, in which case a stream
+      // could still be live and the DB snapshot, which cannot contain an unpersisted reply, would
+      // erase the in-progress bubble; or the DB is behind our local state, where it would erase
+      // the user's own prompt).
+      //
+      // Regenerate instead — the same fallback useStreamRecovery applies when its probe comes up
+      // empty on a network error. It is needed BECAUSE of the stop above: aborting the fetch
+      // settles useChat at `ready` with no `error`, and useStreamRecovery only fires on
+      // `status === 'error'`. Without this, a turn whose POST died on the background transition
+      // (a radio drop right then is common) would find no stream, no reply, and no error — and
+      // the user's prompt would sit unanswered forever.
+      //
+      // Gated on a turn actually having been in flight, so an ordinary resume on an idle
+      // conversation can never fire a spurious generation.
+      if (hadTurnInFlight) await handleRetry();
+    }, [effectiveIsStreaming, rawStop, tryRecover, handlePullUpRefresh, handleRetry]),
     enabled: resumeEnabled,
   });
 

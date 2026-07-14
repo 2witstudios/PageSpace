@@ -160,14 +160,17 @@ function resumeEnabled(currentConversationId: string | null, isAnyEditing: boole
  *  - The web path never stops or probes: a live fetch survives a tab switch.
  *
  */
-type ResumeEffect = 'stop' | 'try-recover' | 'refresh';
+type ResumeEffect = 'stop' | 'try-recover' | 'refresh' | 'regenerate';
 
 function planResume({
   native,
   isStreaming,
+  recovered = true,
 }: {
   native: boolean;
   isStreaming: boolean;
+  /** What tryRecover returned: it rejoined a live stream, or refetched a persisted reply. */
+  recovered?: boolean;
 }): ResumeEffect[] {
   const action = resolveResumeAction({ native, isStreaming });
   if (action === 'noop') return [];
@@ -175,7 +178,15 @@ function planResume({
   // The stop is local-only. It clears useChat state and — critically — ends the dead response
   // body, which releases the channel's `consuming` mark. Without that the rejoin's bootstrap
   // treats the stream as one we are already reading off the POST and skips attaching it.
-  return ['stop', 'try-recover'];
+  const effects: ResumeEffect[] = ['stop', 'try-recover'];
+  if (recovered) return effects;
+  // Nothing live, nothing persisted. NOT a DB refresh (unsafe: the probe may merely have failed
+  // and a stream still be live, or the DB may be behind local state). Regenerate — but only if a
+  // turn was actually in flight when we backgrounded, so an idle resume never fires a spurious
+  // generation. `isStreaming` here is the render-time value iOS froze at background, which is a
+  // faithful record of exactly that.
+  if (isStreaming) effects.push('regenerate');
+  return effects;
 }
 
 // ============================================
@@ -685,6 +696,25 @@ function evictStalePartial<T extends { id: string }>(
 
       it('given web with no live fetch, should refresh only (no stop, no probe)', () => {
         expect(planResume({ native: false, isStreaming: false })).toEqual(['refresh']);
+      });
+
+      it('given native, a turn in flight, and NOTHING to recover, should regenerate — never a DB refresh', () => {
+        // The stop above settles useChat at `ready` with no `error`, and useStreamRecovery only
+        // fires on `status === 'error'` — so aborting the fetch destroys the very signal that
+        // used to drive the fallback. Without regenerating here, a turn whose POST died on the
+        // background transition (a radio drop right then is common) finds no stream, no reply and
+        // no error, and the user's prompt sits unanswered forever.
+        const plan = planResume({ native: true, isStreaming: true, recovered: false });
+        expect(plan).toEqual(['stop', 'try-recover', 'regenerate']);
+        expect(plan).not.toContain('refresh');
+      });
+
+      it('given native, NO turn in flight, and nothing to recover, should NOT regenerate', () => {
+        // An ordinary resume on an idle conversation must never fire a spurious generation.
+        expect(planResume({ native: true, isStreaming: false, recovered: false })).toEqual([
+          'stop',
+          'try-recover',
+        ]);
       });
     });
 
