@@ -737,7 +737,7 @@ const SidebarChatTab: React.FC = () => {
 
   // Shared shape for every sidebar send path (text, voice, ask-user-answer) —
   // all three need "the request body for wherever we're sending right now,
-  // given a freshly-resolved location." Centralized so the agent-mode vs
+  // given a freshly-built contextRef." Centralized so the agent-mode vs
   // global-mode branch and field list can't drift between call sites.
   const buildSidebarChatRequestBody = useCallback((
     contextRef: ContextRef,

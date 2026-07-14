@@ -177,4 +177,72 @@ describe('resolveRequestContext', () => {
       breadcrumbs: ['Engineering'],
     });
   });
+
+  // Audit trail parity: the sibling authz check in the same routes
+  // (checkMCPPageScope) reports every denial via auditRequest — a contextRef
+  // pointing at something the caller can't view/isn't a member of is the same
+  // class of event and must be equally observable (repeated probing should be
+  // detectable), even though the resolved value itself stays a silent `null`
+  // rather than an error response.
+  describe('onAccessDenied callback', () => {
+    it("given routeType 'page' the caller CANNOT view, should invoke onAccessDenied with routeType and pageId", async () => {
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(false);
+      const onAccessDenied = vi.fn();
+      const ref: ContextRef = { routeType: 'page', pageId: 'secret-page' };
+
+      await resolveRequestContext(AUTH, ref, onAccessDenied);
+
+      expect(onAccessDenied).toHaveBeenCalledWith({ routeType: 'page', pageId: 'secret-page' });
+    });
+
+    it("given routeType 'drive' the caller is NOT a member of, should invoke onAccessDenied with routeType and driveId", async () => {
+      vi.mocked(isPrincipalDriveMember).mockResolvedValue(false);
+      const onAccessDenied = vi.fn();
+      const ref: ContextRef = { routeType: 'drive', driveId: 'drive-1' };
+
+      await resolveRequestContext(AUTH, ref, onAccessDenied);
+
+      expect(onAccessDenied).toHaveBeenCalledWith({ routeType: 'drive', driveId: 'drive-1' });
+    });
+
+    it('given a successfully resolved page, should NOT invoke onAccessDenied', async () => {
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
+      vi.mocked(getPageBreadcrumbTrail).mockResolvedValue([trailPage({})]);
+      const onAccessDenied = vi.fn();
+      const ref: ContextRef = { routeType: 'page', pageId: 'page-x' };
+
+      await resolveRequestContext(AUTH, ref, onAccessDenied);
+
+      expect(onAccessDenied).not.toHaveBeenCalled();
+    });
+
+    it('given a page that passes the view check but no longer exists (empty trail), should NOT invoke onAccessDenied (not a security denial)', async () => {
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(true);
+      vi.mocked(getPageBreadcrumbTrail).mockResolvedValue([]);
+      const onAccessDenied = vi.fn();
+      const ref: ContextRef = { routeType: 'page', pageId: 'page-x' };
+
+      await resolveRequestContext(AUTH, ref, onAccessDenied);
+
+      expect(onAccessDenied).not.toHaveBeenCalled();
+    });
+
+    it("given no contextRef, should NOT invoke onAccessDenied", async () => {
+      const onAccessDenied = vi.fn();
+      await resolveRequestContext(AUTH, undefined, onAccessDenied);
+      expect(onAccessDenied).not.toHaveBeenCalled();
+    });
+
+    it("given routeType 'other', should NOT invoke onAccessDenied", async () => {
+      const onAccessDenied = vi.fn();
+      await resolveRequestContext(AUTH, { routeType: 'other' }, onAccessDenied);
+      expect(onAccessDenied).not.toHaveBeenCalled();
+    });
+
+    it('given no callback provided, should not throw on a denied page', async () => {
+      vi.mocked(canPrincipalViewPage).mockResolvedValue(false);
+      const ref: ContextRef = { routeType: 'page', pageId: 'secret-page' };
+      await expect(resolveRequestContext(AUTH, ref)).resolves.toBeNull();
+    });
+  });
 });

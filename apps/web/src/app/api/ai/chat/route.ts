@@ -248,7 +248,16 @@ export async function POST(request: Request) {
     // contextRef at all. Deferred until after the required-field checks above so an
     // invalid request (no messages/chatId) fails fast without an extra DB round-trip.
     const pageContext = contextRef
-      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef))
+      ? locationContextToPageContext(await resolveRequestContext(authResult, contextRef, (denied) => {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId,
+            resourceType: denied.routeType === 'drive' ? 'drive' : 'page',
+            resourceId: denied.routeType === 'drive' ? denied.driveId : denied.pageId,
+            details: { reason: 'context_ref_denied', method: 'POST', chatId },
+            riskScore: 0.3,
+          });
+        }))
       : legacyPageContext;
 
     const mcpScopeError = await checkMCPPageScope(authResult, chatId);
