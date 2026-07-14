@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, index, uniqueIndex, primaryKey } from 'drizzle-orm/pg-core';
 
 export const aiStreamSessions = pgTable('ai_stream_sessions', {
   messageId:      text('message_id').primaryKey(),
@@ -82,4 +82,30 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   // resolves a row BY it. If two rows could share one, a single Stop would mark both. Existing
   // rows are all NULL, and Postgres treats NULLs as distinct, so this is safe to add in place.
   streamIdIdx: uniqueIndex('ai_stream_sessions_stream_id_idx').on(table.streamId),
+}));
+
+/**
+ * Pre-generation abort intents.
+ *
+ * Closes the pre-INSERT preflight window (#2028 item 1). `createStreamLifecycle` runs at the END
+ * of a route's preflight — after auth, permissions, message persistence, and context assembly
+ * (0.5-3s). A Stop pressed during that window finds no `ai_stream_sessions` row to mark, no
+ * registry entry to abort, and silently does nothing. The generation then starts a moment later
+ * and runs to completion: write tools, billing, the lot.
+ *
+ * This table records a durable "stop whatever of MINE starts on this conversation" intent,
+ * keyed by (conversation_id, user_id). `createStreamLifecycle` consumes it at INSERT time and,
+ * if present, aborts the stream immediately rather than letting it generate.
+ *
+ * SECURITY: same model as `ai_stream_sessions.abort_requested_at`. A row here can only be written
+ * by a Stop that has already authenticated as `user_id`, and it can only be consumed by
+ * `createStreamLifecycle`, which receives `userId` from the authenticated route. There is no
+ * forgeable payload — the composite PK (conversation_id, user_id) IS the authorization.
+ */
+export const aiPendingAbortIntents = pgTable('ai_pending_abort_intents', {
+  conversationId: text('conversation_id').notNull(),
+  userId:         text('user_id').notNull(),
+  createdAt:      timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.conversationId, table.userId] }),
 }));

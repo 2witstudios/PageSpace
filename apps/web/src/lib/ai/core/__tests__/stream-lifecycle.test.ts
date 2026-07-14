@@ -13,6 +13,8 @@ const {
   mockUpdateSet,
   mockUpdateWhere,
   mockLoggerWarn,
+  mockConsumePendingAbort,
+  mockEnsureWatcher,
   aiStreamSessionsToken,
 } = vi.hoisted(() => ({
   mockRegistryRegister: vi.fn(),
@@ -27,6 +29,8 @@ const {
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
   mockLoggerWarn: vi.fn(),
+  mockConsumePendingAbort: vi.fn().mockResolvedValue(false),
+  mockEnsureWatcher: vi.fn(),
   aiStreamSessionsToken: { __table: 'ai_stream_sessions', messageId: 'message_id' },
 }));
 
@@ -91,6 +95,18 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 }));
 
+vi.mock('@/lib/ai/core/stream-horizons', () => ({
+  STREAM_MAX_LIFETIME_MS: 60 * 60 * 1000,
+}));
+
+vi.mock('@/lib/ai/core/stream-abort-watcher', () => ({
+  ensureStreamAbortWatcher: mockEnsureWatcher,
+}));
+
+vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
+  consumePendingAbort: mockConsumePendingAbort,
+}));
+
 import { createStreamLifecycle } from '../stream-lifecycle';
 
 const params = (overrides: Partial<Parameters<typeof createStreamLifecycle>[0]> = {}) => ({
@@ -109,6 +125,8 @@ const flushMicrotasks = () => new Promise<void>((resolve) => setImmediate(resolv
 describe('createStreamLifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConsumePendingAbort.mockResolvedValue(false);
+    mockEnsureWatcher.mockImplementation(() => {});
     // clearAllMocks() clears calls, NOT implementations — a mockReturnValue set inside one test
     // otherwise leaks into every test after it. These two drive the parts-checkpoint guards, so
     // a leak here silently changes what later tests are actually exercising.
@@ -682,6 +700,104 @@ describe('createStreamLifecycle', () => {
 
       expect(mockUpdateSet).toHaveBeenCalled();
       expect(mockBroadcastComplete).toHaveBeenCalled();
+    });
+  });
+
+  // A Stop pressed during the route's preflight — or landing in the narrow gap between entering
+  // createStreamLifecycle and the aiStreamSessions INSERT resolving — finds no row to mark and
+  // writes a durable pending-abort intent instead. A single check right after the row exists
+  // catches both cases: nothing else consumes the intent in between, so checking once here is
+  // equivalent to checking before AND after the INSERT, without the extra DB round-trip.
+  describe('pre-aborted: pending-abort intent consumed right after INSERT (#2028 item 1)', () => {
+    it('given a pending-abort intent exists, should return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(handle.preAborted).toBe(true);
+    });
+
+    it('given a pending-abort intent exists, should check exactly once', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockConsumePendingAbort).toHaveBeenCalledTimes(1);
+    });
+
+    it('given a pending-abort intent exists, should still register in the multicast registry (then evict it)', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockRegistryRegister).toHaveBeenCalled();
+      expect(mockRegistryFinish).toHaveBeenCalledWith('msg-1', true);
+    });
+
+    it('given a pending-abort intent exists, should NOT broadcast stream_start', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockBroadcastStart).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, should INSERT as streaming then UPDATE the row to status=aborted', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      await createStreamLifecycle(params());
+
+      expect(mockInsertValues).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'streaming' }),
+      );
+      expect(mockUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'aborted', parts: [], abortRequestedAt: null }),
+      );
+      expect(mockUpdateWhere).toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, should return a handle whose finish is a no-op', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+      mockRegistryFinish.mockClear();
+
+      handle.finish(false);
+      await flushMicrotasks();
+
+      expect(mockRegistryFinish).not.toHaveBeenCalled();
+      expect(mockBroadcastComplete).not.toHaveBeenCalled();
+    });
+
+    it('given a pending-abort intent exists, pushPart should be a no-op', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+
+      const handle = await createStreamLifecycle(params());
+      handle.pushPart({ type: 'text', text: 'hello' });
+
+      expect(mockRegistryPush).not.toHaveBeenCalled();
+    });
+
+    it('given the pre-abort UPDATE rejects, should warn and still return preAborted=true', async () => {
+      mockConsumePendingAbort.mockResolvedValue(true);
+      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(mockLoggerWarn).toHaveBeenCalled();
+      expect(handle.preAborted).toBe(true);
+    });
+
+    it('given NO pending-abort intent, should proceed normally with preAborted=false', async () => {
+      mockConsumePendingAbort.mockResolvedValue(false);
+
+      const handle = await createStreamLifecycle(params());
+
+      expect(handle.preAborted).toBe(false);
+      expect(mockRegistryRegister).toHaveBeenCalled();
+      expect(mockBroadcastStart).toHaveBeenCalled();
+      // Not evicted — this is the normal, still-streaming path.
+      expect(mockRegistryFinish).not.toHaveBeenCalled();
     });
   });
 

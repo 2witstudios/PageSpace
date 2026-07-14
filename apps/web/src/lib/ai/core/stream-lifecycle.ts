@@ -9,6 +9,7 @@ import {
   streamMulticastRegistry,
   type UIMessagePart,
 } from '@/lib/ai/core/stream-multicast-registry';
+import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -42,6 +43,12 @@ export interface StreamLifecycleHandle {
   finish: (aborted: boolean) => void;
   pushPart: (part: UIMessagePart) => void;
   getBufferedParts: () => UIMessagePart[];
+  /**
+   * True when a pending-abort intent was consumed immediately after INSERT time (#2028 item 1).
+   * The row was updated to 'aborted' directly; the caller should abort the controller so
+   * streamText never starts, and skip broadcastAiStreamStart.
+   */
+  preAborted: boolean;
 }
 
 // Batch DB writes rather than persisting on every token — a checkpoint every
@@ -169,6 +176,65 @@ export const createStreamLifecycle = async (
       messageId,
       error: error instanceof Error ? error.message : 'unknown',
     });
+  }
+
+  // ── POST-INSERT PENDING-ABORT CHECK (#2028 item 1) ────────────────────────────────────────
+  //
+  // A Stop pressed during the route's preflight (auth, permissions, context assembly: 0.5-3s of
+  // TTFB) — or landing in the narrow gap between entering this function and the INSERT above
+  // resolving — found no row to mark and wrote a durable pending-abort intent instead. Checking
+  // once here, right after the row exists, catches BOTH cases: nothing else consumes the intent
+  // in between, and it persists (bounded by its TTL) regardless of when it was written. If one
+  // exists, honour it: flip the just-inserted row to 'aborted' and return a pre-finished handle.
+  // The caller aborts the controller so streamText never starts.
+  //
+  // NOT fully closed, same as the KNOWN RACE in chat/route.ts: `recordPendingAbort`'s write runs
+  // on an independent connection with no shared lock or transaction, so it can commit-visible
+  // AFTER this consume already ran — a single-digit-millisecond commit-ordering skew, not a logic
+  // bug. In that sliver, the Stop is lost (the generation it targeted runs to completion) and the
+  // orphaned intent then wrongly pre-aborts the user's NEXT, unrelated send within the 30s TTL.
+  // Bounded and self-healing (no double-billing, TTL expiry), so a same-transaction check or
+  // advisory lock is not warranted here — but do not read this as the window being absent.
+  const preAborted = await consumePendingAbort({ conversationId, userId });
+
+  if (preAborted) {
+    loggers.ai.info('stream-lifecycle: consumed pending-abort intent, stream pre-aborted', {
+      messageId,
+      conversationId,
+    });
+
+    const abortedAt = new Date();
+    try {
+      await db
+        .update(aiStreamSessions)
+        .set({
+          status: 'aborted',
+          completedAt: abortedAt,
+          parts: [],
+          abortRequestedAt: null,
+        })
+        .where(eq(aiStreamSessions.messageId, messageId));
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: pre-aborted UPDATE failed', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    // Nothing has subscribed yet — registration just happened and broadcastAiStreamStart has not
+    // fired — so evicting the entry here is a plain cleanup, not a notification to a live client.
+    try {
+      streamMulticastRegistry.finish(messageId, true);
+    } catch (error) {
+      loggers.ai.warn('stream-lifecycle: registry.finish threw during pre-abort', {
+        messageId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+
+    // No broadcast, no heartbeat. A no-op handle whose finish is idempotent.
+    const noop = (): void => {};
+    return { finish: noop, pushPart: noop, getBufferedParts: () => [], preAborted: true };
   }
 
   broadcastAiStreamStart({
@@ -327,5 +393,5 @@ export const createStreamLifecycle = async (
   const getBufferedParts = (): UIMessagePart[] =>
     streamMulticastRegistry.getBufferedParts(messageId);
 
-  return { finish, pushPart, getBufferedParts };
+  return { finish, pushPart, getBufferedParts, preAborted: false };
 };

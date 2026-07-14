@@ -1026,7 +1026,7 @@ MENTION PROCESSING:
 
     const serverAssistantMessageId = createId();
 
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
 
     const channelId = globalChannelId(userId);
@@ -1101,6 +1101,14 @@ MENTION PROCESSING:
     // this row to settle before deciding what to tell the user. See attachStreamFinisher.
     attachStreamFinisher({ streamId, finish: lifecycle.finish });
 
+    // Pre-aborted: a pending-abort intent was consumed in createStreamLifecycle (#2028 item 1).
+    // The user pressed Stop during the preflight window. Abort the controller so streamText
+    // never starts; the lifecycle handle is already finished and its finish() is a no-op.
+    if (lifecycle.preAborted) {
+      abortController.abort();
+      removeStream({ streamId });
+    }
+
     // Outcome of the retry shell, shared from execute() to onFinish(). Carries the
     // summed usage/steps for billing plus the success flag, abort detection, and retry
     // observability — so no separate usage/steps promises are needed.
@@ -1110,6 +1118,11 @@ MENTION PROCESSING:
       originalMessages: sanitizedMessages, // full history — UI always sees all messages
       generateId: () => serverAssistantMessageId,
       execute: async ({ writer }) => {
+        // Pre-aborted (#2028 item 1, see StreamLifecycleHandle.preAborted) — nothing past this
+        // point can ever reach the model. Skip straight to onFinish rather than relying on the
+        // already-aborted signal to short-circuit streamText's underlying fetch.
+        if (lifecycle!.preAborted) return;
+
         // Execution feedback (UX spec §7): announce one command indicator
         // per resolved plan as the first parts of the assistant message, in
         // the order the chips appeared; persisted via onFinish.
