@@ -255,9 +255,12 @@ async function safeStop(client: SandboxClient, sandboxId: string): Promise<boole
   }
 }
 
-async function safeRemove(store: MachineSessionStore, sessionKey: string): Promise<void> {
+async function safeRemoveIfSandbox(
+  store: MachineSessionStore,
+  input: { sessionKey: string; sandboxId: string; spriteInstanceId: string | null },
+): Promise<void> {
   try {
-    await store.remove(sessionKey);
+    await store.removeIfSandbox(input);
   } catch {
     // best-effort
   }
@@ -456,12 +459,22 @@ export async function acquireMachineSession(
       case 'teardown': {
         const stopped = await safeStop(deps.client, plan.sandboxId);
         if (!stopped) {
-          // VM may still be running — keep the link so a later attempt (or an
-          // explicit retry) can still find it and finish the teardown. There is
-          // no separate reaper; nothing reclaims this but a future call here.
+          // VM may still be running — keep the link so a later attempt (or the
+          // orphan-reconcile cron) can still find it and finish the teardown.
           return { ok: false, reason: 'error' };
         }
-        await safeRemove(deps.store, key);
+        // CAS on the INSTANCE we just stopped, never a key-only delete: this
+        // immediately re-provisions under the SAME session key below, and a name is
+        // reused across re-creates — so a key-keyed remove could delete the row that
+        // the re-provision (or a concurrent acquire) has already pointed at a NEW,
+        // live VM, orphaning it with no pointer at all. Losing the CAS is correct:
+        // whoever owns the row now owns a live Sprite, and the one we stopped is
+        // already gone.
+        await safeRemoveIfSandbox(deps.store, {
+          sessionKey: key,
+          sandboxId: plan.sandboxId,
+          spriteInstanceId: existing?.spriteInstanceId ?? null,
+        });
         return await provisionFreshMachine({ key, input });
       }
 
