@@ -218,6 +218,17 @@ export type OpenPtyShellArgs = {
    * to race a stamp into this clock ahead of `write()` for their input to land.
    */
   getLastActivityAt?(): number | undefined;
+  /**
+   * The idle window the caller's Sprites Tasks API hold is ACTUALLY using
+   * (`TaskHoldController.agentIdleMs`) — a getter, not a value, because the hold
+   * controller is constructed after the shell is opened. `undefined` (or
+   * omitted) falls back to `TASK_HOLD_AGENT_IDLE_MS`.
+   *
+   * Exists so the watchdog cannot drift from the hold: both must answer "may
+   * this sprite pause?" on the same window, and that window is configurable.
+   * See `planWatchdogResponse`'s `idleMs`.
+   */
+  getIdleMs?(): number | undefined;
 };
 
 // The @fly/sprites WSCommand keepalive is output-driven: it declares the socket
@@ -339,6 +350,7 @@ export function planWatchdogResponse({
   lastActivityAt,
   now,
   resumeRequested = false,
+  idleMs,
 }: {
   viewersAttached: boolean;
   closed: boolean;
@@ -354,12 +366,23 @@ export function planWatchdogResponse({
    * the quiet verdict was waiting for. Defaults to false — an ordinary trip.
    */
   resumeRequested?: boolean;
+  /**
+   * The idle window to judge `lastActivityAt` against. This is NOT a knob of the
+   * watchdog's own: it must be the EFFECTIVE window the Sprites Tasks API hold
+   * is using (`TaskHoldController.agentIdleMs`), which is configurable and so is
+   * not always the `TASK_HOLD_AGENT_IDLE_MS` default. `undefined` falls back to
+   * that default — correct when no hold controller is wired at all.
+   *
+   * Passing the default blindly would be a separate threshold in disguise, and
+   * the two would disagree the moment `SPRITE_TASK_HOLD_REFRESH_MS` is set: a
+   * shell quieting on 2 minutes while its hold is still held on 4 would be
+   * quiet, blind, AND still pinning the sprite — the worst of every world.
+   */
+  idleMs?: number;
 }): WatchdogAction {
   if (closed) return 'detach-quiet';
   if (!viewersAttached) return 'detach-quiet';
-  // Default `idleMs` on purpose: this MUST be the same window the Tasks API
-  // hold uses (TASK_HOLD_AGENT_IDLE_MS), not a knob of its own.
-  if (!resumeRequested && lastActivityAt !== undefined && !isAgentActive({ lastActivityAt, now })) return 'attach-quiet';
+  if (!resumeRequested && lastActivityAt !== undefined && !isAgentActive({ lastActivityAt, now, idleMs })) return 'attach-quiet';
   return consecutiveFailures > MAX_RECONNECT_ATTEMPTS ? 'fatal' : 'reattach';
 }
 
@@ -519,6 +542,7 @@ export function openPtyShell({
   onExit,
   onSessionId,
   getLastActivityAt,
+  getIdleMs,
 }: OpenPtyShellArgs): PtyShell {
   const toBuf = (chunk: unknown): Buffer => (typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : (chunk as Buffer));
 
@@ -1092,6 +1116,7 @@ export function openPtyShell({
       lastActivityAt: getLastActivityAt?.(),
       now: Date.now(),
       resumeRequested: resume,
+      idleMs: getIdleMs?.(),
     });
     if (action === 'detach-quiet' || action === 'attach-quiet') {
       // Nothing worth reconnecting FOR. Either no viewer at all

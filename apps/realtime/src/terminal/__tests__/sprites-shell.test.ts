@@ -242,6 +242,34 @@ describe('planWatchdogResponse (pure)', () => {
   });
 
   assert({
+    given: 'a hold configured with a LONGER idle window than the default, and activity stale only by the default',
+    should: 'still reattach — judging on the default would quiet a shell whose hold is still held, leaving it quiet, blind AND pinning the sprite',
+    actual: planWatchdogResponse({
+      viewersAttached: true,
+      closed: false,
+      consecutiveFailures: 0,
+      lastActivityAt: NOW - TASK_HOLD_AGENT_IDLE_MS - 1,
+      now: NOW,
+      idleMs: TASK_HOLD_AGENT_IDLE_MS * 2,
+    }),
+    expected: 'reattach' as const,
+  });
+
+  assert({
+    given: 'a hold configured with a SHORTER idle window, and activity stale by that window but not the default',
+    should: 'quiet — the hold has already let go, so holding a socket open past it is pure churn',
+    actual: planWatchdogResponse({
+      viewersAttached: true,
+      closed: false,
+      consecutiveFailures: 0,
+      lastActivityAt: NOW - 31_000,
+      now: NOW,
+      idleMs: 30_000,
+    }),
+    expected: 'attach-quiet' as const,
+  });
+
+  assert({
     given: 'a caller that keeps no activity clock (getLastActivityAt omitted)',
     should: 'reattach exactly as before this verdict existed — an unknown clock is not evidence of idleness',
     actual: planWatchdogResponse({ viewersAttached: true, closed: false, consecutiveFailures: 0, lastActivityAt: undefined, now: NOW }),

@@ -999,6 +999,13 @@ export function buildAgentTerminalHandlers({
           // moment it does, `hasOutput` flips and the normal idle window governs.
           getLastActivityAt: () =>
             (session.hasOutput || !session.resumedAtCreate ? latestActivityAt(session) : undefined),
+          // The window the hold is ACTUALLY judging idleness on — configurable
+          // (`SPRITE_TASK_HOLD_REFRESH_MS`), so it is read from the controller
+          // rather than assumed to be the default. Both signals must answer "may
+          // this sprite pause?" on the same window or they contradict each other.
+          // A getter because the controller is built after this shell is opened;
+          // `undefined` (no hold wired) falls back to `TASK_HOLD_AGENT_IDLE_MS`.
+          getIdleMs: () => session.taskHold?.agentIdleMs,
           onOutput: (data) => {
             // The hold's "agent output is flowing" signal — kept fresh here so
             // a DETACHED session with an agent mid-run keeps its sprite up.

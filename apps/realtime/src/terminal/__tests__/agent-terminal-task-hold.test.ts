@@ -14,6 +14,14 @@ import type { TaskHoldController, TaskHoldState } from '@pagespace/lib/services/
 import { assert } from './riteway';
 
 const TICK_INTERVAL_MS = 60_000;
+/**
+ * The controller's EFFECTIVE idle window. Deliberately not `2 * TICK_INTERVAL_MS`
+ * (the default formula) and not `TASK_HOLD_AGENT_IDLE_MS`: `refreshMs` is
+ * configurable via `SPRITE_TASK_HOLD_REFRESH_MS`, so anything that decides "may
+ * this sprite pause?" alongside the hold must read this window from the
+ * controller rather than assume the module constant.
+ */
+const AGENT_IDLE_MS = 37_000;
 
 /**
  * `setQuiesced` stands in for what the real shell does on its own: swallow a
@@ -78,6 +86,9 @@ function makeRecordingHold() {
   let ended = false;
   const controller: TaskHoldController = {
     tickIntervalMs: TICK_INTERVAL_MS,
+    // Deliberately NOT the TASK_HOLD_AGENT_IDLE_MS default: the watchdog must
+    // read the controller's EFFECTIVE window, not assume the module constant.
+    agentIdleMs: AGENT_IDLE_MS,
     tick: (state) => {
       ticks.push({ ...state });
     },
@@ -347,6 +358,28 @@ describe('agent terminal task holds (wiring)', () => {
       should: 'hand over the real clock again — silence is evidence of idleness once we have heard it once',
       actual: typeof args.getLastActivityAt?.(),
       expected: 'number',
+    });
+  });
+
+  /**
+   * Coherence. The watchdog's `attach-quiet` and the hold both answer "may this
+   * sprite pause?", and they must answer it on the SAME window. `refreshMs` (and
+   * therefore the derived idle window) is configurable, so the shell reads the
+   * controller's effective window instead of assuming `TASK_HOLD_AGENT_IDLE_MS`.
+   * If it assumed the default, a longer-configured hold would leave a shell that
+   * is quiet, blind, AND still pinning the sprite.
+   */
+  it('hands the watchdog the hold controller\'s EFFECTIVE idle window, not the module default', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    const args = (openShell as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as OpenPtyShellArgs;
+
+    assert({
+      given: 'a hold controller configured with a non-default idle window',
+      should: 'report that window to the watchdog, so the two never disagree about idleness',
+      actual: args.getIdleMs?.(),
+      expected: AGENT_IDLE_MS,
     });
   });
 

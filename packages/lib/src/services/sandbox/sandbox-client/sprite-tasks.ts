@@ -401,6 +401,20 @@ export interface TaskHoldController {
   end(): void;
   /** The heartbeat cadence the owner should tick at (== refreshMs). */
   readonly tickIntervalMs: number;
+  /**
+   * The EFFECTIVE idle window this controller judges `lastActivityAt` against
+   * (`agentIdleMs ?? 2 * refreshMs`) — NOT necessarily the
+   * {@link TASK_HOLD_AGENT_IDLE_MS} default, since `refreshMs` is configurable
+   * (`SPRITE_TASK_HOLD_REFRESH_MS`, or derived from a custom expiry).
+   *
+   * Exposed for the same reason as `tickIntervalMs`: anything that decides
+   * "may this sprite pause?" alongside this controller has to decide it on the
+   * SAME window, or the two answers diverge. The terminal watchdog's
+   * `attach-quiet` (sprites-shell.ts) reads it for exactly that — a shell that
+   * quiets on a 2-minute window while its hold is still held on a 4-minute one
+   * would be quiet, blind, AND still pinning the sprite.
+   */
+  readonly agentIdleMs: number;
 }
 
 /**
@@ -490,6 +504,7 @@ export function createTaskHoldController({
 
   return {
     tickIntervalMs: refreshMs,
+    agentIdleMs: idleMs,
 
     tick({ attached, lastActivityAt, activityObservable = true }) {
       if (ended) return;
