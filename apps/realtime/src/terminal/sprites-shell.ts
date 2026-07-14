@@ -211,10 +211,11 @@ export type OpenPtyShellArgs = {
    * output for a viewer sitting right there — and, since the hold heartbeat
    * keys off the same quiescence, would pause the Sprite under a live agent.
    *
-   * CONTRACT for callers that DO supply it: a keystroke must be recorded in this
-   * clock BEFORE it is handed to `write()`, because `write()`'s lazy reattach
-   * re-consults `planWatchdogResponse`, which reads this. (The handler does:
-   * `session.lastInputAt = Date.now()` immediately precedes `command.write()`.)
+   * Read ONLY on a watchdog trip, never on a resume: a viewer returning or a
+   * keystroke arriving is itself the activity the quiet verdict was waiting for,
+   * so `resumeIfLazyReattachNeeded` reconnects regardless of what this says (see
+   * `planWatchdogResponse`'s `resumeRequested`). Callers therefore do NOT have
+   * to race a stamp into this clock ahead of `write()` for their input to land.
    */
   getLastActivityAt?(): number | undefined;
 };
@@ -305,6 +306,17 @@ export type WatchdogAction = 'reattach' | 'attach-quiet' | 'detach-quiet' | 'fat
  * before this verdict existed. This is why the check is not a bare
  * `!isAgentActive(...)`, which treats an unknown clock as idle.
  *
+ * A RESUME is not a watchdog trip and must never be re-vetoed by the idle gate
+ * (`resumeRequested`). The trigger for a resume is a human — a viewer tabbing
+ * back, or a keystroke — and a viewer who returns to a shell that went quiet
+ * two hours ago necessarily brings a stale activity clock with them. Asking
+ * "has this session been idle?" at that moment answers "yes" and quiets the
+ * shell straight back down, so the socket never comes up, the viewer stares at
+ * stale scrollback, and (since the hold heartbeat keys off the same quiescence)
+ * the Sprite stays paused underneath them. The clock describes the SESSION's
+ * activity; the resume is the VIEWER's. Only the first is what `attach-quiet`
+ * is about.
+ *
  * Both quiet verdicts are decided BEFORE the failure budget, for the reason
  * spelled out above: a quiet verdict means no attempt runs, and an attempt that
  * never ran is not evidence the shell is dead. Going `fatal` here would latch
@@ -326,19 +338,28 @@ export function planWatchdogResponse({
   consecutiveFailures,
   lastActivityAt,
   now,
+  resumeRequested = false,
 }: {
   viewersAttached: boolean;
   closed: boolean;
   consecutiveFailures: number;
-  /** Epoch-ms of the session's last output/keystroke/launch; `undefined` = the caller keeps no clock. */
+  /** Epoch-ms of the session's last output/keystroke/launch; `undefined` = the caller offers no trustworthy idleness signal. */
   lastActivityAt: number | undefined;
   now: number;
+  /**
+   * This call is paying back a swallowed trip on a HUMAN's request — a viewer
+   * returned, or a keystroke arrived (`resumeIfLazyReattachNeeded`) — rather
+   * than reacting to a fresh watchdog trip. The activity clock is then beside
+   * the point: the human interaction IS the activity, and it is the very thing
+   * the quiet verdict was waiting for. Defaults to false — an ordinary trip.
+   */
+  resumeRequested?: boolean;
 }): WatchdogAction {
   if (closed) return 'detach-quiet';
   if (!viewersAttached) return 'detach-quiet';
   // Default `idleMs` on purpose: this MUST be the same window the Tasks API
   // hold uses (TASK_HOLD_AGENT_IDLE_MS), not a knob of its own.
-  if (lastActivityAt !== undefined && !isAgentActive({ lastActivityAt, now })) return 'attach-quiet';
+  if (!resumeRequested && lastActivityAt !== undefined && !isAgentActive({ lastActivityAt, now })) return 'attach-quiet';
   return consecutiveFailures > MAX_RECONNECT_ATTEMPTS ? 'fatal' : 'reattach';
 }
 
@@ -1042,7 +1063,16 @@ export function openPtyShell({
     });
   }
 
-  async function reconnect(): Promise<void> {
+  /**
+   * `resume` marks a reconnect a HUMAN asked for — a viewer returning, or a
+   * keystroke (`resumeIfLazyReattachNeeded`) — rather than the watchdog reacting
+   * to a drop. It survives this attempt's internal retries (the `catch` below
+   * re-enters with it), because a resume that fails once is still a resume: the
+   * viewer is still there, waiting, and abandoning it to a quiet verdict would
+   * leave them staring at a dead terminal. It is bounded by the same
+   * `MAX_RECONNECT_ATTEMPTS` budget as any other attempt.
+   */
+  async function reconnect({ resume = false }: { resume?: boolean } = {}): Promise<void> {
     if (closed || reconnecting) return;
     reconnecting = true;
     consecutiveFailures += 1;
@@ -1061,6 +1091,7 @@ export function openPtyShell({
       consecutiveFailures,
       lastActivityAt: getLastActivityAt?.(),
       now: Date.now(),
+      resumeRequested: resume,
     });
     if (action === 'detach-quiet' || action === 'attach-quiet') {
       // Nothing worth reconnecting FOR. Either no viewer at all
@@ -1200,7 +1231,8 @@ export function openPtyShell({
       // `abandonedUnnamedSessions` for a session that never existed.
       lastErrorWasPreOpenDrop = true;
       // Reattach itself failed; retry until the bounded budget is exhausted.
-      void reconnect();
+      // A resume stays a resume across its own retries — see `reconnect`'s doc.
+      void reconnect({ resume });
     }
   }
 
@@ -1228,7 +1260,12 @@ export function openPtyShell({
     // human-timescale idle window.
     consecutiveFailures = 0;
     abandonedUnnamedSessions = 0;
-    void reconnect();
+    // `resume: true` — this reconnect is a HUMAN's, not the watchdog's, so the
+    // idle gate must not veto it. A viewer returning to a shell that went quiet
+    // an hour ago necessarily arrives with a stale clock; re-asking "is this
+    // session idle?" here would quiet it straight back down and hand them a dead
+    // terminal. See `planWatchdogResponse`'s `resumeRequested`.
+    void reconnect({ resume: true });
   }
 
   if (currentSessionId !== undefined) {

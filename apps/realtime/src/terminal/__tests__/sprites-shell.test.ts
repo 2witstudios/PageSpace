@@ -214,6 +214,34 @@ describe('planWatchdogResponse (pure)', () => {
   });
 
   assert({
+    given: 'a RESUME (viewer returned / keystroke) on a session whose clock is long stale',
+    should: 'reattach — the human interaction IS the activity; the idle gate must not veto the very thing the quiet verdict was waiting for',
+    actual: planWatchdogResponse({ viewersAttached: true, closed: false, consecutiveFailures: 1, lastActivityAt: STALE, now: NOW, resumeRequested: true }),
+    expected: 'reattach' as const,
+  });
+
+  assert({
+    given: 'a resume request with NO viewer attached',
+    should: 'still go quiet — a resume cannot fabricate a viewer to reconnect for',
+    actual: planWatchdogResponse({ viewersAttached: false, closed: false, consecutiveFailures: 1, lastActivityAt: STALE, now: NOW, resumeRequested: true }),
+    expected: 'detach-quiet' as const,
+  });
+
+  assert({
+    given: 'a resume request on an already-closed shell',
+    should: 'still go quiet — there is nothing left to reconnect',
+    actual: planWatchdogResponse({ viewersAttached: true, closed: true, consecutiveFailures: 1, lastActivityAt: STALE, now: NOW, resumeRequested: true }),
+    expected: 'detach-quiet' as const,
+  });
+
+  assert({
+    given: 'a resume whose own retries have exhausted the failure budget',
+    should: 'go fatal — a resume is bounded by the same budget as any other attempt, not exempt from it',
+    actual: planWatchdogResponse({ viewersAttached: true, closed: false, consecutiveFailures: 6, lastActivityAt: STALE, now: NOW, resumeRequested: true }),
+    expected: 'fatal' as const,
+  });
+
+  assert({
     given: 'a caller that keeps no activity clock (getLastActivityAt omitted)',
     should: 'reattach exactly as before this verdict existed — an unknown clock is not evidence of idleness',
     actual: planWatchdogResponse({ viewersAttached: true, closed: false, consecutiveFailures: 0, lastActivityAt: undefined, now: NOW }),
@@ -636,6 +664,68 @@ describe('viewer attach/detach gates the watchdog reconnect (leaf 3-2)', () => {
   });
 
   /**
+   * The tab-back regression: a viewer who returns after a LONG detached gap
+   * necessarily brings a stale activity clock with them. If the resume is
+   * re-litigated by the idle gate it quiets straight back down — the socket
+   * never comes up, the viewer sees only stale scrollback until they type, and
+   * (because the hold heartbeat keys off the same quiescence) the Sprite stays
+   * paused underneath them. This is the documented `setViewerAttached(true)`
+   * resume path from leaf 3-2, and it must survive `attach-quiet` untouched.
+   */
+  it('given a viewer returns after a detached trip AND a long idle gap, still reattaches — the resume is not re-vetoed by the idle gate', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+    const onOutput = vi.fn();
+    const activity = activityClock();
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput, onExit: vi.fn(), getLastActivityAt: activity.get });
+    cmd._emitter.emit('message', announces('sess-1'));
+
+    shell.setViewerAttached(false);
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sprite.attachSession).not.toHaveBeenCalled(); // quiet while detached
+
+    // The tab stays closed well past the idle window — the clock goes stale.
+    await vi.advanceTimersByTimeAsync(TASK_HOLD_AGENT_IDLE_MS + 1);
+
+    shell.setViewerAttached(true); // …and the viewer comes back
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+    expect(shell.isQuiesced()).toBe(false); // the hold can come back too
+
+    attachCmd._stdout.emit('data', 'back\r\n');
+    expect(onOutput).toHaveBeenCalledWith('back\r\n'); // live output, without typing a thing
+  });
+
+  it('given the viewer returns and then still does nothing, the NEXT watchdog trip quiets again (the resume is one attempt, not an exemption)', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+    const activity = activityClock();
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), getLastActivityAt: activity.get });
+    cmd._emitter.emit('message', announces('sess-1'));
+    shell.setViewerAttached(false);
+    cmd._emitter.emit('error', new Error('keepalive'));
+    await vi.advanceTimersByTimeAsync(TASK_HOLD_AGENT_IDLE_MS + 1);
+
+    shell.setViewerAttached(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sprite.attachSession).toHaveBeenCalledTimes(1); // the resume reconnected
+
+    // The viewer just sits there. The reattached socket trips again — and this
+    // time there is no resume behind it, so it goes quiet.
+    attachCmd._emitter.emit('error', new Error('keepalive'));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(sprite.attachSession).toHaveBeenCalledTimes(1); // no second attach: quiet again
+    expect(shell.isQuiesced()).toBe(true);
+  });
+
+  /**
    * `isQuiesced()` is what the Sprites Tasks API hold reads to tell "a viewer is
    * attached" from "a LIVE exec connection exists" — only the second is a reason
    * to keep a Sprite resident. If this ever reported `false` through an
@@ -788,6 +878,30 @@ describe('input queued across a reconnect (no silent stdin loss)', () => {
 
     await vi.advanceTimersByTimeAsync(500); // backoff + listSessions resolve; attachSession called
     attachCmd._emitter.emit('spawn'); // the replacement confirms open
+
+    expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
+    expect(attachCmd.stdin!.write).toHaveBeenCalledWith('ls\n');
+  });
+
+  it('given a keystroke arrives while the caller\'s activity clock is still STALE, resumes anyway (no stamp-before-write race)', async () => {
+    // The resume must not depend on the caller having raced a timestamp into its
+    // own clock before calling write(). The keystroke IS the activity; the shell
+    // does not re-ask the idle gate about it (`resumeRequested`).
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+    const activity = activityClock();
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), getLastActivityAt: activity.get });
+    cmd._emitter.emit('message', announces('sess-1'));
+
+    await vi.advanceTimersByTimeAsync(TASK_HOLD_AGENT_IDLE_MS + 1);
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(2000); // attach-quiet
+
+    shell.write('ls\n'); // NOTE: no activity.touch() — the clock is still stale
+    await vi.advanceTimersByTimeAsync(500);
+    attachCmd._emitter.emit('spawn');
 
     expect(sprite.attachSession).toHaveBeenCalledWith('sess-1', { cols: 80, rows: 24 });
     expect(attachCmd.stdin!.write).toHaveBeenCalledWith('ls\n');
