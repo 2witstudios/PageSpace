@@ -36,12 +36,21 @@ export default defineConfig({
         '**/drizzle/**',
         '**/node_modules/**',
       ],
-      thresholds: {
-        lines: 44,
-        branches: 85,
-        functions: 56,
-        statements: 44,
-      },
+      // Thresholds are checked against the WHOLE suite's coverage. In CI the web
+      // suite is run as parallel `--shard`s (each on its own runner, so the
+      // executed-coverage remap fits memory — see ci.yml), then their blobs are
+      // combined with `--merge-reports`. A single shard only covers ~1/N of the
+      // code, so it must NOT enforce thresholds; the shards set COVERAGE_SHARD=1
+      // to skip them, and the merge job (and local `test:coverage`) enforces
+      // them on the complete, merged coverage.
+      thresholds: process.env.COVERAGE_SHARD
+        ? undefined
+        : {
+            lines: 44,
+            branches: 85,
+            functions: 56,
+            statements: 44,
+          },
     },
   },
   resolve: {
