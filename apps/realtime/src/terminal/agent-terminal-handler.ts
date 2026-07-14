@@ -720,10 +720,19 @@ export function buildAgentTerminalHandlers({
     // connection never actually dropped, since output is already flowing.
     session.command.setViewerAttached(true);
     session.viewerAttached = true;
-    // A viewer is attached again — that alone is "work in progress", so the
-    // hold (deleted while detached-and-idle) is re-created immediately rather
-    // than waiting out a heartbeat interval.
-    session.taskHold?.tick({ attached: true, lastActivityAt: latestActivityAt(session), activityObservable: true });
+    // A viewer is back AND the `setViewerAttached(true)` above has just resumed
+    // the shell's socket, so the hold (deleted while idle) is re-created
+    // immediately rather than waiting out a heartbeat interval. Derived, not
+    // hardcoded `true`: `attached` means "a LIVE exec connection exists" (see
+    // `startTaskHoldHeartbeat`), and a viewer alone no longer earns a hold.
+    // Both terms are necessarily true right here — the resume clears quiescence
+    // synchronously — so this is the same value either way; deriving it is what
+    // keeps the two tick sites from drifting apart.
+    session.taskHold?.tick({
+      attached: session.viewerAttached && !session.command.isQuiesced(),
+      lastActivityAt: latestActivityAt(session),
+      activityObservable: true,
+    });
     sessionMap.reattach(sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a

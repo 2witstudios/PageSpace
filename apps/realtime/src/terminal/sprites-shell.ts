@@ -1296,6 +1296,14 @@ export function openPtyShell({
       if (!inputReady) { pendingInput.push(data); return; }
       current.stdin?.write(data);
     },
+    // Deliberately NOT a resume trigger, unlike `write()`. A resize says "render
+    // differently", not "I want output now" — and it is not lost by waiting:
+    // `lastCols`/`lastRows` are recorded here and every reconnect path attaches
+    // with them, so a quiet shell comes back at the size the viewer last chose.
+    // Resuming on it would put a live socket back on the Sprite for someone who
+    // merely dragged a pane divider while idle, which is the churn this all
+    // exists to remove. (The resize sent to an already-dead command below is
+    // swallowed the same way a stale write is — see `inputReady`.)
     resize: (c, r) => { lastCols = c; lastRows = r; if (!closed) current.resize?.(c, r); },
     // Anything still held (an unresolved replay, queued stderr) is dropped with it: the
     // viewer is gone, and `closed` stops every listener from speaking after this point.
