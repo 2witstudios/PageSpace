@@ -435,6 +435,18 @@ const GlobalAssistantView: React.FC = () => {
     liveValue: globalLiveId,
   });
 
+  // Whether MY OWN local Chat is producing live content for the conversation about to be
+  // loaded/refreshed — narrower than effectiveIsStreaming (which folds in contextIsStreaming/
+  // agentBootstrapIsStreaming, other already conversation-scoped streams this surface merely
+  // shows a Stop button for). `agentStatus`/`globalStatus` belong to a stable-id useChat
+  // instance that keeps reporting streaming across a conversation switch, for the OLD
+  // conversation's still-in-flight request — comparing against the held stream-start id is the
+  // only way to know whether that live stream actually belongs to the conversation now being
+  // loaded. Used by the load-on-select/refresh effects below so a switch to an idle conversation
+  // isn't blocked by an unrelated stream still running elsewhere for the same agent/global chat.
+  const isOwnAgentStreamForCurrentConversation = isAgentStreamingNow && streamConvIdRef.current === agentConversationId;
+  const isOwnGlobalStreamForCurrentConversation = globalStreamingNow && globalStreamConvIdRef.current === globalConversationId;
+
   // THE STOP BUTTON THE USER ACTUALLY CLICKS aborts by the HELD id, not the live one.
   //
   // `liveAssistantMessageId` is derived from the live `messages` array, and "New Chat" (and
@@ -745,11 +757,20 @@ const GlobalAssistantView: React.FC = () => {
   const prevRefreshSignalRef = useRef(refreshSignal);
   useEffect(() => {
     if (refreshSignal === prevRefreshSignalRef.current) return;
-    prevRefreshSignalRef.current = refreshSignal;
-    if (!selectedAgent && isInitializedRef.current) {
+    // Guarded on isOwnGlobalStreamForCurrentConversation, not the broader effectiveIsStreaming:
+    // handlePullUpRefresh calls setGlobalLocalMessages directly with no reconciliation against
+    // an in-flight stream, so running it while THIS conversation is actively streaming would
+    // clobber the in-progress assistant bubble with a stale DB snapshot. effectiveIsStreaming
+    // would also stay true here for an unrelated conversation's still-in-flight send (stable
+    // useChat id survives a conversation switch), which would wrongly block this refresh for a
+    // conversation the user already left. The ref is only advanced once the refresh actually
+    // runs, so a refreshSignal bump that arrives mid-stream is retried once streaming ends
+    // instead of being marked "seen" and permanently dropped.
+    if (!selectedAgent && isInitializedRef.current && !isOwnGlobalStreamForCurrentConversation) {
+      prevRefreshSignalRef.current = refreshSignal;
       handlePullUpRefresh();
     }
-  }, [refreshSignal, selectedAgent, handlePullUpRefresh]);
+  }, [refreshSignal, selectedAgent, isOwnGlobalStreamForCurrentConversation, handlePullUpRefresh]);
 
   // Sync streaming status to global context (global mode only)
   useEffect(() => {
@@ -971,20 +992,60 @@ const GlobalAssistantView: React.FC = () => {
   const prevAgentLoadSignalRef = useRef<number | null>(null);
   useEffect(() => {
     if (agentConversationLoadSignal === prevAgentLoadSignalRef.current) return;
-    prevAgentLoadSignalRef.current = agentConversationLoadSignal;
-    if (selectedAgent && agentConversationId) {
+    // Guarded the same way as the global-mode load-on-select effect below: the load-signal
+    // indirection already avoids re-firing on every streamed token, but it still fires
+    // unconditionally on a fresh mount (seeded to `null`) — so a reload mid-stream needs this
+    // guard too, or it clobbers the in-progress bubble with the pre-reply snapshot.
+    //
+    // Guarded on isOwnAgentStreamForCurrentConversation, not the broader effectiveIsStreaming:
+    // switching to a different conversation for the same agent does not abort the old
+    // conversation's in-flight send (stable useChat id), so effectiveIsStreaming stays true for
+    // a conversation the user already left. Blocking on it would strand the newly-selected,
+    // idle conversation behind that unrelated stream instead of loading its messages.
+    //
+    // The ref is only advanced INSIDE the guard, not before it. If a load lands while the guard
+    // blocks, the ref stays stale — and if it had already been marked "seen" at that point, the
+    // pending load would never be retried: the signal isn't going to change again on its own, so
+    // once streaming ends this effect would keep seeing "no change" and skip forever, stranding
+    // the dashboard on stale/empty history. Leaving the ref stale means the next re-run
+    // (isOwnAgentStreamForCurrentConversation flipping is itself a dependency) still sees this
+    // signal as unapplied and retries it correctly.
+    if (selectedAgent && agentConversationId && !isOwnAgentStreamForCurrentConversation) {
+      prevAgentLoadSignalRef.current = agentConversationLoadSignal;
       setAgentMessages(agentInitialMessages);
     }
-  }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, setAgentMessages]);
+  }, [agentConversationLoadSignal, selectedAgent, agentConversationId, agentInitialMessages, isOwnAgentStreamForCurrentConversation, setAgentMessages]);
 
   // Global-mode load-on-select guarantee: apply messages from context whenever
   // they change (loadConversation or createNewConversation ran). With a stable
   // useChat id, setMessages is the sole writer — no race with store recreation.
+  //
+  // Guarded on isOwnGlobalStreamForCurrentConversation, not the broader effectiveIsStreaming:
+  // without it, a mount/reload/conversation-switch that lands while THIS conversation is
+  // actively streaming overwrites the in-progress assistant bubble with a stale snapshot that
+  // predates the reply — the live text itself keeps rendering separately via `remoteStreams`
+  // regardless, so this effect only ever needs to apply the persisted snapshot once streaming
+  // has stopped for this conversation. effectiveIsStreaming also folds in contextIsStreaming/a
+  // bootstrapped stream elsewhere and, more importantly, stays true for an unrelated
+  // conversation's still-in-flight send after a mid-stream conversation switch (stable useChat
+  // id) — blocking on it would strand a newly-selected, idle conversation behind that stream.
+  //
+  // Dedup'd on a prevRef (CodeRabbit caught this): `globalInitialMessages` is NOT refreshed for
+  // a fresh own send/completion in this surface (onStreamComplete deliberately no-ops — "surface's
+  // useChat already has the message"), so without the reference check this effect would re-fire on
+  // every isOwnGlobalStreamForCurrentConversation transition, including the streaming -> not-
+  // streaming edge at the end of every ordinary send — reapplying the SAME STALE pre-send
+  // snapshot and wiping the just-completed reply straight back out of view. The ref advances
+  // only inside the guard (see the load-on-select effects above) so a load skipped mid-stream is
+  // still retried once streaming ends, rather than being marked "seen" and dropped.
+  const prevGlobalInitialMessagesRef = useRef<import('ai').UIMessage[] | null>(null);
   useEffect(() => {
     if (selectedAgent) return;
-    if (!globalIsInitialized || !globalConversationId) return;
+    if (globalInitialMessages === prevGlobalInitialMessagesRef.current) return;
+    if (!globalIsInitialized || !globalConversationId || isOwnGlobalStreamForCurrentConversation) return;
+    prevGlobalInitialMessagesRef.current = globalInitialMessages;
     setGlobalLocalMessages(globalInitialMessages);
-  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, setGlobalLocalMessages]);
+  }, [globalInitialMessages, globalIsInitialized, globalConversationId, selectedAgent, isOwnGlobalStreamForCurrentConversation, setGlobalLocalMessages]);
 
   // Agent-mode multiplayer wiring (Tasks 2 + 5 + 6). No-op when selectedAgent
   // is null. Encapsulates page-room subscription, stream bootstrap/socket

@@ -51,15 +51,82 @@ function getStopFunction(
  * SidebarChatTab: with a stable useChat id, the agent Chat instance is never
  * recreated on conversation switch, so usePageAgentSidebarState's fetched
  * messages must be explicitly applied via setMessages whenever the reference
- * changes — but only while in agent mode.
+ * changes — but only while in agent mode, and never while this surface is
+ * actively streaming (a mount/reload/agent-switch landing mid-stream must not
+ * clobber the in-progress assistant bubble with a stale conversation snapshot).
  */
 function shouldApplySidebarAgentMessages<T>(
   selectedAgent: { id: string } | null,
   agentInitialMessages: T[],
-  prevAgentInitialMessages: T[] | null
+  prevAgentInitialMessages: T[] | null,
+  displayIsStreaming: boolean
 ): boolean {
   if (agentInitialMessages === prevAgentInitialMessages) return false;
-  return Boolean(selectedAgent);
+  return Boolean(selectedAgent) && !displayIsStreaming;
+}
+
+/**
+ * Pure function that mirrors the global-mode load-on-select effect in
+ * SidebarChatTab: GlobalChatContext's `initialMessages` reference changes on
+ * mount/loadConversation/createNewConversation, and must be explicitly
+ * re-fetched via loadGlobalMessages — but never while this surface is
+ * actively streaming, for the same clobber reason as the agent-mode twin.
+ */
+function shouldLoadSidebarGlobalMessages<T>(
+  selectedAgent: { id: string } | null,
+  globalIsInitialized: boolean,
+  globalConversationId: string | null,
+  globalInitialMessages: T[],
+  prevGlobalInitialMessages: T[] | null,
+  displayIsStreaming: boolean
+): boolean {
+  if (globalInitialMessages === prevGlobalInitialMessages) return false;
+  return !selectedAgent && globalIsInitialized && Boolean(globalConversationId) && !displayIsStreaming;
+}
+
+/**
+ * Stateful simulator for the "ref-advances-only-on-apply" discipline used by
+ * every load-on-select / refreshSignal effect in this file (global
+ * load-on-select, agent load-on-select, and the refreshSignal effect). A
+ * CodeRabbit/Codex review on this PR found that the first version of these
+ * fixes advanced the "seen" ref BEFORE checking the streaming guard: when the
+ * guard blocked (streaming), the ref was still marked as seen, so once
+ * streaming ended the effect would keep seeing "no change" on the same
+ * reference and permanently skip the deferred load. This simulator mirrors
+ * the corrected effect body across multiple renders so that retry-after-
+ * guard-lifts behavior can be pinned directly, not just checked as a single
+ * boolean call.
+ */
+function createRefAdvancesOnlyOnApplySimulator<X>() {
+  let prevRef: X | null = null;
+  return {
+    /** Simulates one render/effect run. Returns true if the apply ran. */
+    step(x: X, guardPasses: boolean): boolean {
+      if (x === prevRef) return false;
+      if (!guardPasses) return false;
+      prevRef = x;
+      return true;
+    },
+  };
+}
+
+/**
+ * Mirrors `isOwnStreamForCurrentConversation` in SidebarChatTab.tsx: whether MY OWN local
+ * useChat is producing live content for the conversation about to be loaded/refreshed.
+ *
+ * Found via proactive review (not a reviewer comment): the raw `isStreaming`/`displayIsStreaming`
+ * flag belongs to a stable-id useChat instance that keeps reporting true across a conversation
+ * switch, for the OLD conversation's still-in-flight request — switching conversations does not
+ * abort it. Comparing against `heldStreamConvId` (latched to the conversation the stream actually
+ * started in) is the only way to tell whether a currently-true streaming flag actually belongs to
+ * the conversation now being loaded, or to one the user has already left.
+ */
+function isOwnStreamForConversation(
+  isStreaming: boolean,
+  heldStreamConvId: string | null,
+  targetConversationId: string | null,
+): boolean {
+  return isStreaming && heldStreamConvId === targetConversationId;
 }
 
 // ============================================
@@ -326,25 +393,172 @@ describe('SidebarChatTab Display Logic', () => {
 
   describe('shouldApplySidebarAgentMessages (agent-mode load-on-select)', () => {
     it('given an agent selected and a new messages reference, should apply', () => {
-      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null)).toBe(true);
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null, false)).toBe(true);
     });
 
     it('given an agent selected and conversation switch fetches a new reference, should apply', () => {
       const firstConversation = [mockUserMessage] as never[];
       const secondConversation = [mockAssistantMessage] as never[];
-      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation)).toBe(true);
+      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation, false)).toBe(true);
     });
 
     it('given an agent selected but the messages reference is unchanged, should NOT re-apply (no-op)', () => {
-      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, mockAgentMessages)).toBe(false);
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, mockAgentMessages, false)).toBe(false);
     });
 
     it('given global mode (no agent selected), should never apply agent messages even on a new reference', () => {
-      expect(shouldApplySidebarAgentMessages(null, mockAgentMessages, null)).toBe(false);
+      expect(shouldApplySidebarAgentMessages(null, mockAgentMessages, null, false)).toBe(false);
     });
 
     it('given a new empty-array reference (new conversation created), should still apply', () => {
-      expect(shouldApplySidebarAgentMessages(mockAgent, [], null)).toBe(true);
+      expect(shouldApplySidebarAgentMessages(mockAgent, [], null, false)).toBe(true);
+    });
+
+    // Regression coverage for the clobber bug fixed in this PR: a mount/reload/agent-switch
+    // landing while this surface is actively streaming must NOT overwrite the in-progress
+    // assistant bubble with a stale conversation snapshot, even though the messages
+    // reference did change (this is exactly the condition a reload produces).
+    it('given a new messages reference while streaming, should NOT apply (would clobber the live reply)', () => {
+      expect(shouldApplySidebarAgentMessages(mockAgent, mockAgentMessages, null, true)).toBe(false);
+    });
+
+    it('given a conversation switch fetch lands mid-stream, should NOT apply', () => {
+      const firstConversation = [mockUserMessage] as never[];
+      const secondConversation = [mockAssistantMessage] as never[];
+      expect(shouldApplySidebarAgentMessages(mockAgent, secondConversation, firstConversation, true)).toBe(false);
+    });
+  });
+
+  // ============================================
+  // Global-mode load-on-select regression tests
+  //
+  // Regression coverage for the same clobber bug as the agent-mode twin above,
+  // but on the global-assistant path: GlobalChatContext's `initialMessages`
+  // changes reference on mount/loadConversation/createNewConversation, and
+  // SidebarChatTab re-fetches via loadGlobalMessages whenever it does — but
+  // must skip that re-fetch while this surface is actively streaming, or a
+  // reload/conversation-switch mid-stream clobbers the in-progress reply with
+  // a DB snapshot that predates it (the flash + "invisible streaming" bug).
+  // ============================================
+
+  describe('shouldLoadSidebarGlobalMessages (global-mode load-on-select)', () => {
+    it('given global mode, initialized, with a new messages reference, should load', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', mockContextMessages, null, false)
+      ).toBe(true);
+    });
+
+    it('given the messages reference is unchanged, should NOT re-load (no-op)', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', mockContextMessages, mockContextMessages, false)
+      ).toBe(false);
+    });
+
+    it('given agent mode (agent selected), should never load global messages', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(mockAgent, true, 'conv-1', mockContextMessages, null, false)
+      ).toBe(false);
+    });
+
+    it('given not yet initialized, should NOT load', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, false, 'conv-1', mockContextMessages, null, false)
+      ).toBe(false);
+    });
+
+    it('given no conversation id, should NOT load', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, null, mockContextMessages, null, false)
+      ).toBe(false);
+    });
+
+    it('given a new messages reference while streaming (e.g. reload mid-stream), should NOT load (would clobber the live reply)', () => {
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', mockContextMessages, null, true)
+      ).toBe(false);
+    });
+
+    it('given a conversation switch lands mid-stream, should NOT load', () => {
+      const firstConversation = [mockUserMessage] as never[];
+      const secondConversation = [mockAssistantMessage] as never[];
+      expect(
+        shouldLoadSidebarGlobalMessages(null, true, 'conv-1', secondConversation, firstConversation, true)
+      ).toBe(false);
+    });
+  });
+
+  // ============================================
+  // Ref-advances-only-on-apply regression tests (Codex review on PR #2061)
+  //
+  // Pins the multi-render sequence the single-call boolean tests above can't
+  // express: a load skipped while streaming must be retried once streaming
+  // ends, even though the underlying reference never changed again in the
+  // meantime. This is the actual defect class flagged in review — the fix is
+  // "only advance the ref when the apply runs," applied identically to the
+  // global load-on-select effect (~747), the agent load-on-select effect
+  // (~765), and the pre-existing refreshSignal effect (~612) in this file.
+  // ============================================
+
+  describe('ref-advances-only-on-apply (retry-after-guard-lifts)', () => {
+    it('given the guard blocks (streaming) then later passes with the SAME reference, should apply on the later render instead of being lost', () => {
+      const sim = createRefAdvancesOnlyOnApplySimulator<string[]>();
+      const snapshot = ['a'];
+      expect(sim.step(snapshot, false)).toBe(false); // streaming — blocked
+      expect(sim.step(snapshot, true)).toBe(true); // streaming ended, same reference — must still apply
+    });
+
+    it('given the guard passes immediately, should apply once and not re-apply on a redundant re-render with the same reference', () => {
+      const sim = createRefAdvancesOnlyOnApplySimulator<string[]>();
+      const snapshot = ['a'];
+      expect(sim.step(snapshot, true)).toBe(true);
+      expect(sim.step(snapshot, true)).toBe(false); // already applied — no-op
+    });
+
+    it('given a NEW reference arrives while still blocked, should keep deferring until the guard passes, then apply the latest', () => {
+      const sim = createRefAdvancesOnlyOnApplySimulator<string[]>();
+      const first = ['a'];
+      const second = ['b'];
+      expect(sim.step(first, false)).toBe(false); // streaming — blocked
+      expect(sim.step(second, false)).toBe(false); // still streaming — newer snapshot also deferred
+      expect(sim.step(second, true)).toBe(true); // guard lifts — applies the latest snapshot
+    });
+  });
+
+  // ============================================
+  // isOwnStreamForConversation regression tests
+  //
+  // Found via proactive review, not a reviewer comment: the load-on-select/refresh effects
+  // originally guarded on the raw `displayIsStreaming` flag, which reflects a stable-id useChat
+  // instance that keeps reporting "streaming" across a conversation switch — for the OLD
+  // conversation's still-in-flight request, not the one now being loaded. Switching
+  // conversations does not abort an in-flight send (documented at length in both this file and
+  // GlobalAssistantView.tsx). Guarding on the raw flag would strand a newly-selected, idle
+  // conversation behind an unrelated stream still running in a conversation the user already
+  // left, until that unrelated stream happened to finish.
+  // ============================================
+
+  describe('isOwnStreamForConversation (conversation-scoped streaming guard)', () => {
+    it('given streaming and the held stream conversation matches the target, should report true (blocks the load — correct, this IS the conversation being clobbered)', () => {
+      expect(isOwnStreamForConversation(true, 'conv-A', 'conv-A')).toBe(true);
+    });
+
+    it('given streaming but the held stream conversation is a DIFFERENT one than the target, should report false (does not block — the target conversation has no stream of its own)', () => {
+      expect(isOwnStreamForConversation(true, 'conv-A', 'conv-B')).toBe(false);
+    });
+
+    it('given not streaming at all, should report false regardless of conversation ids', () => {
+      expect(isOwnStreamForConversation(false, 'conv-A', 'conv-A')).toBe(false);
+    });
+
+    it('given no stream has ever started (held id is null) and not streaming, should report false', () => {
+      expect(isOwnStreamForConversation(false, null, 'conv-A')).toBe(false);
+    });
+
+    it('given the exact regression scenario — send in conv-A, switch to idle conv-B while A keeps streaming — the load-on-select guard for conv-B must NOT be blocked', () => {
+      // isStreaming stays true (stable useChat id survives the switch); heldStreamConvId is
+      // latched to 'conv-A' (where the stream actually started); the surface has moved to 'conv-B'.
+      const blocked = isOwnStreamForConversation(true, 'conv-A', 'conv-B');
+      expect(blocked).toBe(false);
     });
   });
 });
