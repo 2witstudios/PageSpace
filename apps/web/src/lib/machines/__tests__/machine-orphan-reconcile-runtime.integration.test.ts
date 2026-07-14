@@ -30,7 +30,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { machineSessions } from '@pagespace/db/schema/machine-sessions';
@@ -160,6 +160,21 @@ afterAll(async () => {
 });
 
 describe('the reclaim outbox — a Sprite pointer must survive EVERY way its page can die', () => {
+  it('has both triggers installed — they are the entire invariant, and nothing else would notice them missing', async () => {
+    if (!dbAvailable) return;
+    // The triggers are hand-written SQL (migration 0210/0212), invisible to
+    // drizzle's schema diff. A future migration that recreates or renames either
+    // tracking table would drop them SILENTLY, and every test below would still
+    // pass — while production quietly went back to stranding billing VMs.
+    const rows = await db.execute(
+      sql`SELECT tgname FROM pg_trigger WHERE tgname IN ('machine_sessions_sprite_reclaim', 'machine_branches_sprite_reclaim')`,
+    );
+    expect(rows.rows.map((row) => row.tgname).sort()).toEqual([
+      'machine_branches_sprite_reclaim',
+      'machine_sessions_sprite_reclaim',
+    ]);
+  });
+
   it('rescues both sandboxIds when the PAGE is hard-deleted (the 30-day purge; "delete permanently")', async () => {
     if (!dbAvailable) return;
 

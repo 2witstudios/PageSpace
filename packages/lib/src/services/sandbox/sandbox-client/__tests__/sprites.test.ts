@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
   createSpritesSandboxClient,
+  isSpriteGoneStatus,
   isSpriteNotFoundError,
   classifyProvisionError,
   planProvisionFailure,
@@ -172,6 +173,43 @@ function makeSdk(over: Partial<SpritesSdk> = {}) {
   };
   return { sdk, calls, sprite };
 }
+
+describe('isSpriteGoneStatus — the DESTROY-path classifier', () => {
+  it("accepts the SDK's REAL 404, built the way the SDK builds it (parseAPIError -> APIError.statusCode)", async () => {
+    // This is the load-bearing one. `kill()` treats "gone" as success and its
+    // callers then release the Sprite's only pointer, so the classifier is
+    // deliberately strict — status-only, no message/code heuristics. If the SDK's
+    // 404 did NOT carry a numeric statusCode, NOTHING would ever classify as gone:
+    // the reclaim outbox would never drain, every already-dead Sprite would retry
+    // forever, and the "cannot be killed" alarm would fire on Sprites that are
+    // already dead. Constructed via the SDK's own parseAPIError so a future SDK
+    // bump that changes the error shape fails HERE, loudly, instead of silently
+    // disabling the drain in production.
+    // Dynamic import: @fly/sprites is ESM-only and this package compiles to CJS
+    // (the same reason the driver itself loads it dynamically).
+    const { parseAPIError } = await import('@fly/sprites');
+
+    const notFound = parseAPIError(404, JSON.stringify({ error: 'sprite not found' }), {});
+    expect(notFound).toBeDefined();
+    expect(isSpriteGoneStatus(notFound)).toBe(true);
+
+    const gone = parseAPIError(410, '', {});
+    expect(isSpriteGoneStatus(gone)).toBe(true);
+  });
+
+  it("REJECTS everything that leaves the Sprite's fate unknown — including a not-found-looking transport error", async () => {
+    const { parseAPIError } = await import('@fly/sprites');
+    // The read path's `isSpriteNotFoundError` accepts these (a false positive there
+    // only costs a redundant provision). On the destroy path a false positive is
+    // destructive: we would report a running VM as killed and release its pointer.
+    expect(isSpriteGoneStatus(parseAPIError(500, '', {}))).toBe(false);
+    expect(isSpriteGoneStatus(parseAPIError(429, '', {}))).toBe(false);
+    expect(isSpriteGoneStatus(parseAPIError(401, '', {}))).toBe(false);
+    expect(isSpriteGoneStatus(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }))).toBe(false);
+    expect(isSpriteGoneStatus(new Error('sprite not found'))).toBe(false);
+    expect(isSpriteGoneStatus(new Error('connection gone'))).toBe(false);
+  });
+});
 
 describe('isSpriteNotFoundError', () => {
   it('treats 404 / 410 statuses and not-found codes/messages as a vanished Sprite', () => {

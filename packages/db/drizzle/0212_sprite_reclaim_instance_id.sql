@@ -18,8 +18,18 @@
 DROP TRIGGER IF EXISTS machine_sessions_sprite_reclaim ON machine_sessions;
 DROP TRIGGER IF EXISTS machine_branches_sprite_reclaim ON machine_branches;
 
+-- SECURITY DEFINER + a pinned search_path: this trigger now sits on the critical
+-- path of EVERY page/drive/user delete, including Art. 17 erasure. If it ran as
+-- the invoker, any role that may DELETE from `pages` but lacks INSERT on the
+-- outbox would have its delete FAIL — the one outcome this design must never
+-- cause (an erasure blocked by a Sprite we failed to kill). Running as the owner
+-- makes the capture unconditional; the pinned search_path keeps a hostile
+-- search_path from resolving `machine_sprite_reclaims` to another table.
 CREATE OR REPLACE FUNCTION machine_sessions_capture_sprite_reclaim()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
   -- A machine_sessions row exists ONLY while we believe its Sprite is live (it is
   -- deleted on a confirmed kill), so any delete of one is a pointer worth
@@ -27,18 +37,21 @@ BEGIN
   -- harmless: the reconciler's kill is idempotent, so the redundant attempt simply
   -- confirms the death and drops the row — which also makes this a safety net
   -- against a teardown that only THOUGHT it succeeded.
-  INSERT INTO machine_sprite_reclaims ("sandboxId", "spriteInstanceId")
+  INSERT INTO public.machine_sprite_reclaims ("sandboxId", "spriteInstanceId")
   VALUES (OLD."sandboxId", OLD."spriteInstanceId")
   ON CONFLICT ("sandboxId") DO UPDATE
     -- A newer generation took this name; the pointer must chase the VM that is
     -- actually alive now, not the one a stale row remembers.
-    SET "spriteInstanceId" = COALESCE(EXCLUDED."spriteInstanceId", machine_sprite_reclaims."spriteInstanceId");
+    SET "spriteInstanceId" = COALESCE(EXCLUDED."spriteInstanceId", public.machine_sprite_reclaims."spriteInstanceId");
   RETURN OLD;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION machine_branches_capture_sprite_reclaim()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
   -- A branch row OUTLIVES its Sprite on purpose (it is re-creatable config, and
   -- its branch-scoped machine_agent_terminals FK-cascade off it), so teardown
@@ -46,10 +59,10 @@ BEGIN
   -- already confirmed gone — nothing to reclaim. An UNSTAMPED row being deleted
   -- means its Sprite may still be running.
   IF OLD."spriteTornDownAt" IS NULL THEN
-    INSERT INTO machine_sprite_reclaims ("sandboxId", "spriteInstanceId")
+    INSERT INTO public.machine_sprite_reclaims ("sandboxId", "spriteInstanceId")
     VALUES (OLD."sandboxId", OLD."spriteInstanceId")
     ON CONFLICT ("sandboxId") DO UPDATE
-      SET "spriteInstanceId" = COALESCE(EXCLUDED."spriteInstanceId", machine_sprite_reclaims."spriteInstanceId");
+      SET "spriteInstanceId" = COALESCE(EXCLUDED."spriteInstanceId", public.machine_sprite_reclaims."spriteInstanceId");
   END IF;
   RETURN OLD;
 END;
