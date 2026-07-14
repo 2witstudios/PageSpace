@@ -42,7 +42,7 @@ function makeStore(seed?: MachineSessionRecord) {
         egressPolicyToken: input.egressPolicyToken,
       });
     },
-    touch: async ({ sessionKey, now, egressPolicyToken }) => {
+    touch: async ({ sessionKey, now, egressPolicyToken, spriteInstanceId }) => {
       calls.touch += 1;
       const row = rows.get(sessionKey);
       if (row) {
@@ -50,6 +50,9 @@ function makeStore(seed?: MachineSessionRecord) {
           ...row,
           lastActiveAt: now,
           egressPolicyToken: egressPolicyToken ?? row.egressPolicyToken,
+          // Mirrors the real store: a moved instance is recorded (and voids any
+          // teardown intent, which was against the previous VM).
+          spriteInstanceId: spriteInstanceId === undefined ? row.spriteInstanceId : spriteInstanceId,
         });
       }
     },
@@ -83,11 +86,14 @@ function makeClient(overrides: Partial<SandboxClient> = {}) {
     getOrCreate: async ({ name, options, appliedEgressToken }) => {
       calls.getOrCreate.push({ name, options, appliedEgressToken });
       // The driver confirms the lockdown and reports the token it proved.
-      return { sandboxId: 'sbx-new', egressPolicyToken: TOKEN };
+      // Carries spriteInstanceId because production does: a fake that omitted it is
+      // precisely how a dropped instance id shipped unnoticed (the adapter silently
+      // discarded it, every session row stored NULL, and the identity guard was inert).
+      return { sandboxId: 'sbx-new', spriteInstanceId: 'inst-new', egressPolicyToken: TOKEN };
     },
     get: async ({ sandboxId }) => {
       calls.get.push(sandboxId);
-      return { sandboxId };
+      return { sandboxId, spriteInstanceId: `inst-${sandboxId}` };
     },
     stop: async ({ sandboxId }) => {
       calls.stop.push(sandboxId);
@@ -403,7 +409,7 @@ describe('acquireMachineSession — egress policy record', () => {
     const { store, rows } = makeStore();
     // No token: the platform reported no Sprite identity, so the lockdown is
     // unprovable and must not be recorded as proven.
-    const { client } = makeClient({ getOrCreate: async () => ({ sandboxId: 'sbx-new' }) });
+    const { client } = makeClient({ getOrCreate: async () => ({ sandboxId: 'sbx-new', spriteInstanceId: 'inst-sbx-new' }) });
     await acquire(store, client);
     assert({
       given: 'a driver that returns no lockdown token',
@@ -522,5 +528,35 @@ describe('acquireMachineSession — full-egress containment gate', () => {
     });
     expect(result).toEqual({ ok: false, reason: 'containment_unverified' });
     expect(calls.getOrCreate).toEqual([]);
+  });
+});
+
+describe('acquireMachineSession — a reconnect that RE-PROVISIONS must record the new VM', () => {
+  it('persists the new spriteInstanceId when getOrCreate hands back a different VM under the same name', async () => {
+    // `getOrCreate` re-provisions a vanished Sprite under the SAME name, so a
+    // "reconnect" can return a brand-new VM: same sandboxId, new instance. If the
+    // row kept the dead predecessor's id, a later teardown would kill THAT id, the
+    // host would rightly decline (a different VM lives here now), and the CAS —
+    // comparing against the stale id the row still held — would MATCH and delete
+    // the row AND its rescued outbox pointer. The live VM would bill forever with
+    // nothing pointing at it: the exact orphan this workstream exists to kill,
+    // manufactured by its own guard.
+    const key = keyFor();
+    const { store, rows } = makeStore(
+      seedRecord({ sessionKey: key, sandboxId: 'sbx-1', spriteInstanceId: 'inst-OLD' }),
+    );
+    const { client } = makeClient({
+      // getOrCreate re-provisioned: SAME name, DIFFERENT VM.
+      getOrCreate: async () => ({ sandboxId: 'sbx-1', spriteInstanceId: 'inst-NEW' }),
+    });
+
+    const result = await acquireMachineSession({
+      ...actor,
+      canRun: true,
+      deps: { store, client, now: () => NOW, secret: SECRET, checkFullEgressEnablement: passGate },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(rows.get(key)?.spriteInstanceId).toBe('inst-NEW');
   });
 });

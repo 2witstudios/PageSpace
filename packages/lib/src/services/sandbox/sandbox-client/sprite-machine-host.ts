@@ -17,6 +17,7 @@
  */
 
 import {
+  MachineSpriteReplacedError,
   MachineStreamOpenTimeoutError,
   type MachineHandle,
   type MachineHost,
@@ -143,7 +144,7 @@ function wrapSpriteHandle({
 }): MachineHandle {
   return {
     machineId: exec.sandboxId,
-    spriteInstanceId: exec.spriteInstanceId,
+    spriteInstanceId: exec.spriteInstanceId ?? null,
     egressPolicyToken: exec.egressPolicyToken,
     exec: (args) => exec.runCommand(args),
     writeFiles: (files) => exec.writeFiles(files),
@@ -298,9 +299,20 @@ export function createSpriteMachineHost({
         // and the delete below is a residual TOCTOU, but the DB-side CAS is keyed
         // on the same instance id, so a replacement still cannot have its pointer
         // dropped.)
-        if (expectedInstanceId !== undefined) {
+        if (expectedInstanceId != null) {
           const current = await sdk.getSprite(machineId);
-          if (current.id !== undefined && current.id !== expectedInstanceId) return;
+          if (current.id != null && current.id !== expectedInstanceId) {
+            // A DIFFERENT VM holds this name now, so the one we were told to kill
+            // is already gone. THROW rather than return success: "success" means
+            // "confirmed destroyed", and every caller acts on it by releasing the
+            // Sprite's last pointer (deleting the tracking row and its rescued
+            // outbox entry). If the caller's instance id were stale — the row not
+            // yet updated after a re-provision — that release would drop the only
+            // pointer to the LIVE VM standing here, billing forever. Refusing keeps
+            // the pointer and surfaces the staleness as a retry, which is the
+            // safe way to be wrong.
+            throw new MachineSpriteReplacedError(machineId, expectedInstanceId, current.id);
+          }
         }
         await client.stop({ sandboxId: machineId });
       } catch (error) {

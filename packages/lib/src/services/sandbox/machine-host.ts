@@ -92,15 +92,37 @@ export interface MachineStream {
   kill(signal?: string): void;
 }
 
+/**
+ * A kill was asked to destroy one Sprite INSTANCE, but a DIFFERENT one holds that
+ * name now — so the target is already gone and the newcomer is not ours to kill.
+ *
+ * Deliberately an ERROR rather than a quiet success. Callers treat a successful
+ * kill as proof the VM is dead and release its last pointer; if their instance id
+ * was stale, that release would strand the live VM standing at the name. Failing
+ * keeps the pointer, so the worst case is a retry, never an orphan.
+ */
+export class MachineSpriteReplacedError extends Error {
+  constructor(
+    readonly machineId: string,
+    readonly expectedInstanceId: string,
+    readonly actualInstanceId: string,
+  ) {
+    super(
+      `Sprite "${machineId}" is now instance ${actualInstanceId}, not the ${expectedInstanceId} we were asked to kill — refusing to destroy a VM we did not target`,
+    );
+    this.name = 'MachineSpriteReplacedError';
+  }
+}
+
 /** A provisioned/attached machine session — the full surface a caller drives. */
 export interface MachineHandle {
   /**
    * The platform's id for this Sprite INSTANCE — the VM's actual identity, unique
    * per generation. `machineId` below is only the reused NAME, so anything that
    * must act on THIS VM (a kill, a CAS against a tracking row) keys on this.
-   * Undefined when the driver could not report one.
+   * Null when the driver could not report one.
    */
-  spriteInstanceId?: string;
+  spriteInstanceId: string | null;
   readonly machineId: string;
   /**
    * Proof of the egress lockdown confirmed for THIS VM, for the caller to persist
@@ -172,5 +194,5 @@ export interface MachineHost {
    * the name is the one we meant to kill, and treats "a different VM lives here
    * now" as success (our target is already gone) rather than destroying it.
    */
-  kill(args: { machineId: string; expectedInstanceId?: string }): Promise<void>;
+  kill(args: { machineId: string; expectedInstanceId?: string | null }): Promise<void>;
 }

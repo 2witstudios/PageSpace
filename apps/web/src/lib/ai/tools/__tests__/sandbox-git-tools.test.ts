@@ -12,6 +12,7 @@ function makeDeps(token: string | null = 'ghp_test'): GitSandboxToolsDeps {
       acquireSandbox: vi.fn().mockResolvedValue({ ok: true, sandboxId: 'sbx-1', resumed: false }),
       reconnect: vi.fn().mockResolvedValue({
         sandboxId: 'sbx-1',
+        spriteInstanceId: null,
         runCommand: vi.fn().mockImplementation(async (opts) => {
           runCommandCalls.push(opts);
           mockRun(opts);

@@ -17,11 +17,17 @@ export interface SandboxHandle {
   sandboxId: string;
   /**
    * The platform's id for this Sprite INSTANCE — the actual identity, unique per
-   * VM generation. Undefined when the driver could not report it (a legacy row,
-   * or a platform that returned no id), in which case callers fall back to
-   * comparing names and accept the ABA risk that implies.
+   * VM generation. Null when the platform reported none, in which case callers
+   * fall back to comparing names and accept the ABA risk that implies.
+   *
+   * REQUIRED, deliberately: it was optional, and an adapter
+   * (`adaptMachineHandleToExecutableSandbox`) silently dropped it on the way from
+   * `MachineHandle` back to `ExecutableSandbox` — which is the production session
+   * client. Every `machine_sessions` row therefore stored NULL, every identity
+   * guard fell back to name-only, and the whole ABA protection was inert while
+   * typechecking clean. A required field makes that a compile error.
    */
-  spriteInstanceId?: string;
+  spriteInstanceId: string | null;
   /**
    * Proof that this VM is running the egress policy the caller asked for — a
    * token over (Sprite instance id, policy hash); see `egress-lockdown.ts`. The
@@ -203,8 +209,27 @@ export interface MachineSessionStore {
     egressPolicyToken: string | null;
     now: Date;
   }): Promise<void>;
-  /** Advances `lastActiveAt`; also records `egressPolicyToken` when a new lockdown was just confirmed. */
-  touch(args: { sessionKey: string; now: Date; egressPolicyToken?: string }): Promise<void>;
+  /**
+   * Advances `lastActiveAt`; also records `egressPolicyToken` when a new lockdown
+   * was just confirmed, and `spriteInstanceId` when the VM behind this session
+   * key CHANGED.
+   *
+   * That last part is load-bearing. Reconnect goes through `getOrCreate`, which
+   * RE-PROVISIONS a vanished Sprite under the same name — a brand-new VM with a
+   * new instance id and the SAME `sandboxId`. If the row kept the dead
+   * predecessor's id, a later teardown would ask the host to kill THAT id, the
+   * host would correctly decline (a different VM lives at the name now) and report
+   * success, and the CAS — comparing against the stale id the row still held —
+   * would MATCH and delete the row and its rescued outbox pointer. The live VM
+   * would be left billing forever with nothing pointing at it: exactly the orphan
+   * this whole workstream exists to kill, manufactured by its own guard.
+   */
+  touch(args: {
+    sessionKey: string;
+    now: Date;
+    egressPolicyToken?: string;
+    spriteInstanceId?: string | null;
+  }): Promise<void>;
   remove(sessionKey: string): Promise<void>;
   /**
    * Compare-and-swap removal: deletes the row ONLY if it still points at
@@ -271,13 +296,17 @@ async function safeTouch(
   sessionKey: string,
   now: Date,
   egressPolicyToken?: string,
+  spriteInstanceId?: string | null,
 ): Promise<void> {
   try {
-    await store.touch({ sessionKey, now, egressPolicyToken });
+    await store.touch({ sessionKey, now, egressPolicyToken, spriteInstanceId });
   } catch {
     // Best-effort. A lost token write only costs a redundant re-apply on the next
     // hand-back (the record stays stale → `shouldApplyPolicy` says yes), never an
-    // unlocked Sprite.
+    // unlocked Sprite. A lost INSTANCE write leaves the row naming a dead VM while
+    // a live one holds the name — which is why a kill against a stale id refuses
+    // rather than reporting success (`MachineSpriteReplacedError`): the pointer is
+    // kept, the staleness surfaces as a retry, and the next connect re-writes it.
   }
 }
 
@@ -422,11 +451,23 @@ export async function acquireMachineSession(
         // changed policy). An unchanged token is already on the row, so writing it
         // again would be a pointless UPDATE on every connect.
         const confirmed = handle.egressPolicyToken;
+        // `getOrCreate` RE-PROVISIONS a vanished Sprite under the same name, so a
+        // "reconnect" can hand back a brand-new VM: same `sandboxId`, different
+        // INSTANCE. Record the new identity whenever it moved — the row is the
+        // pointer, and a pointer naming a dead predecessor is the setup for
+        // destroying (or stranding) the live VM standing in its place. The token
+        // write below already exists for exactly this reason: it is derived from
+        // the sprite's instance id, so it moves precisely when the VM does.
+        const movedInstance =
+          handle.spriteInstanceId != null && handle.spriteInstanceId !== existing?.spriteInstanceId
+            ? handle.spriteInstanceId
+            : undefined;
         await safeTouch(
           deps.store,
           key,
           deps.now(),
           confirmed && confirmed !== appliedEgressToken ? confirmed : undefined,
+          movedInstance,
         );
         return { ok: true, sandboxId: handle.sandboxId, sessionKey: key, resumed: true };
       } catch (error) {
@@ -589,7 +630,7 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
         });
     },
 
-    async touch({ sessionKey, now, egressPolicyToken }) {
+    async touch({ sessionKey, now, egressPolicyToken, spriteInstanceId }) {
       await db
         .update(machineSessions)
         .set({
@@ -598,6 +639,11 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
           // Only overwrite the recorded token when a new lockdown was just
           // confirmed — an omitted token must not blank the existing record.
           ...(egressPolicyToken === undefined ? {} : { egressPolicyToken }),
+          // Likewise, only when the VM behind this key actually CHANGED (a
+          // re-provision). Recording it also voids any teardown INTENT: that
+          // request was against the previous VM, which is provably gone, and
+          // leaving it set would let the reconciler destroy this live one.
+          ...(spriteInstanceId === undefined ? {} : { spriteInstanceId, teardownRequestedAt: null }),
         })
         .where(eq(machineSessions.sessionKey, sessionKey));
     },

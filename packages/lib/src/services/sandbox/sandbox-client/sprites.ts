@@ -922,7 +922,7 @@ function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): Executabl
     // The VM's actual identity. `sandboxId` above is only our reused NAME, so
     // anything that must act on THIS VM — a kill, a compare-and-swap against a
     // tracking row — has to key on this instead (see `SpriteInstanceLike.id`).
-    spriteInstanceId: sprite.id,
+    spriteInstanceId: sprite.id ?? null,
     // Proof of THIS VM's confirmed lockdown, for the caller to persist. Undefined
     // on the `get` path (which applies no policy) and whenever the Sprite's
     // identity is unknown — both of which the caller must treat as "unproven".

@@ -88,9 +88,9 @@ function makeSpriteWorld() {
         sandboxId = `sbx-${counter}`;
         byName.set(name, sandboxId);
       }
-      return { sandboxId };
+      return { sandboxId, spriteInstanceId: null };
     },
-    get: async ({ sandboxId }) => ({ sandboxId }),
+    get: async ({ sandboxId }) => ({ sandboxId, spriteInstanceId: null }),
     stop: async () => {},
   };
 
@@ -98,6 +98,7 @@ function makeSpriteWorld() {
     const fs = fsFor(sandboxId);
     return {
       sandboxId,
+      spriteInstanceId: null,
       runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       writeFiles: async (files) => {
         for (const f of files) {

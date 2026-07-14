@@ -132,6 +132,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
   function makeHandle(state: SpriteState): MachineHandle {
     return {
       machineId: state.machineId,
+      spriteInstanceId: `inst-${state.machineId}`,
       exec: async (args) => {
         state.execLog.push(args);
         if (execImpl) return execImpl(state, args);
@@ -766,6 +767,7 @@ describe('Claude Code credential propagation', () => {
   function makeRootHandle(files: Record<string, string>): MachineHandle {
     return {
       machineId: 'root-sbx',
+      spriteInstanceId: null,
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       writeFiles: async () => {},
       readFile: async ({ path }) => (path in files ? Buffer.from(files[path]!) : null),

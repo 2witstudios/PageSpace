@@ -66,11 +66,11 @@ function makeClient(overrides: Partial<SandboxClient> = {}) {
         sandboxId = `sbx-${counter}`;
         byName.set(name, sandboxId);
       }
-      return { sandboxId };
+      return { sandboxId, spriteInstanceId: null };
     },
     get: async ({ sandboxId }) => {
       calls.get.push(sandboxId);
-      return { sandboxId };
+      return { sandboxId, spriteInstanceId: null };
     },
     stop: async ({ sandboxId }) => {
       calls.stop.push(sandboxId);

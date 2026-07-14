@@ -77,6 +77,7 @@ function makeSandbox(runCommandImpl?: (opts: Parameters<ExecutableSandbox['runCo
   const runCommandCalls: Array<Parameters<ExecutableSandbox['runCommand']>[0]> = [];
   const sandbox: ExecutableSandbox = {
     sandboxId: 'sbx-1',
+    spriteInstanceId: null,
     runCommand: async (opts) => {
       runCommandCalls.push(opts);
       return runCommandImpl ? runCommandImpl(opts) : { exitCode: 0, stdout: '', stderr: '' };
@@ -295,6 +296,7 @@ describe('addProject', () => {
     const rmTargets: string[] = [];
     const sandbox: ExecutableSandbox = {
       sandboxId: 'sbx-1',
+      spriteInstanceId: null,
       runCommand: async (opts) => {
         if (opts.cmd === 'git') return { exitCode: 128, stdout: '', stderr: 'fatal: repository not found' };
         if (opts.cmd === 'rm') { rmTargets.push(opts.args?.[1] ?? ''); return { exitCode: 0, stdout: '', stderr: '' }; }
@@ -325,6 +327,7 @@ describe('addProject', () => {
     const rmTargets: string[] = [];
     const sandbox: ExecutableSandbox = {
       sandboxId: 'sbx-1',
+      spriteInstanceId: null,
       runCommand: async (opts) => {
         if (opts.cmd === 'git') throw new Error('deadline exceeded');
         if (opts.cmd === 'rm') { rmTargets.push(opts.args?.[1] ?? ''); return { exitCode: 0, stdout: '', stderr: '' }; }

@@ -31,6 +31,10 @@ import type { ExecSandboxClient, ExecutableSandbox } from './types';
 export function adaptMachineHandleToExecutableSandbox(handle: MachineHandle): ExecutableSandbox {
   return {
     sandboxId: handle.machineId,
+    // WHICH VM this is. Dropping it here (as this adapter used to) is invisible:
+    // `sandboxId` is only the reused name, so everything still "works" while every
+    // identity guard downstream silently degrades to name-only.
+    spriteInstanceId: handle.spriteInstanceId ?? null,
     egressPolicyToken: handle.egressPolicyToken,
     runCommand: (args) => handle.exec(args),
     writeFiles: (files) => handle.writeFiles(files),

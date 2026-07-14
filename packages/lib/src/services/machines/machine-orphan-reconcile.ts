@@ -165,11 +165,12 @@ export interface ReconcileOrphanSpritesDeps {
 export interface ReconcileOrphanSpritesResult {
   processed: number;
   /**
-   * True when the candidate list came back at the runtime's per-run cap, i.e. a
-   * backlog remains that this run did not attempt. Surfaced (not swallowed)
-   * because a silent truncation reads exactly like "nothing left to reclaim"
-   * while the un-attempted Sprites keep billing. The backlog drains over
-   * subsequent ticks, oldest-trashed first.
+   * True when a candidate remained BEYOND the runtime's per-run cap — i.e. a
+   * backlog this run did not attempt. Surfaced (not swallowed) because a silent
+   * truncation reads exactly like "nothing left to reclaim" while the
+   * un-attempted Sprites keep billing. The backlog drains over subsequent ticks,
+   * oldest first. (The runtime proves the backlog with a one-row lookahead rather
+   * than inferring it from an exactly-full result, which would cry wolf.)
    */
   capped: boolean;
   /** Rows whose Sprite is now confirmed gone AND whose row was released/stamped. */
