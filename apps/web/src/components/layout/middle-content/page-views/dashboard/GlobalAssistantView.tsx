@@ -200,14 +200,25 @@ const GlobalAssistantView: React.FC = () => {
   // Populated after useAgentChannelMultiplayer runs (called further down); used
   // in tryRecover via ref so the callback doesn't depend on hook ordering.
   const rejoinAgentStreamRef = useRef<() => void>(() => {});
-  // The conversation the most recent message load was requested for. Lets a response that
-  // resolves after the user switched conversation be dropped instead of clobbering the new one.
-  const loadRequestedIdRef = useRef<string | null>(null);
+  // The conversation currently on screen, mirrored on every render. Read after an await to
+  // decide whether a response that just resolved is still wanted.
+  //
+  // Deliberately NOT the "id the load was requested for" ref that AiChatView and
+  // SidebarChatTab use. That pattern only works because in those components every load path
+  // funnels through the one loader that advances the ref, so switching conversation advances
+  // it. Here it would not: this surface loads on select via the globalInitialMessages /
+  // agent-load-signal effects, which do NOT go through handlePullUpRefresh. A
+  // "requested id" ref written only by handlePullUpRefresh would still equal the id its own
+  // in-flight fetch was issued for, so the guard would always pass and a response for the
+  // conversation the user just left would be applied to the one they switched to. Comparing
+  // against the LIVE conversation is the invariant that actually holds here.
+  const currentConversationIdRef = useRef<string | null>(null);
 
   // ============================================
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
+  currentConversationIdRef.current = currentConversationId;
 
   const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
@@ -706,34 +717,43 @@ const GlobalAssistantView: React.FC = () => {
   // through the same two guards as the authoritative loaders elsewhere in the app
   // (AiChatView.loadMessagesForConversation, SidebarChatTab.loadGlobalMessages):
   //
-  //   1. shouldApplyLoadedMessages — drop the response if the user switched conversation while
-  //      the fetch was in flight, so it cannot clobber the conversation they moved to.
+  //   1. shouldApplyLoadedMessages, against the LIVE conversation (currentConversationIdRef) —
+  //      drop the response if the user switched conversation or agent while the fetch was in
+  //      flight, so it cannot clobber the conversation they moved to.
   //   2. mergeServerAndPending — re-attach the in-flight own stream's bubble, which by definition
   //      is absent from the DB snapshot while the run is still generating.
   const handlePullUpRefresh = useCallback(async () => {
     const conversationId = currentConversationId;
     if (!conversationId) return;
-    loadRequestedIdRef.current = conversationId;
+    const agentId = selectedAgent?.id ?? null;
     try {
-      const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
+      const url = agentId
+        ? `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages`
         : `/api/ai/global/${conversationId}/messages`;
       const res = await fetchWithAuth(url);
       if (!res.ok) return;
       // Stale check after the await — the user may have switched conversation/agent.
-      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+      if (!shouldApplyLoadedMessages(conversationId, currentConversationIdRef.current)) return;
       const data = await res.json();
-      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+      if (!shouldApplyLoadedMessages(conversationId, currentConversationIdRef.current)) return;
 
       const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-      const ownStream = Array.from(usePendingStreamsStore.getState().streams.values()).find(
-        (s) => s.isOwn && s.conversationId === conversationId,
-      );
+      // Scoped by channel AND conversation, the same way AiChatView scopes its own lookup.
+      // A conversation id is only unique within its channel, and this surface switches between
+      // the global channel and per-agent channels, so matching on `isOwn && conversationId`
+      // alone could splice a different agent's in-flight bubble into this conversation.
+      const channelId = agentId ?? (user?.id ? globalChannelId(user.id) : null);
+      const ownStream = channelId
+        ? usePendingStreamsStore
+            .getState()
+            .getOwnStreams(channelId)
+            .find((s) => s.conversationId === conversationId)
+        : undefined;
       const merged = ownStream
         ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
         : serverMessages;
 
-      if (selectedAgent) {
+      if (agentId) {
         setAgentMessages(merged);
         setAgentStoreMessages(merged);
       } else {
@@ -745,6 +765,7 @@ const GlobalAssistantView: React.FC = () => {
   }, [
     currentConversationId,
     selectedAgent,
+    user,
     setAgentMessages,
     setAgentStoreMessages,
     setGlobalLocalMessages,
