@@ -83,6 +83,16 @@ const codeLine = {
   margin: '0',
 };
 
+// Inline monospace for a command name mid-sentence (e.g. `pagespace mcp`).
+const inlineCode = {
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontSize: '13px',
+  color: colors.heading,
+  backgroundColor: colors.accent,
+  padding: '1px 5px',
+  borderRadius: '4px',
+};
+
 const secondaryLink = {
   fontSize: typography.small,
   color: colors.link,
@@ -134,9 +144,12 @@ export function SdkCliLaunchEmail({
               <Text style={calloutHeading}>@pagespace/cli</Text>
               <Text style={calloutText}>
                 The same capabilities from your terminal, so PageSpace can be a
-                step in a shell script, a cron job, or a CI pipeline. It also
-                runs as an MCP server, which lets coding agents like Claude Code
-                read from and write to your PageSpace directly.
+                step in a shell script, a cron job, or a CI pipeline — and a
+                coding agent that already has a shell, like Claude Code, can
+                drive it directly. It also ships an MCP server (
+                <code style={inlineCode}>pagespace mcp</code>) that connects
+                assistants without a terminal, like Claude Desktop and Cursor,
+                to the same tools.
               </Text>
             </Section>
 
@@ -147,10 +160,10 @@ export function SdkCliLaunchEmail({
             </Section>
 
             <Text style={emailStyles.paragraph}>
-              A good first use: point an agent at a drive and let it keep your
-              notes, tasks, and docs current while you work. Nothing about your
-              existing workspace changes — this is a new way in, not a new thing
-              to learn.
+              A good first use: point a terminal agent like Claude Code at a
+              drive, and let it keep your notes, tasks, and docs current while
+              you work. Nothing about your existing workspace changes — this is
+              a new way in, not a new thing to learn.
             </Text>
 
             <Section style={emailStyles.buttonContainer}>
