@@ -43,7 +43,7 @@ jobs:
       # (onnxruntime) content detection fails to load on Node 24 — so it is
       # excluded here and run separately below on its own Node 22 runtime.
       - name: Setup Node.js (24 — web/realtime runtime)
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: '24'
 
@@ -72,7 +72,7 @@ jobs:
       # onnxruntime native bindings fail to initialize on Node 24, so test the
       # processor on the runtime it actually deploys to.
       - name: Setup Node.js (22 — processor runtime)
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
           node-version: '22'
 

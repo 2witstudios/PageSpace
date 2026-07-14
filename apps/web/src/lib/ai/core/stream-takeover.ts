@@ -137,7 +137,7 @@ export const takeOverConversationStreams = async ({
         // SELECT and here isn't retroactively relabelled 'aborted'.
         await db
           .update(aiStreamSessions)
-          .set({ status: 'aborted', completedAt: new Date(), parts: [] })
+          .set({ status: 'aborted', completedAt: new Date(), parts: [], abortRequestedAt: null })
           .where(and(
             inArray(aiStreamSessions.messageId, reconcile),
             eq(aiStreamSessions.status, 'streaming'),

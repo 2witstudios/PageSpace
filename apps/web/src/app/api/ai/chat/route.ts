@@ -1164,7 +1164,7 @@ export async function POST(request: Request) {
 
     serverAssistantMessageId = createId();
 
-    const { streamId, signal: abortSignal } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
+    const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
 
     const [userProfile] = await userProfilePromise;
@@ -1230,11 +1230,24 @@ export async function POST(request: Request) {
     // this row to settle before deciding what to tell the user. See attachStreamFinisher.
     attachStreamFinisher({ streamId, finish: lifecycle.finish });
 
+    // Pre-aborted: a pending-abort intent was consumed in createStreamLifecycle (#2028 item 1).
+    // The user pressed Stop during the preflight window. Abort the controller so streamText
+    // never starts; the lifecycle handle is already finished and its finish() is a no-op.
+    if (lifecycle.preAborted) {
+      abortController.abort();
+      removeStream({ streamId });
+    }
+
     try {
       const stream = createUIMessageStream({
         originalMessages: sanitizedMessages,
         generateId: () => serverAssistantMessageId!,
         execute: async ({ writer }) => {
+          // Pre-aborted (#2028 item 1, see StreamLifecycleHandle.preAborted) — nothing past this
+          // point can ever reach the model. Skip straight to onFinish rather than relying on the
+          // already-aborted signal to short-circuit streamText's underlying fetch.
+          if (lifecycle!.preAborted) return;
+
           // Execution feedback (UX spec §7): announce one command indicator
           // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
           // the first parts of the assistant message, in the same order the
