@@ -618,10 +618,44 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, setGlobalMessages]);
 
+  // App state recovery — deterministic stream rejoin on mobile.
+  //
+  // The `enabled` gate MUST be a callback, not a render-time boolean: iOS freezes JS the
+  // moment the app backgrounds, so a boolean captured at render is whatever was true when
+  // the app went away. That is how this path was dead in exactly the case it was written
+  // for — `!isStreaming` was false (streaming), and the recovery hook was gated off.
+  //
+  // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh'
+  // (the local fetch is dead after backgrounding), so we stop the local useChat state,
+  // rejoin the server-owned stream, then refresh from DB to catch a stream that finished
+  // while backgrounded.
+  const resumeEnabled = useCallback(
+    () => currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
+    [currentConversationId],
+  );
+
   useAppStateRecovery({
-    onResume: handleAppResume,
-    // Block recovery if streaming OR pending send OR any editing active
-    enabled: !isStreaming && currentConversationId !== null && !useEditingStore.getState().isAnyEditing(),
+    onResume: useCallback(async () => {
+      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
+      if (action === 'noop') return;
+      if (action === 'rejoin-and-refresh') {
+        stop();
+        if (selectedAgent) {
+          rejoinAgentStream();
+        } else {
+          rejoinGlobalStream();
+        }
+      }
+      await handleAppResume();
+    }, [
+      displayIsStreaming,
+      stop,
+      selectedAgent,
+      rejoinAgentStream,
+      rejoinGlobalStream,
+      handleAppResume,
+    ]),
+    enabled: resumeEnabled,
   });
 
   // Clean up stream tracking on unmount or conversation change.
