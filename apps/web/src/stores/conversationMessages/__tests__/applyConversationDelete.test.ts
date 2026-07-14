@@ -22,12 +22,13 @@ describe('applyConversationDelete', () => {
     expect(result.c1.optimisticSends).toEqual([]);
   });
 
-  it('given an id present in neither, should no-op and return the same reference', () => {
+  it('given an id present in neither array, should leave messages and optimisticSends unchanged (applyMessageDelete no-ops)', () => {
     const initial: ConversationMessagesById = {
       c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
     };
     const result = applyConversationDelete(initial, { conversationId: 'c1', messageId: 'missing' });
-    expect(result).toBe(initial);
+    expect(result.c1.messages).toBe(initial.c1.messages);
+    expect(result.c1.optimisticSends).toBe(initial.c1.optimisticSends);
   });
 
   it('given a conversation not tracked at all, should no-op', () => {
@@ -43,20 +44,20 @@ describe('applyConversationDelete', () => {
     expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'delete', messageId: 'm1' }]);
   });
 
-  it('given a delete that only removed an optimistic (unconfirmed) send, should NOT record a pending mutation (it can never appear in a DB snapshot)', () => {
+  it('given a delete that only removed an optimistic (unconfirmed) send, should STILL record the pending mutation (Codex finding: the send may already be persisted server-side despite not yet being reconciled into messages locally, so a stale load could resurrect it)', () => {
     const initial: ConversationMessagesById = {
       c1: { messages: [], optimisticSends: [msg('opt1')], loadGeneration: 0, pendingMutationsSinceLoad: [] },
     };
     const result = applyConversationDelete(initial, { conversationId: 'c1', messageId: 'opt1' });
-    expect(result.c1.pendingMutationsSinceLoad).toEqual([]);
+    expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'delete', messageId: 'opt1' }]);
   });
 
-  it('given a no-op delete (id present in neither array), should not record a pending mutation', () => {
+  it('given a delete for an id not locally known at all (neither array), should STILL record the pending mutation (a fully unknown message can still exist in a stale in-flight load snapshot)', () => {
     const initial: ConversationMessagesById = {
       c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
     };
-    const result = applyConversationDelete(initial, { conversationId: 'c1', messageId: 'missing' });
-    expect(result.c1.pendingMutationsSinceLoad).toEqual([]);
+    const result = applyConversationDelete(initial, { conversationId: 'c1', messageId: 'never-seen' });
+    expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'delete', messageId: 'never-seen' }]);
   });
 
   it('given an actual delete, should NOT bump loadGeneration (a fresh load already reflecting this delete must not be invalidated)', () => {

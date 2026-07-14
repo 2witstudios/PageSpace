@@ -18,7 +18,7 @@ describe('applyConversationEdit', () => {
     expect(result.c1.messages[0]).toMatchObject({ id: 'm1', parts: [{ type: 'text', text: 'new' }], editedAt });
   });
 
-  it('given a messageId not present, should no-op and return the same reference', () => {
+  it('given a messageId not present, should leave messages unchanged (applyMessageEdit no-ops)', () => {
     const initial: ConversationMessagesById = {
       c1: { messages: [msg('m1', 'old')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
     };
@@ -26,7 +26,7 @@ describe('applyConversationEdit', () => {
       conversationId: 'c1',
       payload: { messageId: 'missing', parts: [], editedAt: new Date() },
     });
-    expect(result).toBe(initial);
+    expect(result.c1.messages).toBe(initial.c1.messages);
   });
 
   it('given a conversation not tracked at all, should no-op', () => {
@@ -63,15 +63,18 @@ describe('applyConversationEdit', () => {
     ]);
   });
 
-  it('given a no-op edit (messageId not present), should not record a pending mutation', () => {
+  it('given an edit for a messageId not present yet (e.g. conversation still loading), should STILL record the pending mutation for later replay (Codex finding: dropping it here would let a stale load undo the edit once the row appears)', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [msg('m1', 'old')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
+      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
     };
+    const editedAt = new Date('2024-01-01T00:00:00.000Z');
     const result = applyConversationEdit(initial, {
       conversationId: 'c1',
-      payload: { messageId: 'missing', parts: [], editedAt: new Date() },
+      payload: { messageId: 'not-yet-loaded', parts: [{ type: 'text', text: 'new' }], editedAt },
     });
-    expect(result.c1.pendingMutationsSinceLoad).toEqual([]);
+    expect(result.c1.pendingMutationsSinceLoad).toEqual([
+      { type: 'edit', payload: { messageId: 'not-yet-loaded', parts: [{ type: 'text', text: 'new' }], editedAt } },
+    ]);
   });
 
   it('given an actual edit, should NOT bump loadGeneration (a fresh load already covering this edit must not be invalidated)', () => {

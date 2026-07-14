@@ -143,4 +143,55 @@ describe('applyLoad reconciliation with concurrent live mutations', () => {
     expect(store.c1.messages.map((m) => m.id)).toEqual(['m1', 'm3']);
     expect(store.c1.messages[0].parts).toEqual([{ type: 'text', text: 'v2' }]);
   });
+
+  it('given an edit broadcast arrives for a message not yet present locally (conversation still loading), should still apply once the load introduces it (Codex finding #4)', () => {
+    let store: ConversationMessagesById = {};
+    const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
+    store = afterStart;
+
+    // Edit arrives before this client has ever seen m1 — messages is still empty.
+    const editedAt = new Date('2024-01-01T00:00:00.000Z');
+    store = applyConversationEdit(store, {
+      conversationId: 'c1',
+      payload: { messageId: 'm1', parts: [{ type: 'text', text: 'edited' }], editedAt },
+    });
+    expect(store.c1.messages).toEqual([]);
+
+    // The in-flight load's stale snapshot predates the edit.
+    store = applyLoad(store, { conversationId: 'c1', generation, messages: [msg('m1', 'original')] });
+
+    expect(store.c1.messages[0].parts).toEqual([{ type: 'text', text: 'edited' }]);
+  });
+
+  it('given a delete broadcast arrives for an id that only exists in optimisticSends locally, should still exclude it once the load resolves (Codex finding #5)', () => {
+    let store: ConversationMessagesById = {
+      c1: { messages: [], optimisticSends: [msg('opt1')], loadGeneration: 0, pendingMutationsSinceLoad: [] },
+    };
+    const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
+    store = afterStart;
+
+    // opt1 was actually already persisted server-side by the time it's deleted,
+    // but this client hasn't reconciled it into `messages` yet — the delete
+    // only visibly changes optimisticSends.
+    store = applyConversationDelete(store, { conversationId: 'c1', messageId: 'opt1' });
+    expect(store.c1.messages).toEqual([]);
+    expect(store.c1.optimisticSends).toEqual([]);
+
+    // The in-flight load's snapshot independently includes opt1 (it really was persisted).
+    store = applyLoad(store, { conversationId: 'c1', generation, messages: [msg('opt1')] });
+
+    expect(store.c1.messages.some((m) => m.id === 'opt1')).toBe(false);
+  });
+
+  it('given a delete broadcast arrives for an id this client has never seen at all, should still exclude it once a stale load resolves', () => {
+    let store: ConversationMessagesById = {};
+    const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
+    store = afterStart;
+
+    store = applyConversationDelete(store, { conversationId: 'c1', messageId: 'never-seen' });
+
+    store = applyLoad(store, { conversationId: 'c1', generation, messages: [msg('never-seen'), msg('m2')] });
+
+    expect(store.c1.messages.map((m) => m.id)).toEqual(['m2']);
+  });
 });
