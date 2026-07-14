@@ -178,6 +178,8 @@ async function main(): Promise<number> {
   const marketingBase = resolveMarketingBase();
   const sdkDocsUrl = `${marketingBase}/docs/features/sdk`;
   const cliDocsUrl = `${marketingBase}/docs/features/cli`;
+  const agentApiUrl = `${marketingBase}/docs/features/agent-api`;
+  const blogUrl = `${marketingBase}/blog/build-a-chat-app-on-pagespace`;
 
   console.log('📢 SDK + CLI launch announcement broadcast');
   console.log(`  Mode:          ${opts.live ? 'LIVE SEND' : 'DRY RUN (no sends) — pass --live to send'}`);
@@ -209,10 +211,11 @@ async function main(): Promise<number> {
     process.exit(1);
   }
 
-  // The docs pages ship in a sibling PR. Prove they're live before mailing a CTA
-  // that would otherwise 404 for everyone.
+  // Every page this email links to must be deployed before we mail a link to it —
+  // an unreachable CTA or guide would 404 for the whole audience, and that can't
+  // be taken back. Checks the docs pages and the blog post.
   if (opts.live) {
-    const unreachable = await findUnreachableUrls([sdkDocsUrl, cliDocsUrl]);
+    const unreachable = await findUnreachableUrls([sdkDocsUrl, cliDocsUrl, agentApiUrl, blogUrl]);
     if (unreachable.length > 0) {
       console.error(
         '❌ Refusing live send: the pages this email links to are not reachable, so every\n' +
@@ -280,7 +283,7 @@ async function main(): Promise<number> {
     await sendEmail({
       to: email,
       subject: EMAIL_SUBJECT,
-      react: SdkCliLaunchEmail({ userName, sdkDocsUrl, cliDocsUrl, postalAddress, unsubscribeUrl }),
+      react: SdkCliLaunchEmail({ userName, sdkDocsUrl, cliDocsUrl, agentApiUrl, blogUrl, postalAddress, unsubscribeUrl }),
       // Bulk mail must offer a client-level one-click unsubscribe, not just a body
       // link. The unsubscribe route answers POST for exactly this.
       headers: listUnsubscribeHeaders(unsubscribeUrl),
@@ -299,6 +302,8 @@ async function main(): Promise<number> {
         userName,
         sdkDocsUrl,
         cliDocsUrl,
+        agentApiUrl,
+        blogUrl,
         postalAddress,
         // A dry run mints no token: that would be a DB write.
         unsubscribeUrl: `${baseUrl}/api/notifications/unsubscribe/<token>`,

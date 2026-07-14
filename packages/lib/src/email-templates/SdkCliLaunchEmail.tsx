@@ -20,6 +20,10 @@ interface SdkCliLaunchEmailProps {
   sdkDocsUrl: string;
   /** Docs page for @pagespace/cli. */
   cliDocsUrl: string;
+  /** Docs page for the Agent API (OpenAI-compatible completions endpoint). */
+  agentApiUrl: string;
+  /** Blog post: building a chat app with PageSpace as the backend. */
+  blogUrl: string;
   /** Optional one-click unsubscribe link for product-update emails. */
   unsubscribeUrl?: string;
   /**
@@ -125,6 +129,8 @@ export function SdkCliLaunchEmail({
   userName,
   sdkDocsUrl,
   cliDocsUrl,
+  agentApiUrl,
+  blogUrl,
   unsubscribeUrl,
   postalAddress,
 }: SdkCliLaunchEmailProps) {
@@ -140,11 +146,17 @@ export function SdkCliLaunchEmail({
             <Heading style={emailStyles.headerTitle}>PageSpace</Heading>
           </Section>
           <Section style={emailStyles.content}>
-            <Text style={eyebrow}>New</Text>
+            <Text style={eyebrow}>Catch-up</Text>
             <Text style={emailStyles.contentHeading}>
               Browser for you. CLI for your agents. SDK for your apps.
             </Text>
             <Text style={emailStyles.paragraph}>Hi {userName},</Text>
+            <Text style={emailStyles.paragraph}>
+              We&apos;ve been heads-down shipping, and behind on telling you about
+              it. So instead of trickling it out, here&apos;s a catch-up on what
+              you can do in PageSpace now — starting with the part developers ask
+              us about most.
+            </Text>
             <Text style={emailStyles.paragraph}>
               You&apos;ve always worked in PageSpace through the browser. Now the
               same workspace — pages, drives, tasks, search, files — opens two
@@ -188,6 +200,27 @@ export function SdkCliLaunchEmail({
               you work. Nothing about your existing workspace changes — this is
               a new way in, not a new thing to learn.
             </Text>
+
+            <Section style={calloutCard}>
+              <Text style={calloutHeading}>Your agents are already an API</Text>
+              <Text style={calloutText}>
+                Here&apos;s one that shipped a while ago and we never made noise
+                about: every PageSpace agent answers on an OpenAI-compatible
+                endpoint. Point a chat app straight at one and it brings the
+                system prompt, the tools, and conversations that persist right
+                here in your workspace — so your app doesn&apos;t store or wire
+                any of it. We wrote up how to build a chat app on it.
+              </Text>
+              <Text style={{ ...calloutText, marginTop: spacing.sm }}>
+                <Link href={blogUrl} style={secondaryLink}>
+                  Read the guide
+                </Link>
+                {'   ·   '}
+                <Link href={agentApiUrl} style={secondaryLink}>
+                  Agent API docs
+                </Link>
+              </Text>
+            </Section>
 
             <Section style={emailStyles.buttonContainer}>
               <Button style={darkButton} href={cliDocsUrl}>

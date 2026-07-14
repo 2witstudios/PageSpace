@@ -6,6 +6,8 @@ const PROPS = {
   userName: 'Ada',
   sdkDocsUrl: 'https://pagespace.ai/docs/features/sdk',
   cliDocsUrl: 'https://pagespace.ai/docs/features/cli',
+  agentApiUrl: 'https://pagespace.ai/docs/features/agent-api',
+  blogUrl: 'https://pagespace.ai/blog/build-a-chat-app-on-pagespace',
   unsubscribeUrl: 'https://app.pagespace.ai/api/notifications/unsubscribe/ps_unsub_abc',
   postalAddress: 'PageSpace, 1 Example St, Springfield, IL 62704',
 };
