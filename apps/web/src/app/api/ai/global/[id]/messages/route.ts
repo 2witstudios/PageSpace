@@ -25,6 +25,7 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
+import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
@@ -1075,26 +1076,35 @@ MENTION PROCESSING:
     // assistant rows, two bills. Takeover, not 409; see stream-liveness.ts for why rejecting
     // would self-lock the conversation.
     //
-    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
-    // comment used to claim that it did. See the docblock on takeOverConversationStreams: the
-    // SELECT there and the INSERT in createStreamLifecycle are not atomic together, so two
-    // near-simultaneous sends can both find nothing in flight and both proceed. It narrows the
-    // window; it does not close it.
-    await takeOverConversationStreams({
+    // BEST-EFFORT, not an invariant — named honestly. `startGenerationExclusive` closes the
+    // check-then-act race documented here previously (the SELECT inside
+    // takeOverConversationStreams and the INSERT inside createStreamLifecycle are not atomic on
+    // their own) by holding a per-conversation Postgres advisory lock across both. On lock_busy
+    // it retries briefly, then proceeds UNLOCKED rather than blocking the send — availability
+    // wins over serialization, so a rare contention/pool-exhaustion case can still double-generate.
+    // See start-generation-exclusive.ts and the PR 4 board page.
+    const generation = await startGenerationExclusive({
       conversationId,
-      channelId,
+      run: async () => {
+        await takeOverConversationStreams({
+          conversationId,
+          channelId,
+        });
+
+        return createStreamLifecycle({
+          messageId: serverAssistantMessageId,
+          channelId,
+          conversationId,
+          userId,
+          displayName,
+          browserSessionId,
+          streamId,
+          isShared: conversation.isShared === true,
+        });
+      },
     });
 
-    lifecycle = await createStreamLifecycle({
-      messageId: serverAssistantMessageId,
-      channelId,
-      conversationId,
-      userId,
-      displayName,
-      browserSessionId,
-      streamId,
-      isShared: conversation.isShared === true,
-    });
+    lifecycle = generation.result;
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
