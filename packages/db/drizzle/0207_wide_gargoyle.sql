@@ -1,1 +1,0 @@
-ALTER TABLE "machine_branches" ADD COLUMN "spriteTornDownAt" timestamp;

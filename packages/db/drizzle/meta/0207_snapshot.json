@@ -1,5 +1,5 @@
 {
-  "id": "8068f67f-b331-455f-9f98-a6188f1a3553",
+  "id": "30f07448-1f84-465b-8989-7f604e052c69",
   "prevId": "51de21e2-aec7-43cd-8bb6-cba5859819e5",
   "version": "7",
   "dialect": "postgresql",
@@ -15229,6 +15229,13 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
+        "raw_parts_count": {
+          "name": "raw_parts_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "started_at": {
           "name": "started_at",
           "type": "timestamp",
@@ -19021,12 +19028,6 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
-        },
-        "spriteTornDownAt": {
-          "name": "spriteTornDownAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
         },
         "createdAt": {
           "name": "createdAt",

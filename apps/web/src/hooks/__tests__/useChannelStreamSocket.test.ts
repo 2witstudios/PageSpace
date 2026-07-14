@@ -1262,6 +1262,96 @@ describe('useChannelStreamSocket', () => {
       expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', newPart);
     });
 
+    // The server merges consecutive text-delta chunks before persisting (checkpoint-serialize.ts),
+    // so `parts` can hold FEWER entries than were actually pushed. The live SSE replay always
+    // sends the raw, unmerged buffer — skipping by `parts.length` alone would under-skip and
+    // re-apply chunks already reflected in the seeded snapshot, duplicating visible text.
+    // `rawPartsCount` carries the true raw count so the skip stays correct.
+    it('given the persisted snapshot was merged server-side (rawPartsCount > parts.length), should skip the full raw prefix rather than under-skip by parts.length', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-bootstrap',
+            conversationId: 'conv-1',
+            // One merged entry representing three raw text-delta chunks.
+            parts: [{ type: 'text', text: 'hello world' }],
+            rawPartsCount: 3,
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+      let capturedOnChunk!: (part: unknown) => void;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
+          capturedOnChunk = onChunk;
+          return new Promise(() => {});
+        },
+      );
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); });
+
+      mockAppendPart.mockClear();
+
+      // Live join replays its full raw buffer: the three chunks already folded into the
+      // seeded "hello world", then genuinely new content.
+      capturedOnChunk({ type: 'text', text: 'hel' });
+      capturedOnChunk({ type: 'text', text: 'lo ' });
+      capturedOnChunk({ type: 'text', text: 'world' });
+      const newPart = { type: 'text', text: ' — and more' };
+      capturedOnChunk(newPart);
+
+      // Only the genuinely new chunk reaches appendPart — under the bug this fixes, the
+      // skip would have stopped after 1 chunk (parts.length) and the second/third replayed
+      // chunks would have duplicated content already in the seed.
+      expect(mockAppendPart).toHaveBeenCalledTimes(1);
+      expect(mockAppendPart).toHaveBeenCalledWith('msg-bootstrap', newPart);
+    });
+
+    // aiStreamSessions.raw_parts_count is NOT NULL DEFAULT 0 — a row written by a
+    // not-yet-updated worker mid-rollout (whose code never sets this column) reads back
+    // as a real `0`, not null/undefined. `??` would use that 0 verbatim (skip nothing)
+    // and reproduce the exact duplicate-text bug the rawPartsCount fix exists to close;
+    // `||` correctly falls through to persistedParts.length whenever rawPartsCount is
+    // falsy, which is what makes this rollout scenario safe.
+    it('given rawPartsCount is 0 but the persisted snapshot has real content (a legacy row from a not-yet-updated worker), should fall back to skipping by parts.length rather than skipping nothing', async () => {
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-legacy',
+            conversationId: 'conv-1',
+            parts: [{ type: 'text', text: 'partial' }],
+            rawPartsCount: 0,
+            triggeredBy: { userId: 'user-2', displayName: 'Alice', browserSessionId: SESSION_ID_REMOTE },
+          }],
+        }),
+      });
+      let capturedOnChunk!: (part: unknown) => void;
+      mockConsumeStreamJoin.mockImplementation(
+        (_id: string, _signal: AbortSignal, onChunk: (part: unknown) => void) => {
+          capturedOnChunk = onChunk;
+          return new Promise(() => {});
+        },
+      );
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      await act(async () => { await Promise.resolve(); });
+
+      mockAppendPart.mockClear();
+
+      // Live join replays the one raw frame already reflected in the seed, then new content.
+      capturedOnChunk({ type: 'text', text: 'partial' });
+      const newPart = { type: 'text', text: ' more' };
+      capturedOnChunk(newPart);
+
+      // Under the `??` bug, rawPartsCount=0 would be used verbatim (skip nothing), so the
+      // first replayed chunk would have duplicated the seeded "partial" text.
+      expect(mockAppendPart).toHaveBeenCalledTimes(1);
+      expect(mockAppendPart).toHaveBeenCalledWith('msg-legacy', newPart);
+    });
+
     it('given no persisted parts, should not skip any live-joined chunks', async () => {
       mockFetchWithAuth.mockResolvedValueOnce({
         ok: true,

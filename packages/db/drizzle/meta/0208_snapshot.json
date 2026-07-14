@@ -1,6 +1,6 @@
 {
-  "id": "87a5f11c-d65f-462c-8639-a3e62c23cc92",
-  "prevId": "8068f67f-b331-455f-9f98-a6188f1a3553",
+  "id": "12924380-626b-4d6a-adbd-0de980c23025",
+  "prevId": "30f07448-1f84-465b-8989-7f604e052c69",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -15229,6 +15229,13 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
+        "raw_parts_count": {
+          "name": "raw_parts_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "started_at": {
           "name": "started_at",
           "type": "timestamp",
@@ -16169,6 +16176,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "spriteInstanceId": {
+          "name": "spriteInstanceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "egressPolicyToken": {
           "name": "egressPolicyToken",
@@ -19028,6 +19041,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "spriteInstanceId": {
+          "name": "spriteInstanceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "teardownRequestedAt": {
           "name": "teardownRequestedAt",
           "type": "timestamp",
@@ -19136,6 +19155,70 @@
           ]
         }
       }
+    },
+    "public.machine_sprite_reclaims": {
+      "name": "machine_sprite_reclaims",
+      "schema": "",
+      "columns": {
+        "sandboxId": {
+          "name": "sandboxId",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "spriteInstanceId": {
+          "name": "spriteInstanceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recordedAt": {
+          "name": "recordedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lastAttemptAt": {
+          "name": "lastAttemptAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastError": {
+          "name": "lastError",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "machine_sprite_reclaims_recorded_at_idx": {
+          "name": "machine_sprite_reclaims_recorded_at_idx",
+          "columns": [
+            {
+              "expression": "recordedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {}
     },
     "public.machine_agent_terminals": {
       "name": "machine_agent_terminals",

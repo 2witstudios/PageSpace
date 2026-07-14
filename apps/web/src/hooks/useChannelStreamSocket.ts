@@ -38,8 +38,15 @@ interface ActiveStreamRow {
   conversationId: string;
   /** ISO timestamp of the stream's start; stamps synthesized bubbles with a `createdAt`. */
   startedAt?: string;
-  /** Last debounced snapshot persisted server-side — a prefix of the live multicast buffer, if still alive. */
+  /** Last debounced snapshot persisted server-side — see `rawPartsCount` below. */
   parts?: UIMessagePart[];
+  /**
+   * See rawPartsCount's docblock on the schema (packages/db/src/schema/ai-streams.ts) for
+   * why this, not `parts.length`, is the live-replay skip count (`skipReplayCount` below).
+   * Optional here only because an old (pre-rawPartsCount) `active-streams` route build
+   * omits the field entirely mid-rollout.
+   */
+  rawPartsCount?: number;
   triggeredBy: { userId: string; displayName: string; browserSessionId: string };
 }
 
@@ -344,16 +351,12 @@ export function useChannelStreamSocket(
           // the originator's process has died. Seeding through addStream
           // (a no-op when the entry exists) keeps a co-mounted surface that
           // bootstrapped the same channel from appending the snapshot twice.
-          // The persisted snapshot is the raw registry buffer (one entry per
-          // pushed chunk: every text delta, and a separate frame per tool-call
-          // state transition) — the same shape the live SSE replay delivers.
           // isValidPartFrame applies the same wire-trust gate the live path
-          // applies in consumeStreamJoin, and the count of frames that pass
-          // it is what the replay will actually skip past (see
-          // skipReplayCount below); appendPartPure then folds the raw
-          // sequence the way the store's own appendPart does for every live
-          // chunk, so a restored snapshot renders identically to a live one
-          // (merged text, tool parts converged to their latest state).
+          // applies in consumeStreamJoin; appendPartPure then folds the
+          // (already server-merged) sequence the way the store's own
+          // appendPart does for every live chunk, so a restored snapshot
+          // renders identically to a live one (merged text, tool parts
+          // converged to their latest state).
           const persistedParts = (stream.parts ?? []).filter(isValidPartFrame);
           const foldedParts = persistedParts.reduce(appendPartPure, [] as UIMessagePart[]);
           addStream({
@@ -372,7 +375,22 @@ export function useChannelStreamSocket(
               conversationId: stream.conversationId,
             });
           }
-          startConsume(stream.messageId, stream.conversationId, persistedParts.length);
+          // The live SSE replay always delivers the RAW registry buffer (one frame per
+          // pushed chunk), but the persisted snapshot above is server-merged/converged —
+          // fewer, larger entries — so `persistedParts.length` no longer counts how many
+          // raw frames are already reflected in the seed. `rawPartsCount` does (see its
+          // docblock on ActiveStreamRow).
+          //
+          // `||`, deliberately not `??`: the column is NOT NULL DEFAULT 0, so a row
+          // written by a not-yet-updated worker mid-rollout (whose code never sets this
+          // column) reads back as a real `0`, not null/undefined — `??` would use that 0
+          // verbatim and skip nothing, re-delivering the live replay's raw frames on top
+          // of the seeded snapshot and reproducing the exact duplicate-text bug this fix
+          // exists to close. `0` is only ever the CORRECT value when `parts` is also
+          // empty (every write of this column sets it from the same raw buffer snapshot
+          // as `parts`, atomically), so falling through to `persistedParts.length` on any
+          // falsy value is safe for the legitimate zero case too — both are 0 there.
+          startConsume(stream.messageId, stream.conversationId, stream.rawPartsCount || persistedParts.length);
         }
 
         // The server's word on what is still running. Consumers reconcile any ownership
