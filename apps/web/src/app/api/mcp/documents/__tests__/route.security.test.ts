@@ -35,12 +35,18 @@ vi.mock('@/lib/auth/auth-core', () => ({
     (result as { tokenType?: string }).tokenType === 'oauth' &&
     (result as { scopes?: { manageKeys?: boolean } }).scopes?.manageKeys === true,
 }));
-vi.mock('@/lib/auth/principal-permissions', () => ({
-  getPrincipalAccessLevel: async (auth: unknown, pageId: string) => {
-    const { getPrincipalAccessLevel } = await import('@/lib/auth/principal-permissions');
-    return getPrincipalAccessLevel(auth as never, pageId);
-  },
-}));
+// Delegate to the REAL principal dispatch (unit-tested in
+// src/lib/auth/__tests__/principal-permissions.test.ts) so the security
+// assertions below still verify that scoped tokens resolve app-level permissions
+// and unscoped tokens fall back to user permissions. Use vi.importActual to reach
+// the real module — a plain import() would resolve to THIS mock and recurse
+// forever (the barrel-split codemod's original bug: it OOM'd the worker).
+vi.mock('@/lib/auth/principal-permissions', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth/principal-permissions')>(
+    '@/lib/auth/principal-permissions',
+  );
+  return { getPrincipalAccessLevel: actual.getPrincipalAccessLevel };
+});
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),

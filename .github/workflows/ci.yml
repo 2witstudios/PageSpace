@@ -63,12 +63,10 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bun run --filter '@pagespace/db' db:migrate
 
-      # apps/web is excluded here and run in the sharded `web-tests` job below —
-      # its ~1500-module suite exceeds one runner's memory under v8 coverage.
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bunx turbo run test:coverage --filter='!@pagespace/processor' --filter='!web'
+        run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
       # onnxruntime native bindings fail to initialize on Node 24, so test the
@@ -103,114 +101,6 @@ jobs:
             apps/*/coverage/coverage-summary.json
             packages/*/coverage/coverage-summary.json
           retention-days: 30
-
-  # apps/web is sharded across parallel standard runners: its suite executes
-  # ~1500 real modules (the auth-barrel elimination made ~285 test files load
-  # real modules instead of a barrel mock), and the v8 coverage remap of that
-  # whole graph exceeds one 16 GB runner. Each shard runs ~1/N of the test files
-  # on its own fresh runner, so the executed-coverage remap fits with headroom,
-  # and each writes a `--reporter=blob` report. Thresholds are NOT enforced here
-  # (a shard only covers 1/N of the code): the config skips them when
-  # COVERAGE_SHARD is set. The `web-coverage` job merges the blobs and enforces
-  # thresholds on the complete coverage. To scale, raise the shard count.
-  web-tests:
-    name: Web Tests (shard ${{ matrix.shard }}/6)
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6]
-
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: pagespace_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-
-      - name: Setup Node.js (24 — web runtime)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
-        with:
-          node-version: '24'
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build packages
-        run: bun run build
-
-      - name: Generate migrations
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bun run db:generate
-
-      - name: Setup test database
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: bun run --filter '@pagespace/db' db:migrate
-
-      - name: Run web coverage shard ${{ matrix.shard }}/6
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-          COVERAGE_SHARD: '1'
-        run: cd apps/web && bunx vitest run --coverage --reporter=default --reporter=blob --shard=${{ matrix.shard }}/6
-
-      - name: Upload coverage blob
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: web-coverage-blob-${{ matrix.shard }}
-          path: apps/web/.vitest-reports/
-          retention-days: 1
-          include-hidden-files: true
-
-  # Merge the web shards' coverage blobs and enforce thresholds on the complete
-  # coverage. This job only merges (no tests re-run) and combines already-
-  # processed per-file coverage, so it is light and runs on a standard runner.
-  web-coverage:
-    name: Web Coverage (merge + thresholds)
-    runs-on: ubuntu-latest
-    needs: web-tests
-
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-
-      - name: Setup Node.js (24 — web runtime)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
-        with:
-          node-version: '24'
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Download coverage blobs
-        uses: actions/download-artifact@v8
-        with:
-          path: apps/web/.vitest-reports/
-          pattern: web-coverage-blob-*
-          merge-multiple: true
-
-      - name: Merge coverage and enforce thresholds
-        run: cd apps/web && bunx vitest run --merge-reports --coverage
 
   lint:
     name: Lint & TypeScript Check
