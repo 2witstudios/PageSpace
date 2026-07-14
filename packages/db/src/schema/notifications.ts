@@ -20,7 +20,11 @@ export const notificationType = pgEnum('NotificationType', [
   'EMAIL_VERIFICATION_REQUIRED',
   'TOS_PRIVACY_UPDATED',
   'MENTION',
-  'TASK_ASSIGNED'
+  'TASK_ASSIGNED',
+  // Product announcements (SDK/CLI launch and the like). Broadcast-only: never
+  // raised as an in-app notification, but it needs an enum value so recipients
+  // can opt out through the same email_notification_preferences mechanism.
+  'PRODUCT_UPDATE'
 ]);
 
 export const notifications = pgTable('notifications', {

@@ -18,7 +18,8 @@ type NotificationType =
   | 'CONNECTION_REQUEST'
   | 'CONNECTION_ACCEPTED'
   | 'CONNECTION_REJECTED'
-  | 'NEW_DIRECT_MESSAGE';
+  | 'NEW_DIRECT_MESSAGE'
+  | 'PRODUCT_UPDATE';
 
 const VALID_NOTIFICATION_TYPES = new Set<string>([
   'PERMISSION_GRANTED',
@@ -32,6 +33,7 @@ const VALID_NOTIFICATION_TYPES = new Set<string>([
   'CONNECTION_ACCEPTED',
   'CONNECTION_REJECTED',
   'NEW_DIRECT_MESSAGE',
+  'PRODUCT_UPDATE',
 ]);
 
 // GET /api/notifications/unsubscribe/[token] - Unsubscribe from email notifications
