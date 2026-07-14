@@ -635,6 +635,57 @@ describe('viewer attach/detach gates the watchdog reconnect (leaf 3-2)', () => {
     expect(onExit).not.toHaveBeenCalled();
   });
 
+  /**
+   * `isQuiesced()` is what the Sprites Tasks API hold reads to tell "a viewer is
+   * attached" from "a LIVE exec connection exists" — only the second is a reason
+   * to keep a Sprite resident. If this ever reported `false` through an
+   * attach-quiet window, the hold would pin the sandbox behind an open tab and
+   * the whole idle-cost fix would be inert.
+   */
+  it('reports isQuiesced across the whole quiet window: false while live, true once a trip is swallowed, false again once paid back', async () => {
+    const cmd = buildFakeCommand();
+    const attachCmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession], attachCmd });
+    const activity = activityClock();
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn(), getLastActivityAt: activity.get });
+    cmd._emitter.emit('message', announces('sess-1'));
+    cmd._emitter.emit('spawn');
+
+    expect(shell.isQuiesced()).toBe(false); // live socket
+
+    await vi.advanceTimersByTimeAsync(TASK_HOLD_AGENT_IDLE_MS + 1);
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(shell.isQuiesced()).toBe(true); // attach-quiet: deliberately down
+
+    activity.touch();
+    shell.write('ls\n');
+    await vi.advanceTimersByTimeAsync(2000);
+    attachCmd._emitter.emit('spawn');
+
+    expect(shell.isQuiesced()).toBe(false); // paid back
+  });
+
+  it('reports isQuiesced true for a DETACHED swallowed trip too — the hold reads one flag, not two', async () => {
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });
+
+    const shell = openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+    cmd._emitter.emit('message', announces('sess-1'));
+    shell.setViewerAttached(false);
+    cmd._emitter.emit('error', new Error('WebSocket keepalive timeout'));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(shell.isQuiesced()).toBe(true);
+
+    shell.setViewerAttached(true);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(shell.isQuiesced()).toBe(false);
+  });
+
   it('given an idle attached shell that never tripped the watchdog, a keystroke changes nothing (no reattach to pay back)', async () => {
     const cmd = buildFakeCommand();
     const sprite = buildFakeSprite(cmd, { sessions: [liveSession] });

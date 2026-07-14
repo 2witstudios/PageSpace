@@ -15,8 +15,22 @@ import { assert } from './riteway';
 
 const TICK_INTERVAL_MS = 60_000;
 
-function makeShell(): PtyShell & { kill: ReturnType<typeof vi.fn> } {
-  return { write: vi.fn(), resize: vi.fn(), kill: vi.fn(), setViewerAttached: vi.fn() };
+/**
+ * `setQuiesced` stands in for what the real shell does on its own: swallow a
+ * watchdog trip instead of reconnecting (`detach-quiet` / `attach-quiet`),
+ * leaving the exec socket deliberately down until a viewer returns or a
+ * keystroke arrives.
+ */
+function makeShell(): PtyShell & { kill: ReturnType<typeof vi.fn>; setQuiesced: (quiesced: boolean) => void } {
+  let quiesced = false;
+  return {
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    setViewerAttached: vi.fn(),
+    isQuiesced: () => quiesced,
+    setQuiesced: (next: boolean) => { quiesced = next; },
+  };
 }
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
@@ -235,6 +249,118 @@ describe('agent terminal task holds (wiring)', () => {
       should: 'report activity as unobservable so the controller never deletes on a frozen clock',
       actual: { attached: lastTick.attached, observable: lastTick.activityObservable },
       expected: { attached: false, observable: false },
+    });
+  });
+
+  /**
+   * The attached-but-idle leak. `planHold`'s `needHold = attached || agentRunning`
+   * means an attached viewer pins the sprite forever — so quieting the watchdog
+   * alone saves the ~45s exec round-trips but NOT the residency (the RAM bill
+   * this change exists to cut). `attached` has to mean "a LIVE exec connection
+   * exists", and a quiesced socket is not one.
+   */
+  it('ticks NOT-attached once the shell quiesces its socket, so the idle hold is released and the sprite can pause', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    // The watchdog swallowed a trip on an attached-but-idle shell (attach-quiet):
+    // the viewer is still here, but the exec connection is deliberately down.
+    shell.setQuiesced(true);
+    vi.advanceTimersByTime(TICK_INTERVAL_MS);
+
+    const lastTick = hold.ticks[hold.ticks.length - 1];
+    assert({
+      given: 'a heartbeat while the viewer is attached but the socket is quiesced',
+      should: 'report attached: false — there is no live connection for the platform to keep the sprite up FOR',
+      actual: lastTick.attached,
+      expected: false,
+    });
+
+    assert({
+      given: 'a heartbeat while the viewer is attached but the socket is quiesced',
+      should: 'still trust staleness — a shell is only quieted BECAUSE its clock was already stale on a live socket',
+      actual: lastTick.activityObservable,
+      expected: true,
+    });
+  });
+
+  it('ticks attached again once a keystroke resumes the quiesced socket (the hold must come back)', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    shell.setQuiesced(true);
+    vi.advanceTimersByTime(TICK_INTERVAL_MS);
+    shell.setQuiesced(false); // the real shell clears this in `resumeIfLazyReattachNeeded`
+    vi.advanceTimersByTime(TICK_INTERVAL_MS);
+
+    assert({
+      given: 'a heartbeat after the socket came back',
+      should: 'report attached: true so the hold is recreated',
+      actual: hold.ticks[hold.ticks.length - 1].attached,
+      expected: true,
+    });
+  });
+
+  /**
+   * The one session whose silence proves nothing. A RESUMED agent was verified
+   * LIVE at connect and may simply be thinking; we hold only the connect stamp,
+   * so aging that into a quiet verdict would drop the hold (the tick above) and
+   * pause the sprite under a working agent. `getLastActivityAt` returns
+   * `undefined` for it — "no trustworthy idleness signal" — which keeps the
+   * watchdog reattaching, exactly the same trust rule `disconnectConnection`
+   * already applies (`hasOutput || !resumedAtCreate`).
+   */
+  it('offers the watchdog NO idleness signal for a resumed agent that has not yet spoken', async () => {
+    const auth = makeAuthSuccess();
+    const liveSession = { id: 'sess-live', command: 'claude', isActive: true, tty: true };
+    auth.sprite.listSessions = vi.fn(async () => [liveSession]);
+    auth.resolveSandbox = vi.fn(async () => ({
+      ok: true as const,
+      agentTerminalId: 'agent-terminal-1',
+      sandboxId: 'sbx1',
+      cwd: '/workspace',
+      sprite: auth.sprite,
+      command: 'claude',
+      args: [],
+      commandOverride: null,
+      streamSessionId: 'sess-live', // still running server-side — this is a RESUME
+      releaseSlot: vi.fn(),
+    }));
+    checkAuth.mockResolvedValue(auth);
+
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    const args = (openShell as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as OpenPtyShellArgs;
+
+    assert({
+      given: 'a resumed agent that has not yet emitted a byte',
+      should: 'report no activity clock at all, so the watchdog keeps the socket up rather than quieting it',
+      actual: args.getLastActivityAt?.(),
+      expected: undefined,
+    });
+
+    args.onOutput('thinking… done\r\n');
+
+    assert({
+      given: 'the resumed agent finally speaks',
+      should: 'hand over the real clock again — silence is evidence of idleness once we have heard it once',
+      actual: typeof args.getLastActivityAt?.(),
+      expected: 'number',
+    });
+  });
+
+  it('offers the watchdog a real clock for a FRESH (non-resumed) session from the very first tick', async () => {
+    const handlers = build();
+    await handlers.onConnect(validPayload);
+
+    const args = (openShell as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0] as OpenPtyShellArgs;
+
+    assert({
+      given: 'a fresh session whose launch is its own first activity',
+      should: 'report the launch stamp — a fresh boot that goes silent IS idle and may be quieted',
+      actual: typeof args.getLastActivityAt?.(),
+      expected: 'number',
     });
   });
 

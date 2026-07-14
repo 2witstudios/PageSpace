@@ -135,6 +135,23 @@ export type PtyShell = {
    * before this leaf.
    */
   setViewerAttached(attached: boolean): void;
+  /**
+   * Is this shell's exec connection currently DOWN ON PURPOSE — a watchdog trip
+   * the shell swallowed (`detach-quiet` or `attach-quiet`) rather than
+   * reconnected, and has not yet paid back?
+   *
+   * The Sprites Tasks API hold reads this (`startTaskHoldHeartbeat`), and it is
+   * the difference between the hold's two very different meanings of "attached":
+   * a viewer bound to this session, versus a LIVE EXEC CONNECTION on the Sprite.
+   * Only the second is a reason to keep a Sprite resident — a quiesced socket
+   * gives the platform nothing to hold the sandbox up FOR.
+   *
+   * NOT true during an ordinary reconnect's sub-second backoff: that socket is
+   * coming straight back, and the hold heartbeat only ticks once a minute
+   * anyway. This is specifically "we have decided not to reconnect until
+   * something happens" (a viewer returns, or a keystroke arrives).
+   */
+  isQuiesced(): boolean;
 };
 
 export type OpenPtyShellArgs = {
@@ -184,11 +201,15 @@ export type OpenPtyShellArgs = {
    * A shell whose hold has been dropped for idleness must not still be poking
    * the Sprite every ~45s to keep a socket alive for it.
    *
-   * OMITTED means the watchdog behaves exactly as it did before `attach-quiet`
-   * existed: an attached shell is always reattached, never quieted. A caller with
-   * no activity clock has no basis to claim the session is idle, and guessing
-   * "idle" from the absence of information would silence output for a viewer who
-   * is sitting right there.
+   * OMITTED — or returning `undefined` — means the watchdog behaves exactly as
+   * it did before `attach-quiet` existed: an attached shell is always
+   * reattached, never quieted. `undefined` is the caller's way of saying "I have
+   * no TRUSTWORTHY idleness signal for this session", which covers both a caller
+   * with no clock at all and a caller whose clock it would be unsafe to age out
+   * (the handler returns `undefined` for a resumed agent that has not yet
+   * spoken). Guessing "idle" from the absence of information would silence
+   * output for a viewer sitting right there — and, since the hold heartbeat
+   * keys off the same quiescence, would pause the Sprite under a live agent.
    *
    * CONTRACT for callers that DO supply it: a keystroke must be recorded in this
    * clock BEFORE it is handed to `write()`, because `write()`'s lazy reattach
@@ -1277,5 +1298,10 @@ export function openPtyShell({
       // may kick off sees the viewer that is now here.
       if (attached) resumeIfLazyReattachNeeded();
     },
+    // `needsLazyReattach` IS the quiesced state: it is set exactly when a
+    // watchdog trip was swallowed by a quiet verdict, and cleared exactly when
+    // that trip is paid back (`resumeIfLazyReattachNeeded`). Nothing else can
+    // leave this shell's socket deliberately down.
+    isQuiesced: () => needsLazyReattach,
   };
 }

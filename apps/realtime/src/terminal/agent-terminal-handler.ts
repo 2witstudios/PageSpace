@@ -458,14 +458,44 @@ function startTaskHoldHeartbeat(
 ): ReturnType<typeof setInterval> {
   const tick = () =>
     taskHold.tick({
-      attached: session.viewerAttached,
+      // `attached` means "a LIVE EXEC CONNECTION exists on the Sprite for a
+      // viewer", not merely "a browser tab is open". Those were the same thing
+      // until the watchdog learned to quiet an attached-but-idle shell: a
+      // quiesced socket (`isQuiesced`) is deliberately DOWN, so it gives the
+      // platform nothing to keep the sandbox resident FOR, and holding the
+      // sprite up for it is exactly the idle-cost bug this change exists to
+      // close. Without this, `planHold`'s `needHold = attached || agentRunning`
+      // would refresh the hold forever behind any open tab — the watchdog would
+      // have gone quiet while the hold went on pinning the Sprite, and the RAM
+      // bill would not move.
+      //
+      // A viewer whose shell was paused out from under them gets it back
+      // transparently: their next keystroke resumes the socket, and the shell's
+      // own reconnect either reattaches the surviving session or falls back to a
+      // fresh one (`planReconnect`) — the same recovery a returning DETACHED
+      // viewer has always had.
+      attached: session.viewerAttached && !session.command.isQuiesced(),
       lastActivityAt: latestActivityAt(session),
-      // While DETACHED the exec socket may be dead (the shell deliberately
-      // never reconnects it — leaf 3-2), so a frozen activity clock is not
-      // evidence of idleness; the controller then keeps an existing hold
-      // rather than deleting it under an agent it can no longer see. And a
-      // detached agent that FINISHES while the socket survived still releases
-      // promptly: its PTY exit reaches onExit, whose teardown ends the hold.
+      // Whether a STALE clock is trustworthy evidence of idleness.
+      //
+      // While DETACHED the exec socket may have died mid-run — the shell
+      // deliberately never reconnects it (leaf 3-2) — so the clock can freeze
+      // under an agent that is still working. That is blind, and the controller
+      // then keeps an existing hold rather than deleting it under an agent it
+      // can no longer see. And a detached agent that FINISHES while the socket
+      // survived still releases promptly: its PTY exit reaches onExit, whose
+      // teardown ends the hold.
+      //
+      // An ATTACHED shell stays observable even once the watchdog quiets it,
+      // which is why this is still just `viewerAttached`. A shell is only ever
+      // quiesced-while-attached BECAUSE its clock was already stale past the
+      // idle window while the socket was live and watching (`attach-quiet` is
+      // unreachable with fresh activity — see `planWatchdogResponse`). The
+      // freeze is a CONSEQUENCE of idleness we observed, not a blindfold that
+      // hides work. Passing `false` here instead would invert the policy and
+      // pin the hold forever: `agentRunning` is
+      // `isAgentActive(...) || (!activityObservable && holdExists)`, so an
+      // unobservable session with a live hold counts as running by definition.
       activityObservable: session.viewerAttached,
     });
   tick();
@@ -946,7 +976,20 @@ export function buildAgentTerminalHandlers({
           // the Sprite every ~45s for a viewer who is only watching an idle
           // prompt. The next keystroke reattaches transparently. See
           // `planWatchdogResponse`'s `attach-quiet`.
-          getLastActivityAt: () => latestActivityAt(session),
+          //
+          // `undefined` — "no trustworthy idleness signal, keep the socket up" —
+          // for the ONE session whose silence proves nothing: a RESUMED agent
+          // that has not yet emitted a byte to us. It was verified live at
+          // connect, so it may be mid-run and merely thinking; our clock holds
+          // nothing but the connect stamp, and letting that age into a quiet
+          // verdict would drop the hold (see the tick below) and pause the
+          // sprite under a working agent. This is the SAME trust rule
+          // `disconnectConnection` already applies to its own hold tick
+          // (`hasOutput || !resumedAtCreate`) — silence is only evidence of
+          // idleness once we have heard this session speak at least once. The
+          // moment it does, `hasOutput` flips and the normal idle window governs.
+          getLastActivityAt: () =>
+            (session.hasOutput || !session.resumedAtCreate ? latestActivityAt(session) : undefined),
           onOutput: (data) => {
             // The hold's "agent output is flowing" signal — kept fresh here so
             // a DETACHED session with an agent mid-run keeps its sprite up.

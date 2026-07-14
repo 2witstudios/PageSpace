@@ -50,7 +50,7 @@ function makeShell(): PtyShell & {
   kill: ReturnType<typeof vi.fn>;
   setViewerAttached: ReturnType<typeof vi.fn>;
 } {
-  return { write: vi.fn(), resize: vi.fn(), kill: vi.fn(), setViewerAttached: vi.fn() };
+  return { write: vi.fn(), resize: vi.fn(), kill: vi.fn(), setViewerAttached: vi.fn(), isQuiesced: () => false };
 }
 
 function makeSprite(sessions: Array<{ id: string; command: string; isActive: boolean; tty: boolean }> = []) {
