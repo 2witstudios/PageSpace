@@ -45,6 +45,8 @@ One drive sits behind both. Here is what that looks like.
 
 Everything in this guide is running in a small reference app we built on exactly those two connections. Three surfaces, one drive behind all of them.
 
+Keep one thing in mind as you look: this is your own app, so it can look however you want. The screenshots below are just one design we put together to show the pieces. Because PageSpace is only the backend, the chat box, the help center, and the admin are entirely your frontend: your layout, your branding, your fonts and colors, your components. Nothing about the look is fixed or locked to a PageSpace widget. You build the interface; PageSpace supplies the answers and the content behind it.
+
 **Customers ask the bot.** A chat box on your site, streaming answers straight from the docs in your drive:
 
 ![The public support bot on a website](/blog/support-bot/public-bot.png)
@@ -67,7 +69,7 @@ Everything in this guide is running in a small reference app we built on exactly
 
 *Edit an answer here and the next customer question is answered from the new version. No developer, no redeploy: the docs are the bot's knowledge, and updating them updates the bot.*
 
-The help center and the admin above are built with the **[SDK](/docs/features/sdk)**, a small library for reading and writing your content. Listing, reading, and searching your docs is a few lines, so a developer can put your own interface in front of them:
+The help center and the admin above are built with the **[SDK](/docs/features/sdk)**, a small library for reading and writing your content. Listing, reading, and searching your docs is a few lines, so a developer can build whatever interface you want on top of them:
 
 \`\`\`ts
 import { PageSpaceClient, StaticTokenProvider } from "@pagespace/sdk";
