@@ -171,9 +171,9 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     return false;
   }
 
-  let settled = true;
+  let settled: boolean;
   try {
-    await db
+    const result = await db
       .update(aiStreamSessions)
       .set({ status: 'aborted', completedAt: now, parts: [], rawPartsCount: 0, abortRequestedAt: null })
       .where(and(
@@ -182,6 +182,12 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
         // caller's read and here is not retroactively relabelled.
         eq(aiStreamSessions.status, 'streaming'),
       ));
+    // A conditional UPDATE that matches zero rows does not throw — it succeeds and changes
+    // nothing. That happens when a concurrent reap (another instance's takeover, or a second
+    // sweep racing this one) already settled this exact row first. `rowCount` is the only way
+    // to tell "I settled it" from "someone else already had" — matching the established
+    // pattern for the same class of conditional update (compaction-repository.ts).
+    settled = (result.rowCount ?? 0) > 0;
   } catch (error) {
     settled = false;
     loggers.ai.warn('materializeInterruptedStream: could not settle session row', {

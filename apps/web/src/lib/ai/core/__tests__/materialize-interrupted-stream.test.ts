@@ -105,7 +105,9 @@ beforeEach(() => {
   mockInsertValues.mockReturnValue({ onConflictDoUpdate: mockOnConflictDoUpdate });
   mockOnConflictDoUpdate.mockResolvedValue(undefined);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-  mockUpdateWhere.mockResolvedValue(undefined);
+  // Defaults to "one row actually settled" (rowCount: 1) — the common case. Tests exercising the
+  // zero-row race (a concurrent reap already settled this row) override this per-case.
+  mockUpdateWhere.mockResolvedValue({ rowCount: 1 });
   mockBroadcastAiStreamComplete.mockResolvedValue(undefined);
 });
 
@@ -313,6 +315,28 @@ describe('materializeInterruptedStream — settling the session row', () => {
       actual: conds.find((c) => c.field === 'ai_stream_sessions.status')?.value,
       expected: 'streaming',
     });
+  });
+
+  // The conditional UPDATE (`WHERE messageId = X AND status = 'streaming'`) does NOT throw when
+  // it matches zero rows — it succeeds and changes nothing. That happens when a concurrent reap
+  // (another instance's takeover, or a second sweep racing this one) already settled this exact
+  // row first. Reporting `true` here would credit THIS call with settling a row someone else
+  // already handled, and — more importantly — would mask the case where the row was never
+  // settled by anyone (see the `rowCount: 0` semantics matching compaction-repository.ts's own
+  // conditional-update pattern).
+  it('reports false when the session-row update matches zero rows (a concurrent reap already settled it)', async () => {
+    mockUpdateWhere.mockResolvedValue({ rowCount: 0 });
+
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+    // The message write still succeeded and is not itself an error — only the session-settle
+    // half is "unsettled", so this is not a warn-worthy failure the way a thrown error is.
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  it('defensively treats a missing rowCount (driver/mock returns undefined) as zero, not as settled', async () => {
+    mockUpdateWhere.mockResolvedValue({});
+
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
   });
 
   it('does not settle the session row when the message write fails', async () => {
