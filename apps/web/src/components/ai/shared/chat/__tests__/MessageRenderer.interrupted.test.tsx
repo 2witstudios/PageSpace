@@ -134,10 +134,16 @@ describe('MessageRenderer — interrupted affordance', () => {
 
   // The other half of the fix: a message that DID stream real text before dying already gets a
   // retry button from TextBlock's own footer — the message-level button must not duplicate it.
+  // TextBlock's footer (MessageActionButtons) only renders at all when BOTH onEdit and onDelete
+  // are supplied (not onRetry alone), matching how the real chat surfaces always wire all three
+  // together — so this test must supply them too, or TextBlock's footer never appears and the
+  // "exactly one" assertion would trivially pass on zero.
   it('given an interrupted message WITH real text content and a retry handler, shows exactly ONE retry button', () => {
     render(
       <MessageRenderer
         message={assistantMessage({ status: 'interrupted' })}
+        onEdit={async () => {}}
+        onDelete={async () => {}}
         onRetry={() => {}}
         isLastAssistantMessage
       />,

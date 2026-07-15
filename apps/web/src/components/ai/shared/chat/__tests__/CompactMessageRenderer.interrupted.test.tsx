@@ -129,10 +129,15 @@ describe('CompactMessageRenderer — interrupted affordance', () => {
     expect(screen.getByTitle('Retry this message')).toBeInTheDocument();
   });
 
+  // CompactTextBlock's footer (MessageActionButtons) only renders at all when BOTH onEdit and
+  // onDelete are supplied (not onRetry alone) — supply them so TextBlock's own retry button
+  // actually appears, or the "exactly one" assertion would trivially pass on zero.
   it('given an interrupted message WITH real text content and a retry handler, shows exactly ONE retry button', () => {
     render(
       <CompactMessageRenderer
         message={assistantMessage({ status: 'interrupted' })}
+        onEdit={async () => {}}
+        onDelete={async () => {}}
         onRetry={() => {}}
         isLastAssistantMessage
       />,
