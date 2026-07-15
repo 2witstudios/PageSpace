@@ -12,10 +12,10 @@ import ts from 'typescript';
 // correctly rejected. `\r?` tolerates CRLF line endings: .gitattributes does
 // not force LF for .ts files, so a Windows/core.autocrlf checkout can have
 // \r\n here even though the repo's own files are LF.
-export const SENTINEL_REGEX = /^([ \t]*)\/\* ratchet:start \*\/[ \t]*\r?\n[\s\S]*?^[ \t]*\/\* ratchet:end \*\/[ \t]*\r?$/m;
+const SENTINEL_REGEX = /^([ \t]*)\/\* ratchet:start \*\/[ \t]*\r?\n[\s\S]*?^[ \t]*\/\* ratchet:end \*\/[ \t]*\r?$/m;
 const SENTINEL_REGEX_GLOBAL = new RegExp(SENTINEL_REGEX.source, `${SENTINEL_REGEX.flags}g`);
 
-export const PLAIN_REGEX = /thresholds:\s*\{[^}]+\}/s;
+const PLAIN_REGEX = /thresholds:\s*\{[^}]+\}/s;
 
 // Match the sentinel-marked ratchet region first — packages with per-glob
 // threshold keys after the four ratcheted scalars (e.g. apps/web's 100% gates
@@ -34,12 +34,12 @@ export const PLAIN_REGEX = /thresholds:\s*\{[^}]+\}/s;
 //    it to a malformed sentinel reproduces the original truncation bug on
 //    apps/web's per-glob keys.
 export function matchThresholdBlock(config) {
-  const sentinelSpans = config.match(SENTINEL_REGEX_GLOBAL);
-  if (sentinelSpans && sentinelSpans.length > 1) {
-    throw new Error(`found ${sentinelSpans.length} ratchet:start/ratchet:end sentinel blocks — expected at most one; refusing to guess which is real`);
+  const sentinelMatches = [...config.matchAll(SENTINEL_REGEX_GLOBAL)];
+  if (sentinelMatches.length > 1) {
+    throw new Error(`found ${sentinelMatches.length} ratchet:start/ratchet:end sentinel blocks — expected at most one; refusing to guess which is real`);
   }
 
-  const sentinelMatch = config.match(SENTINEL_REGEX);
+  const sentinelMatch = sentinelMatches[0];
   if (sentinelMatch) {
     return { match: sentinelMatch, regex: SENTINEL_REGEX, isSentinel: true, indent: sentinelMatch[1] };
   }

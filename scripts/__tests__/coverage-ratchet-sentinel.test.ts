@@ -56,11 +56,8 @@ describe('matchThresholdBlock', () => {
 
   it('extracts the real numeric thresholds, not zeros from a fake match', () => {
     const found = matchThresholdBlock(CONFIG_WITH_PROSE_MENTION)!;
-    const lines = parseInt(found.match[0].match(/lines:\s*(\d+)/)?.[1] ?? '0');
-    const branches = parseInt(found.match[0].match(/branches:\s*(\d+)/)?.[1] ?? '0');
 
-    expect(lines).toBe(44);
-    expect(branches).toBe(85);
+    expect(parseThresholds(found.match[0])).toEqual({ lines: 44, branches: 85, functions: 56, statements: 44 });
   });
 
   it('falls back to the plain thresholds block when there is no sentinel', () => {
