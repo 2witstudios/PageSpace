@@ -67,16 +67,15 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           # v8 coverage instrumentation is memory-heavy; the default per-worker heap
-          # ceiling (~2-4GB in a constrained container) is occasionally too tight for
-          # apps/web's ~930-file suite, causing an intermittent
-          # "Ineffective mark-compacts near heap limit" crash. ubuntu-latest runners
-          # have 16GB RAM. apps/web/vitest.config.ts locks coverage concurrency to
-          # maxForks: 3 — confirmed via CI log that this concurrency level does NOT
-          # exceed total system memory (both earlier failures at ~this same fork
-          # count were clean per-process exits, never an OS-level OOM-kill) — so the
-          # remaining headroom goes entirely into this per-process ceiling instead
-          # of into more parallel forks.
-          NODE_OPTIONS: --max-old-space-size=14336
+          # ceiling (~2-4GB in a constrained container) is too tight for apps/web's
+          # suite. apps/web/vitest.config.ts's `coverage.all: false` (see that file's
+          # comment) addresses the actual memory driver — hundreds of never-tested
+          # files no longer get instrumented for nothing — so this is a modest
+          # headroom bump, not the primary fix. Deliberately NOT pushed as high as a
+          # prior attempt (14GB): that combination, at a low locked fork count, spent
+          # ~53 minutes GC-thrashing near the ceiling instead of failing fast, which
+          # is worse than either a clean crash or a pass. ubuntu-latest has 16GB RAM.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's

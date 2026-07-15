@@ -13,22 +13,21 @@ export default defineConfig({
     // takes effect and the v8-coverage-instrumented run of this ~930-file
     // suite no longer crashes with "Ineffective mark-compacts near heap limit".
     pool: 'forks',
-    // Trimming the reporters (below) didn't fully fix it either: 2 forks still
-    // hit the identical FATAL ERROR after all their assigned tests passed —
-    // confirmed via CI log as a graceful per-process V8 ceiling breach (exit
-    // code 1, all tests still reported passed), NOT a system-level OOM-kill.
-    // Raising maxForks to 8 (tried next) made that per-process crash disappear,
-    // but instead caused a genuine system-level OOM-kill (exit 137, "runner has
-    // received a shutdown signal") — 8 truly concurrent coverage-instrumented
-    // forks summed past the 16GB runner's physical RAM even though no single
-    // one hit its own ceiling. That run proved the default (~one fork per CPU,
-    // ~3 on this runner) does NOT exceed total system memory — both prior
-    // failures at that concurrency were clean, non-signal exits. So: lock
-    // concurrency to a known-safe, deliberately low value (rather than trust
-    // the runner's exact CPU count) and spend the confirmed headroom entirely
-    // on the per-process ceiling (see NODE_OPTIONS in ci.yml) instead of on
-    // more parallel forks.
-    poolOptions: { forks: { minForks: 3, maxForks: 3 } },
+    // Fork-count/ceiling tuning alone couldn't fix the coverage-run OOM (see
+    // this file's and ci.yml's git history for the full trail — 4 different
+    // combinations tried: graceful per-process crashes, a system-level OOM-kill
+    // at high concurrency, and a ~53-minute GC-thrashing hang at a high ceiling
+    // with low, locked concurrency). Switching the coverage provider to
+    // 'istanbul' was also tried and reverted: its babel-counter instrumentation
+    // counts branches differently than v8's precise coverage, which silently
+    // dropped several files below their 100% thresholds (e.g. lines 98.96%,
+    // branches 98.02% on src/lib/ai/streams/*.ts) — fixing that would mean
+    // writing new tests, out of scope for a CI-infra fix. Addressed the actual
+    // memory driver instead: `coverage.all` (see below) was leaving hundreds of
+    // never-tested source files instrumented for no reason. Reverted
+    // concurrency to the pool's default (proven safe against total system
+    // memory across two earlier runs) and kept a modest heap bump as headroom,
+    // not as the primary fix.
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
@@ -37,11 +36,22 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
       provider: 'v8',
+      // Defaults to true, which instruments every source file matching
+      // include/exclude below — including the ~640 files (1569 non-test source
+      // files vs 932 test files, apps/web/src) that no test ever imports or
+      // executes. Each one still costs v8 coverage bookkeeping despite
+      // contributing nothing but a hardcoded 0% row to the report. Disabling
+      // this can only raise or hold steady the computed percentages for
+      // thresholds (never lower them — it strictly removes always-0% files
+      // from the denominator), so it doesn't risk the ratchet or the 100%
+      // per-glob checks; verified locally that the 5 gated globs stay at
+      // 100/100/100/100 with this off.
+      all: false,
       // Only coverage-summary.json is ever consumed (coverage-report.mjs,
       // coverage-ratchet.mjs, the CI artifact upload) — 'json' (full raw
       // per-statement maps) and 'html' (syntax-highlighted per-file pages)
-      // for this ~930-file suite were dead weight that spiked memory hard
-      // during report generation at the tail end of the coverage run.
+      // for this suite were dead weight that spiked memory hard during report
+      // generation at the tail end of the coverage run.
       reporter: ['text', 'json-summary'],
       reportsDirectory: './coverage',
       reportOnFailure: true,
