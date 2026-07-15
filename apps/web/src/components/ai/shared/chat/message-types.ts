@@ -15,6 +15,14 @@ export interface ConversationMessage extends UIMessage {
   editedAt?: Date;
   createdAt?: Date;
   userName?: string | null;
+  /**
+   * Lifecycle state of an assistant row (see chat_messages.status / messages.status).
+   * `'interrupted'` means the generation died mid-flight and this is a real, partial
+   * reply, terminal and never resumed on its own — MessageRenderer badges it and
+   * surfaces a retry hint. Absent on rows saved before this column existed, which
+   * read as `'complete'` server-side by default.
+   */
+  status?: 'streaming' | 'complete' | 'interrupted';
 }
 
 /**
