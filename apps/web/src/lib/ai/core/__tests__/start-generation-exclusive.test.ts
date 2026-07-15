@@ -252,4 +252,65 @@ describe('startGenerationExclusive', () => {
       expect(metricMeta).toMatchObject({ reason: 'lock_busy' });
     });
   });
+
+  describe('run() throws while the lock is genuinely acquired (NOT a lock-machinery failure)', () => {
+    it('given the lock is genuinely acquired and run() throws, should propagate the error and NOT invoke run a second time unlocked (no double generation)', async () => {
+      const client = makeClient([true]);
+      const pool = makePool(client);
+      const runError = new Error('placeholder insert failed');
+      // Mirrors the reviewer's repro exactly: run rejects on its first (locked) invocation
+      // only. Pre-fix, the outer catch misclassified this as lock machinery failure and
+      // called degradeToUnlocked(..., run), invoking run a second time — unlocked — which
+      // would resolve here with 'second-call-result' and outcome 'degraded'.
+      const run = vi.fn().mockRejectedValueOnce(runError).mockResolvedValueOnce('second-call-result');
+      const sleep = vi.fn(async () => {});
+
+      await expect(startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep })).rejects.toThrow(runError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('given run() throws with the lock held, should NOT emit lock-degrade telemetry (this is a run failure, not a lock failure)', async () => {
+      const client = makeClient([true]);
+      const pool = makePool(client);
+      const run = vi.fn(async () => { throw new Error('boom'); });
+      const sleep = vi.fn(async () => {});
+
+      await expect(startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep })).rejects.toThrow('boom');
+
+      expect(mockLoggerWarn).not.toHaveBeenCalled();
+      expect(mockLogPerformance).not.toHaveBeenCalled();
+    });
+
+    it('given run() throws with the lock held, the advisory lock must still be released (finally-in-withAdvisoryLock, unaffected by the fix)', async () => {
+      const client = makeClient([true]);
+      const pool = makePool(client);
+      const run = vi.fn(async () => { throw new Error('boom'); });
+
+      await expect(
+        startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep: vi.fn(async () => {}) }),
+      ).rejects.toThrow('boom');
+
+      // try-lock + unlock: the lock was genuinely acquired and released despite run() throwing.
+      expect(client.query).toHaveBeenCalledTimes(2);
+    });
+
+    it('given run() throws and the SAME conversation is retried by the caller, a real lock-machinery failure on that retry should still degrade normally', async () => {
+      // Guards against a stale `runThrew` flag leaking across calls/loop iterations.
+      const client = makeClient([true]);
+      const pool = makePool(client);
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      const brokenPool: AdvisoryLockPool = { connect: vi.fn(async () => { throw new Error('pool exhausted'); }) };
+
+      await expect(startGenerationExclusive({ conversationId: 'conv-1', run: vi.fn(async () => { throw new Error('first call run failure'); }), pool, sleep })).rejects.toThrow(
+        'first call run failure',
+      );
+
+      const result = await startGenerationExclusive({ conversationId: 'conv-2', run, pool: brokenPool, sleep });
+      expect(result).toEqual({ outcome: 'degraded', result: 'lifecycle-handle' });
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+  });
 });

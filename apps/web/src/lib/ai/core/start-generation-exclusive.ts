@@ -25,9 +25,14 @@ import { loggers, logPerformance } from '@pagespace/lib/logging/logger-config';
  * never block. Both degrade paths emit the same telemetry, tagged with a `reason` so they stay
  * distinguishable (`lock_busy` vs `lock_error`) in logs/metrics.
  *
- * `fn` (takeover + lifecycle-create today; the assistant message-row insert once PR 2 lands —
- * see the seam note on the PR 2 page) runs exactly once per call, either inside the lock or,
- * on degrade, once unlocked. It never runs twice for one `startGenerationExclusive` call.
+ * `run` (takeover + lifecycle-create + the placeholder message-row insert, PR 2) runs exactly
+ * once per call, either inside the lock or, on degrade, once unlocked. It never runs twice for
+ * one `startGenerationExclusive` call — enforced below, not merely assumed: the loop tags
+ * whether `run` itself threw (as opposed to the lock machinery failing), and a `run` failure
+ * propagates as a genuine failure instead of triggering the unlocked fallback. Every operation
+ * inside `run` is ALSO expected to catch and log its own errors (each call site's own
+ * try/catch) so this path is a backstop, not the primary defense — but the backstop is real:
+ * if `run` throws for any reason, this can never double-invoke it.
  */
 
 export const MAX_LOCK_BUSY_RETRIES = 3;
@@ -114,18 +119,38 @@ export async function startGenerationExclusive<T>(
 
   let attemptsMade = 0;
   for (;;) {
+    // Tags whether THIS attempt's exception came from `run` itself, so the catch below can
+    // tell it apart from the lock machinery failing. Every operation inside `run` is expected
+    // to catch and log its own errors (see each call site), so `runThrew` firing means that
+    // contract was violated somewhere — but it must still never cause a double-invocation.
+    let runThrew = false;
+    const guardedRun = async (): Promise<T> => {
+      try {
+        return await run();
+      } catch (error) {
+        runThrew = true;
+        throw error;
+      }
+    };
+
     let attempt;
     try {
-      attempt = await withAdvisoryLock(pool, lockKey, run);
+      attempt = await withAdvisoryLock(pool, lockKey, guardedRun);
     } catch (error) {
+      if (runThrew) {
+        // `run` ran — possibly with real side effects — while the lock WAS held. Degrading
+        // to an unlocked fallback here would invoke `run` a SECOND time, unlocked: exactly
+        // the double-generation/double-billing race this lock exists to close. A `run`
+        // failure must propagate as a genuine, one-time failure instead.
+        throw error;
+      }
       // The lock connection itself failed (pool.connect() or the try-lock query threw) —
-      // NOT `run` throwing. `run` (takeover + lifecycle-create) is documented to catch and
-      // log its own errors and never throw, so this catch can only be reached by the lock
-      // machinery; `run` has not been invoked yet on this path. Degrade immediately rather
-      // than retry: a broken connection is not "busy" and won't resolve itself in 300ms the
-      // way lock contention might, so retrying here would only add latency to a send that
-      // must never block. See the PR board page's verification: "Lock-pool exhaustion
-      // simulation: proceeds unlocked, metric emitted, warn logged, both requests complete."
+      // NOT `run` throwing (guardedRun above would have set `runThrew`). `run` has not been
+      // invoked yet on this path. Degrade immediately rather than retry: a broken connection
+      // is not "busy" and won't resolve itself in 300ms the way lock contention might, so
+      // retrying here would only add latency to a send that must never block. See the PR
+      // board page's verification: "Lock-pool exhaustion simulation: proceeds unlocked, metric
+      // emitted, warn logged, both requests complete."
       return degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error', error }, run);
     }
 

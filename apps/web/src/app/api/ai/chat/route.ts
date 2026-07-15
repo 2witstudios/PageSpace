@@ -1274,20 +1274,35 @@ export async function POST(request: Request) {
         // stream row without its placeholder, or vice versa. Skipped when pre-aborted — the
         // user pressed Stop before streamText ever ran, so there is no generation to show and
         // no execute-end/onFinish write will ever arrive to flip this row out of 'streaming'.
+        //
+        // Own try/catch, matching every other operation in this closure (takeOverConversationStreams,
+        // createStreamLifecycle): `run` must never throw while the advisory lock is held, or
+        // start-generation-exclusive.ts's caller misclassifies it as lock-machinery failure and
+        // invokes `run` a SECOND time, unlocked — double generation, double billing. Best-effort:
+        // a failed placeholder just means history can't show this entry mid-stream; the generation
+        // itself still proceeds.
         if (!streamLifecycle.preAborted) {
-          await db.insert(chatMessages).values({
-            id: serverAssistantMessageId!,
-            pageId: chatId!,
-            conversationId: conversationId!,
-            role: 'assistant',
-            content: '',
-            toolCalls: null,
-            toolResults: null,
-            isActive: true,
-            userId: null,
-            sourceAgentId: null,
-            status: 'streaming',
-          });
+          try {
+            await db.insert(chatMessages).values({
+              id: serverAssistantMessageId!,
+              pageId: chatId!,
+              conversationId: conversationId!,
+              role: 'assistant',
+              content: '',
+              toolCalls: null,
+              toolResults: null,
+              isActive: true,
+              userId: null,
+              sourceAgentId: null,
+              status: 'streaming',
+            });
+          } catch (error) {
+            loggers.ai.warn('AI Chat API: placeholder assistant row INSERT failed', {
+              messageId: serverAssistantMessageId,
+              conversationId,
+              error: error instanceof Error ? error.message : 'unknown',
+            });
+          }
         }
 
         return streamLifecycle;
