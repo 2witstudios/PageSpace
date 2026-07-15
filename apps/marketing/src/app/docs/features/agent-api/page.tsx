@@ -18,7 +18,7 @@ It shares credentials with the rest of the developer surface — the same \`mcp_
 ## The endpoint
 
 - **Base URL** — \`https://pagespace.ai/api/v1\`
-- **API key** — a drive-scoped key (\`mcp_...\`) from \`pagespace keys\` or **Settings > MCP**. Keep it server-side; it can read and write everything in its scope.
+- **API key** — a drive-scoped key (\`mcp_...\`) from \`pagespace keys\` or **Settings > MCP**, minted with edit access (an inherit key, created without \`--role\`). Keep it server-side.
 - **Model** — \`ps-agent://<pageId>\`, the id of the AI Chat page to run. Copy it from the agent's settings tab, or list every agent a key can reach with \`GET /api/v1/models\`.
 
 Because it is the OpenAI Chat Completions shape, the OpenAI SDKs work unchanged — you only swap the base URL and key.
@@ -63,11 +63,11 @@ The page you name in \`model\` runs as the agent you configured, so each request
 - **its tools, executed server-side** — it searches the drive, reads pages, and writes back on its own, and returns the result; and
 - **your permissions and the key's scope** — it can only reach what the key can reach. If you cannot see a page in the app, the agent cannot either.
 
-Because the agent runs write tools on your behalf, the endpoint requires **edit** access to the agent page. A view-only key gets a \`403\` — mint a member-scoped key for a chat backend.
+Because the agent runs write tools on your behalf, the endpoint requires **edit** access to the agent page. A key without edit gets a \`403\`. The simplest edit-capable key inherits your own drive access, so create it without a \`--role\` (a plain \`--role member\` key is view-only on an agent page and will 403).
 
 ## Streaming only
 
-Responses stream. Set \`stream: true\`; a non-streaming request is rejected with a \`400\`. This keeps a chat UI responsive and matches how the in-app agent renders.
+Responses always stream. Set \`stream: true\`; an explicit \`stream: false\` is rejected with a \`400\` (omitting it streams anyway). This keeps a chat UI responsive and matches how the in-app agent renders.
 
 ## Store and resume conversations
 
@@ -75,7 +75,7 @@ Each call is stateless by default: you send the messages, the agent replies, not
 
 This holds even when your app owns the conversation UX. Set \`client_manages_history: true\` and your harness keeps its own context window — it resends the history it wants on each call — while PageSpace still records the thread under the \`conversation_id\` you pass. So you handle conversations in your harness *and* they live in PageSpace, resumable by any client (or a human in the app) that can reach them.
 
-You don't have to pre-create the thread: pass a fresh \`conversation_id\` and PageSpace creates it on first use, owned by your key.
+With \`client_manages_history\` set, you don't even have to pre-create the thread: pass a fresh \`conversation_id\` and PageSpace creates it on first use, owned by your key. (On the default path, an unknown \`conversation_id\` returns 404 — create it first with \`POST /api/v1/conversations\`.)
 
 \`\`\`bash
 # Optional: create a thread up front (drive-scoped, titled) — or just pass a new

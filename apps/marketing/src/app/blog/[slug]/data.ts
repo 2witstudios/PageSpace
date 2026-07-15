@@ -23,58 +23,74 @@ export function formatDate(dateString: string): string {
 export const blogPosts: Record<string, BlogPost> = {
   "build-a-chat-app-on-pagespace": {
     slug: "build-a-chat-app-on-pagespace",
-    title: "Build a Chat App Without Building a Backend",
+    title: "Turn Your PageSpace Docs Into a Support Bot",
     description:
-      "Every PageSpace agent is an OpenAI-compatible endpoint, so your chat app can skip the model, the prompt, the tools, and the conversation store. Here is the whole integration, end to end.",
+      "Your help docs already live in a PageSpace drive. Point a support bot at them through the OpenAI-compatible endpoint, and let every conversation land back in PageSpace for your team to read and step into.",
     content: `
 ## What you'll have when you're done
 
-A chat app whose entire backend is a PageSpace agent. It answers with your system prompt, runs your tools, reaches into your drive, and stores every conversation — and the only thing you wrote is the interface.
+A support bot on your site that answers customers from the help docs in your PageSpace drive, with every conversation showing up in PageSpace for your team to read and step into. You build the chat box. PageSpace is everything behind it: the model, the system prompt, the search across your docs, and the place the conversations live.
 
-Adding a chatbot to an app usually burns a week on plumbing that has nothing to do with the app: choose a model, wire up streaming, write a system prompt and keep it in sync, build the tools it can call, stand up a place to pull context from, and save conversations somewhere. None of that is your product. It's the tax you pay before you get to your product.
+Standing up a support bot normally costs a week on work that has nothing to do with support. Pick a model. Wire streaming. Write and version a system prompt. Index your docs into a vector store. Build retrieval. Store the conversations somewhere your team can see them. If your help content already lives in a PageSpace drive, that work is finished. A PageSpace agent reads the drive, answers from it, and keeps the thread. You point your chat box at it.
 
-If your knowledge already lives in PageSpace, you've paid it. Every AI Chat page is an agent — a system prompt, a set of tools, and the run of a whole drive behind it — and every agent answers on an OpenAI-compatible endpoint. So a PageSpace agent is the backend. You point at it.
+Here is the whole thing, start to finish.
 
-## Wire your UI to an agent
+## Set up the support agent
 
-**1. Mint a scoped key.** From the [CLI](/docs/features/cli):
+**1. Create the agent in your support drive.** An agent is an AI Chat page. Create one and keep the id it returns:
 
 \`\`\`bash
-pagespace keys create --drive <driveId> --role member --name chat-app
+pagespace pages create "Support Bot" AI_CHAT --drive <driveId> --json
+# -> { "id": "<agentPageId>", "type": "AI_CHAT", ... }
 \`\`\`
 
-Use \`--role member\`, not viewer. The agent runs write tools on your behalf, so the endpoint needs edit access — a view-only key gets a \`403\`. Keep the \`mcp_\` key on your server; it can read and write everything in its scope.
+**2. Tell it how to answer.** An AI Chat page has a system prompt, and the system prompt is what turns a blank agent into your support bot. Set it from the CLI:
 
-**2. Grab an agent's id.** Open an AI Chat page, copy its id from the settings tab, and address it as \`ps-agent://<pageId>\`. \`GET /api/v1/models\` lists every agent a key can reach.
+\`\`\`bash
+pagespace agents config <agentPageId> --set systemPrompt="You are the support assistant for Acme. Answer only from the docs in this drive. Be concise and friendly. If the docs do not cover a question, say so and offer to hand off to a human. Never invent product behavior."
+\`\`\`
 
-**3. Call it exactly like OpenAI.** It speaks Chat Completions, so change three things — the base URL, the key, and the model:
+Pick a specific model the same way if you want one (\`--set aiModel=<id>\`, and \`pagespace models list\` shows the options), or set the prompt and model in the agent's settings tab in the app.
+
+**3. Mint a key for your server.** The endpoint runs the agent's tools, which need edit access to the page, so create a key that inherits your own access to the drive (leave \`--role\` off). A plain \`member\` key is view-only on an agent page and would get a 403:
+
+\`\`\`bash
+pagespace keys create --drive <driveId> --name support-bot --show-token
+# prints PAGESPACE_TOKEN=mcp_... once. Store it as PAGESPACE_TOKEN on your server, never in the browser.
+\`\`\`
+
+Scope the key to the drive that holds your public help docs and nothing sensitive. If the key cannot see a page, neither can the agent.
+
+## Wire it into your site
+
+**4. Call the agent exactly like OpenAI.** It speaks Chat Completions, so you change three things: the base URL, the key, and the model. The model is your agent, addressed as \`ps-agent://<agentPageId>\`:
 
 \`\`\`ts
 import OpenAI from "openai";
 
 const client = new OpenAI({
   baseURL: "https://pagespace.ai/api/v1",
-  apiKey: process.env.PAGESPACE_KEY, // the mcp_ key, server-side only
+  apiKey: process.env.PAGESPACE_TOKEN, // the mcp_ token, server side only
 });
 
 const stream = await client.chat.completions.create({
-  model: "ps-agent://<pageId>",
-  stream: true, // required
-  messages: [{ role: "user", content: "What changed in the roadmap this week?" }],
+  model: "ps-agent://<agentPageId>",
+  stream: true, // the API only streams; stream: false is rejected
+  messages: [{ role: "user", content: "How do I reset my password?" }],
 });
 \`\`\`
 
-The agent answers with its own system prompt and runs its own tools server-side — it searches the drive, reads pages, and writes back, all within the key's scope. If the key can't see a page, neither can the agent. It's the same credential the [SDK](/docs/features/sdk) uses, so one key covers your whole integration.
+The agent answers with its own system prompt and runs its own tools on the server. It searches the drive, reads the right doc, and returns the answer, all inside the key's scope. It is the same credential the [SDK](/docs/features/sdk) and [CLI](/docs/features/cli) use.
 
-**4. Stream it to the browser.** The response is an OpenAI stream, so a Next.js route handler that pipes it to the client is a dozen lines:
+**5. Stream it to the customer.** The response is an OpenAI stream, so a Next.js route handler that pipes it to the browser is a dozen lines:
 
 \`\`\`ts
-// app/api/chat/route.ts
+// app/api/support/route.ts
 export async function POST(req: Request) {
   const { messages } = await req.json();
 
   const stream = await client.chat.completions.create({
-    model: "ps-agent://<pageId>",
+    model: "ps-agent://<agentPageId>",
     stream: true,
     messages,
   });
@@ -95,13 +111,13 @@ export async function POST(req: Request) {
 }
 \`\`\`
 
-Your front end reads that stream and renders tokens as they land. That's the app.
+Your chat box posts the message history to that route and renders tokens as they arrive. That is the bot.
 
-## Conversations live in PageSpace
+## Every conversation lands in PageSpace
 
-Pass a \`conversation_id\` and the thread stops being throwaway. Every message persists in PageSpace, shows up on the AI Chat page in the app, and reads back later so a user can resume where they left off.
+A support bot is only half done if the conversations vanish. Pass a \`conversation_id\` and the thread persists in PageSpace: every message is stored, it appears on the AI Chat page in the app, and your support team can read it or open the same thread and reply as a human.
 
-You don't give up control to get that. Set \`client_manages_history: true\` and your app keeps its own context window and its own UI, while PageSpace records the thread under the id you pass. Mint the id yourself — it's created on first use and owned by your key. To resume:
+Give each customer session its own \`conversation_id\`. Set \`client_manages_history: true\` so your app keeps its own context window and UI, then pass a \`conversation_id\` you mint per session: with that flag set, PageSpace creates the thread on first use, owned by your key, and stores every message under it while your app stays in charge of the chat. (Prefer to create threads up front? \`POST /api/v1/conversations\` with a \`drive_id\` returns an id you reuse.) To let a customer resume where they left off, read the stored messages back:
 
 \`\`\`bash
 curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
@@ -109,17 +125,13 @@ curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
 # -> { "messages": [ { "role": "user", "content": "..." }, ... ] }
 \`\`\`
 
-Rehydrate your UI from those messages, or let a teammate open the same thread in PageSpace and reply in their browser. The conversation isn't locked inside your app's database. It's a page in the workspace.
+Rehydrate the chat box from those messages and the customer picks up mid conversation. A teammate can open the same thread in PageSpace and take over. The conversation is not trapped in your database. It is a page in the workspace.
 
-## What you didn't have to build
-
-Count what you skipped: no model to choose, no system prompt to maintain — it lives on the agent page, and anyone on your team can edit it without a deploy — no tools to define, no retrieval layer because [the drive is the context](/blog/your-workspace-is-the-context), and no conversation store. You brought a UI and a scoped key. PageSpace brought the rest.
-
-Start with the [Agent API reference](/docs/features/agent-api): streaming, threads, listing agents, and permissions, in full.
+Count what you did not build: no model, no system prompt to maintain (it lives on the agent page, editable by your support lead without a deploy), no vector store, no retrieval layer since [the drive is the context](/blog/your-workspace-is-the-context), and no conversation store. You brought a chat box and a scoped key. PageSpace brought the rest. The full reference is in the [Agent API docs](/docs/features/agent-api).
 `,
     author: "Jono",
     date: "2026-07-14",
-    readTime: "4 min read",
+    readTime: "5 min read",
     category: "Guide",
   },
   "usage-based-pricing-and-built-for-scale": {
