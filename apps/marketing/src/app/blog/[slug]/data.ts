@@ -25,42 +25,64 @@ export const blogPosts: Record<string, BlogPost> = {
     slug: "build-a-chat-app-on-pagespace",
     title: "Turn Your PageSpace Docs Into a Support Bot",
     description:
-      "Your help docs already live in a PageSpace drive. Point a support bot at them through the OpenAI-compatible endpoint, and let every conversation land back in PageSpace for your team to read and step into.",
+      "Your help docs already live in PageSpace. With two simple connections, a chat API for the conversation and the SDK for your content, they become a support bot on your site and a help center your team runs, with every conversation saved back in PageSpace.",
     image: "/blog/support-bot/bot-answer.png",
     content: `
 ## What you'll have when you're done
 
-A support bot on your site that answers customers from the help docs in your PageSpace drive, with every conversation showing up in PageSpace for your team to read and step into. You build the chat box. PageSpace is everything behind it: the model, the system prompt, the search across your docs, and the place the conversations live.
+A support bot on your website that answers customers from your own help docs, with every conversation saved back in PageSpace for your team to read or jump into. You build the chat box on your site. PageSpace handles everything behind it: the AI, the instructions it follows, the searching through your docs to find the answer, and the record of every conversation.
 
-Standing up a support bot normally costs a week on work that has nothing to do with support. Pick a model. Wire streaming. Write and version a system prompt. Index your docs into a vector store. Build retrieval. Store the conversations somewhere your team can see them. If your help content already lives in a PageSpace drive, that work is finished. A PageSpace agent reads the drive, answers from it, and keeps the thread. You point your chat box at it.
+Normally a support bot is a week of work that has nothing to do with support. You pick an AI model and pay to run it. You teach it how to answer and keep those instructions up to date. You build a way for it to search your help articles and pull up the right one, which is the part most teams find hardest. And you store every conversation somewhere your team can see it. If your help content already lives in a PageSpace drive, all of that is already done.
+
+You connect to it in two ways, and both are worth knowing up front:
+
+- **A chat API** runs the conversation. It is a standard chat endpoint, the same shape most AI chat tools already use, so any chat box can talk to it. This is what powers the live bot.
+- **The [SDK](/docs/features/sdk)** handles your content: reading, searching, and editing the docs the bot answers from. This is what powers the browsable help center and the admin your team uses to keep the docs current.
+
+One drive sits behind both. Here is what that looks like.
 
 ## See it working
 
-Everything in this guide is running in a small reference app built on exactly two PageSpace APIs: the OpenAI-compatible **completions endpoint** for the chat, and the **[SDK](/docs/features/sdk)** for everything else. Three surfaces, one drive behind all of them.
+Everything in this guide is running in a small reference app we built on exactly those two connections. Three surfaces, one drive behind all of them.
 
 **Customers ask the bot.** A chat box on your site, streaming answers straight from the docs in your drive:
 
 ![The public support bot on a website](/blog/support-bot/public-bot.png)
 
-*The bot is a PageSpace agent addressed over the OpenAI-compatible endpoint. None of the model, the system prompt, or the search across your docs lives in your app.*
+*The bot on your site is a PageSpace agent, answering over the chat API. Your website only shows the chat box; the AI, its instructions, and the searching through your docs all live in PageSpace.*
 
 ![The support bot answering a question from the docs](/blog/support-bot/bot-answer.png)
 
-*Ask "How do I mint a drive-scoped key?" and it reads the right page and answers with the real commands. No vector store, no retrieval code, no prompt to maintain in your codebase.*
+*Ask a real question and the bot finds the right help page and answers from it, with the actual steps. You never built the part that searches your docs to find that page; the agent reads your drive directly.*
 
-**Customers browse the same docs.** The SDK reads the drive's pages, so the exact content that feeds the bot also renders as a clean, searchable docs site:
+**Customers browse the same docs.** The same pages the bot reads also become a clean, searchable help center customers can browse themselves:
 
 ![A browsable, searchable docs site built on the PageSpace SDK](/blog/support-bot/docs-browser.png)
 
-*\`client.pages.list\` builds the index, \`client.pages.read\` renders a page, \`client.search.regex\` powers the search box. The pages are the single source of truth for both the bot and the docs.*
+*The docs are the single source of truth. The bot and the help center read from the exact same content, so they can never fall out of sync.*
 
-**You manage the docs in your own admin.** The bot's memory is just pages, and the SDK writes them, so a support lead edits the answers in a custom UI with no deploy:
+**You manage the docs in your own admin.** The bot's knowledge is just those pages, so a support lead can edit an answer in your own admin screen:
 
 ![A custom docs admin built on the PageSpace SDK](/blog/support-bot/docs-admin.png)
 
-*Edit a page here and the next customer question is answered from the new content. The docs are the bot's brain; this is where you change its mind, through \`client.pages.replaceLines\`.*
+*Edit an answer here and the next customer question is answered from the new version. No developer, no redeploy: the docs are the bot's knowledge, and updating them updates the bot.*
 
-And because the drive is a real PageSpace workspace, you can skip the custom admin entirely and manage all of it natively in the app: edit the docs, configure the agent, and read every customer conversation as a page your team can open.
+The help center and the admin above are built with the **[SDK](/docs/features/sdk)**, a small library for reading and writing your content. Listing, reading, and searching your docs is a few lines, so a developer can put your own interface in front of them:
+
+\`\`\`ts
+import { PageSpaceClient, StaticTokenProvider } from "@pagespace/sdk";
+
+const ps = new PageSpaceClient({
+  baseUrl: "https://pagespace.ai",
+  auth: new StaticTokenProvider(process.env.PAGESPACE_TOKEN),
+});
+
+const { pages } = await ps.pages.list({ driveId, recursive: true, ls: true }); // the help-center list
+const doc = await ps.pages.read({ operation: "read", pageId });                // one page to show
+const hits = await ps.search.regex({ driveId, pattern: "reset password", searchIn: "content" }); // the search box
+\`\`\`
+
+And because the drive is a real PageSpace workspace, you can skip the custom admin entirely and manage all of it natively in the app: edit the docs, adjust the bot, and read every customer conversation as a page your team can open.
 
 ![The same agent and its docs, managed natively inside PageSpace](/blog/support-bot/inside-pagespace.png)
 
@@ -184,7 +206,7 @@ First, keep the token on your server. The \`mcp_\` key inherits your drive acces
 
 Second, add rate limiting. The endpoint does not do per-request rate limiting for you. It caps how many calls run at once and it stops when your credits run out, but nothing stops one visitor from sending request after request, and every request spends your drive's credits. On a public page that is an open door to drain your balance. Put a limit in the route that fronts the endpoint: throttle by IP or session, cap messages per minute, and reject anything over the line before it reaches PageSpace. It is a few lines in the same route handler that already holds the token.
 
-Count what you did not build: no model, no system prompt to maintain (it lives on the agent page, editable by your support lead without a deploy), no tools to write (you turn on the agent's built-in search and read), no vector store to build or keep in sync since [the drive is the context](/blog/your-workspace-is-the-context) and the agent searches it directly, and no conversation store. You brought a chat box and a scoped key. PageSpace brought the rest. The full reference is in the [Agent API docs](/docs/features/agent-api).
+Look at everything you did not have to build: no AI model to choose and pay a separate vendor to run, no instructions to keep up to date in your code (they live on the agent page, editable by your support lead), no search system to build and maintain so the bot finds the right article (the agent reads your drive directly, since [the drive is the context](/blog/your-workspace-is-the-context)), and no database of past conversations (they are already pages in your workspace). You brought a chat box and a key. PageSpace brought the rest. The full technical reference is in the [Agent API docs](/docs/features/agent-api) and the [SDK docs](/docs/features/sdk).
 `,
     author: "Jono",
     date: "2026-07-14",
