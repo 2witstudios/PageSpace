@@ -50,6 +50,9 @@ export function AskView({ chat, botName, suggestions = DEFAULT_SUGGESTIONS }: As
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    // Re-set on mount so StrictMode's dev remount (mount → cleanup → mount)
+    // doesn't leave the ref stuck false and silently break sending.
+    aliveRef.current = true;
     return () => {
       aliveRef.current = false;
       abortRef.current?.abort();
