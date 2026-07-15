@@ -448,6 +448,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 onClick={handleRetry}
                 className="h-4 px-0.5"
                 title="Retry this message"
+                aria-label="Retry this message"
               >
                 <RotateCw className="h-2 w-2" />
               </Button>

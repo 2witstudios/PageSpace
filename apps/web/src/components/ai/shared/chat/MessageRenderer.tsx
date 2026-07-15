@@ -450,6 +450,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onClick={handleRetry}
                 className="h-5 px-1"
                 title="Retry this message"
+                aria-label="Retry this message"
               >
                 <RotateCw className="h-2.5 w-2.5" />
               </Button>
