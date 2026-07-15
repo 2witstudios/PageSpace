@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // The PageSpace API sends no Access-Control-Allow-Origin header, so a
 // browser's own fetch() to https://pagespace.ai is always blocked,
@@ -10,7 +11,7 @@ import react from "@vitejs/plugin-react";
 // outbound request. Demo/dev workaround only; a real deployed SPA needs
 // either a same-origin reverse proxy or server-side CORS headers.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 5184,
     proxy: {
