@@ -677,6 +677,11 @@
       "import": "./dist/services/machines/machine-access.js",
       "require": "./dist/services/machines/machine-access.js"
     },
+    "./services/machines/machine-orphan-reconcile": {
+      "types": "./dist/services/machines/machine-orphan-reconcile.d.ts",
+      "import": "./dist/services/machines/machine-orphan-reconcile.js",
+      "require": "./dist/services/machines/machine-orphan-reconcile.js"
+    },
     "./services/machines/machine-list": {
       "types": "./dist/services/machines/machine-list.d.ts",
       "import": "./dist/services/machines/machine-list.js",
@@ -1841,6 +1846,9 @@
       ],
       "services/machines/machine-access": [
         "./dist/services/machines/machine-access.d.ts"
+      ],
+      "services/machines/machine-orphan-reconcile": [
+        "./dist/services/machines/machine-orphan-reconcile.d.ts"
       ],
       "services/machines/machine-list": [
         "./dist/services/machines/machine-list.d.ts"

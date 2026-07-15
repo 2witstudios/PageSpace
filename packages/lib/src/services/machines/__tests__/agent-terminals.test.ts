@@ -131,6 +131,7 @@ function makeHost(over: Partial<MachineHost> = {}): MachineHost {
 function makeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
   return {
     machineId: BRANCH_SANDBOX_ID,
+    spriteInstanceId: null,
     exec: async () => ({ success: true, exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async () => null,

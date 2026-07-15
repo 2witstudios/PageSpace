@@ -18,7 +18,20 @@ export interface MachineBranchRecord {
   projectName: string;
   branchName: string;
   sessionKey: string;
+  /** The Sprite's NAME — reused across re-creates, so NOT an identity. */
   sandboxId: string;
+  /** WHICH VM this row points at. Null on legacy rows. Every teardown CAS keys on this, because `sandboxId` cannot tell a replacement Sprite from its predecessor. */
+  spriteInstanceId: string | null;
+  /** When a teardown of this branch's Sprite was REQUESTED (`deleteMachine` ran). Cleared whenever a live Sprite is recorded — a stale request must never license destroying a VM the user can still restore. */
+  teardownRequestedAt: Date | null;
+  /**
+   * When `sandboxId`'s Sprite was CONFIRMED destroyed; NULL while we believe it
+   * is live. The row deliberately OUTLIVES its Sprite — it is re-creatable
+   * config (`spawnBranch` re-provisions under the same `sessionKey`), so a
+   * teardown stamps this instead of deleting the row. See the column's doc in
+   * `@pagespace/db/schema/machine-branches`.
+   */
+  spriteTornDownAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,6 +43,7 @@ export interface NewMachineBranchInput {
   branchName: string;
   sessionKey: string;
   sandboxId: string;
+  spriteInstanceId: string | null;
   now: Date;
 }
 
@@ -47,9 +61,34 @@ export interface MachineBranchStore {
    * replacement Sprite for the same vanished one must not silently
    * last-write-wins (the loser's win would orphan its own live Sprite,
    * untracked) — the loser instead sees `updated: false` and can react.
+   *
+   * Recording a live replacement Sprite also CLEARS `spriteTornDownAt`: this is
+   * the sole re-provision write path, so if it left a stale torn-down stamp
+   * behind, the brand-new Sprite would be invisible to both the orphan
+   * reconciler and the hard-purge guard — i.e. it could be orphaned and billed
+   * forever, the exact bug this all exists to prevent.
    */
-  updateSandboxId(input: { id: string; previousSandboxId: string; sandboxId: string; now: Date }): Promise<boolean>;
+  updateSandboxId(input: {
+    id: string;
+    previousSandboxId: string;
+    sandboxId: string;
+    spriteInstanceId: string | null;
+    now: Date;
+  }): Promise<boolean>;
   remove(machineId: string, projectName: string, branchName: string): Promise<void>;
+  /**
+   * Compare-and-swap removal by row id: deletes ONLY if the row still points at
+   * `sandboxId`.
+   *
+   * Use this — never the name-keyed `remove` — after killing a branch's Sprite.
+   * `spawnBranch` re-provisions a vanished branch under the SAME (machineId,
+   * projectName, branchName) identity, so between the kill and the delete a
+   * concurrent spawn can write a REPLACEMENT Sprite into this very row. A
+   * name-keyed delete would then destroy the pointer to that brand-new, LIVE
+   * Sprite, leaving it billing forever with nothing — not even the orphan
+   * reconciler — able to find it.
+   */
+  removeIfSandbox(input: { id: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
 }
 
 /** Re-exported so callers can classify a `create` rejection without importing the DB layer directly. */
@@ -61,10 +100,11 @@ export { isUniqueViolation };
  * the DB module graph.
  */
 export async function createDbMachineBranchStore(): Promise<MachineBranchStore> {
-  const [{ db }, { eq, and }, { machineBranches }] = await Promise.all([
+  const [{ db }, { eq, and, eqOrIsNull }, { machineBranches }, { machineSpriteReclaims }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-branches'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
   ]);
 
   return {
@@ -106,6 +146,7 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
           branchName: input.branchName,
           sessionKey: input.sessionKey,
           sandboxId: input.sandboxId,
+          spriteInstanceId: input.spriteInstanceId,
           createdAt: input.now,
           updatedAt: input.now,
         })
@@ -113,10 +154,21 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
       return row;
     },
 
-    async updateSandboxId({ id, previousSandboxId, sandboxId, now }) {
+    async updateSandboxId({ id, previousSandboxId, sandboxId, spriteInstanceId, now }) {
       const updated = await db
         .update(machineBranches)
-        .set({ sandboxId, updatedAt: now })
+        .set({
+          sandboxId,
+          spriteInstanceId,
+          // This row points at a LIVE Sprite again, so BOTH teardown marks are void:
+          // `spriteTornDownAt` (it is not torn down) and `teardownRequestedAt` (the
+          // request was against the PREVIOUS VM). Leaving the request set would let
+          // the reconciler destroy this live VM — and would turn a later REVERSIBLE
+          // trash of the restored Machine into an irreversible kill.
+          spriteTornDownAt: null,
+          teardownRequestedAt: null,
+          updatedAt: now,
+        })
         .where(and(eq(machineBranches.id, id), eq(machineBranches.sandboxId, previousSandboxId)))
         .returning({ id: machineBranches.id });
       return updated.length > 0;
@@ -132,6 +184,30 @@ export async function createDbMachineBranchStore(): Promise<MachineBranchStore> 
             eq(machineBranches.branchName, branchName),
           ),
         );
+    },
+
+    async removeIfSandbox({ id, sandboxId, spriteInstanceId }) {
+      // One transaction — see the identical note in `createDbMachineSessionStore`.
+      // The AFTER DELETE trigger rescues this row's sandboxId into the reclaim
+      // outbox as it goes; here the Sprite is already CONFIRMED dead, so we drop
+      // the rescued pointer with it rather than pay a redundant kill next tick.
+      return db.transaction(async (tx) => {
+        // CAS on the INSTANCE: `sandboxId` is a reused name, so it cannot tell a
+        // replacement VM from the one we killed.
+        const deleted = await tx
+          .delete(machineBranches)
+          .where(
+            and(
+              eq(machineBranches.id, id),
+              eq(machineBranches.sandboxId, sandboxId),
+              eqOrIsNull(machineBranches.spriteInstanceId, spriteInstanceId),
+            ),
+          )
+          .returning({ id: machineBranches.id });
+        if (deleted.length === 0) return false;
+        await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+        return true;
+      });
     },
   };
 }

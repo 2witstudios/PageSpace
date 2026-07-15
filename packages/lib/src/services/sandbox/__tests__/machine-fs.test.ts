@@ -14,6 +14,7 @@ function makeHandle(overrides: {
 }): MachineHandle {
   return {
     machineId: 'sbx-test',
+    spriteInstanceId: null,
     exec: overrides.exec ?? (async () => ({ exitCode: 0, stdout: '', stderr: '' })),
     readFile: overrides.readFile ?? (async () => null),
     writeFiles: async () => {},

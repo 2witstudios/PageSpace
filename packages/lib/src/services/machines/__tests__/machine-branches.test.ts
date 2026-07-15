@@ -52,17 +52,31 @@ function makeStore(seed: MachineBranchRecord[] = []) {
         branchName: input.branchName,
         sessionKey: input.sessionKey,
         sandboxId: input.sandboxId,
+        spriteInstanceId: input.spriteInstanceId,
+        teardownRequestedAt: null,
+        spriteTornDownAt: null,
         createdAt: input.now,
         updatedAt: input.now,
       };
       rows.set(k, row);
       return row;
     },
-    updateSandboxId: async ({ id, previousSandboxId, sandboxId, now }) => {
+    updateSandboxId: async ({ id, previousSandboxId, sandboxId, spriteInstanceId, now }) => {
       for (const [k, row] of rows) {
         if (row.id === id) {
           if (row.sandboxId !== previousSandboxId) return false;
-          rows.set(k, { ...row, sandboxId, updatedAt: now });
+          // Mirrors the real store: recording a LIVE replacement Sprite clears BOTH
+          // teardown marks. A surviving `teardownRequestedAt` would let the
+          // reconciler destroy this live VM (and turn a later reversible trash into
+          // an irreversible kill); a surviving `spriteTornDownAt` would hide it.
+          rows.set(k, {
+            ...row,
+            sandboxId,
+            spriteInstanceId,
+            spriteTornDownAt: null,
+            teardownRequestedAt: null,
+            updatedAt: now,
+          });
           return true;
         }
       }
@@ -70,6 +84,18 @@ function makeStore(seed: MachineBranchRecord[] = []) {
     },
     remove: async (machineId, projectName, branchName) => {
       rows.delete(key(machineId, projectName, branchName));
+    },
+    removeIfSandbox: async ({ id, sandboxId }) => {
+      // Mirrors the real store: a row whose sandboxId has changed under us now
+      // points at a LIVE replacement Sprite — deleting it would orphan that VM.
+      for (const [k, row] of rows) {
+        if (row.id === id) {
+          if (row.sandboxId !== sandboxId) return false;
+          rows.delete(k);
+          return true;
+        }
+      }
+      return false;
     },
   };
   return { store, rows };
@@ -106,6 +132,7 @@ function makeFakeHost(execImpl?: (state: SpriteState, args: RunCommandArgs) => S
   function makeHandle(state: SpriteState): MachineHandle {
     return {
       machineId: state.machineId,
+      spriteInstanceId: `inst-${state.machineId}`,
       exec: async (args) => {
         state.execLog.push(args);
         if (execImpl) return execImpl(state, args);
@@ -383,6 +410,7 @@ describe('spawnBranch', () => {
             secret: SECRET,
           }),
           sandboxId: state.machineId,
+          spriteInstanceId: null,
           now: NOW,
         });
         return { exitCode: 128, stdout: '', stderr: 'fatal: destination path already exists' };
@@ -420,6 +448,7 @@ describe('spawnBranch', () => {
             secret: SECRET,
           }),
           sandboxId: 'sbx-other-winner',
+          spriteInstanceId: 'inst-other-winner',
           now: NOW,
         });
       }
@@ -435,6 +464,48 @@ describe('spawnBranch', () => {
     expect(killCalls).not.toContain('sbx-other-winner');
   });
 
+  it('given a branch whose Sprite was TORN DOWN (machine trashed, then restored), should re-provision and CLEAR the torn-down stamp', async () => {
+    // The subtlest invariant in the orphan-reconcile design: a re-provisioned
+    // branch Sprite is LIVE again, so its row must stop looking reclaimed. If the
+    // stamp survived here, the new Sprite would be invisible to BOTH the orphan
+    // reconciler and the hard-purge guard — i.e. it could be orphaned and billed
+    // forever, the exact bug the reconciler exists to prevent.
+    const sessionKey = deriveBranchSessionKey({
+      tenantId: actor.tenantId,
+      machineId: TERMINAL_ID,
+      projectName: PROJECT_NAME,
+      branchName: 'main',
+      secret: SECRET,
+    });
+    const { store } = makeStore([
+      {
+        id: 'branch-torndown',
+        ownerId: actor.userId,
+        machineId: TERMINAL_ID,
+        projectName: PROJECT_NAME,
+        branchName: 'main',
+        sessionKey,
+        // Not registered with the fake host → attach returns null, i.e. the
+        // Sprite the reconciler killed is genuinely gone.
+        sandboxId: 'sbx-reclaimed',
+        spriteInstanceId: 'inst-reclaimed',
+        teardownRequestedAt: NOW,
+        spriteTornDownAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    ]);
+    const { host } = makeFakeHost();
+    const { deps } = makeDeps({ host, store });
+
+    const result = await spawnBranch({ machineId: TERMINAL_ID, projectName: PROJECT_NAME, branchName: 'main', actor, deps });
+
+    expect(result.ok).toBe(true);
+    const row = await store.findByName(TERMINAL_ID, PROJECT_NAME, 'main');
+    expect(row?.spriteTornDownAt).toBeNull();
+    expect(row?.sandboxId).not.toBe('sbx-reclaimed');
+  });
+
   it('given a concurrent re-provision-after-vanish race, should not overwrite the winner\'s row and should kill its own redundant Sprite', async () => {
     let armed = false;
     let raceRowId = '';
@@ -445,6 +516,7 @@ describe('spawnBranch', () => {
         // Simulate a truly concurrent racer winning the re-provision update
         // for the SAME vanished branch just before we do.
         void store.updateSandboxId({
+          spriteInstanceId: 'inst-race',
           id: raceRowId,
           previousSandboxId: racePreviousSandboxId,
           sandboxId: 'sbx-concurrent-winner',
@@ -695,6 +767,7 @@ describe('Claude Code credential propagation', () => {
   function makeRootHandle(files: Record<string, string>): MachineHandle {
     return {
       machineId: 'root-sbx',
+      spriteInstanceId: null,
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       writeFiles: async () => {},
       readFile: async ({ path }) => (path in files ? Buffer.from(files[path]!) : null),

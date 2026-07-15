@@ -7,7 +7,27 @@ import { loggers } from '../../logging/logger-config';
 
 /** Minimal sandbox handle the lifecycle needs. */
 export interface SandboxHandle {
+  /**
+   * The Sprite's NAME — our own derived session key. Deliberately NOT an
+   * identity: it is reused across re-creates, so a Sprite destroyed and
+   * re-provisioned under the same key answers to the same `sandboxId` while
+   * being a physically different VM (see `SpriteInstanceLike.id`). Anything that
+   * needs to know WHICH VM must use `spriteInstanceId`.
+   */
   sandboxId: string;
+  /**
+   * The platform's id for this Sprite INSTANCE — the actual identity, unique per
+   * VM generation. Null when the platform reported none, in which case callers
+   * fall back to comparing names and accept the ABA risk that implies.
+   *
+   * REQUIRED, deliberately: it was optional, and an adapter
+   * (`adaptMachineHandleToExecutableSandbox`) silently dropped it on the way from
+   * `MachineHandle` back to `ExecutableSandbox` — which is the production session
+   * client. Every `machine_sessions` row therefore stored NULL, every identity
+   * guard fell back to name-only, and the whole ABA protection was inert while
+   * typechecking clean. A required field makes that a compile error.
+   */
+  spriteInstanceId: string | null;
   /**
    * Proof that this VM is running the egress policy the caller asked for — a
    * token over (Sprite instance id, policy hash); see `egress-lockdown.ts`. The
@@ -164,6 +184,8 @@ export interface MachineSessionRecord {
   sessionKey: string;
   pageId: string;
   sandboxId: string;
+  /** The Sprite INSTANCE this row points at — the identity `sandboxId` (a reused name) cannot express. Null on legacy rows. */
+  spriteInstanceId: string | null;
   userId: string;
   lastActiveAt: Date;
   /**
@@ -182,13 +204,45 @@ export interface MachineSessionStore {
     sessionKey: string;
     pageId: string;
     sandboxId: string;
+    spriteInstanceId: string | null;
     userId: string;
     egressPolicyToken: string | null;
     now: Date;
   }): Promise<void>;
-  /** Advances `lastActiveAt`; also records `egressPolicyToken` when a new lockdown was just confirmed. */
-  touch(args: { sessionKey: string; now: Date; egressPolicyToken?: string }): Promise<void>;
+  /**
+   * Advances `lastActiveAt`; also records `egressPolicyToken` when a new lockdown
+   * was just confirmed, and `spriteInstanceId` when the VM behind this session
+   * key CHANGED.
+   *
+   * That last part is load-bearing. Reconnect goes through `getOrCreate`, which
+   * RE-PROVISIONS a vanished Sprite under the same name — a brand-new VM with a
+   * new instance id and the SAME `sandboxId`. If the row kept the dead
+   * predecessor's id, a later teardown would ask the host to kill THAT id, the
+   * host would correctly decline (a different VM lives at the name now) and report
+   * success, and the CAS — comparing against the stale id the row still held —
+   * would MATCH and delete the row and its rescued outbox pointer. The live VM
+   * would be left billing forever with nothing pointing at it: exactly the orphan
+   * this whole workstream exists to kill, manufactured by its own guard.
+   */
+  touch(args: {
+    sessionKey: string;
+    now: Date;
+    egressPolicyToken?: string;
+    spriteInstanceId?: string | null;
+  }): Promise<void>;
   remove(sessionKey: string): Promise<void>;
+  /**
+   * Compare-and-swap removal: deletes the row ONLY if it still points at
+   * `sandboxId`. Reports whether it actually deleted.
+   *
+   * Use this — never plain `remove` — after killing a Sprite. `sessionKey` is
+   * DETERMINISTIC per (tenant, drive, page) and `save` UPSERTS on it, so between
+   * the kill and the delete a concurrent `acquireMachineSession` can provision a
+   * REPLACEMENT Sprite and write it to this very row. A key-only delete would
+   * then destroy the pointer to that brand-new, LIVE Sprite, leaving it billing
+   * forever with nothing — not even the orphan reconciler — able to find it.
+   */
+  removeIfSandbox(input: { sessionKey: string; sandboxId: string; spriteInstanceId: string | null }): Promise<boolean>;
 }
 
 export interface AcquireMachineSessionInput {
@@ -226,9 +280,12 @@ async function safeStop(client: SandboxClient, sandboxId: string): Promise<boole
   }
 }
 
-async function safeRemove(store: MachineSessionStore, sessionKey: string): Promise<void> {
+async function safeRemoveIfSandbox(
+  store: MachineSessionStore,
+  input: { sessionKey: string; sandboxId: string; spriteInstanceId: string | null },
+): Promise<void> {
   try {
-    await store.remove(sessionKey);
+    await store.removeIfSandbox(input);
   } catch {
     // best-effort
   }
@@ -239,13 +296,17 @@ async function safeTouch(
   sessionKey: string,
   now: Date,
   egressPolicyToken?: string,
+  spriteInstanceId?: string | null,
 ): Promise<void> {
   try {
-    await store.touch({ sessionKey, now, egressPolicyToken });
+    await store.touch({ sessionKey, now, egressPolicyToken, spriteInstanceId });
   } catch {
     // Best-effort. A lost token write only costs a redundant re-apply on the next
     // hand-back (the record stays stale → `shouldApplyPolicy` says yes), never an
-    // unlocked Sprite.
+    // unlocked Sprite. A lost INSTANCE write leaves the row naming a dead VM while
+    // a live one holds the name — which is why a kill against a stale id refuses
+    // rather than reporting success (`MachineSpriteReplacedError`): the pointer is
+    // kept, the staleness surfaces as a retry, and the next connect re-writes it.
   }
 }
 
@@ -280,6 +341,7 @@ async function provisionFreshMachine({
   const options = machineSandboxOptions();
 
   let sandboxId: string;
+  let spriteInstanceId: string | null = null;
   let egressPolicyToken: string | undefined;
   try {
     // No `appliedEgressToken`: there is no session row, so nothing is known about
@@ -290,6 +352,7 @@ async function provisionFreshMachine({
     // crash between `createSprite` and lockdown from ever being handed back.
     const handle = await deps.client.getOrCreate({ name: key, options });
     sandboxId = handle.sandboxId;
+    spriteInstanceId = handle.spriteInstanceId ?? null;
     egressPolicyToken = handle.egressPolicyToken;
   } catch (error) {
     const meta = { reason: 'provision_failed', userId, pageId, driveId };
@@ -307,6 +370,10 @@ async function provisionFreshMachine({
       pageId,
       userId,
       sandboxId,
+      // WHICH VM this is, as opposed to which name it answers to. Every teardown
+      // CAS keys on this, so a Sprite re-provisioned under the same name can never
+      // be mistaken for its predecessor.
+      spriteInstanceId,
       // What the driver CONFIRMED for this VM, not what we asked for. Null when it
       // could not prove it (no Sprite identity) → the next hand-back re-applies.
       egressPolicyToken: egressPolicyToken ?? null,
@@ -384,11 +451,23 @@ export async function acquireMachineSession(
         // changed policy). An unchanged token is already on the row, so writing it
         // again would be a pointless UPDATE on every connect.
         const confirmed = handle.egressPolicyToken;
+        // `getOrCreate` RE-PROVISIONS a vanished Sprite under the same name, so a
+        // "reconnect" can hand back a brand-new VM: same `sandboxId`, different
+        // INSTANCE. Record the new identity whenever it moved — the row is the
+        // pointer, and a pointer naming a dead predecessor is the setup for
+        // destroying (or stranding) the live VM standing in its place. The token
+        // write below already exists for exactly this reason: it is derived from
+        // the sprite's instance id, so it moves precisely when the VM does.
+        const movedInstance =
+          handle.spriteInstanceId != null && handle.spriteInstanceId !== existing?.spriteInstanceId
+            ? handle.spriteInstanceId
+            : undefined;
         await safeTouch(
           deps.store,
           key,
           deps.now(),
           confirmed && confirmed !== appliedEgressToken ? confirmed : undefined,
+          movedInstance,
         );
         return { ok: true, sandboxId: handle.sandboxId, sessionKey: key, resumed: true };
       } catch (error) {
@@ -421,12 +500,22 @@ export async function acquireMachineSession(
       case 'teardown': {
         const stopped = await safeStop(deps.client, plan.sandboxId);
         if (!stopped) {
-          // VM may still be running — keep the link so a later attempt (or an
-          // explicit retry) can still find it and finish the teardown. There is
-          // no separate reaper; nothing reclaims this but a future call here.
+          // VM may still be running — keep the link so a later attempt (or the
+          // orphan-reconcile cron) can still find it and finish the teardown.
           return { ok: false, reason: 'error' };
         }
-        await safeRemove(deps.store, key);
+        // CAS on the INSTANCE we just stopped, never a key-only delete: this
+        // immediately re-provisions under the SAME session key below, and a name is
+        // reused across re-creates — so a key-keyed remove could delete the row that
+        // the re-provision (or a concurrent acquire) has already pointed at a NEW,
+        // live VM, orphaning it with no pointer at all. Losing the CAS is correct:
+        // whoever owns the row now owns a live Sprite, and the one we stopped is
+        // already gone.
+        await safeRemoveIfSandbox(deps.store, {
+          sessionKey: key,
+          sandboxId: plan.sandboxId,
+          spriteInstanceId: existing?.spriteInstanceId ?? null,
+        });
         return await provisionFreshMachine({ key, input });
       }
 
@@ -480,14 +569,15 @@ export async function findLiveMachineSandboxId(input: MachineSessionKeyInput): P
 
 /**
  * Production DB-backed implementation of MachineSessionStore.
- * Lazily resolves the db client, schema table, and `eq` operator so callers
+ * Lazily resolves the db client, schema table, and operators so callers
  * that inject a fake (in tests) never load the DB module graph.
  */
 export async function createDbMachineSessionStore(): Promise<MachineSessionStore> {
-  const [{ db }, { eq }, { machineSessions }] = await Promise.all([
+  const [{ db }, { eq, and, eqOrIsNull }, { machineSessions }, { machineSpriteReclaims }] = await Promise.all([
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/machine-sessions'),
+    import('@pagespace/db/schema/machine-sprite-reclaims'),
   ]);
 
   return {
@@ -502,23 +592,45 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
         sessionKey: row.sessionKey,
         pageId: row.pageId,
         sandboxId: row.sandboxId,
+        spriteInstanceId: row.spriteInstanceId,
         userId: row.userId,
         lastActiveAt: row.lastActiveAt,
         egressPolicyToken: row.egressPolicyToken,
       };
     },
 
-    async save({ sessionKey, pageId, sandboxId, userId, egressPolicyToken, now }) {
+    async save({ sessionKey, pageId, sandboxId, spriteInstanceId, userId, egressPolicyToken, now }) {
       await db
         .insert(machineSessions)
-        .values({ sessionKey, pageId, sandboxId, userId, egressPolicyToken, lastActiveAt: now, updatedAt: now })
+        .values({
+          sessionKey,
+          pageId,
+          sandboxId,
+          spriteInstanceId,
+          userId,
+          egressPolicyToken,
+          lastActiveAt: now,
+          updatedAt: now,
+        })
         .onConflictDoUpdate({
           target: machineSessions.sessionKey,
-          set: { sandboxId, userId, egressPolicyToken, lastActiveAt: now, updatedAt: now },
+          set: {
+            sandboxId,
+            spriteInstanceId,
+            userId,
+            egressPolicyToken,
+            lastActiveAt: now,
+            updatedAt: now,
+            // This row now points at a LIVE Sprite, so any teardown INTENT recorded
+            // against its predecessor is void. Leaving it set would let the orphan
+            // reconciler destroy this live VM later — and worse, would turn a future
+            // REVERSIBLE trash of the restored Machine into an irreversible kill.
+            teardownRequestedAt: null,
+          },
         });
     },
 
-    async touch({ sessionKey, now, egressPolicyToken }) {
+    async touch({ sessionKey, now, egressPolicyToken, spriteInstanceId }) {
       await db
         .update(machineSessions)
         .set({
@@ -527,12 +639,45 @@ export async function createDbMachineSessionStore(): Promise<MachineSessionStore
           // Only overwrite the recorded token when a new lockdown was just
           // confirmed — an omitted token must not blank the existing record.
           ...(egressPolicyToken === undefined ? {} : { egressPolicyToken }),
+          // Likewise, only when the VM behind this key actually CHANGED (a
+          // re-provision). Recording it also voids any teardown INTENT: that
+          // request was against the previous VM, which is provably gone, and
+          // leaving it set would let the reconciler destroy this live one.
+          ...(spriteInstanceId === undefined ? {} : { spriteInstanceId, teardownRequestedAt: null }),
         })
         .where(eq(machineSessions.sessionKey, sessionKey));
     },
 
     async remove(sessionKey) {
       await db.delete(machineSessions).where(eq(machineSessions.sessionKey, sessionKey));
+    },
+
+    async removeIfSandbox({ sessionKey, sandboxId, spriteInstanceId }) {
+      // One transaction, because the AFTER DELETE trigger will rescue this row's
+      // sandboxId into the reclaim outbox as we delete it (it cannot know WHY the
+      // row is going). Here we know: the Sprite was already CONFIRMED dead, so the
+      // rescued pointer is not needed and would only cost a redundant kill on the
+      // next cron tick. Deleting both together keeps that self-cleaning — and if
+      // this transaction rolls back, the pointer survives, which is the safe way
+      // to be wrong.
+      return db.transaction(async (tx) => {
+        // CAS on the INSTANCE where we know it (`sandboxId` is a reused name, so it
+        // cannot tell a replacement VM from the one we killed — comparing it alone
+        // would let us delete the pointer to a live re-provisioned Sprite).
+        const deleted = await tx
+          .delete(machineSessions)
+          .where(
+            and(
+              eq(machineSessions.sessionKey, sessionKey),
+              eq(machineSessions.sandboxId, sandboxId),
+              eqOrIsNull(machineSessions.spriteInstanceId, spriteInstanceId),
+            ),
+          )
+          .returning({ id: machineSessions.id });
+        if (deleted.length === 0) return false;
+        await tx.delete(machineSpriteReclaims).where(eq(machineSpriteReclaims.sandboxId, sandboxId));
+        return true;
+      });
     },
   };
 }

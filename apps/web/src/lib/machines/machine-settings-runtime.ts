@@ -42,7 +42,27 @@
  * `machine_agent_terminals`) are intentionally left in place — they FK-cascade on
  * the page's eventual HARD purge, so a reversible soft-delete never destroys the
  * user's configured-repo metadata (killing the Sprites frees the compute; the rows
- * stay for a restore).
+ * stay for a restore). `machine_branches` rows are STAMPED
+ * (`spriteTornDownAt`) rather than deleted for exactly this reason: they are
+ * re-creatable config, and deleting one would cascade away its branch-scoped
+ * `machine_agent_terminals` too.
+ *
+ * `machine_sessions` is the one row that IS deleted on a confirmed kill: it is a
+ * pure live-Sprite pointer, and the storage reconcile bills every row it finds,
+ * so a row outliving its Sprite would bill storage for a destroyed VM. A restore
+ * simply provisions a fresh Sprite under the same derived session key.
+ *
+ * Before any kill, the teardown stamps `teardownRequestedAt` on the rows it is
+ * about to destroy. That INTENT — not the page's trashed state — is what
+ * licenses the orphan reconciler (`machine-orphan-reconcile.ts`) to finish the
+ * job if a kill here fails or this process dies mid-teardown. It has to be
+ * recorded, because a kill is an irreversible DESTROY while a trash is not: the
+ * generic page-trash paths (`pageService.trashPage`, bulk delete, folder
+ * cascade-trash) hide a MACHINE page WITHOUT tearing anything down, and those
+ * Sprites must survive for a restore. So "trashed + a Sprite we still believe is
+ * LIVE + a teardown was requested" is the reclaim signal — and it is written
+ * first, deliberately, so a crash before the kill leaves the row reclaimable
+ * rather than stranded.
  *
  * NOT handled here (deliberate scope): PATCH (`updateSettings`) still writes the
  * settings fields via raw `db.update` — a Machine rename/toggle does not bump the
@@ -54,11 +74,12 @@
  * path as well.
  */
 
-import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, eqOrIsNull, inArray, isNull, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { globalAssistantConfig } from '@pagespace/db/schema/integrations';
 import { machineBranches } from '@pagespace/db/schema/machine-branches';
+import { machineSessions } from '@pagespace/db/schema/machine-sessions';
 import {
   createDbMachineSessionStore,
   deriveMachineSessionKey,
@@ -300,10 +321,17 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   });
   if (!page) return;
 
+  // Only branches whose Sprite we still believe is LIVE. A row stamped by an
+  // earlier teardown (trash → restore → trash) points at a Sprite that is
+  // already gone, so re-killing it would just be a wasted API round-trip.
   const branchRows = await db
-    .select({ sandboxId: machineBranches.sandboxId })
+    .select({
+      id: machineBranches.id,
+      sandboxId: machineBranches.sandboxId,
+      spriteInstanceId: machineBranches.spriteInstanceId,
+    })
     .from(machineBranches)
-    .where(eq(machineBranches.machineId, machineId));
+    .where(and(eq(machineBranches.machineId, machineId), isNull(machineBranches.spriteTornDownAt)));
 
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, page.driveId),
@@ -322,16 +350,69 @@ async function teardownOneMachine(machineId: string): Promise<void> {
 
   if (branchRows.length === 0 && !session) return; // Nothing live to tear down.
 
+  // Record the INTENT to destroy, BEFORE any kill — this is what licenses the
+  // orphan reconciler to finish the job if a kill below fails (or if this process
+  // dies mid-teardown). Without it, a failed kill is indistinguishable from a
+  // Machine someone merely dragged to the trash, whose Sprite must NOT be
+  // destroyed (a trash is reversible; a kill is not). Written first precisely so
+  // a crash between here and the kill leaves the row RECLAIMABLE rather than
+  // stranded. See `machine-orphan-reconcile.ts`'s tier 1.
+  const teardownRequestedAt = new Date();
+  if (session && sessionKey) {
+    await db
+      .update(machineSessions)
+      .set({ teardownRequestedAt })
+      .where(eq(machineSessions.sessionKey, sessionKey));
+  }
+  if (branchRows.length > 0) {
+    await db
+      .update(machineBranches)
+      .set({ teardownRequestedAt })
+      .where(
+        inArray(
+          machineBranches.id,
+          branchRows.map((branch) => branch.id),
+        ),
+      );
+  }
+
   const host = await getMachineHostForBranches();
 
-  // Branch Sprites: best-effort. A failure leaves a microVM the hard-purge
-  // cascade won't reclaim (rows are kept), but it must not fail the delete or
-  // invert spriteTornDown — the branch row stays so a retry can find it.
+  // Branch Sprites: best-effort. A failure must not fail the delete or invert
+  // spriteTornDown — the branch row is left UNSTAMPED so the orphan reconciler
+  // (@pagespace/lib/services/machines/machine-orphan-reconcile, wired in
+  // ./machine-orphan-reconcile-runtime) can find the sandboxId and retry.
+  //
+  // On a CONFIRMED kill we STAMP `spriteTornDownAt` — we never delete the row.
+  // The row is re-creatable config, not just a pointer (`spawnBranch`
+  // re-provisions a vanished branch under the same sessionKey and re-clones),
+  // and its branch-scoped `machine_agent_terminals` FK-cascade off it, so
+  // deleting it here would destroy the user's branch terminals on a REVERSIBLE
+  // soft-delete. "Live Sprite" is therefore `spriteTornDownAt IS NULL`, not the
+  // row's existence — which is exactly the signal the reconciler reclaims on.
   for (const branch of branchRows) {
     try {
-      await host.kill({ machineId: branch.sandboxId });
+      // Identity-guarded: the kill is name-keyed and names are reused, so without
+      // this we could destroy a replacement VM instead of the one we mean.
+      await host.kill({
+        machineId: branch.sandboxId,
+        expectedInstanceId: branch.spriteInstanceId ?? undefined,
+      });
+      await db
+        .update(machineBranches)
+        .set({ spriteTornDownAt: new Date() })
+        // CAS on the INSTANCE, not the name: a concurrent re-provision may already
+        // have written a LIVE replacement into this row, and stamping that as torn
+        // down would hide a billing VM from the reconciler forever.
+        .where(
+          and(
+            eq(machineBranches.id, branch.id),
+            eq(machineBranches.sandboxId, branch.sandboxId),
+            eqOrIsNull(machineBranches.spriteInstanceId, branch.spriteInstanceId),
+          ),
+        );
     } catch {
-      // Best-effort; leave the row for a later retry.
+      // Best-effort; leave the row unstamped for the reconciler to retry.
     }
   }
 
@@ -340,12 +421,25 @@ async function teardownOneMachine(machineId: string): Promise<void> {
   // best-effort so a remove failure AFTER a successful kill doesn't invert the
   // flag into falsely reporting the Sprite as still alive.
   if (session && sessionKey) {
-    await host.kill({ machineId: session.sandboxId });
+    await host.kill({
+      machineId: session.sandboxId,
+      expectedInstanceId: session.spriteInstanceId ?? undefined,
+    });
     try {
-      await sessionStore.remove(sessionKey);
+      // CAS on sandboxId — NEVER a key-only delete. `sessionKey` is deterministic
+      // per (tenant, drive, page) and `save` UPSERTS on it, so between the kill
+      // above and this delete a concurrent `acquireMachineSession` can provision a
+      // REPLACEMENT Sprite into this very row. Deleting by key alone would destroy
+      // the pointer to that brand-new, LIVE Sprite — leaving it billing forever
+      // with nothing, not even the orphan reconciler, able to find it.
+      await sessionStore.removeIfSandbox({
+        sessionKey,
+        sandboxId: session.sandboxId,
+        spriteInstanceId: session.spriteInstanceId,
+      });
     } catch {
-      // Sprite is dead; a stale machine_sessions row is harmless (the reaper
-      // or a re-provision under the same key reclaims it).
+      // Sprite is dead; a stale machine_sessions row is harmless (the orphan
+      // reconciler, or a re-provision under the same key, reclaims it).
     }
   }
 }

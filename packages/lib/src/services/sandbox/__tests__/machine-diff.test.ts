@@ -33,6 +33,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
   const calls: Array<{ cmd: string; args: string[] }> = [];
   const sandbox: ExecutableSandbox = {
     sandboxId: 'sbx-1',
+    spriteInstanceId: null,
     runCommand: async (opts) => {
       calls.push({ cmd: opts.cmd, args: opts.args ?? [] });
       return runCommand(opts);
@@ -70,6 +71,7 @@ function makeHandle(files: Record<string, string>): { handle: MachineHandle; rea
   const reads: string[] = [];
   const handle: MachineHandle = {
     machineId: 'sbx-1',
+    spriteInstanceId: null,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async ({ path }) => {

@@ -28,6 +28,7 @@ function makeDeps(runCommand: (args: RunCommandArgs) => Promise<SandboxRunResult
   const calls: Array<{ cmd: string; args: string[] }> = [];
   const sandbox: ExecutableSandbox = {
     sandboxId: 'sbx-1',
+    spriteInstanceId: null,
     runCommand: async (opts) => {
       calls.push({ cmd: opts.cmd, args: opts.args ?? [] });
       return runCommand(opts);

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteMachineHost } from '../sprite-machine-host';
-import { MachineStreamOpenTimeoutError } from '../../machine-host';
+import { MachineSpriteReplacedError, MachineStreamOpenTimeoutError } from '../../machine-host';
 import {
   createSpritesSandboxClient,
   spawnWithSelfHealingCwd,
@@ -182,6 +182,84 @@ describe('createSpriteMachineHost', () => {
     await host.kill({ machineId: 'session-key' });
     expect(calls.deleted).toEqual(['session-key']);
   });
+
+  it('given expectedInstanceId that MATCHES the sprite at the name, should kill it', async () => {
+    const { sdk, calls } = makeSdk({ getSprite: async () => fakeSprite({ id: 'inst-A' }) });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await host.kill({ machineId: 'session-key', expectedInstanceId: 'inst-A' });
+    expect(calls.deleted).toEqual(['session-key']);
+  });
+
+  it('given a DIFFERENT VM holds the name now, should THROW MachineSpriteReplacedError and NOT destroy it', async () => {
+    // The kill is name-keyed and names are reused across re-creates, so a
+    // replacement Sprite must not be destroyed in place of the one we meant. And it
+    // must THROW, not return success: callers treat success as "confirmed dead" and
+    // release the last pointer — if the id were stale, that would strand the live VM.
+    const { sdk, calls } = makeSdk({ getSprite: async () => fakeSprite({ id: 'inst-B' }) });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await expect(
+      host.kill({ machineId: 'session-key', expectedInstanceId: 'inst-A' }),
+    ).rejects.toThrow(MachineSpriteReplacedError);
+    expect(calls.deleted).toEqual([]); // the newcomer was NOT destroyed
+  });
+
+  it('given kill of an ALREADY-GONE sprite, should resolve as a successful (idempotent) kill', async () => {
+    // Every caller derives "the sprite is dead" from this NOT throwing:
+    // teardownOneMachine's spriteTornDown flag, killBranch's row removal, and the
+    // orphan reconciler's row removal. A not-found error must therefore read as
+    // success, or an already-destroyed sprite's tracking row can never be cleared.
+    const { sdk } = makeSdk({
+      deleteSprite: async () => {
+        throw Object.assign(new Error('sprite not found'), { status: 404 });
+      },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await expect(host.kill({ machineId: 'already-gone' })).resolves.toBeUndefined();
+  });
+
+  it('given kill that fails for a reason OTHER than not-found, should still throw — the sprite may be alive', async () => {
+    const { sdk } = makeSdk({
+      deleteSprite: async () => {
+        throw Object.assign(new Error('internal server error'), { status: 500 });
+      },
+    });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteMachineHost({ sdk, client });
+
+    await expect(host.kill({ machineId: 'unknown-fate' })).rejects.toThrow('internal server error');
+  });
+
+  // A kill is only idempotent against a control plane that POSITIVELY says the
+  // sprite is gone. Callers (teardownOneMachine, killBranch, the orphan
+  // reconciler) treat "did not throw" as proof the sprite is dead and release
+  // its ONLY pointer — so a transport error swallowed here would strand every
+  // sprite in the batch, billing forever, unreachable. This is why `kill` uses
+  // the strict `isSpriteGoneStatus` rather than the read path's looser
+  // `isSpriteNotFoundError` (which accepts ENOTFOUND and message heuristics).
+  const transportErrors: Array<[string, Error]> = [
+    ['a DNS failure (ENOTFOUND — no HTTP status)', Object.assign(new Error('getaddrinfo ENOTFOUND api.sprites.dev'), { code: 'ENOTFOUND' })],
+    ['a socket hang-up whose message merely says "gone"', new Error('socket hang up: connection gone')],
+    ['an opaque failure that mentions "no such" host', new Error('fetch failed: no such host')],
+  ];
+  for (const [label, error] of transportErrors) {
+    it(`given kill that fails with ${label}, should THROW — the sprite's fate is unknown, not confirmed dead`, async () => {
+      const { sdk } = makeSdk({
+        deleteSprite: async () => {
+          throw error;
+        },
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteMachineHost({ sdk, client });
+
+      await expect(host.kill({ machineId: 'maybe-alive' })).rejects.toThrow();
+    });
+  }
 
   it('given stream with no sessionId, should create a fresh interactive session and stream its combined stdout/stderr', async () => {
     // Built LAZILY, inside createSession — exactly when the real SDK builds it, so
