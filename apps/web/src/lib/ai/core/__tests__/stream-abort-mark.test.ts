@@ -498,10 +498,11 @@ describe('reconcileDeadStreamRows — materializes each dead row as an interrupt
     });
   });
 
-  it('hands each row it reads to materializeInterruptedStream with its full parts snapshot', async () => {
+  it('hands each row it reads to materializeInterruptedStream with its full parts snapshot and startedAt', async () => {
     const parts = [{ type: 'text', text: 'partial reply' }];
+    const startedAt = new Date('2026-07-15T00:00:00.000Z');
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts },
+      { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts, startedAt },
     ]);
 
     await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
@@ -510,7 +511,7 @@ describe('reconcileDeadStreamRows — materializes each dead row as an interrupt
       given: 'a dead row read fresh from the DB',
       should: 'materialize it as an interrupted message rather than just wiping the session row',
       actual: mockMaterializeInterruptedStream.mock.calls[0][0],
-      expected: { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts },
+      expected: { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts, startedAt },
     });
   });
 

@@ -289,6 +289,7 @@ describe('GET /api/ai/chat/active-streams', () => {
         conversationId: 'conv-1',
         userId: 'user-2',
         parts,
+        startedAt: longAgo,
       });
     });
 

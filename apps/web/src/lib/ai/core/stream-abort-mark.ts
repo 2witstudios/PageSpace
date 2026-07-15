@@ -287,7 +287,7 @@ export const reconcileDeadStreamRows = async ({
 }): Promise<void> => {
   if (messageIds.length === 0) return;
 
-  let rows: { messageId: string; channelId: string; conversationId: string; userId: string; parts: unknown[] }[];
+  let rows: { messageId: string; channelId: string; conversationId: string; userId: string; parts: unknown[]; startedAt: Date }[];
   try {
     rows = await db
       .select({
@@ -296,6 +296,7 @@ export const reconcileDeadStreamRows = async ({
         conversationId: aiStreamSessions.conversationId,
         userId: aiStreamSessions.userId,
         parts: aiStreamSessions.parts,
+        startedAt: aiStreamSessions.startedAt,
       })
       .from(aiStreamSessions)
       .where(and(

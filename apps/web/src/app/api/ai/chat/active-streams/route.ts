@@ -124,6 +124,7 @@ export async function GET(request: Request) {
         conversationId: row.conversationId,
         userId: row.userId,
         parts: row.parts,
+        startedAt: row.startedAt,
       });
     }
 

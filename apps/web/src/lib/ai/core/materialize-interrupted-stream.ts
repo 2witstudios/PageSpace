@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, ne } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { chatMessages } from '@pagespace/db/schema/core';
 import { messages } from '@pagespace/db/schema/conversations';
@@ -30,6 +30,12 @@ export interface MaterializableStreamRow {
    *  never by more (see PR 1's time-based cadence). This is the only content a dead process
    *  leaves behind; there is no live buffer to fall back to. */
   parts: unknown[];
+  /** The stream's actual start time. Used ONLY as the `createdAt` for the defensive
+   *  insert-if-missing branch below (the placeholder row should already exist per PR 2, but a
+   *  failed placeholder insert is the one case this function must still degrade gracefully
+   *  for) — never reap/takeover time, or a recovered reply can sort after a user's later
+   *  follow-up message that was saved in the interim. */
+  startedAt: Date;
 }
 
 /**
@@ -44,11 +50,16 @@ export interface MaterializableStreamRow {
  *      onFinish already use in `saveMessageToDatabase`/`saveGlobalAssistantMessageToDatabase`,
  *      so a materialized reply preserves file/data parts and ordering exactly like one the
  *      model actually finished, instead of degrading to flat extracted text).
- *   2. Upsert the assistant message row as `status: 'interrupted'` — but ONLY if it is not
- *      already `'complete'`. That guard is the #2022 invariant: the old worker's own
- *      terminal write is fire-and-forget and can land in the gap between the caller's
- *      liveness read and this write. A `setWhere` on the conflict clause makes the guard
- *      atomic — there is no separate read to race.
+ *   2. Upsert the assistant message row as `status: 'interrupted'` — but ONLY if it is still
+ *      `'streaming'` (the placeholder state). That guard is the #2022 invariant, and it is
+ *      deliberately compare-and-swap rather than a blanket "not complete": the old worker's own
+ *      terminal write is fire-and-forget and can land in the gap between the caller's liveness
+ *      read and this write — and it can ALSO leave a row `'interrupted'` (a clean Stop whose
+ *      onFinish wrote full content but whose session-row settle then failed). Guarding on
+ *      `!= 'complete'` would still let a later sweep clobber that already-correct interrupted
+ *      row with an older debounced checkpoint; guarding on `== 'streaming'` cannot, because a
+ *      row leaves `'streaming'` exactly once. A `setWhere` on the conflict clause makes the
+ *      guard atomic — there is no separate read to race.
  *   3. Only once the message write is confirmed: settle the `ai_stream_sessions` row
  *      terminal (`status: 'aborted'`, parts cleared) and broadcast `stream_complete`.
  *      Settling first would let a crashed sweep lose the row's only content — the session
@@ -85,7 +96,10 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           content: structuredContent,
           toolCalls: toolCallsJson,
           toolResults: toolResultsJson,
-          createdAt: now,
+          // Only reached if the placeholder insert (PR 2's seam) never happened — the stream's
+          // actual start, not reap time, so a recovered reply still sorts correctly against a
+          // user's later follow-up message.
+          createdAt: row.startedAt,
           isActive: true,
           status: 'interrupted',
         })
@@ -101,9 +115,10 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
             conversationId: row.conversationId,
             status: 'interrupted',
           },
-          // The #2022 invariant, enforced atomically: never relabel a row the normal
-          // terminal path already finished.
-          setWhere: ne(messages.status, 'complete'),
+          // The #2022 invariant, enforced atomically as a compare-and-swap: only a row still
+          // `'streaming'` may be relabelled. Never re-touch a row already `'interrupted'` or
+          // `'complete'` — see the docblock above for why `!= 'complete'` alone isn't enough.
+          setWhere: eq(messages.status, 'streaming'),
         });
     } else {
       await db
@@ -116,7 +131,10 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           content: structuredContent,
           toolCalls: toolCallsJson,
           toolResults: toolResultsJson,
-          createdAt: now,
+          // Only reached if the placeholder insert (PR 2's seam) never happened — the stream's
+          // actual start, not reap time, so a recovered reply still sorts correctly against a
+          // user's later follow-up message.
+          createdAt: row.startedAt,
           isActive: true,
           userId: null,
           sourceAgentId: null,
@@ -131,7 +149,7 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
             conversationId: row.conversationId,
             status: 'interrupted',
           },
-          setWhere: ne(chatMessages.status, 'complete'),
+          setWhere: eq(chatMessages.status, 'streaming'),
         });
     }
   } catch (error) {

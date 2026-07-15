@@ -157,6 +157,7 @@ export const takeOverConversationStreams = async ({
           conversationId,
           userId: row.userId,
           parts: row.parts,
+          startedAt: row.startedAt,
         });
       }));
 

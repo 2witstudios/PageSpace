@@ -196,6 +196,23 @@ describe('takeOverConversationStreams', () => {
     );
   });
 
+  // Codex review finding: a recovered reply timestamped at reap time (instead of the stream's
+  // actual start) can sort after a user's later follow-up message. Carrying startedAt through
+  // is what lets materializeInterruptedStream's defensive insert-if-missing path get this right.
+  it("passes the row's actual startedAt through to materializeInterruptedStream, not takeover time", async () => {
+    const longAgo = new Date(Date.now() - 30 * 60 * 1000);
+    mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [] },
+    ]);
+
+    await takeOverConversationStreams(ARGS);
+
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ startedAt: longAgo }),
+    );
+  });
+
   // A liveness guess must never gate the abort. The heartbeat can lag (a slow DB write,
   // a GC pause), and skipping the abort for a row we wrongly called dead would leave a
   // REAL generation running while we start a second one beside it — precisely what this

@@ -31,7 +31,6 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ conds: args })),
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
-  ne: vi.fn((field: unknown, value: unknown) => ({ ne: [field, value] })),
 }));
 
 vi.mock('@pagespace/db/schema/ai-streams', () => ({
@@ -78,12 +77,15 @@ const toolCallPart = (): UIMessagePart =>
     state: 'output-available',
   }) as UIMessagePart;
 
+const STREAM_STARTED_AT = new Date('2026-07-15T00:00:00.000Z');
+
 const pageRow = (over: Partial<MaterializableStreamRow> = {}): MaterializableStreamRow => ({
   messageId: 'msg-1',
   channelId: 'page-abc123',
   conversationId: 'conv-1',
   userId: 'user-a',
   parts: [textPart('partial reply')],
+  startedAt: STREAM_STARTED_AT,
   ...over,
 });
 
@@ -92,6 +94,7 @@ const globalRow = (over: Partial<MaterializableStreamRow> = {}): MaterializableS
   channelId: 'user:user-a:global',
   conversationId: 'conv-2',
   userId: 'user-a',
+  startedAt: STREAM_STARTED_AT,
   parts: [textPart('partial global reply')],
   ...over,
 });
@@ -206,31 +209,31 @@ describe('materializeInterruptedStream — content from the parts snapshot', () 
   });
 });
 
-describe('materializeInterruptedStream — the #2022 invariant (never overwrite complete)', () => {
+describe('materializeInterruptedStream — the #2022 invariant (compare-and-swap: only from streaming)', () => {
   // Stands in for Postgres evaluating `ON CONFLICT ... DO UPDATE SET ... WHERE <setWhere>`:
   // the update is applied only when the simulated current row's status satisfies the guard.
   const simulatePostgresConflict = (currentStatus: string) => {
-    mockOnConflictDoUpdate.mockImplementation(async (config: { setWhere: { ne: [string, string] } }) => {
-      const [, guardedAgainst] = config.setWhere.ne;
-      return guardedAgainst === currentStatus ? 'skipped' : 'updated';
+    mockOnConflictDoUpdate.mockImplementation(async (config: { setWhere: { field: string; value: string } }) => {
+      const { value: requiredStatus } = config.setWhere;
+      return requiredStatus === currentStatus ? 'updated' : 'skipped';
     });
   };
 
-  it('the onConflictDoUpdate guard names the row status column and "complete"', async () => {
+  it('the onConflictDoUpdate guard requires the row to still be streaming', async () => {
     await materializeInterruptedStream(pageRow());
 
     assert({
       given: 'any materialization attempt',
-      should: 'guard the conflict update with status != complete',
+      should: 'guard the conflict update with status == streaming',
       actual: mockOnConflictDoUpdate.mock.calls[0][0].setWhere,
-      expected: { ne: ['chat_messages.status', 'complete'] },
+      expected: { field: 'chat_messages.status', value: 'streaming' },
     });
   });
 
   it('given a row already complete (the old worker\'s onFinish landed first), the simulated conflict update is a no-op', async () => {
     simulatePostgresConflict('complete');
 
-    const outcome = await mockOnConflictDoUpdate({ setWhere: { ne: ['chat_messages.status', 'complete'] } });
+    const outcome = await mockOnConflictDoUpdate({ setWhere: { field: 'chat_messages.status', value: 'streaming' } });
 
     assert({
       given: 'a message row already flipped to complete between the caller\'s read and this write',
@@ -240,16 +243,49 @@ describe('materializeInterruptedStream — the #2022 invariant (never overwrite 
     });
   });
 
+  // The gap the guard was widened to close: a clean Stop whose onFinish already persisted the
+  // FULL content as 'interrupted', but whose ai_stream_sessions terminal write then failed
+  // (fire-and-forget), leaves the session row eligible for a later sweep. A `!= 'complete'`
+  // guard would let that sweep clobber the already-correct content with an older checkpoint;
+  // `== 'streaming'` cannot, because the row already left 'streaming'.
+  it('given a row already interrupted by its own onFinish (session-row settle failed separately), the simulated conflict update is a no-op', async () => {
+    simulatePostgresConflict('interrupted');
+
+    const outcome = await mockOnConflictDoUpdate({ setWhere: { field: 'chat_messages.status', value: 'streaming' } });
+
+    assert({
+      given: 'a message row already correctly interrupted by its own generation',
+      should: 'never overwrite it with a possibly-staler checkpoint',
+      actual: outcome,
+      expected: 'skipped',
+    });
+  });
+
   it('given a row still streaming, the simulated conflict update applies', async () => {
     simulatePostgresConflict('streaming');
 
-    const outcome = await mockOnConflictDoUpdate({ setWhere: { ne: ['chat_messages.status', 'complete'] } });
+    const outcome = await mockOnConflictDoUpdate({ setWhere: { field: 'chat_messages.status', value: 'streaming' } });
 
     assert({
       given: 'a message row still streaming',
       should: 'apply the interrupted write',
       actual: outcome,
       expected: 'updated',
+    });
+  });
+});
+
+describe('materializeInterruptedStream — the defensive insert-if-missing path', () => {
+  it('uses the stream\'s actual start time, not reap time, as createdAt for a newly-inserted row', async () => {
+    const startedAt = new Date('2026-07-15T01:23:45.000Z');
+    await materializeInterruptedStream(pageRow({ startedAt }));
+
+    const values = mockInsertValues.mock.calls[0][0];
+    assert({
+      given: 'a materialization whose placeholder insert never happened',
+      should: 'timestamp the recovered row at the stream\'s actual start, so it still sorts correctly against a later user message',
+      actual: values.createdAt,
+      expected: startedAt,
     });
   });
 });
