@@ -232,7 +232,6 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-message-id'),
-  isCuid: vi.fn().mockReturnValue(true),
 }));
 vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`) }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
