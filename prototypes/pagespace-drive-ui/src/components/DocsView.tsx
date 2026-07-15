@@ -62,7 +62,9 @@ export function DocsView({ client, driveId }: DocsViewProps) {
         const r = (await client.pages.read({ operation: "read", pageId: selectedId })) as unknown as {
           content?: string;
         };
-        if (!cancelled) setContent(r.content ?? "");
+        // We render the page title as the heading, so drop a leading `# Title`
+        // line the doc body may repeat (otherwise the header shows twice).
+        if (!cancelled) setContent((r.content ?? "").replace(/^\s*#\s+[^\n]*\r?\n+/, ""));
       } catch (e) {
         if (!cancelled) setError(describeError(e));
       } finally {
