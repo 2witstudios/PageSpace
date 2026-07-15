@@ -190,7 +190,21 @@ Your chat box sends the conversation so far to that route and shows the reply as
 
 A support bot is only half done if the conversations vanish. Pass a \`conversation_id\` and the whole conversation is saved in PageSpace: every message is stored, it appears on the AI Chat page in the app, and your support team can read it or open the same thread and reply as a human.
 
-Give each customer session its own \`conversation_id\`. Set \`client_manages_history: true\` so your app keeps control of the running history and the chat interface. With that flag set, PageSpace creates the thread the first time it is used, owned by your key, and stores every message under it, while your app stays in charge of the chat. (Prefer to create threads up front? \`POST /api/v1/conversations\` with a \`drive_id\` returns an id you reuse.) To let a customer resume where they left off, read the stored messages back:
+Give each customer session its own \`conversation_id\`. Set \`client_manages_history: true\` so your app keeps control of the running history and the chat interface. With that flag set, PageSpace creates the thread the first time it is used, owned by your key, and stores every message under it, while your app stays in charge of the chat.
+
+Both fields go on the same \`create\` call, right beside \`messages\`:
+
+\`\`\`ts
+const stream = await client.chat.completions.create({
+  model: "ps-agent://<agentPageId>",
+  stream: true,
+  messages,
+  conversation_id: conversationId,   // a fresh id you generate per customer session
+  client_manages_history: true,      // your app owns the running history
+});
+\`\`\`
+
+Those last two are extra fields in the request body. The OpenAI client sends them through as-is; they are not part of its built-in types, so a TypeScript app adds a small cast on the object. (Prefer to create threads up front? \`POST /api/v1/conversations\` with a \`drive_id\` returns an id you reuse.) To let a customer resume where they left off, read the stored messages back:
 
 \`\`\`bash
 curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
