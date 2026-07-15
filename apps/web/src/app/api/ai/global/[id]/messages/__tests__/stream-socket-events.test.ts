@@ -739,7 +739,12 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(assistantSave?.[0]).toMatchObject({ status: 'complete' });
     });
 
-    it('given the run was aborted with NO responseMessage, should still persist an interrupted placeholder using buffered parts', async () => {
+    // CodeRabbit review: execute-end (not onFinish) is now the durable, unconditional terminal
+    // write — it runs regardless of client disconnect (onFinish is response-stream-coupled and
+    // may never fire when a mobile client backgrounds mid-stream, per #2065). onFinish's own
+    // no-responseMessage branch does nothing now; execute-end has already terminalized the row
+    // by the time onFinish would have run.
+    it('given the run was aborted with buffered content, execute-end should persist an interrupted placeholder', async () => {
       vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
       mockCreateStreamLifecycle.mockResolvedValueOnce({
         pushPart: mockLifecyclePushPart,
@@ -748,18 +753,17 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       });
 
       await POST(makeRequest(), makeContext());
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
       const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
       const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave?.[0]).toMatchObject({ status: 'interrupted', messageId: 'test-message-id' });
     });
 
-    // Line-by-line review finding: the aborted/no-responseMessage fallback branch must bump
-    // conversations.lastMessageAt the same way the responseMessage branch does above it —
+    // Line-by-line review finding: the terminal write must bump conversations.lastMessageAt —
     // otherwise a conversation-list view sorted by lastMessageAt never surfaces a conversation
     // whose only new activity was an interrupted, no-responseMessage assistant row.
-    it('given the run was aborted with NO responseMessage, should still bump conversations.lastMessageAt', async () => {
+    it('given the run was aborted with buffered content, execute-end should bump conversations.lastMessageAt', async () => {
       vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
       mockCreateStreamLifecycle.mockResolvedValueOnce({
         pushPart: mockLifecyclePushPart,
@@ -768,19 +772,29 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       });
 
       await POST(makeRequest(), makeContext());
-      const updateCallsBeforeOnFinish = vi.mocked(db.update).mock.calls.length;
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
+      const updateCallsBeforeExecute = vi.mocked(db.update).mock.calls.length;
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
-      expect(vi.mocked(db.update).mock.calls.length).toBeGreaterThan(updateCallsBeforeOnFinish);
+      expect(vi.mocked(db.update).mock.calls.length).toBeGreaterThan(updateCallsBeforeExecute);
     });
 
-    it('given a normal (non-aborted) run with NO responseMessage, should NOT persist an assistant row', async () => {
+    // CodeRabbit review: a run that exhausted its retries without ever aborting or producing a
+    // responseMessage (a sustained provider outage, say) used to fall through BOTH onFinish's
+    // `if (responseMessage)` guard and (before this PR) any execute-end equivalent, leaving the
+    // placeholder stuck at 'streaming' forever. execute-end now always terminalizes the row.
+    it('given buffered content and the run was NOT aborted, execute-end should persist as complete (not leave the row stuck at streaming)', async () => {
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([]),
+      });
+
       await POST(makeRequest(), makeContext());
-      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: undefined });
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
       const saveCalls = mockSaveGlobalAssistantMessageToDatabase.mock.calls;
       const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
-      expect(assistantSave).toBeUndefined();
+      expect(assistantSave?.[0]).toMatchObject({ status: 'complete', messageId: 'test-message-id' });
     });
 
     it('given an error throws after lifecycle creation, should call lifecycle.finish(true) from the outer catch', async () => {

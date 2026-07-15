@@ -791,14 +791,19 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       });
     });
 
-    it('given buffered parts are empty, should NOT persist from the execute path', async () => {
+    // CodeRabbit review: this used to be a "should NOT persist" test — but skipping the
+    // execute-end write whenever bufferedParts is empty and the run wasn't aborted left an
+    // exhausted-with-no-content run (a sustained provider outage, say) stuck at 'streaming'
+    // forever, since onFinish's own `if (responseMessage)` guard also skips it. execute-end
+    // now always terminalizes the row.
+    it('given buffered parts are empty and the run was not aborted, should still persist as complete (not leave the row stuck at streaming)', async () => {
       // beforeEach already mocks getBufferedParts to return [] — no override needed
       await POST(makeRequest());
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
       const saveCalls = mockSaveMessageToDatabase.mock.calls;
       const assistantSave = saveCalls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
-      expect(assistantSave).toBeUndefined();
+      expect(assistantSave?.[0]).toMatchObject({ status: 'complete', messageId: 'test-message-id' });
     });
 
     // Server Stream Durability epic PR 2 — Codex review: a run the user stopped must persist as

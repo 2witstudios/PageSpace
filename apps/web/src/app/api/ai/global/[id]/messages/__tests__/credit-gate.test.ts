@@ -336,7 +336,7 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     captured.totalUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish });
+    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
   });
 
   it('returns 402 out_of_credits and never starts the stream when the gate denies', async () => {
@@ -391,7 +391,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish });
+    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
   });
 
   it('calls AIMonitoring.trackUsage even when the provider returns no usage metadata', async () => {

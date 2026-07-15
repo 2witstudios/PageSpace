@@ -1473,30 +1473,30 @@ export async function POST(request: Request) {
           //
           // Status: a run the user (or the credit gate) stopped is 'interrupted', not
           // 'complete' — its content, even if non-empty, was cut short, not delivered in
-          // full. And the write must happen even with ZERO buffered parts when aborted:
-          // otherwise a stream stopped before any token arrives leaves its placeholder
-          // stuck at 'streaming' forever — excluded from every reader by default AND
-          // rejected by edit/delete's 409 guard, an invisible, permanently-locked ghost
-          // row. See Server Stream Durability epic PR 2 — Codex review.
+          // full. Unconditional now (not gated on buffered content or abort): a run that
+          // exhausted its retries without ever aborting or producing a responseMessage
+          // (a sustained provider outage, say) used to fall through BOTH this block and
+          // onFinish's `if (responseMessage)` guard, leaving the placeholder stuck at
+          // 'streaming' forever — excluded from every reader by default AND rejected by
+          // edit/delete's 409 guard, an invisible, permanently-locked ghost row. See
+          // Server Stream Durability epic PR 2 — Codex + CodeRabbit review.
           if (chatId && serverAssistantMessageId) {
             const bufferedParts = lifecycle!.getBufferedParts();
             const aborted = isRunAborted({ agentRun, abortSignal });
-            if (bufferedParts.length > 0 || aborted) {
-              const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
-              try {
-                await saveMessageToDatabase({
-                  messageId: serverAssistantMessageId,
-                  pageId: chatId,
-                  conversationId: conversationId!,
-                  userId: null,
-                  role: 'assistant',
-                  ...payload,
-                  status: aborted ? 'interrupted' : 'complete',
-                });
-                assistantMessagePersisted = true;
-              } catch (e) {
-                loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
-              }
+            const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+            try {
+              await saveMessageToDatabase({
+                messageId: serverAssistantMessageId,
+                pageId: chatId,
+                conversationId: conversationId!,
+                userId: null,
+                role: 'assistant',
+                ...payload,
+                status: aborted ? 'interrupted' : 'complete',
+              });
+              assistantMessagePersisted = true;
+            } catch (e) {
+              loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
             }
           }
         },

@@ -1302,6 +1302,45 @@ MENTION PROCESSING:
         // Single onFinish → single consumeCredits → one hold settle: no double-charge,
         // but failed/partial attempts ARE billed (the provider charged us for them).
         agentRun = runResult;
+
+        // Durable server-side persistence — runs regardless of whether the client is still
+        // connected. onFinish is coupled to the response stream and may never fire when the
+        // mobile client backgrounds mid-stream (exactly the scenario #2065 fixed client-side
+        // for this same route — recovery only helps if the server actually settled the row).
+        // Mirrors chat/route.ts's execute-end block: unconditional, using whatever lifecycle
+        // has buffered so far. onFinish, when it runs, refines this write with the richer SDK
+        // responseMessage; when onFinish never runs, this write stands as the sole record.
+        // See Server Stream Durability epic PR 2 — CodeRabbit review.
+        {
+          const bufferedParts = lifecycle!.getBufferedParts();
+          const aborted = isRunAborted({ agentRun, abortSignal });
+          const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+          try {
+            await saveGlobalAssistantMessageToDatabase({
+              messageId: serverAssistantMessageId,
+              conversationId,
+              userId,
+              role: 'assistant',
+              ...payload,
+              status: aborted ? 'interrupted' : 'complete',
+            });
+            assistantMessagePersisted = true;
+
+            // A conversation with newly-written assistant content — even empty-content,
+            // interrupted content — must still surface as recently active in a list
+            // sorted/filtered by lastMessageAt. onFinish's own responseMessage branch below
+            // does the same bump when it gets to refine this write with richer content.
+            await db
+              .update(conversations)
+              .set({
+                lastMessageAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(conversations.id, conversationId));
+          } catch (e) {
+            loggers.api.error('Global Assistant Chat API: execute-end persist failed', e as Error);
+          }
+        }
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry
@@ -1321,14 +1360,10 @@ MENTION PROCESSING:
         const extractedToolResults = responseMessage ? extractToolResults(responseMessage) : [];
 
         // Save the assistant message. Best-effort: persistence errors must NOT skip
-        // usage/credit settlement below — that would leak the gate's hold.
-        //
-        // Status: a run the user (or the credit gate) stopped is 'interrupted', not 'complete'.
-        // And when responseMessage is absent (exhausted/no-content run) but the run WAS aborted,
-        // fall back to whatever lifecycle buffered — otherwise a stream stopped before any token
-        // arrives leaves its placeholder stuck at 'streaming' forever: excluded from every
-        // reader by default AND rejected by edit/delete's 409 guard, an invisible,
-        // permanently-locked ghost row. See Server Stream Durability epic PR 2 — Codex review.
+        // usage/credit settlement below — that would leak the gate's hold. This is the
+        // "refine with the richer SDK responseMessage" step — execute-end above already
+        // terminalized the row unconditionally, so when responseMessage is absent there is
+        // nothing richer to refine with and nothing left to do here.
         if (responseMessage) {
           try {
             const messageContent = extractMessageContent(responseMessage);
@@ -1366,34 +1401,8 @@ MENTION PROCESSING:
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }
-        } else if (aborted) {
-          try {
-            const payload = buildAssistantPersistencePayload(messageId, lifecycle!.getBufferedParts());
-            await saveGlobalAssistantMessageToDatabase({
-              messageId,
-              conversationId,
-              userId,
-              role: 'assistant',
-              ...payload,
-              status: 'interrupted',
-            });
-            assistantMessagePersisted = true;
-
-            // Same lastMessageAt bump as the responseMessage branch above — a conversation with
-            // a newly-written (even empty-content, interrupted) assistant row must still surface
-            // as recently active in a list sorted/filtered by lastMessageAt.
-            await db
-              .update(conversations)
-              .set({
-                lastMessageAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .where(eq(conversations.id, conversationId));
-
-            loggers.api.debug('Global Assistant Chat API: terminalized aborted placeholder with no responseMessage', {});
-          } catch (error) {
-            loggers.api.error('Global Assistant Chat API: failed to terminalize aborted placeholder', error as Error);
-          }
+        } else {
+          loggers.api.debug('Global Assistant Chat API: no responseMessage — execute-end already terminalized this row', {});
         }
 
         // Usage + credit settlement ALWAYS runs after runAgentWithRetry completes —
