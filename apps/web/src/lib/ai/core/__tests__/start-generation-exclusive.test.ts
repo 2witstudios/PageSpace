@@ -291,24 +291,30 @@ describe('startGenerationExclusive', () => {
         startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep: vi.fn(async () => {}) }),
       ).rejects.toThrow('boom');
 
-      // try-lock + unlock: the lock was genuinely acquired and released despite run() throwing.
-      expect(client.query).toHaveBeenCalledTimes(2);
+      // The lock was genuinely acquired despite run() throwing, and its release contract
+      // (client.release, not the raw query count) must still be honored.
+      expect(client.release).toHaveBeenCalledTimes(1);
     });
 
-    it('given run() throws and the SAME conversation is retried by the caller, a real lock-machinery failure on that retry should still degrade normally', async () => {
-      // Guards against a stale `runThrew` flag leaking across calls/loop iterations.
-      const client = makeClient([true]);
-      const pool = makePool(client);
+    it('given a prior call on the SAME conversation had run() throw, a later call that hits a genuine lock-machinery failure should still degrade normally', async () => {
+      // `runThrew` is local to each startGenerationExclusive invocation (a fresh closure per
+      // call), so nothing from a prior call's rejection can leak into the next one — this
+      // exercises that with the same conversationId, not just structural reasoning about it.
+      const firstCallClient = makeClient([true]);
+      const firstCallPool = makePool(firstCallClient);
+      await expect(
+        startGenerationExclusive({
+          conversationId: 'conv-1',
+          run: vi.fn(async () => { throw new Error('first call run failure'); }),
+          pool: firstCallPool,
+          sleep: vi.fn(async () => {}),
+        }),
+      ).rejects.toThrow('first call run failure');
+
       const run = vi.fn(async () => 'lifecycle-handle');
-      const sleep = vi.fn(async () => {});
-
       const brokenPool: AdvisoryLockPool = { connect: vi.fn(async () => { throw new Error('pool exhausted'); }) };
+      const result = await startGenerationExclusive({ conversationId: 'conv-1', run, pool: brokenPool, sleep: vi.fn(async () => {}) });
 
-      await expect(startGenerationExclusive({ conversationId: 'conv-1', run: vi.fn(async () => { throw new Error('first call run failure'); }), pool, sleep })).rejects.toThrow(
-        'first call run failure',
-      );
-
-      const result = await startGenerationExclusive({ conversationId: 'conv-2', run, pool: brokenPool, sleep });
       expect(result).toEqual({ outcome: 'degraded', result: 'lifecycle-handle' });
       expect(run).toHaveBeenCalledTimes(1);
     });

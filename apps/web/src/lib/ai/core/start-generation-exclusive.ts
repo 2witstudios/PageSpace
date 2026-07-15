@@ -117,22 +117,24 @@ export async function startGenerationExclusive<T>(
   const sleep = params.sleep ?? defaultSleep;
   const lockKey = advisoryLockKeyFor(conversationId);
 
+  // Tags whether `run` itself threw, so the catch below can tell it apart from the lock
+  // machinery failing. Every operation inside `run` is expected to catch and log its own errors
+  // (see each call site), so `runThrew` firing means that contract was violated somewhere — but
+  // it must still never cause a double-invocation. Declared once, outside the retry loop: a
+  // `runThrew` catch always throws out of this function immediately (never `continue`s back
+  // into the loop), so there is no cross-iteration state to reset between retries.
+  let runThrew = false;
+  const guardedRun = async (): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      runThrew = true;
+      throw error;
+    }
+  };
+
   let attemptsMade = 0;
   for (;;) {
-    // Tags whether THIS attempt's exception came from `run` itself, so the catch below can
-    // tell it apart from the lock machinery failing. Every operation inside `run` is expected
-    // to catch and log its own errors (see each call site), so `runThrew` firing means that
-    // contract was violated somewhere — but it must still never cause a double-invocation.
-    let runThrew = false;
-    const guardedRun = async (): Promise<T> => {
-      try {
-        return await run();
-      } catch (error) {
-        runThrew = true;
-        throw error;
-      }
-    };
-
     let attempt;
     try {
       attempt = await withAdvisoryLock(pool, lockKey, guardedRun);
