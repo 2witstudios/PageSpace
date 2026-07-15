@@ -70,8 +70,11 @@ jobs:
           # ceiling (~2-4GB in a constrained container) is occasionally too tight for
           # apps/web's ~930-file suite, causing an intermittent
           # "Ineffective mark-compacts near heap limit" crash. ubuntu-latest runners
-          # have 16GB RAM, so raising the ceiling well below that is safe headroom.
-          NODE_OPTIONS: --max-old-space-size=8192
+          # have 16GB RAM. Combined with apps/web/vitest.config.ts's maxForks bump
+          # (spreads files across more, shorter-lived workers so no single one
+          # accumulates coverage data from hundreds of sequential files), this stays
+          # safe headroom rather than a real per-process reservation.
+          NODE_OPTIONS: --max-old-space-size=10240
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's

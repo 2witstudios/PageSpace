@@ -13,6 +13,17 @@ export default defineConfig({
     // takes effect and the v8-coverage-instrumented run of this ~930-file
     // suite no longer crashes with "Ineffective mark-compacts near heap limit".
     pool: 'forks',
+    // Trimming the reporters (below) didn't fully fix it either: 2 forks still
+    // hit the identical FATAL ERROR after all their assigned tests passed. Root
+    // cause: the v8 coverage provider retains precise per-script coverage data
+    // for every file a process has ever run, for that process's whole lifetime —
+    // it never gets released between files. With the default fork count (~one
+    // per CPU) on this ~930-file suite, each long-lived worker accumulates that
+    // data across ~300 sequential files before finishing, eventually exceeding
+    // even an 8GB ceiling. Raising maxForks shrinks each worker's file share
+    // (and thus its accumulated coverage memory) well before it can build up
+    // that far.
+    poolOptions: { forks: { minForks: 1, maxForks: 8 } },
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
