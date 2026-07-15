@@ -362,6 +362,7 @@ import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
 import { createStreamAbortController } from '@/lib/ai/core/stream-abort-registry';
 import { db } from '@pagespace/db/db';
+import { conversations } from '@pagespace/db/schema/conversations';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -775,7 +776,8 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       const updateCallsBeforeExecute = vi.mocked(db.update).mock.calls.length;
       await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
 
-      expect(vi.mocked(db.update).mock.calls.length).toBeGreaterThan(updateCallsBeforeExecute);
+      const newUpdateCalls = vi.mocked(db.update).mock.calls.slice(updateCallsBeforeExecute);
+      expect(newUpdateCalls.some((call) => call[0] === conversations)).toBe(true);
     });
 
     // CodeRabbit review: a run that exhausted its retries without ever aborting or producing a
