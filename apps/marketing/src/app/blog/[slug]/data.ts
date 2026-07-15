@@ -25,37 +25,37 @@ export const blogPosts: Record<string, BlogPost> = {
     slug: "build-a-chat-app-on-pagespace",
     title: "Turn Your PageSpace Docs Into a Support Bot",
     description:
-      "Your help docs already live in PageSpace. With two simple connections, a chat API for the conversation and the SDK for your content, they become a support bot on your site and a help center your team runs, with every conversation saved back in PageSpace.",
+      "Your help docs already live in PageSpace. With two connections, a chat API for the conversation and the SDK for your content, they become a support bot on your site and a help center your team runs, with every conversation saved back in PageSpace.",
     image: "/blog/support-bot/bot-answer.png",
     content: `
 ## What you'll have when you're done
 
-A support bot on your website that answers customers from your own help docs, with every conversation saved back in PageSpace for your team to read or jump into. You build the chat box on your site. PageSpace handles everything behind it: the AI, the instructions it follows, the searching through your docs to find the answer, and the record of every conversation.
+A support bot on your website that answers customers from your own help docs, with every conversation saved back in PageSpace for your team to read or jump into. You build the chat box; PageSpace handles everything behind it: the AI, the instructions it follows, the search through your docs, and the record of every conversation.
 
-Normally a support bot is a week of work that has nothing to do with support. You pick an AI model and pay to run it. You teach it how to answer and keep those instructions up to date. You build a way for it to search your help articles and pull up the right one, which is the part most teams find hardest. And you store every conversation somewhere your team can see it. If your help content already lives in a PageSpace drive, all of that is already done.
+Normally a support bot is a week of work that has nothing to do with support. You pick an AI model and pay to run it. You teach it how to answer and keep those instructions up to date. You build a way for it to search your help articles and pull up the right one, the part most teams find hardest. And you store every conversation somewhere your team can see it. If your help content already lives in a PageSpace drive, all of that is already done.
 
 You connect to it in two ways, and both are worth knowing up front:
 
-- **A chat API** runs the conversation. It is a standard chat endpoint, the same shape most AI chat tools already use, so any chat box can talk to it. This is what powers the live bot.
-- **The [SDK](/docs/features/sdk)** handles your content: reading, searching, and editing the docs the bot answers from. This is what powers the browsable help center and the admin your team uses to keep the docs current.
+- **A chat API** runs the conversation. It works the same way most AI chat tools already do, so any chat box can talk to it. This powers the live bot.
+- **The [SDK](/docs/features/sdk)** (a small set of ready-made code a developer plugs into your app) handles your content: reading, searching, and editing the docs the bot answers from. This powers the browsable help center and the admin your team uses to keep the docs current.
 
 One drive sits behind both. Here is what that looks like.
 
 ## See it working
 
-Everything in this guide is running in a small reference app we built on exactly those two connections. Three surfaces, one drive behind all of them.
+Everything in this guide runs in a small reference app we built on exactly those two connections. Three surfaces, one drive behind them.
 
-Keep one thing in mind as you look: this is your own app, so it can look however you want. The screenshots below are just one design we put together to show the pieces. Because PageSpace is only the backend, the chat box, the help center, and the admin are entirely your frontend: your layout, your branding, your fonts and colors, your components. Nothing about the look is fixed or locked to a PageSpace widget. You build the interface; PageSpace supplies the answers and the content behind it.
+Keep one thing in mind as you look: this is your own app, so it can look however you want. The screenshots below are one design we mocked up to show the pieces. Because PageSpace is only the backend, the chat box, the help center, and the admin are entirely your frontend: your layout, your branding, your fonts and colors, your components. Nothing about the look is locked to a PageSpace widget. You build the interface; PageSpace supplies the answers and the content behind it.
 
-**Customers ask the bot.** A chat box on your site, streaming answers straight from the docs in your drive:
+**Customers ask the bot.** A chat box on your site that answers straight from the docs in your drive, appearing word by word as the bot types:
 
 ![The public support bot on a website](/blog/support-bot/public-bot.png)
 
-*The bot on your site is a PageSpace agent, answering over the chat API. Your website only shows the chat box; the AI, its instructions, and the searching through your docs all live in PageSpace.*
+*The bot on your site is a PageSpace agent (the AI assistant that reads your docs and answers), working through the chat API. Your website only shows the chat box; the AI, its instructions, and the search through your docs all live in PageSpace.*
 
 ![The support bot answering a question from the docs](/blog/support-bot/bot-answer.png)
 
-*Ask a real question and the bot finds the right help page and answers from it, with the actual steps. You never built the part that searches your docs to find that page; the agent reads your drive directly.*
+*Ask a real question and the bot finds the right help page and answers from it, with the actual steps. You never built the part that searches your docs; the agent reads your drive directly.*
 
 **Customers browse the same docs.** The same pages the bot reads also become a clean, searchable help center customers can browse themselves:
 
@@ -69,7 +69,7 @@ Keep one thing in mind as you look: this is your own app, so it can look however
 
 *Edit an answer here and the next customer question is answered from the new version. No developer, no redeploy: the docs are the bot's knowledge, and updating them updates the bot.*
 
-The help center and the admin above are built with the **[SDK](/docs/features/sdk)**, a small library for reading and writing your content. Listing, reading, and searching your docs is a few lines, so a developer can build whatever interface you want on top of them:
+The help center and the admin above are built with that same **[SDK](/docs/features/sdk)**. Listing, reading, and searching your docs is a few lines, so a developer can build whatever interface you want on top:
 
 \`\`\`ts
 import { PageSpaceClient, StaticTokenProvider } from "@pagespace/sdk";
@@ -84,13 +84,13 @@ const doc = await ps.pages.read({ operation: "read", pageId });                /
 const hits = await ps.search.regex({ driveId, pattern: "reset password", searchIn: "content" }); // the search box
 \`\`\`
 
-And because the drive is a real PageSpace workspace, you can skip the custom admin entirely and manage all of it natively in the app: edit the docs, adjust the bot, and read every customer conversation as a page your team can open.
+And because the drive is a real PageSpace workspace, you can skip the custom admin entirely and manage everything natively in the app: edit the docs, adjust the bot, and read every customer conversation as a page your team can open.
 
 ![The same agent and its docs, managed natively inside PageSpace](/blog/support-bot/inside-pagespace.png)
 
-*The agent, the docs it reads, and the threads it produces are all pages in one drive. A teammate can open any conversation and take over as a human.*
+*The agent, the docs it reads, and the threads it produces are all pages in one drive. A teammate can open any conversation and take over.*
 
-Here is how it goes together.
+Now let's build it.
 
 ## Set up the support agent
 
@@ -125,7 +125,7 @@ If you would rather point and click, the same settings live on the agent page in
 
 *Hand the agent the drive's page tree so it knows what documentation exists before it starts searching.*
 
-**3. Mint a key for your server.** The endpoint runs the agent's tools, which need edit access to the page, so create a key that inherits your own access to the drive (leave \`--role\` off). A plain \`member\` key is view-only on an agent page and would get a 403:
+**3. Create a key for your server.** The endpoint runs the agent's tools, which need edit access to the page, so create a key that inherits your own access to the drive (leave \`--role\` off). A plain \`member\` key is view-only on an agent page and would get a 403:
 
 \`\`\`bash
 pagespace keys create --drive <driveId> --name support-bot --show-token
@@ -153,7 +153,7 @@ const stream = await client.chat.completions.create({
 });
 \`\`\`
 
-The agent answers with its own system prompt and runs its own tools on the server. It searches the drive, reads the right doc, and returns the answer, all inside the key's scope. It is the same credential the [SDK](/docs/features/sdk) and [CLI](/docs/features/cli) use.
+The agent answers with its own system prompt and runs its own tools on the server. It searches the drive, reads the right doc, and returns the answer, all inside the key's scope. This is the same credential the [SDK](/docs/features/sdk) and [CLI](/docs/features/cli) use.
 
 **5. Stream it to the customer.** The response is an OpenAI stream, so a Next.js route handler that pipes it to the browser is a dozen lines:
 
@@ -184,13 +184,13 @@ export async function POST(req: Request) {
 }
 \`\`\`
 
-Your chat box posts the message history to that route and renders tokens as they arrive. That is the bot.
+Your chat box sends the conversation so far to that route and shows the reply as it streams in, word by word. That is the bot.
 
 ## Every conversation lands in PageSpace
 
-A support bot is only half done if the conversations vanish. Pass a \`conversation_id\` and the thread persists in PageSpace: every message is stored, it appears on the AI Chat page in the app, and your support team can read it or open the same thread and reply as a human.
+A support bot is only half done if the conversations vanish. Pass a \`conversation_id\` and the whole conversation is saved in PageSpace: every message is stored, it appears on the AI Chat page in the app, and your support team can read it or open the same thread and reply as a human.
 
-Give each customer session its own \`conversation_id\`. Set \`client_manages_history: true\` so your app keeps its own context window and UI, then pass a \`conversation_id\` you mint per session: with that flag set, PageSpace creates the thread on first use, owned by your key, and stores every message under it while your app stays in charge of the chat. (Prefer to create threads up front? \`POST /api/v1/conversations\` with a \`drive_id\` returns an id you reuse.) To let a customer resume where they left off, read the stored messages back:
+Give each customer session its own \`conversation_id\`. Set \`client_manages_history: true\` so your app keeps control of the running history and the chat interface. With that flag set, PageSpace creates the thread the first time it is used, owned by your key, and stores every message under it, while your app stays in charge of the chat. (Prefer to create threads up front? \`POST /api/v1/conversations\` with a \`drive_id\` returns an id you reuse.) To let a customer resume where they left off, read the stored messages back:
 
 \`\`\`bash
 curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
@@ -198,19 +198,19 @@ curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
 # -> { "messages": [ { "role": "user", "content": "..." }, ... ] }
 \`\`\`
 
-Rehydrate the chat box from those messages and the customer picks up mid conversation. A teammate can open the same thread in PageSpace and take over. The conversation is not trapped in your database. It is a page in the workspace.
+Refill the chat box from those saved messages and the customer picks up mid conversation. A teammate can open the same thread in PageSpace and take over. The conversation is not trapped in your database. It is a page in the workspace.
 
 ## Before you make it public
 
-This is the working bot, not a hardened production service. You do not have to build much more, but two things are on you before it goes on a real site.
+This is the working bot, but not yet locked down for real public traffic. You do not have to build much more, but two things are on you before it goes live.
 
 First, keep the token on your server. The \`mcp_\` key inherits your drive access, so it never belongs in the browser. Your route handler holds it and the customer only ever talks to your route. The examples above already do this.
 
-Second, add rate limiting. The endpoint does not do per-request rate limiting for you. It caps how many calls run at once and it stops when your credits run out, but nothing stops one visitor from sending request after request, and every request spends your drive's credits. On a public page that is an open door to drain your balance. Put a limit in the route that fronts the endpoint: throttle by IP or session, cap messages per minute, and reject anything over the line before it reaches PageSpace. It is a few lines in the same route handler that already holds the token.
+Second, add rate limiting. The chat API does not limit how often each visitor can send messages. It caps how many calls run at once and stops when your credits run out, but nothing stops one visitor from sending request after request, and every request spends your drive's credits. On a public page that is an open door to drain your balance. Put a limit in the route that sits in front of the chat API: throttle by IP or session, cap messages per minute, and reject anything over the line before it reaches PageSpace. A few lines in the same route handler that already holds the token.
 
 Look at everything you did not have to build: no AI model to choose and pay a separate vendor to run, no instructions to keep up to date in your code (they live on the agent page, editable by your support lead), no search system to build and maintain so the bot finds the right article (the agent reads your drive directly, since [the drive is the context](/blog/your-workspace-is-the-context)), and no database of past conversations (they are already pages in your workspace). You brought a chat box and a key. PageSpace brought the rest. The full technical reference is in the [Agent API docs](/docs/features/agent-api) and the [SDK docs](/docs/features/sdk).
 `,
-    author: "Jono",
+    author: "PageSpace Team",
     date: "2026-07-14",
     readTime: "7 min read",
     category: "Guide",
