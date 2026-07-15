@@ -144,18 +144,40 @@ describe('materializeInterruptedStream — table routing', () => {
       expected: { userId: 'user-a', status: 'interrupted' },
     });
   });
+
+  // Mirrors saveMessageToDatabase's own update-set ("Update conversationId if message is
+  // reprocessed") — a message reparented into a different conversation before this sweep ran
+  // must not be left pointing at a stale conversationId after materialization.
+  it('re-syncs conversationId on the conflict update, same as the normal terminal-write path', async () => {
+    await materializeInterruptedStream(pageRow({ conversationId: 'conv-fresh' }));
+
+    const setClause = mockOnConflictDoUpdate.mock.calls[0][0].set;
+    assert({
+      given: 'a materialization upsert',
+      should: 'include conversationId in the conflict update set clause',
+      actual: setClause.conversationId,
+      expected: 'conv-fresh',
+    });
+  });
 });
 
 describe('materializeInterruptedStream — content from the parts snapshot', () => {
-  it('builds message content via the shared execute-end/onFinish payload builder', async () => {
+  // The normal execute-end/onFinish path runs any non-empty parts array through
+  // extractStructuredContentFromParts before persisting (message-utils.ts:536,666) — the
+  // structured JSON envelope is what preserves file/data parts and chronological ordering on
+  // reload. Materialize must produce the SAME envelope, not the plain concatenated text, or a
+  // materialized reply with tool calls/file parts would silently degrade to flat text forever
+  // (it's a terminal write — no later pass ever fixes it).
+  it('builds message content via the same structured-content pipeline execute-end/onFinish use, not plain concatenated text', async () => {
     await materializeInterruptedStream(pageRow({ parts: [textPart('Hello'), textPart(' world')] }));
 
     const values = mockInsertValues.mock.calls[0][0];
+    const parsed = JSON.parse(values.content as string);
     assert({
       given: 'a parts snapshot with two text parts',
-      should: 'produce the same concatenated content buildAssistantPersistencePayload would for a finished stream',
-      actual: values.content,
-      expected: 'Hello world',
+      should: 'persist the structured-content envelope (matching saveMessageToDatabase), not flat text',
+      actual: { originalContent: parsed.originalContent, textParts: parsed.textParts },
+      expected: { originalContent: 'Hello world', textParts: ['Hello', ' world'] },
     });
   });
 
@@ -313,6 +335,26 @@ describe('materializeInterruptedStream — broadcast', () => {
     await materializeInterruptedStream(pageRow());
 
     expect(mockBroadcastAiStreamComplete).not.toHaveBeenCalled();
+  });
+
+  it('logs but does not throw when the broadcast itself fails', async () => {
+    mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
+
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining('broadcast failed'),
+      expect.objectContaining({ error: 'socket down' }),
+    );
+  });
+
+  it('logs a non-Error broadcast rejection without throwing', async () => {
+    mockBroadcastAiStreamComplete.mockRejectedValue('a rejected string, not an Error instance');
+
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining('broadcast failed'),
+      expect.objectContaining({ error: 'unknown' }),
+    );
   });
 });
 

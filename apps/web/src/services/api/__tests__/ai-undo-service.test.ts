@@ -44,13 +44,13 @@ vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+  chatMessages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive', status: 'status' },
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: { id: 'id', aiConversationId: 'aiConversationId', isAiGenerated: 'isAiGenerated', timestamp: 'timestamp' },
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive' },
+  messages: { id: 'id', conversationId: 'conversationId', createdAt: 'createdAt', isActive: 'isActive', status: 'status' },
 }));
 
 // Mock the rollback service
@@ -877,6 +877,98 @@ describe('ai-undo-service', () => {
 
       expect(result).not.toBeNull();
       expect(result!.driveId).toBeNull();
+    });
+  });
+
+  // ============================================
+  // Undo excludes in-flight streaming rows (#2022 safe default — D.2)
+  //
+  // The implementation is real (previewAiUndo's count query and both of executeAiUndo's
+  // soft-delete updates already add ne(table.status, 'streaming') — see the SAFE DEFAULT
+  // comments in ai-undo-service.ts). It was previously claimed "tested" with zero assertions
+  // on the actual where-clause: the only prior diff to this file was a one-line `ne` mock
+  // addition so the changed source didn't throw on an unmocked import. These tests close that
+  // gap by asserting the mocked `where(...)` call actually carries the ne(status,'streaming')
+  // condition, mirroring the rigor already applied to the sibling 409-mutation-guard tests.
+  // ============================================
+
+  describe('undo excludes in-flight streaming rows (#2022 safe default — D.2)', () => {
+    it("previewAiUndo's affected-message count query excludes status='streaming' rows", async () => {
+      const mockMessage = createMockMessage();
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+
+      const whereMock = vi.fn().mockImplementation(() =>
+        whereMock.mock.calls.length === 1 ? [] : { orderBy: vi.fn().mockResolvedValue([]) }
+      );
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({ where: whereMock }),
+      }));
+
+      await previewAiUndo(mockMessageId, mockUserId);
+
+      const affectedMessagesConds = whereMock.mock.calls[0][0] as unknown[];
+      expect(affectedMessagesConds).toContainEqual({ field: 'status', op: 'ne', value: 'streaming' });
+    });
+
+    it("executeAiUndo's primary-table soft-delete update excludes status='streaming' rows", async () => {
+      const mockMessage = createMockMessage();
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1) return [{ id: 'msg_1' }];
+            return { orderBy: vi.fn().mockResolvedValue([]) };
+          }),
+        }),
+      }));
+
+      const updateWhereMock = vi.fn().mockResolvedValue(undefined);
+      const updateSetMock = vi.fn().mockReturnValue({ where: updateWhereMock });
+      const updateMock = vi.fn().mockReturnValue({ set: updateSetMock });
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
+        await callback({ update: updateMock });
+      });
+
+      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+
+      // First update() call is the primary table (source-based); second is the secondary table.
+      const primaryConds = updateWhereMock.mock.calls[0][0] as unknown[];
+      expect(primaryConds).toContainEqual({ field: 'status', op: 'ne', value: 'streaming' });
+    });
+
+    it("executeAiUndo's secondary-table soft-delete update excludes status='streaming' rows", async () => {
+      const mockMessage = createMockMessage();
+      mockDb.query.chatMessages.findFirst.mockResolvedValue(mockMessage);
+      mockDb.query.pages.findFirst.mockResolvedValue({ driveId: mockDriveId });
+
+      let selectCallCount = 0;
+      mockDb.select.mockImplementation(() => ({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockImplementation(() => {
+            selectCallCount++;
+            if (selectCallCount === 1) return [{ id: 'msg_1' }];
+            return { orderBy: vi.fn().mockResolvedValue([]) };
+          }),
+        }),
+      }));
+
+      const updateWhereMock = vi.fn().mockResolvedValue(undefined);
+      const updateSetMock = vi.fn().mockReturnValue({ where: updateWhereMock });
+      const updateMock = vi.fn().mockReturnValue({ set: updateSetMock });
+      mockDb.transaction.mockImplementation(async (callback: (tx: Record<string, unknown>) => Promise<void>) => {
+        await callback({ update: updateMock });
+      });
+
+      await executeAiUndo(mockMessageId, mockUserId, 'messages_only');
+
+      expect(updateWhereMock).toHaveBeenCalledTimes(2);
+      const secondaryConds = updateWhereMock.mock.calls[1][0] as unknown[];
+      expect(secondaryConds).toContainEqual({ field: 'status', op: 'ne', value: 'streaming' });
     });
   });
 });

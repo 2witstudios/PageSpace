@@ -312,9 +312,11 @@ export const reconcileDeadStreamRows = async ({
     return;
   }
 
-  for (const row of rows) {
-    await materializeInterruptedStream(row);
-  }
+  // Concurrent, not sequential — `materializeInterruptedStream` never throws (it catches and
+  // logs its own DB failures per step) and each row is independent, so there is no correctness
+  // reason to serialize a mass-crash-recovery batch (potentially dozens of rows after an
+  // instance dies) into N sequential round trips.
+  await Promise.all(rows.map((row) => materializeInterruptedStream(row)));
 };
 
 /**

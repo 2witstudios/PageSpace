@@ -292,6 +292,33 @@ describe('GET /api/ai/chat/active-streams', () => {
       });
     });
 
+    // A page channel carries EVERY conversation on it, including other members' PRIVATE ones.
+    // Without this gate, any user with mere page-view access could trigger a reap side effect
+    // (a DB write + broadcast) for a conversation whose content they can never see returned —
+    // the same authorization gap the response payload itself already closes via
+    // filterSubscribableStreams.
+    it("given a provably-dead row in a conversation the caller may NOT subscribe to (another member's private conversation), does not materialize it", async () => {
+      const longAgo = new Date(Date.now() - 5 * 60 * 1000);
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-not-mine',
+          conversationId: 'their-private-conv',
+          userId: 'user-other',
+          displayName: 'Alice',
+          browserSessionId: 'session-2',
+          parts: [{ type: 'text', text: 'private content' }],
+          startedAt: longAgo,
+          lastHeartbeatAt: longAgo,
+        },
+      ]);
+      // Conversation-scoped authorization drops it, exactly as it does for the response payload.
+      mockFilterSubscribableStreams.mockResolvedValueOnce([]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+    });
+
     it('given a live, checkpointing row, does not materialize it', async () => {
       mockOrderBy.mockResolvedValueOnce([
         {

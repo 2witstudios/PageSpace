@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { UIMessage } from 'ai';
-import { MessageRenderer } from '../MessageRenderer';
+import { CompactMessageRenderer } from '../CompactMessageRenderer';
 import type { ConversationMessage } from '../message-types';
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -21,28 +21,26 @@ function assistantMessage(overrides: Partial<ConversationMessage> = {}): Convers
   } as unknown as ConversationMessage & UIMessage;
 }
 
-describe('MessageRenderer — interrupted affordance', () => {
+// Parity coverage for the sidebar/compact surface — this is the actual renderer behind
+// SidebarChatTab (global-assistant conversations, the exact channel type
+// materializeInterruptedStream's page-vs-global routing exists for). Mirrors
+// MessageRenderer.interrupted.test.tsx so the two surfaces can't silently drift.
+describe('CompactMessageRenderer — interrupted affordance', () => {
   it('given an assistant message with status "interrupted", shows the Interrupted badge', () => {
-    render(<MessageRenderer message={assistantMessage({ status: 'interrupted' })} />);
+    render(<CompactMessageRenderer message={assistantMessage({ status: 'interrupted' })} />);
 
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
   });
 
   it('given an assistant message with status "complete", shows no badge', () => {
-    render(<MessageRenderer message={assistantMessage({ status: 'complete' })} />);
-
-    expect(screen.queryByText('Interrupted')).not.toBeInTheDocument();
-  });
-
-  it('given no status at all (a pre-column row), shows no badge', () => {
-    render(<MessageRenderer message={assistantMessage()} />);
+    render(<CompactMessageRenderer message={assistantMessage({ status: 'complete' })} />);
 
     expect(screen.queryByText('Interrupted')).not.toBeInTheDocument();
   });
 
   it('given an interrupted message with a retry handler, shows the retry hint text', () => {
     render(
-      <MessageRenderer
+      <CompactMessageRenderer
         message={assistantMessage({ status: 'interrupted' })}
         onRetry={() => {}}
         isLastAssistantMessage
@@ -53,15 +51,19 @@ describe('MessageRenderer — interrupted affordance', () => {
   });
 
   it('given an interrupted message with no retry handler available, shows the badge without a retry hint', () => {
-    render(<MessageRenderer message={assistantMessage({ status: 'interrupted' })} />);
+    render(<CompactMessageRenderer message={assistantMessage({ status: 'interrupted' })} />);
 
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
     expect(screen.queryByText(/retry to continue/i)).not.toBeInTheDocument();
   });
 
+  // The bug this test guards against: CompactTextBlock's own `!content.trim()` guard hides an
+  // empty text block entirely. Without a message-level badge independent of that guard, a
+  // global-assistant stream that died before any text arrived would render as nothing at all in
+  // the sidebar — reproducing the exact silent-loss bug this feature exists to fix.
   it('given an interrupted message with zero content (died before any part arrived), still renders the badge', () => {
     render(
-      <MessageRenderer
+      <CompactMessageRenderer
         message={assistantMessage({ status: 'interrupted', parts: [{ type: 'text', text: '' }] })}
       />,
     );
@@ -69,13 +71,9 @@ describe('MessageRenderer — interrupted affordance', () => {
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
   });
 
-  // The badge must not be coupled to any one part shape: a stream can die mid-tool-call, before
-  // any trailing text ever arrives, leaving `parts` entirely tool-only (no text-group at all).
-  // Nesting the badge inside the text block's own render would make it vanish for exactly this
-  // message — the affordance must render at the message level, independent of which groups exist.
   it('given an interrupted message with ONLY a tool part (no text ever arrived), still shows the badge', () => {
     render(
-      <MessageRenderer
+      <CompactMessageRenderer
         message={assistantMessage({
           status: 'interrupted',
           parts: [
@@ -96,7 +94,7 @@ describe('MessageRenderer — interrupted affordance', () => {
 
   it('given a USER message with status "interrupted" (should never happen, but must never mislabel), shows no badge', () => {
     render(
-      <MessageRenderer
+      <CompactMessageRenderer
         message={{
           id: 'msg-user',
           role: 'user',

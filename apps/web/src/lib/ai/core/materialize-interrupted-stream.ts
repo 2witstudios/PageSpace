@@ -7,6 +7,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { broadcastAiStreamComplete } from '@/lib/websocket';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
+import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 /**
@@ -38,9 +39,11 @@ export interface MaterializableStreamRow {
  * Three things happen, in an order chosen so a failure at any step leaves the row eligible
  * for the NEXT sweep to retry rather than half-materialized:
  *
- *   1. Build the message payload from the parts snapshot (`buildAssistantPersistencePayload`
- *      — the same primitive execute-end and onFinish already use, so a materialized reply
- *      renders identically to one the model actually finished).
+ *   1. Build the message payload from the parts snapshot (`buildAssistantPersistencePayload`,
+ *      then `extractStructuredContentFromParts` — the SAME two-step pipeline execute-end and
+ *      onFinish already use in `saveMessageToDatabase`/`saveGlobalAssistantMessageToDatabase`,
+ *      so a materialized reply preserves file/data parts and ordering exactly like one the
+ *      model actually finished, instead of degrading to flat extracted text).
  *   2. Upsert the assistant message row as `status: 'interrupted'` — but ONLY if it is not
  *      already `'complete'`. That guard is the #2022 invariant: the old worker's own
  *      terminal write is fire-and-forget and can land in the gap between the caller's
@@ -53,15 +56,22 @@ export interface MaterializableStreamRow {
  *
  * Never throws. Every step logs and degrades — a reap that fails partway must not take
  * down the caller's loop over the rest of its batch (takeover, the abort-mark reconciler,
- * and the active-streams lazy sweep all call this per-row, in a loop).
+ * and the active-streams lazy sweep all call this per-row, in a loop). This is why step 1
+ * — building the payload from `row.parts` — lives INSIDE the same try/catch as the DB write:
+ * a malformed parts snapshot must degrade exactly like a failed write, not escape uncaught to
+ * a caller that assumes this function never throws.
  */
 export const materializeInterruptedStream = async (row: MaterializableStreamRow): Promise<void> => {
-  const payload = buildAssistantPersistencePayload(row.messageId, row.parts as UIMessagePart[]);
-  const toolCallsJson = payload.toolCalls ? JSON.stringify(payload.toolCalls) : null;
-  const toolResultsJson = payload.toolResults ? JSON.stringify(payload.toolResults) : null;
   const now = new Date();
 
   try {
+    const payload = buildAssistantPersistencePayload(row.messageId, row.parts as UIMessagePart[]);
+    const structuredContent = payload.uiMessage.parts.length > 0
+      ? await extractStructuredContentFromParts(payload.uiMessage.parts, payload.content)
+      : payload.content;
+    const toolCallsJson = payload.toolCalls ? JSON.stringify(payload.toolCalls) : null;
+    const toolResultsJson = payload.toolResults ? JSON.stringify(payload.toolResults) : null;
+
     const globalOwnerId = parseGlobalChannelId(row.channelId);
 
     if (globalOwnerId !== null) {
@@ -72,7 +82,7 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           conversationId: row.conversationId,
           userId: row.userId,
           role: 'assistant',
-          content: payload.content,
+          content: structuredContent,
           toolCalls: toolCallsJson,
           toolResults: toolResultsJson,
           createdAt: now,
@@ -82,9 +92,13 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
         .onConflictDoUpdate({
           target: messages.id,
           set: {
-            content: payload.content,
+            content: structuredContent,
             toolCalls: toolCallsJson,
             toolResults: toolResultsJson,
+            // Re-synced on conflict, mirroring saveMessageToDatabase's own update-set — a
+            // message reprocessed/reparented into a different conversation before this sweep
+            // ran should not have its conversationId left stale.
+            conversationId: row.conversationId,
             status: 'interrupted',
           },
           // The #2022 invariant, enforced atomically: never relabel a row the normal
@@ -99,7 +113,7 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           pageId: row.channelId,
           conversationId: row.conversationId,
           role: 'assistant',
-          content: payload.content,
+          content: structuredContent,
           toolCalls: toolCallsJson,
           toolResults: toolResultsJson,
           createdAt: now,
@@ -111,9 +125,10 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
         .onConflictDoUpdate({
           target: chatMessages.id,
           set: {
-            content: payload.content,
+            content: structuredContent,
             toolCalls: toolCallsJson,
             toolResults: toolResultsJson,
+            conversationId: row.conversationId,
             status: 'interrupted',
           },
           setWhere: ne(chatMessages.status, 'complete'),
@@ -152,5 +167,10 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     pageId: row.channelId,
     conversationId: row.conversationId,
     aborted: true,
-  }).catch(() => {});
+  }).catch((error) => {
+    loggers.ai.warn('materializeInterruptedStream: broadcast failed', {
+      messageId: row.messageId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  });
 };

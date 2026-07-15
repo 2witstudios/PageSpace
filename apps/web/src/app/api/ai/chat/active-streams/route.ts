@@ -99,19 +99,23 @@ export async function GET(request: Request) {
       .orderBy(asc(aiStreamSessions.startedAt), asc(aiStreamSessions.messageId));
 
     // Page access is not enough. A page channel carries EVERY conversation on the page,
-    // and conversations are private by default — so returning every streaming row (with
-    // its buffered `parts` snapshot!) to anyone who can view the page hands one member's
-    // private conversation to all the others. Narrow to what this user may subscribe to:
-    // their own streams, plus streams in explicitly shared conversations.
-    const live = rows.filter((r) => isStreamRowLive(r, now));
-    const streams = await filterSubscribableStreams({ userId, rows: live });
+    // and conversations are private by default — so acting on every streaming row (with its
+    // buffered `parts` snapshot, or even just the side effect of reaping it!) for anyone who
+    // can view the page hands one member's private conversation to all the others. Narrow to
+    // what this user may subscribe to — their own streams, plus streams in explicitly shared
+    // conversations — BEFORE either building the response or running the lazy sweep below, so
+    // an unauthorized-to-that-conversation poller can't even trigger a reap side effect for a
+    // conversation whose content it will never see returned.
+    const authorized = await filterSubscribableStreams({ userId, rows });
+    const streams = authorized.filter((r) => isStreamRowLive(r, now));
 
-    // Lazy reap: this query already reads every 'streaming' row on the channel, so any row that
-    // is not live and is PROVABLY dead (never mere staleness — see isProvablyDead) is reaped here
-    // rather than waiting on a cron or the next send's takeover. Fire-and-forget: a channel with
-    // no more traffic on it would otherwise never trigger a takeover again, and this response must
-    // not wait on a reap of rows the caller didn't even ask to see.
-    for (const row of rows) {
+    // Lazy reap: this query already reads every 'streaming' row on the channel, so any
+    // authorized-to-view row that is not live and is PROVABLY dead (never mere staleness — see
+    // isProvablyDead) is reaped here rather than waiting on a cron or the next send's takeover.
+    // Fire-and-forget: a channel with no more traffic on it would otherwise never trigger a
+    // takeover again, and this response must not wait on a reap of rows the caller didn't even
+    // ask to see.
+    for (const row of authorized) {
       if (isStreamRowLive(row, now)) continue;
       if (!isProvablyDead(row, now)) continue;
       void materializeInterruptedStream({

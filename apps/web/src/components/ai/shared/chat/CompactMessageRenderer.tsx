@@ -256,6 +256,8 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   const groupedParts = useGroupedParts(message.parts);
   const { getToolCallOpen, setToolCallOpen } = useToolCallOpenState();
 
+  const isInterrupted = message.role === 'assistant' && message.status === 'interrupted';
+
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
 
@@ -420,6 +422,16 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
           }
           return null;
         })}
+        {isInterrupted && (
+          <div className="mt-1 flex items-center gap-1.5 text-[10px]" data-testid="interrupted-affordance">
+            <span className="rounded bg-amber-100 dark:bg-amber-950/40 px-1 py-0.5 font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              Interrupted
+            </span>
+            {canRetry && (
+              <span className="text-gray-500 dark:text-gray-400">Cut short — retry to continue.</span>
+            )}
+          </div>
+        )}
       </div>
 
       {onDelete && (
