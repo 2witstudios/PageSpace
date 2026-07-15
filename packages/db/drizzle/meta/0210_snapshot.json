@@ -1,5 +1,5 @@
 {
-  "id": "bc6bf0e1-3895-481b-916d-471341a22de5",
+  "id": "4e7813c6-a926-468f-883c-f96348572e9f",
   "prevId": "12924380-626b-4d6a-adbd-0de980c23025",
   "version": "7",
   "dialect": "postgresql",
@@ -1425,6 +1425,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'standard'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'complete'"
         }
       },
       "indexes": {
@@ -4820,6 +4827,13 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'complete'"
         }
       },
       "indexes": {
@@ -19699,8 +19713,7 @@
         "EMAIL_VERIFICATION_REQUIRED",
         "TOS_PRIVACY_UPDATED",
         "MENTION",
-        "TASK_ASSIGNED",
-        "PRODUCT_UPDATE"
+        "TASK_ASSIGNED"
       ]
     },
     "public.toast_notification_level": {

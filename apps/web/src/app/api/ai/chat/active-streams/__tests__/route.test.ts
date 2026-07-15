@@ -2,13 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-const { mockOrderBy } = vi.hoisted(() => ({ mockOrderBy: vi.fn() }));
+const { mockOrderBy, mockWhere, mockMaterializeInterruptedStream } = vi.hoisted(() => ({
+  mockOrderBy: vi.fn(),
+  mockWhere: vi.fn(),
+  mockMaterializeInterruptedStream: vi.fn(),
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
+        where: mockWhere.mockReturnValue({
           orderBy: mockOrderBy,
         }),
       }),
@@ -68,6 +72,13 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@pagespace/lib/ai/global-channel-id', () => ({
   parseGlobalChannelId: vi.fn(() => null),
+}));
+
+// Materialization is its own unit with its own tests (materialize-interrupted-stream.test.ts).
+// Stubbed here so these tests exercise the lazy sweep's DECISION (which rows get reaped), not
+// how a row is turned into an interrupted message.
+vi.mock('@/lib/ai/core/materialize-interrupted-stream', () => ({
+  materializeInterruptedStream: mockMaterializeInterruptedStream,
 }));
 
 import { GET } from '../route';
@@ -251,6 +262,109 @@ describe('GET /api/ai/chat/active-streams', () => {
     expect(body.streams).toEqual([]);
   });
 
+  // The lazy sweep: this query already reads every 'streaming' row on the channel, so a row
+  // that is not live AND is provably dead (not mere staleness) is reaped here instead of
+  // waiting on a cron or the next send's takeover.
+  describe('the lazy materialization sweep', () => {
+    it('given a provably-dead row (crashed process), materializes it as interrupted', async () => {
+      const parts = [{ type: 'text', text: 'partial before crash' }];
+      const longAgo = new Date(Date.now() - 5 * 60 * 1000);
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-dead',
+          conversationId: 'conv-1',
+          userId: 'user-2',
+          displayName: 'Alice',
+          browserSessionId: 'session-2',
+          parts,
+          startedAt: longAgo,
+          lastHeartbeatAt: longAgo,
+        },
+      ]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({
+        messageId: 'msg-dead',
+        channelId: mockChannelId,
+        conversationId: 'conv-1',
+        userId: 'user-2',
+        parts,
+        startedAt: longAgo,
+      });
+    });
+
+    // A page channel carries EVERY conversation on it, including other members' PRIVATE ones.
+    // Without this gate, any user with mere page-view access could trigger a reap side effect
+    // (a DB write + broadcast) for a conversation whose content they can never see returned —
+    // the same authorization gap the response payload itself already closes via
+    // filterSubscribableStreams.
+    it("given a provably-dead row in a conversation the caller may NOT subscribe to (another member's private conversation), does not materialize it", async () => {
+      const longAgo = new Date(Date.now() - 5 * 60 * 1000);
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-not-mine',
+          conversationId: 'their-private-conv',
+          userId: 'user-other',
+          displayName: 'Alice',
+          browserSessionId: 'session-2',
+          parts: [{ type: 'text', text: 'private content' }],
+          startedAt: longAgo,
+          lastHeartbeatAt: longAgo,
+        },
+      ]);
+      // Conversation-scoped authorization drops it, exactly as it does for the response payload.
+      mockFilterSubscribableStreams.mockResolvedValueOnce([]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+    });
+
+    it('given a live, checkpointing row, does not materialize it', async () => {
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-live',
+          conversationId: 'conv-1',
+          userId: 'user-2',
+          displayName: 'Alice',
+          browserSessionId: 'session-2',
+          parts: [],
+          startedAt: new Date(Date.now() - 5 * 60 * 1000),
+          lastHeartbeatAt: new Date(Date.now() - 10 * 1000),
+        },
+      ]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+    });
+
+    // A long-running generation whose heartbeat rode all the way to the cap is ambiguous, not
+    // dead — isProvablyDead refuses to judge it (see stream-liveness.ts). Reaping it here would
+    // destroy a still-generating stream's only crash-recovery snapshot.
+    it('given a long-lived stream whose heartbeat is silent by DESIGN (rode to the cap), does not materialize it', async () => {
+      const startedAt = new Date(Date.now() - 65 * 60 * 1000);
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-long-silent',
+          conversationId: 'conv-1',
+          userId: 'user-1',
+          displayName: 'Me',
+          browserSessionId: 'session-1',
+          parts: [],
+          startedAt,
+          // Beat stopped almost exactly at the 60-minute cap — ambiguous, not proof of death.
+          lastHeartbeatAt: new Date(startedAt.getTime() + 60 * 60 * 1000 - 1_000),
+        },
+      ]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+    });
+  });
+
   it('given no active streams, should return an empty streams array', async () => {
     mockOrderBy.mockResolvedValueOnce([]);
 
@@ -283,6 +397,125 @@ describe('GET /api/ai/chat/active-streams', () => {
     const response = await GET(makeRequest());
 
     expect(response.status).toBe(403);
+    expect(mockOrderBy).not.toHaveBeenCalled();
+  });
+});
+
+// Leaf 5.1: cross-channel discovery of the CALLER's own in-flight streams, for the history
+// tab's streaming badge. Ownership is the authz — ai_stream_sessions.userId IS the stream's
+// owner column — so this mode never runs a page-access or conversation-sharing check.
+describe('GET /api/ai/chat/active-streams?scope=user', () => {
+  const makeScopeUserRequest = () => new Request('http://test.local/api/ai/chat/active-streams?scope=user');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('given no channelId, should NOT 400 — channelId is not required in this mode', async () => {
+    mockOrderBy.mockResolvedValueOnce([]);
+
+    const response = await GET(makeScopeUserRequest());
+
+    expect(response.status).toBe(200);
+  });
+
+  it('should query filtered to the CALLER\'s own userId and status=streaming — no channelId predicate', async () => {
+    mockOrderBy.mockResolvedValueOnce([]);
+
+    await GET(makeScopeUserRequest());
+
+    expect(mockWhere).toHaveBeenCalledTimes(1);
+    const condition = mockWhere.mock.calls[0][0] as { and: unknown[] };
+    expect(condition.and).toEqual([
+      { eq: ['userId', mockUserId] },
+      { eq: ['status', 'streaming'] },
+    ]);
+  });
+
+  it('should never call canUserViewPage or filterSubscribableStreams — ownership alone is the authz', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        channelId: 'page-other',
+        startedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
+    ]);
+
+    await GET(makeScopeUserRequest());
+
+    expect(canUserViewPage).not.toHaveBeenCalled();
+    expect(mockFilterSubscribableStreams).not.toHaveBeenCalled();
+  });
+
+  it('given own streaming rows across multiple channels, should return them WITHOUT parts/rawPartsCount/triggeredBy', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        channelId: 'page-a',
+        startedAt: new Date('2024-01-01T00:00:00.000Z'),
+        lastHeartbeatAt: new Date(),
+      },
+      {
+        messageId: 'msg-2',
+        conversationId: 'conv-2',
+        channelId: 'page-b',
+        startedAt: new Date('2024-01-02T00:00:00.000Z'),
+        lastHeartbeatAt: new Date(),
+      },
+    ]);
+
+    const response = await GET(makeScopeUserRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([
+      { messageId: 'msg-1', conversationId: 'conv-1', channelId: 'page-a', startedAt: '2024-01-01T00:00:00.000Z' },
+      { messageId: 'msg-2', conversationId: 'conv-2', channelId: 'page-b', startedAt: '2024-01-02T00:00:00.000Z' },
+    ]);
+    for (const stream of body.streams) {
+      expect(stream).not.toHaveProperty('parts');
+      expect(stream).not.toHaveProperty('rawPartsCount');
+      expect(stream).not.toHaveProperty('triggeredBy');
+    }
+  });
+
+  it('given a row whose heartbeat is stale (crashed process), should NOT include it', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-dead',
+        conversationId: 'conv-1',
+        channelId: 'page-a',
+        startedAt: new Date(Date.now() - 5 * 60 * 1000),
+        lastHeartbeatAt: new Date(Date.now() - 5 * 60 * 1000),
+      },
+    ]);
+
+    const response = await GET(makeScopeUserRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
+  });
+
+  it('given no own streams, should return an empty streams array', async () => {
+    mockOrderBy.mockResolvedValueOnce([]);
+
+    const response = await GET(makeScopeUserRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
+  });
+
+  it('given auth fails, should return the auth error response without querying', async () => {
+    vi.mocked(isAuthError).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthFailure(401));
+
+    const response = await GET(makeScopeUserRequest());
+
+    expect(response.status).toBe(401);
     expect(mockOrderBy).not.toHaveBeenCalled();
   });
 });

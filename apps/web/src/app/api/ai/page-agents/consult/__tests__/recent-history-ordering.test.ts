@@ -60,6 +60,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ __eq: true, field, value })),
   desc: vi.fn((field: unknown) => ({ __desc: true, field })),
   and: vi.fn((...conds: unknown[]) => ({ __and: true, conds })),
+  ne: vi.fn((field: unknown, value: unknown) => ({ __ne: true, field, value })),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({

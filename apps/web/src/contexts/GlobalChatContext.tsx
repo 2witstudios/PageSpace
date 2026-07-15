@@ -148,8 +148,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
     conversationState.setActiveConversationId(conversationId);
     setIsMessagesLoading(true);
     try {
+      // includeStreaming=1: leaf 5.2 (history-tab rejoin). A conversation opened from a
+      // streaming-badged history entry has an in-flight 'streaming' placeholder row that a
+      // default fetch excludes (see chat-message-repository.ts's includeStreaming contract).
+      // Including it here is what lets mergeServerAndPending recognize and replace it with
+      // the live pending-stream content once the channel-wide bootstrap/socket attach (already
+      // running for every conversation via useChannelStreamSocket below) discovers the same
+      // stream — no separate rejoin path needed. Harmless for the common non-streaming case:
+      // there is no such row to include.
       const messagesResponse = await fetchWithAuth(
-        `/api/ai/global/${conversationId}/messages?limit=50`
+        `/api/ai/global/${conversationId}/messages?limit=50&includeStreaming=1`
       );
       // Drop a stale result if the user switched to a different conversation
       // while this fetch was in flight.

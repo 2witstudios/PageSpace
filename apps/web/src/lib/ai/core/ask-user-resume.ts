@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai';
-import { eq, and, desc } from '@pagespace/db/operators';
+import { eq, and, ne, desc } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { chatMessages } from '@pagespace/db/schema/core';
 import { messages as globalMessages } from '@pagespace/db/schema/conversations';
@@ -184,6 +184,7 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
     isActive: boolean;
     editedAt: Date | null;
     messageType: string | null;
+    status: 'streaming' | 'complete' | 'interrupted';
   }) =>
     convertDbMessageToUIMessage({
       id: row.id,
@@ -197,9 +198,10 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
       isActive: row.isActive,
       editedAt: row.editedAt,
       messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
+      status: row.status,
     });
 
-  const persistFor = (messageId: string) => (payload: AssistantPersistencePayload) =>
+  const persistFor = (messageId: string, status: 'complete' | 'interrupted') => (payload: AssistantPersistencePayload) =>
     saveMessageToDatabase({
       messageId,
       pageId: args.pageId,
@@ -207,9 +209,14 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
       userId: null,
       role: 'assistant',
       ...payload,
+      status,
     });
 
   return {
+    // Both fetchers skip 'streaming' placeholders: a still-empty, mid-flight row is never
+    // the message an ask_user resume should target — fetchLastAssistant in particular would
+    // otherwise pick up its own conversation's in-flight placeholder as "the last assistant
+    // message" and merge results into the wrong row. See Server Stream Durability epic PR 2.
     async fetchById(messageId) {
       const [row] = await db
         .select()
@@ -219,12 +226,17 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
             eq(chatMessages.id, messageId),
             eq(chatMessages.pageId, args.pageId),
             eq(chatMessages.conversationId, args.conversationId),
-            eq(chatMessages.isActive, true)
+            eq(chatMessages.isActive, true),
+            ne(chatMessages.status, 'streaming')
           )
         )
         .limit(1);
       if (!row || row.role !== 'assistant') return null;
-      return { message: await toUIMessage(row), persist: persistFor(row.id) };
+      // The fetchers' ne(status, 'streaming') filter guarantees row.status is 'complete' or
+      // 'interrupted' here — persist must preserve it, not silently default back to 'complete'
+      // (saveMessageToDatabase's own default), or a genuinely cut-short reply with a pending
+      // ask_user call would read as fully complete the moment it's answered/dismissed.
+      return { message: await toUIMessage(row), persist: persistFor(row.id, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
     async fetchLastAssistant() {
       const [row] = await db
@@ -235,13 +247,14 @@ function pageAdapter(args: { pageId: string; conversationId: string }): Assistan
             eq(chatMessages.pageId, args.pageId),
             eq(chatMessages.conversationId, args.conversationId),
             eq(chatMessages.isActive, true),
-            eq(chatMessages.role, 'assistant')
+            eq(chatMessages.role, 'assistant'),
+            ne(chatMessages.status, 'streaming')
           )
         )
         .orderBy(desc(chatMessages.createdAt))
         .limit(1);
       if (!row) return null;
-      return { message: await toUIMessage(row), persist: persistFor(row.id) };
+      return { message: await toUIMessage(row), persist: persistFor(row.id, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
   };
 }
@@ -277,6 +290,7 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
     isActive: boolean;
     editedAt: Date | null;
     messageType: string | null;
+    status: 'streaming' | 'complete' | 'interrupted';
   }) =>
     convertGlobalAssistantMessageToUIMessage({
       id: row.id,
@@ -290,18 +304,21 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
       isActive: row.isActive,
       editedAt: row.editedAt,
       messageType: row.messageType === 'todo_list' ? 'todo_list' : 'standard',
+      status: row.status,
     });
 
-  const persistFor = (messageId: string, userId: string) => (payload: AssistantPersistencePayload) =>
+  const persistFor = (messageId: string, userId: string, status: 'complete' | 'interrupted') => (payload: AssistantPersistencePayload) =>
     saveGlobalAssistantMessageToDatabase({
       messageId,
       conversationId: args.conversationId,
       userId,
       role: 'assistant',
       ...payload,
+      status,
     });
 
   return {
+    // Both fetchers skip 'streaming' placeholders — see the page adapter's doc comment above.
     async fetchById(messageId) {
       const [row] = await db
         .select()
@@ -310,12 +327,15 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
           and(
             eq(globalMessages.id, messageId),
             eq(globalMessages.conversationId, args.conversationId),
-            eq(globalMessages.isActive, true)
+            eq(globalMessages.isActive, true),
+            ne(globalMessages.status, 'streaming')
           )
         )
         .limit(1);
       if (!row || row.role !== 'assistant') return null;
-      return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId) };
+      // See pageAdapter's fetchById: preserve the fetched row's terminal status rather than
+      // letting persist silently default to 'complete'.
+      return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
     async fetchLastAssistant() {
       const [row] = await db
@@ -325,13 +345,14 @@ function globalAdapter(args: { conversationId: string }): AssistantMessageAdapte
           and(
             eq(globalMessages.conversationId, args.conversationId),
             eq(globalMessages.isActive, true),
-            eq(globalMessages.role, 'assistant')
+            eq(globalMessages.role, 'assistant'),
+            ne(globalMessages.status, 'streaming')
           )
         )
         .orderBy(desc(globalMessages.createdAt))
         .limit(1);
       if (!row) return null;
-      return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId) };
+      return { message: await toUIMessage(row), persist: persistFor(row.id, row.userId, row.status === 'interrupted' ? 'interrupted' : 'complete') };
     },
   };
 }

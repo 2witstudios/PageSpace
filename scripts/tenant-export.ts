@@ -85,7 +85,7 @@ const PAGE_COLUMNS = [
 const CHAT_MESSAGE_COLUMNS = [
   'id', 'pageId', 'conversationId', 'role', 'content', 'toolCalls',
   'toolResults', 'createdAt', 'isActive', 'editedAt', 'userId',
-  'sourceAgentId', 'messageType',
+  'sourceAgentId', 'messageType', 'status',
 ];
 
 const CHANNEL_MESSAGE_COLUMNS = [
@@ -106,7 +106,7 @@ const CONVERSATION_COLUMNS = [
 
 const MESSAGE_COLUMNS = [
   'id', 'conversationId', 'userId', 'role', 'messageType', 'content',
-  'toolCalls', 'toolResults', 'createdAt', 'isActive', 'editedAt',
+  'toolCalls', 'toolResults', 'createdAt', 'isActive', 'editedAt', 'status',
 ];
 
 const FILE_COLUMNS = [

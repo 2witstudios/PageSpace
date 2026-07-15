@@ -25,9 +25,18 @@ import { loggers, logPerformance } from '@pagespace/lib/logging/logger-config';
  * never block. Both degrade paths emit the same telemetry, tagged with a `reason` so they stay
  * distinguishable (`lock_busy` vs `lock_error`) in logs/metrics.
  *
- * `fn` (takeover + lifecycle-create today; the assistant message-row insert once PR 2 lands —
- * see the seam note on the PR 2 page) runs exactly once per call, either inside the lock or,
- * on degrade, once unlocked. It never runs twice for one `startGenerationExclusive` call.
+ * `run` (takeover + lifecycle-create + the placeholder message-row insert, PR 2) runs exactly
+ * once per call, either inside the lock or, on degrade, once unlocked. It never runs twice for
+ * one `startGenerationExclusive` call — enforced structurally, not by classifying a catch: the
+ * loop below awaits `withAdvisoryLock(pool, lockKey, run)` unwrapped and only branches on its
+ * RESOLVED outcome (`connection_error` | `lock_busy` | `acquired`). Any rejection — `run`
+ * itself throwing, or `withAdvisoryLock`'s post-run lock-release throwing and overriding an
+ * already-successful return (`finally` can still do that; see advisory-lock.ts) — is never
+ * caught here, so there is no reclassification step that could mistake "run already ran" for
+ * "the lock never engaged" and re-invoke `run` unlocked. `withAdvisoryLock` itself never calls
+ * `fn` more than once per call, so a rejection propagating straight through this function is
+ * always safe. Every operation inside `run` is ALSO expected to catch and log its own errors
+ * (each call site's own try/catch) — this function's job is only to never double-invoke it.
  */
 
 export const MAX_LOCK_BUSY_RETRIES = 3;
@@ -114,19 +123,39 @@ export async function startGenerationExclusive<T>(
 
   let attemptsMade = 0;
   for (;;) {
-    let attempt;
-    try {
-      attempt = await withAdvisoryLock(pool, lockKey, run);
-    } catch (error) {
-      // The lock connection itself failed (pool.connect() or the try-lock query threw) —
-      // NOT `run` throwing. `run` (takeover + lifecycle-create) is documented to catch and
-      // log its own errors and never throw, so this catch can only be reached by the lock
-      // machinery; `run` has not been invoked yet on this path. Degrade immediately rather
-      // than retry: a broken connection is not "busy" and won't resolve itself in 300ms the
-      // way lock contention might, so retrying here would only add latency to a send that
-      // must never block. See the PR board page's verification: "Lock-pool exhaustion
-      // simulation: proceeds unlocked, metric emitted, warn logged, both requests complete."
-      return degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error', error }, run);
+    // `withAdvisoryLock` resolves `connection_error` for its own lock-machinery failures
+    // (pool.connect() or the try-lock query threw) instead of throwing — a structural
+    // outcome, not a rejection to catch. This eliminates the ambiguity a catch-based
+    // classification could no longer safely assume once `run` was no longer guaranteed
+    // throw-free (leaf 5.6/5.7, D-task fmfmzw4g4gh6u6q9cjt7ylne): anything `run` itself
+    // throws still propagates as a genuine rejection here, unwrapped and un-mislabeled.
+    //
+    // PR #2080 (merged into master) reached the same "don't double-invoke run" goal via a
+    // `runSettled` flag guarding a try/catch around `withAdvisoryLock` — necessary there
+    // because that version's `withAdvisoryLock` could still THROW for lock-machinery
+    // failures, so a catch site had to disambiguate "run threw" from "the lock connection
+    // itself broke" before deciding whether re-invoking `run` unlocked was safe. This
+    // version never introduces that catch site at all: `withAdvisoryLock` is awaited
+    // unwrapped, so ANY rejection (`run` throwing, or the post-run lock-release throwing
+    // and overriding a successful return — `withAdvisoryLock`'s `finally` can still do
+    // that, see advisory-lock.ts:105-131) propagates straight out of this function without
+    // ever being caught and reinterpreted. `run` runs at most once per call either way —
+    // `withAdvisoryLock` itself never invokes it twice — so there is no reclassification
+    // step left for `runSettled` to guard. Verified directly: every test in
+    // start-generation-exclusive.test.ts, including the "post-run lock release throws"
+    // case PR #2080 added, passes unchanged against this simpler shape.
+    const attempt = await withAdvisoryLock(pool, lockKey, run);
+
+    if (attempt.outcome === 'connection_error') {
+      // Degrade immediately rather than retry: a broken connection is not "busy" and
+      // won't resolve itself in 300ms the way lock contention might, so retrying here
+      // would only add latency to a send that must never block. See the PR board page's
+      // verification: "Lock-pool exhaustion simulation: proceeds unlocked, metric
+      // emitted, warn logged, both requests complete."
+      return degradeToUnlocked(
+        { conversationId, attemptsMade, reason: 'lock_error', error: attempt.error },
+        run,
+      );
     }
 
     if (attempt.outcome === 'acquired') {

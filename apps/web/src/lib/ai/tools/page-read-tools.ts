@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { decryptField } from '@pagespace/lib/encryption/field-crypto'
-import { eq, and, asc, isNotNull, count, max, min, inArray } from '@pagespace/db/operators'
+import { eq, and, ne, asc, isNotNull, count, max, min, inArray } from '@pagespace/db/operators'
 import { pages, chatMessages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { channelMessages } from '@pagespace/db/schema/chat';
@@ -1134,14 +1134,17 @@ export const pageReadTools = {
           return { success: false, error: 'Insufficient permissions to access this conversation' };
         }
 
-        // Get all messages for this conversation
+        // Get all messages for this conversation. Excludes 'streaming' placeholders — this
+        // is delivered straight to the model as a tool result. See Server Stream Durability
+        // epic PR 2.
         const messages = await db
           .select()
           .from(chatMessages)
           .where(and(
             eq(chatMessages.conversationId, conversationId),
             eq(chatMessages.pageId, pageId),
-            eq(chatMessages.isActive, true)
+            eq(chatMessages.isActive, true),
+            ne(chatMessages.status, 'streaming')
           ))
           .orderBy(asc(chatMessages.createdAt));
 

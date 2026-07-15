@@ -75,6 +75,20 @@ export interface RunAgentWithRetryResult {
   terminalReason?: string;
 }
 
+/**
+ * Whether this generation was stopped (user Stop, credit gate, or any other abort signal)
+ * rather than finishing on its own. Both chat routes' terminal-write call sites (execute-end,
+ * onFinish) need this exact check to decide 'interrupted' vs 'complete' — pulled out here so
+ * they read it once instead of re-deriving it, since it lives right next to `terminalReason`'s
+ * only other producer. See Server Stream Durability epic PR 2.
+ */
+export function isRunAborted(params: {
+  agentRun: Pick<RunAgentWithRetryResult, 'terminalReason'> | undefined;
+  abortSignal: AbortSignal;
+}): boolean {
+  return params.agentRun?.terminalReason === 'aborted' || params.abortSignal.aborted;
+}
+
 const num = (a: number | undefined, b: number | undefined): number | undefined => {
   if (a === undefined && b === undefined) return undefined;
   return (a ?? 0) + (b ?? 0);
