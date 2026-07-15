@@ -240,8 +240,6 @@ export function preflight(input: {
   isOnPrem: boolean;
   /** process.env.FROM_EMAIL — unset means the send would use Resend's sandbox from-address. */
   fromEmail?: string;
-  /** process.env.COMPANY_POSTAL_ADDRESS — legally required in commercial email. */
-  postalAddress?: string;
 }): PreflightResult {
   if (!input.live) return { ok: true };
 
@@ -283,18 +281,6 @@ export function preflight(input: {
       reason:
         'FROM_EMAIL is not set, so the send would fall back to Resend\'s sandbox address, which\n' +
         '   only delivers to the account owner. Set FROM_EMAIL to the public sender and re-run.',
-    };
-  }
-
-  if (!input.postalAddress?.trim()) {
-    // This is a COMMERCIAL email — a product announcement, not a transactional
-    // notice — so CAN-SPAM requires the sender's physical postal address in the
-    // message. We will not invent one, and it cannot be added after the send.
-    return {
-      ok: false,
-      reason:
-        'COMPANY_POSTAL_ADDRESS is not set. This is a commercial email, and CAN-SPAM requires a\n' +
-        '   physical postal address in the footer. Set COMPANY_POSTAL_ADDRESS and re-run.',
     };
   }
 
