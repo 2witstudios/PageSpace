@@ -104,9 +104,10 @@ export const isBeyondReconcileBackstop = (row: StreamLivenessRow, now: number): 
 /**
  * May this row be driven TERMINAL on the strength of its heartbeat alone?
  *
- * The one predicate both terminal writers share (`decideStreamTakeover` and `decideAbortOutcome`),
- * so they cannot drift apart on the one write that is unforgiving in both directions: reap a live
- * stream and you erase it mid-flight; fail to reap a dead one and it haunts its conversation.
+ * The one predicate every terminal writer shares (`decideStreamTakeover`, `decideAbortOutcome`,
+ * and the active-streams lazy sweep's own materialization pass), so they cannot drift apart on
+ * the one write that is unforgiving in both directions: reap a live stream and you erase it
+ * mid-flight; fail to reap a dead one and it haunts its conversation.
  */
 export const isProvablyDead = (
   row: StreamLivenessRow,

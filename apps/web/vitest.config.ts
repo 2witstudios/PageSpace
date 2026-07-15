@@ -42,6 +42,10 @@ export default defineConfig({
         // subdirectories — test files carry their own incidental branches
         // (e.g. it.each fixtures) that have no bearing on source coverage.
         'src/lib/ai/streams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Server Stream Durability PR 3: dead-row materialization eligibility and the
+        // #2022 never-overwrite-complete guard — gated at 100% branch per the epic's own
+        // constraints.
+        'src/lib/ai/core/materialize-interrupted-stream.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
