@@ -73,6 +73,9 @@ export interface UserMessageExport {
   isActive?: boolean;
   deletedAt?: Date | null;
   createdAt: Date;
+  /** Assistant-row lifecycle state ('ai_chat'/'conversation' sources only) — explains an
+   * empty-content row as a still-streaming or interrupted placeholder rather than data loss. */
+  status?: 'streaming' | 'complete' | 'interrupted';
 }
 
 export interface UserFileExport {
@@ -319,6 +322,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       pageId: chatMessages.pageId,
       conversationId: chatMessages.conversationId,
       createdAt: chatMessages.createdAt,
+      status: chatMessages.status,
     })
     .from(chatMessages)
     .where(eq(chatMessages.userId, userId));
@@ -332,6 +336,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       pageId: msg.pageId,
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
+      status: msg.status,
     });
   }
 
@@ -356,7 +361,10 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     });
   }
 
-  // Conversation messages (unified conversations table)
+  // Conversation messages (unified conversations table). Global assistant rows store the
+  // conversation OWNER's userId (not null, unlike chatMessages), so this query — unlike
+  // aiChats above — does surface assistant placeholders for the requesting user's own
+  // conversations; `status` is what makes an empty row explainable rather than data loss.
   const convMsgs = await database
     .select({
       id: messages.id,
@@ -364,6 +372,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       role: messages.role,
       conversationId: messages.conversationId,
       createdAt: messages.createdAt,
+      status: messages.status,
     })
     .from(messages)
     .where(eq(messages.userId, userId));
@@ -376,6 +385,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       role: msg.role,
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
+      status: msg.status,
     });
   }
 

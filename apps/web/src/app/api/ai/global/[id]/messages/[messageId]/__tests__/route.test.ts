@@ -105,6 +105,7 @@ const mockMessage = (overrides: Partial<{
   role: string;
   isActive: boolean;
   createdAt: Date;
+  status: 'streaming' | 'complete' | 'interrupted';
 }> = {}) => ({
   id: overrides.id ?? mockMessageId,
   conversationId: overrides.conversationId ?? mockConversationId,
@@ -112,6 +113,7 @@ const mockMessage = (overrides: Partial<{
   role: overrides.role ?? 'user',
   isActive: overrides.isActive ?? true,
   createdAt: overrides.createdAt ?? new Date('2024-01-01T00:00:10Z'),
+  status: overrides.status ?? 'complete' as const,
 });
 
 const createContext = (id: string, messageId: string) => ({
@@ -218,6 +220,20 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(mockMessage({ status: 'streaming' }));
+
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(globalConversationRepository.updateMessageContent).not.toHaveBeenCalled();
     });
   });
 
@@ -429,6 +445,20 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(mockMessage({ status: 'streaming' }));
+
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(globalConversationRepository.softDeleteMessage).not.toHaveBeenCalled();
     });
   });
 

@@ -84,6 +84,7 @@ const mockChatMessage = (overrides: Partial<{
   role: string;
   content: string;
   messageType: 'standard' | 'todo_list';
+  status: 'streaming' | 'complete' | 'interrupted';
 }> = {}) => ({
   id: overrides.id || 'msg_123',
   pageId: overrides.pageId || mockPageId,
@@ -97,13 +98,15 @@ const mockChatMessage = (overrides: Partial<{
   editedAt: null,
   toolCalls: null,
   toolResults: null,
+  status: overrides.status || 'complete' as const,
 });
 
-const createRequest = (pageId?: string, conversationId?: string) => {
+const createRequest = (pageId?: string, conversationId?: string, includeStreaming?: string) => {
   let url = 'https://example.com/api/ai/chat/messages';
   const params = [];
   if (pageId) params.push(`pageId=${pageId}`);
   if (conversationId) params.push(`conversationId=${conversationId}`);
+  if (includeStreaming !== undefined) params.push(`includeStreaming=${includeStreaming}`);
   if (params.length) url += '?' + params.join('&');
 
   return new Request(url, { method: 'GET' });
@@ -208,7 +211,8 @@ describe('GET /api/ai/chat/messages', () => {
 
       expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
-        conversationId
+        conversationId,
+        false
       );
     });
 
@@ -219,7 +223,35 @@ describe('GET /api/ai/chat/messages', () => {
 
       expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
-        undefined
+        undefined,
+        false
+      );
+    });
+
+    // Server Stream Durability epic PR 2: stale-tab rollout protection — a client must
+    // explicitly opt in with includeStreaming=1 before it is shown 'streaming' placeholder
+    // rows; anything else (absent, '0', 'true') stays excluded.
+    it('should pass includeStreaming=true to repository when ?includeStreaming=1 is set', async () => {
+      const request = createRequest(mockPageId, undefined, '1');
+
+      await GET(request);
+
+      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+        mockPageId,
+        undefined,
+        true
+      );
+    });
+
+    it('should pass includeStreaming=false when the query param is anything other than "1"', async () => {
+      const request = createRequest(mockPageId, undefined, 'true');
+
+      await GET(request);
+
+      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+        mockPageId,
+        undefined,
+        false
       );
     });
   });

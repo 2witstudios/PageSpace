@@ -8,7 +8,7 @@
 
 import { generateText } from 'ai';
 import { db } from '@pagespace/db/db'
-import { eq, and, gte, desc, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, and, gte, desc, inArray, isNotNull, ne } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers } from '@pagespace/db/schema/members'
@@ -95,6 +95,11 @@ async function gatherRecentConversations(
       and(
         eq(conversations.userId, userId),
         eq(messages.isActive, true),
+        // Global Assistant placeholder rows carry the real conversation owner's userId (unlike
+        // page-agent chatMessages rows below, which use userId: null for assistant messages and
+        // so are excluded by the userId filter alone) — an in-flight 'streaming' row would
+        // otherwise feed an empty assistant message into the preference-extraction prompt.
+        ne(messages.status, 'streaming'),
         gte(messages.createdAt, lookbackDate)
       )
     )

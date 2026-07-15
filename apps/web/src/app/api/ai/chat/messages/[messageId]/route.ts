@@ -91,6 +91,16 @@ export async function PATCH(
       );
     }
 
+    // A 'streaming' row is mid-flight: its content is a placeholder the generation is about
+    // to overwrite via the execute-end/onFinish upsert. Editing it now would be silently
+    // clobbered the moment that upsert lands. See Server Stream Durability epic PR 2.
+    if (message.status === 'streaming') {
+      return NextResponse.json(
+        { error: 'This message is still generating and cannot be edited yet' },
+        { status: 409 }
+      );
+    }
+
     // Get driveId for activity logging
     const driveId = await getPageDriveId(message.pageId, messageId);
 
@@ -225,6 +235,16 @@ export async function DELETE(
       return NextResponse.json(
         { error: 'You do not have permission to delete messages in this chat' },
         { status: 403 }
+      );
+    }
+
+    // A 'streaming' row is mid-flight: deleting it now would race the execute-end/onFinish
+    // upsert, which does not check isActive and would resurrect the row's content into an
+    // inactive-but-visible-again state. See Server Stream Durability epic PR 2.
+    if (message.status === 'streaming') {
+      return NextResponse.json(
+        { error: 'This message is still generating and cannot be deleted yet' },
+        { status: 409 }
       );
     }
 

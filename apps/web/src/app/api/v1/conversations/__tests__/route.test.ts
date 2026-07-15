@@ -376,6 +376,7 @@ describe('GET /api/v1/conversations/[id]', () => {
         editedAt: null,
         toolCalls: null,
         toolResults: null,
+        status: 'complete' as const,
       },
     ]);
     const response = await getById(makeGetRequest(), { params: Promise.resolve({ id: 'conv-1' }) });

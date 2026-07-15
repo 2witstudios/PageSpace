@@ -29,6 +29,7 @@ vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn(),
   inArray: vi.fn(),
   isNotNull: vi.fn(),
+  ne: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   chatMessages: { content: 'content', role: 'role', pageId: 'pageId', userId: 'userId', isActive: 'isActive', createdAt: 'createdAt' },
@@ -42,7 +43,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: { id: 'id', userId: 'userId' },
-  messages: { content: 'content', role: 'role', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt' },
+  messages: { content: 'content', role: 'role', conversationId: 'conversationId', isActive: 'isActive', createdAt: 'createdAt', status: 'status' },
 }));
 
 // Mock AI provider
