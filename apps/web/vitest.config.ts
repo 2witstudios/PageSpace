@@ -21,7 +21,12 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html', 'json-summary'],
+      // Only coverage-summary.json is ever consumed (coverage-report.mjs,
+      // coverage-ratchet.mjs, the CI artifact upload) — 'json' (full raw
+      // per-statement maps) and 'html' (syntax-highlighted per-file pages)
+      // for this ~930-file suite were dead weight that spiked memory hard
+      // during report generation at the tail end of the coverage run.
+      reporter: ['text', 'json-summary'],
       reportsDirectory: './coverage',
       reportOnFailure: true,
       exclude: [
