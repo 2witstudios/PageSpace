@@ -26,6 +26,7 @@ export const blogPosts: Record<string, BlogPost> = {
     title: "Turn Your PageSpace Docs Into a Support Bot",
     description:
       "Your help docs already live in a PageSpace drive. Point a support bot at them through the OpenAI-compatible endpoint, and let every conversation land back in PageSpace for your team to read and step into.",
+    image: "/blog/support-bot/bot-answer.png",
     content: `
 ## What you'll have when you're done
 
@@ -33,7 +34,39 @@ A support bot on your site that answers customers from the help docs in your Pag
 
 Standing up a support bot normally costs a week on work that has nothing to do with support. Pick a model. Wire streaming. Write and version a system prompt. Index your docs into a vector store. Build retrieval. Store the conversations somewhere your team can see them. If your help content already lives in a PageSpace drive, that work is finished. A PageSpace agent reads the drive, answers from it, and keeps the thread. You point your chat box at it.
 
-Here is the whole thing, start to finish.
+## See it working
+
+Everything in this guide is running in a small reference app built on exactly two PageSpace APIs: the OpenAI-compatible **completions endpoint** for the chat, and the **[SDK](/docs/features/sdk)** for everything else. Three surfaces, one drive behind all of them.
+
+**Customers ask the bot.** A chat box on your site, streaming answers straight from the docs in your drive:
+
+![The public support bot on a website](/blog/support-bot/public-bot.png)
+
+*The bot is a PageSpace agent addressed over the OpenAI-compatible endpoint. None of the model, the system prompt, or the search across your docs lives in your app.*
+
+![The support bot answering a question from the docs](/blog/support-bot/bot-answer.png)
+
+*Ask "How do I mint a drive-scoped key?" and it reads the right page and answers with the real commands. No vector store, no retrieval code, no prompt to maintain in your codebase.*
+
+**Customers browse the same docs.** The SDK reads the drive's pages, so the exact content that feeds the bot also renders as a clean, searchable docs site:
+
+![A browsable, searchable docs site built on the PageSpace SDK](/blog/support-bot/docs-browser.png)
+
+*\`client.pages.list\` builds the index, \`client.pages.read\` renders a page, \`client.search.regex\` powers the search box. The pages are the single source of truth for both the bot and the docs.*
+
+**You manage the docs in your own admin.** The bot's memory is just pages, and the SDK writes them, so a support lead edits the answers in a custom UI with no deploy:
+
+![A custom docs admin built on the PageSpace SDK](/blog/support-bot/docs-admin.png)
+
+*Edit a page here and the next customer question is answered from the new content. The docs are the bot's brain; this is where you change its mind, through \`client.pages.replaceLines\`.*
+
+And because the drive is a real PageSpace workspace, you can skip the custom admin entirely and manage all of it natively in the app: edit the docs, configure the agent, and read every customer conversation as a page your team can open.
+
+![The same agent and its docs, managed natively inside PageSpace](/blog/support-bot/inside-pagespace.png)
+
+*The agent, the docs it reads, and the threads it produces are all pages in one drive. A teammate can open any conversation and take over as a human.*
+
+Here is how it goes together.
 
 ## Set up the support agent
 
@@ -57,6 +90,16 @@ pagespace agents config <agentPageId> --set enabledTools='["multi_drive_search",
 \`\`\`
 
 Pick a specific model the same way if you want one (\`--set aiModel=<id>\`, and \`pagespace models list\` shows the options), or set all of this in the agent's settings tab in the app. Check your work with \`pagespace agents list --drive <driveId> --json\`: it shows the model, whether a system prompt is set, and the enabled tools.
+
+If you would rather point and click, the same settings live on the agent page in PageSpace:
+
+![The agent's enabled tools, configured in PageSpace](/blog/support-bot/agent-tools.png)
+
+*Turn on the read-only search and read tools and nothing else. A support bot should answer from your docs, not write to them.*
+
+![The agent's workspace context setting in PageSpace](/blog/support-bot/agent-context.png)
+
+*Hand the agent the drive's page tree so it knows what documentation exists before it starts searching.*
 
 **3. Mint a key for your server.** The endpoint runs the agent's tools, which need edit access to the page, so create a key that inherits your own access to the drive (leave \`--role\` off). A plain \`member\` key is view-only on an agent page and would get a 403:
 
@@ -145,7 +188,7 @@ Count what you did not build: no model, no system prompt to maintain (it lives o
 `,
     author: "Jono",
     date: "2026-07-14",
-    readTime: "5 min read",
+    readTime: "7 min read",
     category: "Guide",
   },
   "usage-based-pricing-and-built-for-scale": {
