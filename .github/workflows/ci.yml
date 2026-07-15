@@ -86,7 +86,7 @@ jobs:
       # never sees them. Scoped to backfill-* because the older tenant-* and
       # changelog-* suites in that config are broken independently of CI.
       - name: Run backfill script tests
-        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts
+        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts
 
       - name: Coverage report
         if: always()

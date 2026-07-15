@@ -10,10 +10,12 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { matchThresholdBlock, buildThresholdBlock, assertValidSyntax } from './lib/coverage-ratchet-sentinel.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const dryRun = process.argv.includes('--dry-run');
+let hadError = false;
 
 const packages = [
   { name: 'apps/web', config: 'apps/web/vitest.config.ts', summary: 'apps/web/coverage/coverage-summary.json' },
@@ -46,22 +48,14 @@ for (const pkg of packages) {
     statements: Math.floor(t.statements.pct),
   };
 
-  // Match the sentinel-marked ratchet region first — packages with per-glob
-  // threshold keys after the four ratcheted scalars (e.g. apps/web's 100%
-  // gates on new pure modules) would otherwise have `[^}]+` stop at the
-  // glob sub-objects' first `}`, truncating the match and corrupting the
-  // rewrite. Fall back to the plain block match for packages with no
-  // sentinel, so processor/realtime/db/lib keep working unchanged.
-  const sentinelRegex = /\/\* ratchet:start \*\/[\s\S]*?\/\* ratchet:end \*\//;
-  const plainRegex = /thresholds:\s*\{[^}]+\}/s;
-  const sentinelMatch = config.match(sentinelRegex);
-  const match = sentinelMatch ?? config.match(plainRegex);
-  const thresholdRegex = sentinelMatch ? sentinelRegex : plainRegex;
+  const found = matchThresholdBlock(config);
 
-  if (!match) {
+  if (!found) {
     console.log(`[skip] ${pkg.name}: no thresholds block found in vitest config`);
     continue;
   }
+
+  const { match, regex: thresholdRegex, isSentinel } = found;
 
   // Extract current thresholds
   const currentLines = parseInt(match[0].match(/lines:\s*(\d+)/)?.[1] ?? '0');
@@ -88,14 +82,23 @@ for (const pkg of packages) {
     continue;
   }
 
-  // The sentinel rewrite preserves everything after `ratchet:end` (the
-  // per-glob 100% keys) — only the four ratcheted scalars inside the markers
-  // are replaced.
-  const newBlock = sentinelMatch
-    ? `/* ratchet:start */\n        lines: ${finalThresholds.lines},\n        branches: ${finalThresholds.branches},\n        functions: ${finalThresholds.functions},\n        statements: ${finalThresholds.statements},\n        /* ratchet:end */`
-    : `thresholds: {\n        lines: ${finalThresholds.lines},\n        branches: ${finalThresholds.branches},\n        functions: ${finalThresholds.functions},\n        statements: ${finalThresholds.statements},\n      }`;
+  const newBlock = buildThresholdBlock({
+    isSentinel,
+    indent: isSentinel ? match[1] : '',
+    thresholds: finalThresholds,
+  });
 
-  config = config.replace(thresholdRegex, newBlock);
+  const newConfig = config.replace(thresholdRegex, newBlock);
+
+  try {
+    assertValidSyntax(newConfig, pkg.name, root);
+  } catch (err) {
+    console.error(`[fail] ${err.message}`);
+    hadError = true;
+    continue;
+  }
+
+  config = newConfig;
 
   if (dryRun) {
     console.log(`[dry]  ${pkg.name}: would update thresholds:`);
@@ -112,3 +115,7 @@ for (const pkg of packages) {
 }
 
 console.log(`\n${dryRun ? 'Would update' : 'Updated'} ${updated} package(s).`);
+
+if (hadError) {
+  process.exit(1);
+}
