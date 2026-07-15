@@ -44,13 +44,19 @@ pagespace pages create "Support Bot" AI_CHAT --drive <driveId> --json
 # -> { "id": "<agentPageId>", "type": "AI_CHAT", ... }
 \`\`\`
 
-**2. Tell it how to answer.** An AI Chat page has a system prompt, and the system prompt is what turns a blank agent into your support bot. Set it from the CLI:
+**2. Tell it how to answer, and let it read the drive.** An AI Chat page has a system prompt and a set of tools. Set the prompt so it behaves like support:
 
 \`\`\`bash
 pagespace agents config <agentPageId> --set systemPrompt="You are the support assistant for Acme. Answer only from the docs in this drive. Be concise and friendly. If the docs do not cover a question, say so and offer to hand off to a human. Never invent product behavior."
 \`\`\`
 
-Pick a specific model the same way if you want one (\`--set aiModel=<id>\`, and \`pagespace models list\` shows the options), or set the prompt and model in the agent's settings tab in the app.
+A brand-new agent has no tools enabled, which means it cannot actually search or read the drive and will make things up. Turn on the read-only tools so it answers from your docs instead:
+
+\`\`\`bash
+pagespace agents config <agentPageId> --set enabledTools='["multi_drive_search","regex_search","glob_search","list_pages","read_page"]'
+\`\`\`
+
+Pick a specific model the same way if you want one (\`--set aiModel=<id>\`, and \`pagespace models list\` shows the options), or set all of this in the agent's settings tab in the app. Check your work with \`pagespace agents list --drive <driveId> --json\`: it shows the model, whether a system prompt is set, and the enabled tools.
 
 **3. Mint a key for your server.** The endpoint runs the agent's tools, which need edit access to the page, so create a key that inherits your own access to the drive (leave \`--role\` off). A plain \`member\` key is view-only on an agent page and would get a 403:
 
@@ -127,7 +133,7 @@ curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
 
 Rehydrate the chat box from those messages and the customer picks up mid conversation. A teammate can open the same thread in PageSpace and take over. The conversation is not trapped in your database. It is a page in the workspace.
 
-Count what you did not build: no model, no system prompt to maintain (it lives on the agent page, editable by your support lead without a deploy), no vector store, no retrieval layer since [the drive is the context](/blog/your-workspace-is-the-context), and no conversation store. You brought a chat box and a scoped key. PageSpace brought the rest. The full reference is in the [Agent API docs](/docs/features/agent-api).
+Count what you did not build: no model, no system prompt to maintain (it lives on the agent page, editable by your support lead without a deploy), no tools to write (you turn on the agent's built-in search and read), no vector store to build or keep in sync since [the drive is the context](/blog/your-workspace-is-the-context) and the agent searches it directly, and no conversation store. You brought a chat box and a scoped key. PageSpace brought the rest. The full reference is in the [Agent API docs](/docs/features/agent-api).
 `,
     author: "Jono",
     date: "2026-07-14",

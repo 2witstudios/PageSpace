@@ -61,6 +61,7 @@ The page you name in \`model\` runs as the agent you configured, so each request
 
 - **its system prompt** — whatever that AI Chat page is set up to be;
 - **its tools, executed server-side** — it searches the drive, reads pages, and writes back on its own, and returns the result; and
+- **only the tools it has enabled** — a bare agent starts with none and cannot reach the drive; enable read (and, if you want, write) tools on the agent page, or with \`pagespace agents config <pageId> --set enabledTools='["multi_drive_search","read_page"]'\`; and
 - **your permissions and the key's scope** — it can only reach what the key can reach. If you cannot see a page in the app, the agent cannot either.
 
 Because the agent runs write tools on your behalf, the endpoint requires **edit** access to the agent page. A key without edit gets a \`403\`. The simplest edit-capable key inherits your own drive access, so create it without a \`--role\` (a plain \`--role member\` key is view-only on an agent page and will 403).
