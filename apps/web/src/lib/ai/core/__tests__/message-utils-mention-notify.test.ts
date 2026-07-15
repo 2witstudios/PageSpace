@@ -18,10 +18,11 @@ vi.mock('@pagespace/db/db', () => ({
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ kind: 'eq', field, value })),
+  and: vi.fn((...conds: unknown[]) => ({ kind: 'and', conds })),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'id', conversationId: 'conversationId' },
+  chatMessages: { id: 'id', conversationId: 'conversationId', role: 'role' },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({

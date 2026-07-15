@@ -45,7 +45,9 @@ import { conversationMessagesActions } from '@/hooks/conversationMessagesActions
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
+import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
@@ -654,19 +656,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   }, [handleDeleteBase, currentConversationId]);
 
   const handleRetry = useCallback(async () => {
-    // Same "assistant replies after the last user message" computation
-    // useMessageActions.handleRetry runs internally (against the same
-    // plainMessages source) to decide which rows to DELETE server-side —
-    // recomputed here, before the base call, so we know what to remove from
-    // the store once those deletes (and the regenerate() call) have gone out.
-    const lastUserMsgIndex = plainMessages.map((m) => m.role).lastIndexOf('user');
-    const toRemove =
-      lastUserMsgIndex === -1
-        ? []
-        : plainMessages
-            .slice(lastUserMsgIndex + 1)
-            .filter((m) => m.role === 'assistant')
-            .map((m) => m.id);
+    // Same computation useMessageActions.handleRetry runs internally (against
+    // the same plainMessages source) to decide which rows to DELETE
+    // server-side — shared via getAssistantMessagesAfterLastUser so the two
+    // call sites can't drift, computed here BEFORE the base call so we know
+    // what to remove from the store once those deletes (and the regenerate()
+    // call) have gone out.
+    const toRemove = getAssistantMessagesAfterLastUser(plainMessages).map((m) => m.id);
     await handleRetryBase();
     if (!currentConversationId) return;
     for (const id of toRemove) conversationMessagesActions.applyDelete(currentConversationId, id);
@@ -801,23 +797,35 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // These three fire only for a REMOTE tab's action (useChannelStreamSocket already
     // drops own-tab events via isOwnStream before invoking the callback) — the local
     // user's own edit/delete/send is handled separately (handleSendMessage's
-    // addOptimisticSend; handleEdit/handleDelete above). Store actions only, per the
-    // leaf spec — useChat's own `messages` is deliberately NOT touched here; it stays
-    // in sync via the authoritative loader (see loadMessagesForConversation).
+    // addOptimisticSend; handleEdit/handleDelete above).
+    //
+    // Written to BOTH the store (render) AND useChat via setMessages (bookkeeping) —
+    // same dual-write shape as loadMessagesForConversation's, not a NEW two-way sync
+    // (rail 11): both writes are independent, terminal applications of the SAME
+    // upstream event, not one container's state flowing into the other. Required
+    // because `regenerate()` and `useAskUserAnswering` (via plainMessages, but
+    // `regenerate` itself indexes useChat's OWN local array) need useChat's copy to
+    // still reflect a remote edit/delete/message — otherwise a retry right after a
+    // collaborator's edit on a shared conversation could regenerate against stale
+    // history (PR review finding, independently confirmed by three review passes).
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId || !currentConversationId) return;
+      setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
       conversationMessagesActions.applyRemoteUserMessage(currentConversationId, message);
     },
     onMessageEdited: (payload) => {
       if (payload.conversationId !== currentConversationId || !currentConversationId) return;
-      conversationMessagesActions.applyEdit(currentConversationId, {
+      const editPayload: MessageEditPayload = {
         messageId: payload.messageId,
         parts: payload.parts,
         editedAt: new Date(payload.editedAt),
-      });
+      };
+      setMessages((prev) => applyMessageEdit(prev, editPayload));
+      conversationMessagesActions.applyEdit(currentConversationId, editPayload);
     },
     onMessageDeleted: (payload) => {
       if (payload.conversationId !== currentConversationId || !currentConversationId) return;
+      setMessages((prev) => applyMessageDelete(prev, payload.messageId));
       conversationMessagesActions.applyDelete(currentConversationId, payload.messageId);
     },
     onUndoApplied: (payload) => {
@@ -871,15 +879,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         // rejoin-recovery accumulates the FULL reply into `stream.parts` — the real text
         // must not stay stranded in the DB until the user navigates away and back.
         //
-        // `applyRemoteUserMessage` is reused deliberately (see leaf 4.3 note): it is
-        // role-agnostic — append if the id isn't already confirmed, reconcile
-        // optimisticSends, and record the pending-mutation-since-load entry a
-        // conversation-store action needs. Adding a same-shaped, assistant-only action
-        // to the PR3 store surface for this one call site would just be that same logic
-        // under a different name.
+        // `applyConfirmedMessage` (upsert-by-id — REPLACES an existing entry, unlike
+        // `applyRemoteUserMessage`'s no-op-if-present) is required here, not optional:
+        // a DB reload mid-stream can have already seeded `messages` with a
+        // 'streaming'-status placeholder/half-streamed row under this same id, and
+        // the whole point of this branch is to overwrite that with the full content.
+        //
+        // Also replaces the entry in useChat (dual-write, same rationale as the socket
+        // handlers above) — covers the cross-instance-recovery case, where the
+        // recovered content never went through this tab's own useChat stream and would
+        // otherwise leave regenerate()'s bookkeeping short of it.
         const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
+        setMessages((prev) => {
+          const i = prev.findIndex((m) => m.id === messageId);
+          return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
+        });
         if (currentConversationId) {
-          conversationMessagesActions.applyRemoteUserMessage(currentConversationId, synthesized);
+          conversationMessagesActions.applyConfirmedMessage(currentConversationId, synthesized);
         }
         return;
       }
@@ -910,7 +926,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             // unpersisted conversation that triggered it.
             if (isPersistedRef.current) return;
             setIdentity(persisted.id);
-            conversationMessagesActions.applyRemoteUserMessage(
+            conversationMessagesActions.applyConfirmedMessage(
               persisted.id,
               synthesizeAssistantMessage(messageId, parts, startedAt),
             );
@@ -1013,8 +1029,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     contextRef,
   ]);
 
+  // plainMessages (store-rendered), not useChat's raw `messages`: "answerable"
+  // is decided by whether the ask_user part sits on the conversation's LAST
+  // message, and a remote edit/delete/message on this conversation updates
+  // the store but no longer updates useChat's local array (leaf 4.3 — those
+  // socket handlers write only to the store). Reading plainMessages keeps
+  // this decision matched to what the user actually sees on screen.
   const askUserAnswering = useAskUserAnswering({
-    messages,
+    messages: plainMessages,
     status,
     addToolResult,
     wrapSend,

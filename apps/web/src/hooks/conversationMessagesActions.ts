@@ -17,7 +17,7 @@ export const conversationMessagesActions = {
   startLoad: (conversationId: string): number => useConversationMessagesStore.getState().startLoad(conversationId),
   /** True while `generation` is still the newest `startLoad` result for `conversationId` — false once a newer load has superseded it. */
   isLoadCurrent: (conversationId: string, generation: number): boolean =>
-    useConversationMessagesStore.getState().byConversationId[conversationId]?.loadGeneration === generation,
+    useConversationMessagesStore.getState().isLoadCurrent(conversationId, generation),
   applyLoad: (conversationId: string, generation: number, messages: UIMessage[]): void =>
     useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages),
   failLoad: (conversationId: string, generation: number): void =>
@@ -29,11 +29,20 @@ export const conversationMessagesActions = {
   applyDelete: (conversationId: string, messageId: string): void =>
     useConversationMessagesStore.getState().applyDelete(conversationId, messageId),
   /**
-   * Commits a confirmed message (role-agnostic despite the store action's name —
-   * see the PR 4 board note on `onStreamComplete`'s reuse of this for a completed
-   * own-stream's final assistant message) into `messages`, reconciling it out of
-   * `optimisticSends` if present.
+   * Appends a broadcast user message, reconciling it out of `optimisticSends` if
+   * present. No-ops if the id is already confirmed — correct for a user message,
+   * whose content never changes after creation. NOT for assistant completions
+   * (an existing id is not proof of complete content there) — use
+   * `applyConfirmedMessage` for those.
    */
   applyRemoteUserMessage: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().applyRemoteUserMessage(conversationId, message),
+  /**
+   * Upserts a confirmed message by id: replaces an existing entry in place, or
+   * appends if absent. Use for assistant-completion commits (stream-complete,
+   * cross-instance recovery), where an existing row under this id may be a
+   * stale/half-streamed snapshot that must be overwritten, not skipped.
+   */
+  applyConfirmedMessage: (conversationId: string, message: UIMessage): void =>
+    useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message),
 };

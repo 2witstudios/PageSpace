@@ -577,6 +577,13 @@ export async function POST(request: Request) {
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = resolveMessageId(userMessage.id);
+        // Reassign so every downstream use of `userMessage` (the broadcast below,
+        // any future read) agrees with what was actually persisted — resolveMessageId
+        // mints a FRESH id when the client-supplied one is absent or fails the safe-id
+        // shape check, and without this the object stays inconsistent: saved under
+        // `messageId`, but still carrying the original (possibly rejected) id anywhere
+        // `userMessage` itself is read afterward.
+        userMessage.id = messageId;
         const messageContent = extractMessageContent(userMessage);
 
         // Process @mentions in the user message

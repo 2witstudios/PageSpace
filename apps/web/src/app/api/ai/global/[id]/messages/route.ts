@@ -459,6 +459,10 @@ export async function POST(
     if (userMessage && userMessage.role === 'user') {
       try {
         const messageId = resolveMessageId(userMessage.id);
+        // Reassign so every downstream use of `userMessage` (the broadcast below,
+        // any future read) agrees with what was actually persisted — see the
+        // equivalent comment in apps/web/src/app/api/ai/chat/route.ts.
+        userMessage.id = messageId;
         const messageContent = extractMessageContent(userMessage);
         
         // Process @mentions in the user message
