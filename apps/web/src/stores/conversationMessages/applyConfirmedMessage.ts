@@ -20,11 +20,14 @@ export interface ApplyConfirmedMessageEvent {
  * function is for confirming an ASSISTANT reply, whose content can
  * legitimately need to be replaced with a fuller version under the same id.
  *
- * Records the same `pendingMutationsSinceLoad` entry shape `applyRemoteUserMessage`
- * does (best-effort — see `replayPendingMutations`, which replays a
- * `remoteMessage` mutation as append-if-absent, not upsert; a load snapshot
- * racing exactly against this replace can still win with a staler copy in
- * that narrow compound-race window).
+ * Records a `confirmedMessage` pending mutation — distinct from
+ * `applyRemoteUserMessage`'s `remoteMessage` entry. `replayPendingMutations`
+ * replays `remoteMessage` as append-if-absent (correct there: a genuine user
+ * message's content never changes, so a load snapshot that already has the id
+ * already has the right content). This function's content CAN legitimately
+ * need to replace a load snapshot's copy (the load may have read a
+ * 'streaming'-placeholder or partial row while this confirmation was in
+ * flight), so its replay upserts by id instead.
  */
 export const applyConfirmedMessage = (
   byConversationId: ConversationMessagesById,
@@ -45,7 +48,7 @@ export const applyConfirmedMessage = (
       optimisticSends: existing.optimisticSends.filter((m) => m.id !== event.message.id),
       pendingMutationsSinceLoad: [
         ...existing.pendingMutationsSinceLoad,
-        { type: 'remoteMessage', message: event.message },
+        { type: 'confirmedMessage', message: event.message },
       ],
     },
   };

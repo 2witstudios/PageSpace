@@ -730,7 +730,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!currentConversationId) return;
     const isSameIdentityAsLastHandled = lastHandledIdentityRef.current === currentConversationId;
     lastHandledIdentityRef.current = currentConversationId;
-    if (!isPersisted) return;
+    if (!isPersisted) {
+      // No load will run for an unpersisted identity (the early-return at the
+      // top of loadMessagesForConversation skips it) — so if the user switched
+      // here while a load for the PREVIOUS conversation was still in flight,
+      // that load's own `isActiveLoad()` gate will read false when it resolves
+      // (conversationId no longer matches currentConversationIdRef) and never
+      // clear isLoadingMessages itself. Without this, a fresh/New Chat view can
+      // get stuck showing a loading state forever (PR review, chatgpt-codex-connector).
+      setIsLoadingMessages(false);
+      setMessagesLoadError(null);
+      return;
+    }
     if (isSameIdentityAsLastHandled) return;
     if (preloadedMessagesRef.current?.id === currentConversationId) {
       const preloaded = preloadedMessagesRef.current.messages;

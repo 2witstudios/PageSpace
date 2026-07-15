@@ -63,7 +63,7 @@ describe('applyConfirmedMessage', () => {
       c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1') });
-    expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'remoteMessage', message: msg('m1') }]);
+    expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'confirmedMessage', message: msg('m1') }]);
   });
 
   it('given a replace, should also record a pending mutation (unlike applyRemoteUserMessage, which skips no-ops)', () => {
@@ -71,7 +71,7 @@ describe('applyConfirmedMessage', () => {
       c1: { messages: [msg('m1', 'partial')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [] },
     };
     const result = applyConfirmedMessage(initial, { conversationId: 'c1', message: msg('m1', 'full') });
-    expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'remoteMessage', message: msg('m1', 'full') }]);
+    expect(result.c1.pendingMutationsSinceLoad).toEqual([{ type: 'confirmedMessage', message: msg('m1', 'full') }]);
   });
 
   it('given an append or replace, should NOT bump loadGeneration', () => {
