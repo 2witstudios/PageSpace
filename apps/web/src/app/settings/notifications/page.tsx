@@ -36,7 +36,8 @@ type NotificationType =
   | 'CONNECTION_REQUEST'
   | 'CONNECTION_ACCEPTED'
   | 'CONNECTION_REJECTED'
-  | 'NEW_DIRECT_MESSAGE';
+  | 'NEW_DIRECT_MESSAGE'
+  | 'PRODUCT_UPDATE';
 
 interface NotificationPreference {
   notificationType: NotificationType;
@@ -54,6 +55,17 @@ interface PreferenceGroup {
 }
 
 const PREFERENCE_GROUPS: PreferenceGroup[] = [
+  {
+    title: 'Product Updates',
+    description: 'Occasional announcements about new PageSpace features',
+    types: [
+      {
+        type: 'PRODUCT_UPDATE',
+        label: 'Product Announcements',
+        description: 'When we launch something new, like the SDK and CLI',
+      },
+    ],
+  },
   {
     title: 'Workspace Additions',
     description: 'Get notified when you\'re added to a workspace',

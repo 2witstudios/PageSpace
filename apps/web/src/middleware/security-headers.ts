@@ -262,7 +262,13 @@ export const isPublicPageRoute = (pathname: string): boolean =>
   pathname.startsWith('/auth/') ||
   pathname === '/invite' ||
   pathname.startsWith('/invite/') ||
-  pathname.startsWith('/s/');
+  pathname.startsWith('/s/') ||
+  // Unsubscribing must never require a login. These are reached from a link in an
+  // email, where the reader is usually logged out — and an opt-out you have to
+  // sign in to perform is both a bulk-sender violation and, in practice, no
+  // opt-out at all. The one-time token in the URL is the only authorization.
+  pathname === '/unsubscribe' ||
+  pathname === '/unsubscribe-success';
 
 // Published Canvas pages live on *.pagespace.site and are served from object
 // storage, never by this app. If such a request reaches us (proxy misroute /

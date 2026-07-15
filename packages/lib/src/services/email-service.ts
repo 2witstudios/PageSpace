@@ -50,6 +50,22 @@ export interface SendEmailOptions {
   to: string;
   subject: string;
   react: React.ReactNode;
+  /**
+   * Extra SMTP headers. Bulk sends need `List-Unsubscribe` and
+   * `List-Unsubscribe-Post` — Gmail and Yahoo's bulk-sender rules require a
+   * one-click unsubscribe header, and a body link alone does not satisfy them.
+   */
+  headers?: Record<string, string>;
+  /**
+   * Stable key that lets Resend collapse a retry into the original send.
+   *
+   * Without it, a send that Resend ACCEPTS but whose response we never receive
+   * (socket timeout) is indistinguishable from one that never happened: the
+   * caller records a failure, retries, and the recipient gets two copies. Any
+   * caller that may retry a send should pass a key derived from the send's
+   * identity (e.g. `sdk-launch:<userId>`), not a random one.
+   */
+  idempotencyKey?: string;
 }
 
 export async function sendEmail(options: SendEmailOptions): Promise<void> {
@@ -73,12 +89,19 @@ export async function sendEmail(options: SendEmailOptions): Promise<void> {
     throw new Error(`Too many emails sent to ${options.to}. Please try again later.`);
   }
 
-  const { data, error } = await resend.emails.send({
+  const payload = {
     from: config.from,
     to: options.to,
     subject: options.subject,
     react: options.react as React.ReactNode,
-  });
+    ...(options.headers ? { headers: options.headers } : {}),
+  };
+
+  // Only pass the request-options argument when there is something to put in it,
+  // so the common single-argument call stays exactly as it was.
+  const { data, error } = options.idempotencyKey
+    ? await resend.emails.send(payload, { idempotencyKey: options.idempotencyKey })
+    : await resend.emails.send(payload);
 
   if (error) {
     throw new Error(`Failed to send email: ${error.message}`);
