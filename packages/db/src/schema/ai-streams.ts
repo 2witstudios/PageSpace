@@ -101,6 +101,11 @@ export const aiStreamSessions = pgTable('ai_stream_sessions', {
   channelStatusIdx: index('ai_stream_sessions_channel_status_idx').on(table.channelId, table.status),
   // Per-conversation in-flight lookup for the takeover guard in POST /api/ai/chat.
   conversationStatusIdx: index('ai_stream_sessions_conversation_status_idx').on(table.conversationId, table.status),
+  // GET /api/ai/chat/active-streams?scope=user — "what of MINE is streaming, anywhere" for
+  // history-tab discovery. Unlike channelStatusIdx/conversationStatusIdx, this scans across every
+  // channel/conversation the user has ever streamed on, so it needs its own covering index rather
+  // than reusing either.
+  userStatusIdx: index('ai_stream_sessions_user_status_idx').on(table.userId, table.status),
   // Unique, not merely indexed: a streamId names exactly one generation, and the abort UPDATE
   // resolves a row BY it. If two rows could share one, a single Stop would mark both. Existing
   // rows are all NULL, and Postgres treats NULLs as distinct, so this is safe to add in place.

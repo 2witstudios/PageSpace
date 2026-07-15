@@ -117,6 +117,17 @@ export async function reconcileMachineStorageSerialized(
   if (locked.outcome === 'lock_busy') {
     return { outcome: 'lock_busy' };
   }
+  if (locked.outcome === 'connection_error') {
+    // Preserves this caller's existing behavior exactly (previously an unwrapped throw
+    // from `withAdvisoryLock` itself): propagate so the cron route's own catch logs it
+    // and the next scheduled tick retries. `withAdvisoryLock` resolving this outcome
+    // instead of throwing (leaf 5.6/5.7) only removes the AMBIGUITY for callers that
+    // need to distinguish it from `fn` throwing — this caller's `fn`
+    // (`reconcileMachineStorage`) already documents that it never throws, so there is
+    // no such ambiguity here, and the choice to keep propagating is now explicit at the
+    // type level rather than implicit in an uncaught rejection.
+    throw locked.error;
+  }
   return { outcome: 'reconciled', ...locked.result };
 }
 

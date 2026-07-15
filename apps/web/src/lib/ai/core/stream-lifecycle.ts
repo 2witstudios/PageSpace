@@ -12,7 +12,7 @@ import {
 import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
 import {
-  convergeRawParts,
+  convergeRawPartsWithOrigins,
   capPartsToByteBudget,
   CHECKPOINT_MAX_SERIALIZED_BYTES,
 } from '@/lib/ai/core/checkpoint-serialize';
@@ -275,7 +275,8 @@ export const createStreamLifecycle = async (
     // column below cannot answer for a rejoining client. See rawPartsCount's docblock on the
     // schema for why this must travel separately from parts.length.
     const rawPartsCount = parts.length;
-    const { parts: shaped, wasCapped } = capPartsToByteBudget(convergeRawParts(parts));
+    const { parts: converged, originRawIndex } = convergeRawPartsWithOrigins(parts);
+    const { parts: shaped, wasCapped, survivingFromRawIndex } = capPartsToByteBudget(converged, originRawIndex);
     if (wasCapped && !hasWarnedSizeCap) {
       hasWarnedSizeCap = true;
       loggers.ai.warn('stream-lifecycle: parts snapshot at or over the serialized size cap', {
@@ -283,11 +284,19 @@ export const createStreamLifecycle = async (
         maxBytes: CHECKPOINT_MAX_SERIALIZED_BYTES,
       });
     }
+    // Capping drops the oldest merged content from `shaped`, so the seed no longer reflects
+    // the raw frames that fed it — telling the client to skip all the way to `rawPartsCount`
+    // (the pre-cap total) would permanently lose that content, since the live multicast
+    // buffer (the only remaining copy) gets skipped past too. Reporting the raw position
+    // `shaped[0]` actually starts at instead means the client under-skips (a harmless,
+    // self-correcting duplicate) rather than over-skips (a silent, permanent gap) — see
+    // capPartsToByteBudget's doc.
+    const persistedRawPartsCount = wasCapped ? survivingFromRawIndex : rawPartsCount;
     const attempt = (async () => {
       try {
         await db
           .update(aiStreamSessions)
-          .set({ parts: shaped, rawPartsCount, lastHeartbeatAt: new Date() })
+          .set({ parts: shaped, rawPartsCount: persistedRawPartsCount, lastHeartbeatAt: new Date() })
           .where(eq(aiStreamSessions.messageId, messageId));
       } catch (error) {
         loggers.ai.warn('stream-lifecycle: aiStreamSessions parts persist failed', {

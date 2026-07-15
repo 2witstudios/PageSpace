@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-const { mockOrderBy } = vi.hoisted(() => ({ mockOrderBy: vi.fn() }));
+const { mockOrderBy, mockWhere } = vi.hoisted(() => ({ mockOrderBy: vi.fn(), mockWhere: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnValue({
       from: vi.fn().mockReturnValue({
-        where: vi.fn().mockReturnValue({
+        where: mockWhere.mockReturnValue({
           orderBy: mockOrderBy,
         }),
       }),
@@ -283,6 +283,125 @@ describe('GET /api/ai/chat/active-streams', () => {
     const response = await GET(makeRequest());
 
     expect(response.status).toBe(403);
+    expect(mockOrderBy).not.toHaveBeenCalled();
+  });
+});
+
+// Leaf 5.1: cross-channel discovery of the CALLER's own in-flight streams, for the history
+// tab's streaming badge. Ownership is the authz — ai_stream_sessions.userId IS the stream's
+// owner column — so this mode never runs a page-access or conversation-sharing check.
+describe('GET /api/ai/chat/active-streams?scope=user', () => {
+  const makeScopeUserRequest = () => new Request('http://test.local/api/ai/chat/active-streams?scope=user');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockSessionAuth());
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it('given no channelId, should NOT 400 — channelId is not required in this mode', async () => {
+    mockOrderBy.mockResolvedValueOnce([]);
+
+    const response = await GET(makeScopeUserRequest());
+
+    expect(response.status).toBe(200);
+  });
+
+  it('should query filtered to the CALLER\'s own userId and status=streaming — no channelId predicate', async () => {
+    mockOrderBy.mockResolvedValueOnce([]);
+
+    await GET(makeScopeUserRequest());
+
+    expect(mockWhere).toHaveBeenCalledTimes(1);
+    const condition = mockWhere.mock.calls[0][0] as { and: unknown[] };
+    expect(condition.and).toEqual([
+      { eq: ['userId', mockUserId] },
+      { eq: ['status', 'streaming'] },
+    ]);
+  });
+
+  it('should never call canUserViewPage or filterSubscribableStreams — ownership alone is the authz', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        channelId: 'page-other',
+        startedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
+    ]);
+
+    await GET(makeScopeUserRequest());
+
+    expect(canUserViewPage).not.toHaveBeenCalled();
+    expect(mockFilterSubscribableStreams).not.toHaveBeenCalled();
+  });
+
+  it('given own streaming rows across multiple channels, should return them WITHOUT parts/rawPartsCount/triggeredBy', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        channelId: 'page-a',
+        startedAt: new Date('2024-01-01T00:00:00.000Z'),
+        lastHeartbeatAt: new Date(),
+      },
+      {
+        messageId: 'msg-2',
+        conversationId: 'conv-2',
+        channelId: 'page-b',
+        startedAt: new Date('2024-01-02T00:00:00.000Z'),
+        lastHeartbeatAt: new Date(),
+      },
+    ]);
+
+    const response = await GET(makeScopeUserRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([
+      { messageId: 'msg-1', conversationId: 'conv-1', channelId: 'page-a', startedAt: '2024-01-01T00:00:00.000Z' },
+      { messageId: 'msg-2', conversationId: 'conv-2', channelId: 'page-b', startedAt: '2024-01-02T00:00:00.000Z' },
+    ]);
+    for (const stream of body.streams) {
+      expect(stream).not.toHaveProperty('parts');
+      expect(stream).not.toHaveProperty('rawPartsCount');
+      expect(stream).not.toHaveProperty('triggeredBy');
+    }
+  });
+
+  it('given a row whose heartbeat is stale (crashed process), should NOT include it', async () => {
+    mockOrderBy.mockResolvedValueOnce([
+      {
+        messageId: 'msg-dead',
+        conversationId: 'conv-1',
+        channelId: 'page-a',
+        startedAt: new Date(Date.now() - 5 * 60 * 1000),
+        lastHeartbeatAt: new Date(Date.now() - 5 * 60 * 1000),
+      },
+    ]);
+
+    const response = await GET(makeScopeUserRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
+  });
+
+  it('given no own streams, should return an empty streams array', async () => {
+    mockOrderBy.mockResolvedValueOnce([]);
+
+    const response = await GET(makeScopeUserRequest());
+    const body = await response.json();
+
+    expect(body.streams).toEqual([]);
+  });
+
+  it('given auth fails, should return the auth error response without querying', async () => {
+    vi.mocked(isAuthError).mockReturnValue(true);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthFailure(401));
+
+    const response = await GET(makeScopeUserRequest());
+
+    expect(response.status).toBe(401);
     expect(mockOrderBy).not.toHaveBeenCalled();
   });
 });

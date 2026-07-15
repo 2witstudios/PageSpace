@@ -17,7 +17,33 @@ import { appendPart } from '@/lib/ai/streams/appendPart';
 type AnyPart = UIMessage['parts'][number];
 
 export const convergeRawParts = (parts: readonly AnyPart[]): AnyPart[] =>
-  parts.reduce<AnyPart[]>((acc, part) => appendPart(acc, part), []);
+  convergeRawPartsWithOrigins(parts).parts;
+
+/**
+ * Same fold as `convergeRawParts`, but also tracks the RAW index (into `parts`) at which each
+ * merged element was FIRST created — i.e. `originRawIndex[m]` is where merged element `m` starts
+ * in the raw stream. An update-in-place (a tool part's state transition, replaced by
+ * `appendPart`'s `toolCallId` match) does not move an element's position, so it does not change
+ * that element's origin — only a brand-new push does.
+ *
+ * This is what `capPartsToByteBudget` needs to answer "how far into the raw stream does the
+ * surviving (capped) snapshot's earliest content start?" — see its `wasCapped` doc for why that
+ * position, not the total raw count, must become `rawPartsCount` once capping drops content.
+ */
+export const convergeRawPartsWithOrigins = (
+  parts: readonly AnyPart[],
+): { parts: AnyPart[]; originRawIndex: number[] } => {
+  let acc: AnyPart[] = [];
+  const originRawIndex: number[] = [];
+  parts.forEach((part, rawIndex) => {
+    const before = acc.length;
+    acc = appendPart(acc, part);
+    if (acc.length > before) {
+      originRawIndex.push(rawIndex);
+    }
+  });
+  return { parts: acc, originRawIndex };
+};
 
 /** ~5MB — bounds how large a single checkpoint write's `parts` column can grow. */
 export const CHECKPOINT_MAX_SERIALIZED_BYTES = 5 * 1024 * 1024;
@@ -31,16 +57,33 @@ export const CHECKPOINT_MAX_SERIALIZED_BYTES = 5 * 1024 * 1024;
  * cap-induced `[]` would be indistinguishable from that — silently wiping the crash-recovery
  * snapshot instead of merely truncating it. So even a single part larger than the whole budget
  * is kept alone rather than dropped.
+ *
+ * `originRawIndex` (from `convergeRawPartsWithOrigins`, one entry per element of `parts`,
+ * parallel arrays) is required so a capped result can report `survivingFromRawIndex`: the raw
+ * index the surviving `shaped[0]` actually starts at. Trimming here only ever drops a PREFIX of
+ * `parts`, so `originRawIndex` is trimmed the same way — no re-derivation needed.
+ *
+ * WHY THIS MATTERS (D-task yfz5p85c584z3ekvdfc3qx4e): `rawPartsCount`, persisted alongside this
+ * capped snapshot, tells a rejoining client how many RAW frames from the (never-capped) live
+ * multicast buffer to SKIP, because the seed already reflects their effect. If capping ever drops
+ * content, the seed no longer reflects the raw frames that fed the dropped elements — skipping
+ * past them anyway (the old unconditional `parts.length` behavior) permanently loses that content,
+ * since the live buffer replay is the only remaining place it exists. Reporting
+ * `survivingFromRawIndex` instead means the client under-skips (replays some frames whose effect
+ * is already in the seed) rather than over-skips — a harmless, self-correcting duplicate-text
+ * glitch in the one direction this module's docs already call safe, instead of a silent permanent
+ * gap in the other.
  */
 export const capPartsToByteBudget = (
   parts: readonly AnyPart[],
+  originRawIndex: readonly number[],
   maxBytes: number = CHECKPOINT_MAX_SERIALIZED_BYTES,
-): { parts: AnyPart[]; wasCapped: boolean } => {
-  if (parts.length === 0) return { parts: [], wasCapped: false };
+): { parts: AnyPart[]; wasCapped: boolean; survivingFromRawIndex: number } => {
+  if (parts.length === 0) return { parts: [], wasCapped: false, survivingFromRawIndex: 0 };
 
   const sizes = parts.map((part) => Buffer.byteLength(JSON.stringify(part), 'utf8'));
   const total = sizes.reduce((sum, size) => sum + size, 0);
-  if (total <= maxBytes) return { parts: [...parts], wasCapped: false };
+  if (total <= maxBytes) return { parts: [...parts], wasCapped: false, survivingFromRawIndex: 0 };
 
   let kept = parts.length;
   let runningTotal = total;
@@ -48,5 +91,10 @@ export const capPartsToByteBudget = (
     runningTotal -= sizes[parts.length - kept];
     kept -= 1;
   }
-  return { parts: parts.slice(parts.length - kept), wasCapped: true };
+  const droppedCount = parts.length - kept;
+  return {
+    parts: parts.slice(droppedCount),
+    wasCapped: true,
+    survivingFromRawIndex: originRawIndex[droppedCount] ?? 0,
+  };
 };

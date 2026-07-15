@@ -29,9 +29,49 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url);
     const channelId = searchParams.get('channelId');
+    const scope = searchParams.get('scope');
+
+    // scope=user: cross-channel discovery of the CALLER's own in-flight streams — what the
+    // history tab (leaf 5.2) badges as "still streaming", regardless of which page/global
+    // channel each one is on. Ownership IS the authz here (aiStreamSessions.userId is the
+    // stream's owner column — see its docblock), so there is no page-access or
+    // conversation-sharing check to run, unlike the channelId mode below. No `parts`/
+    // `rawPartsCount` in the response: this mode answers "what's streaming", not "render its
+    // mid-stream content" — a click-through re-fetches via includeStreaming=1 and rejoins
+    // through the normal per-channel attach path.
+    if (scope === 'user') {
+      const now = Date.now();
+      const rows = await db
+        .select({
+          messageId: aiStreamSessions.messageId,
+          conversationId: aiStreamSessions.conversationId,
+          channelId: aiStreamSessions.channelId,
+          startedAt: aiStreamSessions.startedAt,
+          lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
+        })
+        .from(aiStreamSessions)
+        .where(
+          and(
+            eq(aiStreamSessions.userId, userId),
+            eq(aiStreamSessions.status, 'streaming'),
+          )
+        )
+        .orderBy(asc(aiStreamSessions.startedAt), asc(aiStreamSessions.messageId));
+
+      const live = rows.filter((r) => isStreamRowLive(r, now));
+
+      return NextResponse.json({
+        streams: live.map((s) => ({
+          messageId: s.messageId,
+          conversationId: s.conversationId,
+          channelId: s.channelId,
+          startedAt: s.startedAt.toISOString(),
+        })),
+      });
+    }
 
     if (!channelId) {
-      return NextResponse.json({ error: 'channelId is required' }, { status: 400 });
+      return NextResponse.json({ error: 'channelId is required (or pass scope=user)' }, { status: 400 });
     }
 
     const channelOwnerUserId = parseGlobalChannelId(channelId);

@@ -114,19 +114,24 @@ export async function startGenerationExclusive<T>(
 
   let attemptsMade = 0;
   for (;;) {
-    let attempt;
-    try {
-      attempt = await withAdvisoryLock(pool, lockKey, run);
-    } catch (error) {
-      // The lock connection itself failed (pool.connect() or the try-lock query threw) —
-      // NOT `run` throwing. `run` (takeover + lifecycle-create) is documented to catch and
-      // log its own errors and never throw, so this catch can only be reached by the lock
-      // machinery; `run` has not been invoked yet on this path. Degrade immediately rather
-      // than retry: a broken connection is not "busy" and won't resolve itself in 300ms the
-      // way lock contention might, so retrying here would only add latency to a send that
-      // must never block. See the PR board page's verification: "Lock-pool exhaustion
-      // simulation: proceeds unlocked, metric emitted, warn logged, both requests complete."
-      return degradeToUnlocked({ conversationId, attemptsMade, reason: 'lock_error', error }, run);
+    // `withAdvisoryLock` resolves `connection_error` for its own lock-machinery failures
+    // (pool.connect() or the try-lock query threw) instead of throwing — a structural
+    // outcome, not a rejection to catch. This eliminates the ambiguity a catch-based
+    // classification could no longer safely assume once `run` was no longer guaranteed
+    // throw-free (leaf 5.6/5.7, D-task fmfmzw4g4gh6u6q9cjt7ylne): anything `run` itself
+    // throws still propagates as a genuine rejection here, unwrapped and un-mislabeled.
+    const attempt = await withAdvisoryLock(pool, lockKey, run);
+
+    if (attempt.outcome === 'connection_error') {
+      // Degrade immediately rather than retry: a broken connection is not "busy" and
+      // won't resolve itself in 300ms the way lock contention might, so retrying here
+      // would only add latency to a send that must never block. See the PR board page's
+      // verification: "Lock-pool exhaustion simulation: proceeds unlocked, metric
+      // emitted, warn logged, both requests complete."
+      return degradeToUnlocked(
+        { conversationId, attemptsMade, reason: 'lock_error', error: attempt.error },
+        run,
+      );
     }
 
     if (attempt.outcome === 'acquired') {

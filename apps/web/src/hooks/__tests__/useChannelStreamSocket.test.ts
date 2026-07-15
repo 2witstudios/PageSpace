@@ -11,6 +11,7 @@ const {
   mockSocket,
   mockAddStream,
   mockAppendPart,
+  mockSetStreamParts,
   mockRemoveStream,
   mockClearPageStreams,
   mockConsumeStreamJoin,
@@ -40,6 +41,7 @@ const {
 
   const mockAddStream = vi.fn();
   const mockAppendPart = vi.fn();
+  const mockSetStreamParts = vi.fn();
   const mockRemoveStream = vi.fn();
   const mockClearPageStreams = vi.fn();
   const mockConsumeStreamJoin = vi.fn().mockResolvedValue({ aborted: false });
@@ -53,6 +55,7 @@ const {
     mockSocket,
     mockAddStream,
     mockAppendPart,
+    mockSetStreamParts,
     mockRemoveStream,
     mockClearPageStreams,
     mockConsumeStreamJoin,
@@ -82,15 +85,24 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
     getState: () => ({
       addStream: mockAddStream,
       appendPart: mockAppendPart,
+      setStreamParts: mockSetStreamParts,
       removeStream: mockRemoveStream,
       clearPageStreams: mockClearPageStreams,
     }),
   },
 }));
 
-vi.mock('@/lib/ai/core/stream-join-client', () => ({
-  consumeStreamJoin: mockConsumeStreamJoin,
-}));
+// Only consumeStreamJoin is mocked — StreamJoinError stays the real class so
+// `err instanceof StreamJoinError` in the hook works against errors these tests construct.
+vi.mock('@/lib/ai/core/stream-join-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/ai/core/stream-join-client')>(
+    '@/lib/ai/core/stream-join-client',
+  );
+  return {
+    ...actual,
+    consumeStreamJoin: mockConsumeStreamJoin,
+  };
+});
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: mockFetchWithAuth,
@@ -106,6 +118,7 @@ vi.mock('@/lib/ai/streams/bootstrapConsumerGuard', () => ({
 }));
 
 import { useChannelStreamSocket } from '../useChannelStreamSocket';
+import { StreamJoinError } from '@/lib/ai/core/stream-join-client';
 import { releaseBootstrapConsumer } from '@/lib/ai/streams/bootstrapConsumerGuard';
 import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
 import type {
@@ -306,6 +319,131 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { await Promise.resolve(); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
+    });
+  });
+
+  // Leaf 5.4: a stream-join 404 usually means the stream lives on another web instance — the
+  // multicast registry is per-process. Instead of freezing until chat:stream_complete finally
+  // arrives, poll the channel's periodic DB checkpoint (~1s) for a near-live view.
+  describe('join-404 poll fallback (cross-instance rejoin)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('given the SSE join 404s, should NOT removeStream (unlike other join failures) and should start polling', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      // Bootstrap's own initial fetch already fired against beforeEach's default
+      // ({streams: []}) — safe to reconfigure now for the poll fallback's own fetches.
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'polled' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(mockRemoveStream).not.toHaveBeenCalled();
+      expect(mockSetStreamParts).toHaveBeenCalledWith('msg-1', [{ type: 'text', text: 'polled' }], 1);
+    });
+
+    it('should poll on the ~1s cadence, incrementing seq on each successful tick', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      let pollCount = 0;
+      mockFetchWithAuth.mockImplementation(async () => {
+        pollCount += 1;
+        return {
+          ok: true,
+          json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: `tick-${pollCount}` }] }] }),
+        };
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      mockSetStreamParts.mockClear();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      expect(mockSetStreamParts).toHaveBeenCalledWith('msg-1', expect.any(Array), expect.any(Number));
+      const [, , firstSeq] = mockSetStreamParts.mock.calls[0];
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      const lastCall = mockSetStreamParts.mock.calls[mockSetStreamParts.mock.calls.length - 1];
+      expect(lastCall[2]).toBeGreaterThan(firstSeq);
+    });
+
+    it('given chat:stream_complete arrives, should stop polling (no further fetches after)', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'x' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
+      mockFetchWithAuth.mockClear();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given a non-404 join failure, should NOT start polling', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 403', 403));
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      // Non-404 (e.g. a genuine 403) falls back to today's behavior: removeStream, no polling.
+      expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
+      mockFetchWithAuth.mockClear();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given unmount while polling, should stop polling (no leaked interval)', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+
+      const { unmount } = renderHook(() => useChannelStreamSocket('page-a'));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'x' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      unmount();
+      mockFetchWithAuth.mockClear();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
   });
 

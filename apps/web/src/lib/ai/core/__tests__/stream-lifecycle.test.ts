@@ -531,9 +531,13 @@ describe('createStreamLifecycle', () => {
       for (const call of mockUpdateSet.mock.calls) {
         const written = call[0] as { parts: unknown[]; rawPartsCount: number };
         expect(written.parts).not.toContainEqual(huge);
-        // The cap trims what's STORED, never what's reported as the raw count — a rejoining
-        // client's skip math must stay correct even when old content was dropped from parts.
-        expect(written.rawPartsCount).toBe(3);
+        // D-task yfz5p85c584z3ekvdfc3qx4e: once capping drops `huge` (raw index 0), the seed
+        // no longer reflects the frame(s) that fed it — reporting the raw total (3) here would
+        // tell a rejoining client to skip past those frames too, permanently losing that
+        // content (the live multicast replay is the only place it still exists). Reporting the
+        // raw index the surviving content (`toolPart`, raw index 1) actually starts at instead
+        // means the client only under-skips (harmless, self-correcting) rather than over-skips.
+        expect(written.rawPartsCount).toBe(1);
       }
       expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
     });

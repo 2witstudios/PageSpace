@@ -3,7 +3,8 @@ import { useSocket } from './useSocket';
 import { useAuth } from './useAuth';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
-import { consumeStreamJoin } from '@/lib/ai/core/stream-join-client';
+import { consumeStreamJoin, StreamJoinError } from '@/lib/ai/core/stream-join-client';
+import { startStreamJoinPollFallback } from '@/lib/ai/core/stream-join-poll-fallback';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { isOwnStream } from '@/lib/ai/streams/isOwnStream';
@@ -198,6 +199,11 @@ export function useChannelStreamSocket(
     let cancelled = false;
     const localBrowserSessionId = getBrowserSessionId();
     const controllers = new Map<string, AbortController>();
+    // Leaf 5.4: cross-instance rejoin polling, started when an SSE join 404s. Tracked
+    // separately from `controllers` (the SSE join's own AbortController) since the two can be
+    // live at different times for the same messageId — the SSE join has already failed and
+    // its controller discarded by the time a poll fallback controller exists.
+    const pollControllers = new Map<string, AbortController>();
     // Tracks which messageIds have had onStreamComplete called to prevent
     // double-firing when both the SSE done sentinel and chat:stream_complete
     // arrive, and to gate post-error stream_complete events.
@@ -225,7 +231,7 @@ export function useChannelStreamSocket(
     // record yet. This is the synchronous fact that says so.
     const joinDelivered = new Set<string>();
 
-    const { addStream, appendPart, removeStream, clearPageStreams } =
+    const { addStream, appendPart, setStreamParts, removeStream, clearPageStreams } =
       usePendingStreamsStore.getState();
 
     const fireComplete = (
@@ -295,17 +301,37 @@ export function useChannelStreamSocket(
           // chat:stream_complete can land before this rejection settles. It has
           // already finalized the stream, so there is nothing left to mark — and
           // adding the id here would leave an entry no later event ever clears.
-          if (!processed.has(messageId)) {
+          const alreadyProcessed = processed.has(messageId);
+          if (!alreadyProcessed) {
             joinFailed.add(messageId);
           }
-          // When the store was seeded from a persisted snapshot
-          // (skipReplayCount > 0), a failed join usually means the
-          // originator's process died — its in-memory registry is gone and
-          // the join 404s. That snapshot is the only surviving copy of the
-          // partial content, so keep it rendered; removing it here would
-          // undo the restore that just happened. Streams with no seeded
-          // snapshot have nothing to preserve and are removed as before.
-          if (skipReplayCount === 0) {
+          // Leaf 5.4: a 404 is the common, benign cross-instance case — start polling the
+          // channel's periodic DB checkpoint (~1s, matching the server's own cadence) for a
+          // near-live view instead of freezing until chat:stream_complete finally arrives.
+          // Gated on `!alreadyProcessed` for the same race as joinFailed above (completion
+          // may have already landed) and on the SSE controller not already being aborted
+          // (unmount/teardown — nothing left to poll for).
+          const shouldPollFallback =
+            err instanceof StreamJoinError && err.status === 404 && !alreadyProcessed && !controller.signal.aborted;
+          if (shouldPollFallback) {
+            // Defensive: a stale poll fallback for this messageId (e.g. a re-entrant
+            // chat:stream_start on an id that already had one running) must not be
+            // orphaned — an overwritten map entry would leak its interval forever.
+            pollControllers.get(messageId)?.abort();
+            const pollController = new AbortController();
+            pollControllers.set(messageId, pollController);
+            let pollSeq = 0;
+            startStreamJoinPollFallback(channelId, messageId, pollController.signal, (parts) => {
+              pollSeq += 1;
+              setStreamParts(messageId, parts, pollSeq);
+            });
+          } else if (skipReplayCount === 0) {
+            // When the store was seeded from a persisted snapshot (skipReplayCount > 0), a
+            // failed join usually means the originator's process died — its in-memory
+            // registry is gone and the join 404s. That snapshot is the only surviving copy
+            // of the partial content, so keep it rendered; removing it here would undo the
+            // restore that just happened. Streams with no seeded snapshot AND no poll
+            // fallback starting have nothing to preserve and are removed as before.
             removeStream(messageId);
           }
           fireOwnFinalize(messageId);
@@ -476,6 +502,14 @@ export function useChannelStreamSocket(
         controller.abort();
         controllers.delete(payload.messageId);
       }
+      // Leaf 5.4: the socket already told us the generation is over — stop polling for a
+      // "near-live" view that no longer applies. The reload-from-DB branch below (didJoinFail)
+      // fetches the final, authoritative content regardless of anything the poll fallback saw.
+      const pollController = pollControllers.get(payload.messageId);
+      if (pollController) {
+        pollController.abort();
+        pollControllers.delete(payload.messageId);
+      }
       // If the SSE join failed, whatever parts we hold are a stale snapshot at best
       // — the authoritative message is in the DB. Dropping the store entry BEFORE
       // firing makes consumers take their reload-from-DB branch
@@ -558,6 +592,10 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
+      for (const pollController of pollControllers.values()) {
+        pollController.abort();
+      }
+      pollControllers.clear();
       // Release every own-stream claim we handed out. This is the ONLY chance: `cancelled`
       // is latched on this effect closure, so every future runBootstrap — including the
       // reconnect re-bootstrap and rejoinActiveStreams, which both call through
@@ -605,6 +643,10 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
+      for (const pollController of pollControllers.values()) {
+        pollController.abort();
+      }
+      pollControllers.clear();
       clearPageStreams(channelId);
     };
   }, [socket, channelId]);
