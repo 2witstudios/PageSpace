@@ -302,44 +302,6 @@ Open your plan to see your balance, pick your models, and top up when you want. 
     category: "Product",
     featured: true,
   },
-  "managed-provider-keys": {
-    slug: "managed-provider-keys",
-    title: "PageSpace now manages AI provider keys for you",
-    description:
-      "Per-user API keys (\"BYOK\") are gone. Provider credentials and quotas are now handled at the platform level — your AI chats keep working without any setup. Here's what changes for existing users.",
-    content: `
-## What changed
-
-If you ever pasted an API key into **Settings > AI** to use Claude, GPT, Gemini, or any non-default provider, that flow is retired. The settings page no longer asks for a key, and every key you'd stored has been deleted from our database.
-
-In practice nothing breaks. Open an AI Chat, pick a model, send a message. The model picker shows the models PageSpace has enabled — you don't manage credentials for any of them.
-
-## What this means in practice
-
-- **Your AI conversations keep working.** No setup, no key to paste, no encryption details to think about.
-- **Your previously-stored keys are gone from our side.** We've deleted them. Your accounts at OpenAI, Anthropic, Google AI, and the other providers are untouched — those keys still exist with the upstream provider. Revoke them there if you want, but you don't have to.
-- **Provider availability is managed by PageSpace.** You get a catalogue of models from many vendors without configuring or maintaining credentials for any of them.
-
-## Which models you can reach
-
-The picker is one catalogue spanning OpenAI, Anthropic, Google, xAI, and more, grouped by vendor. AI usage is metered against a monthly credit allowance, and how much of the catalogue you can reach depends on your plan:
-
-- **Free** plans use a curated allowlist of fast, capable models — GPT-5.3 Chat (the default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family.
-- **Paid** plans unlock the full catalogue, including frontier flagships like Claude Opus, the full GPT-5 family, and Gemini Pro.
-
-Each call draws credits based on the underlying model's real cost, so frontier models spend faster than lightweight ones. If you run low, buy more credits anytime — unused credits roll over, so your balance accumulates month to month — or [upgrade to a higher plan](/pricing) for a larger monthly allowance.
-
-## Why we did this
-
-Two reasons. Key management was the biggest setup hurdle for new users — most never finished configuring providers, and the experience suffered. Holding encrypted keys for every user was also a meaningful security surface area we didn't need to own. PageSpace provisions provider credentials centrally; there's nothing per-user to leak.
-
-If a provider you used regularly has disappeared from your model picker, or a model isn't behaving the way you expect, reach out on the [AI Agent Hub](https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t) or email hello@pagespace.ai.
-    `,
-    author: "Jono",
-    date: "2026-05-01",
-    readTime: "3 min read",
-    category: "Product",
-  },
   "your-workspace-is-the-context": {
     slug: "your-workspace-is-the-context",
     title:
