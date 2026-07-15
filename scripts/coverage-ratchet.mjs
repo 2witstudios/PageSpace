@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { matchThresholdBlock, buildThresholdBlock, assertValidSyntax } from './lib/coverage-ratchet-sentinel.mjs';
+import { matchThresholdBlock, buildThresholdBlock, parseThresholds, assertValidSyntax } from './lib/coverage-ratchet-sentinel.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -48,20 +48,28 @@ for (const pkg of packages) {
     statements: Math.floor(t.statements.pct),
   };
 
-  const found = matchThresholdBlock(config);
+  let found;
+  try {
+    found = matchThresholdBlock(config);
+  } catch (err) {
+    console.error(`[fail] ${pkg.name}: ${err.message}`);
+    hadError = true;
+    continue;
+  }
 
   if (!found) {
     console.log(`[skip] ${pkg.name}: no thresholds block found in vitest config`);
     continue;
   }
 
-  const { match, regex: thresholdRegex, isSentinel } = found;
+  const { match, regex: thresholdRegex, isSentinel, indent } = found;
 
-  // Extract current thresholds
-  const currentLines = parseInt(match[0].match(/lines:\s*(\d+)/)?.[1] ?? '0');
-  const currentBranches = parseInt(match[0].match(/branches:\s*(\d+)/)?.[1] ?? '0');
-  const currentFunctions = parseInt(match[0].match(/functions:\s*(\d+)/)?.[1] ?? '0');
-  const currentStatements = parseInt(match[0].match(/statements:\s*(\d+)/)?.[1] ?? '0');
+  const {
+    lines: currentLines,
+    branches: currentBranches,
+    functions: currentFunctions,
+    statements: currentStatements,
+  } = parseThresholds(match[0]);
 
   // Only ratchet UP, never down
   const finalThresholds = {
@@ -82,16 +90,12 @@ for (const pkg of packages) {
     continue;
   }
 
-  const newBlock = buildThresholdBlock({
-    isSentinel,
-    indent: isSentinel ? match[1] : '',
-    thresholds: finalThresholds,
-  });
+  const newBlock = buildThresholdBlock({ isSentinel, indent, thresholds: finalThresholds });
 
   const newConfig = config.replace(thresholdRegex, newBlock);
 
   try {
-    assertValidSyntax(newConfig, pkg.name, root);
+    assertValidSyntax(newConfig, pkg.name);
   } catch (err) {
     console.error(`[fail] ${err.message}`);
     hadError = true;

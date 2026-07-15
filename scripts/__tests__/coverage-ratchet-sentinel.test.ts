@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   matchThresholdBlock,
   buildThresholdBlock,
+  parseThresholds,
   assertValidSyntax,
 } from '../lib/coverage-ratchet-sentinel.mjs';
 
@@ -76,6 +74,65 @@ describe('matchThresholdBlock', () => {
   it('returns null when no thresholds block exists at all', () => {
     expect(matchThresholdBlock('export default {}')).toBeNull();
   });
+
+  it('throws instead of guessing when two well-formed sentinel blocks exist', () => {
+    const twoSentinels = `thresholds: {
+        /* ratchet:start */
+        lines: 44,
+        branches: 85,
+        functions: 56,
+        statements: 44,
+        /* ratchet:end */
+      },
+      other: {
+        /* ratchet:start */
+        lines: 1,
+        branches: 2,
+        functions: 3,
+        statements: 4,
+        /* ratchet:end */
+      },`;
+
+    expect(() => matchThresholdBlock(twoSentinels)).toThrow(/2 ratchet:start\/ratchet:end sentinel blocks/);
+  });
+
+  it('throws instead of silently falling back to the corrupting plain match when the sentinel is malformed', () => {
+    // Trailing text on the ratchet:end line (e.g. from an autoformatter) means
+    // the marker no longer occupies its own line — this must NOT silently
+    // fall back to PLAIN_REGEX, which would truncate at the first `}` in the
+    // per-glob keys below and corrupt the config exactly like the original bug.
+    const malformed = `thresholds: {
+        /* ratchet:start */
+        lines: 44,
+        branches: 85,
+        functions: 56,
+        statements: 44,
+        /* ratchet:end */ // do not edit
+        'src/lib/foo/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+      },`;
+
+    expect(() => matchThresholdBlock(malformed)).toThrow(/not a well-formed sentinel block/);
+  });
+});
+
+describe('parseThresholds', () => {
+  it('extracts all four numeric thresholds from a block of text', () => {
+    expect(parseThresholds('lines: 44,\nbranches: 85,\nfunctions: 56,\nstatements: 44,')).toEqual({
+      lines: 44,
+      branches: 85,
+      functions: 56,
+      statements: 44,
+    });
+  });
+
+  it('defaults missing keys to 0', () => {
+    expect(parseThresholds('lines: 44,')).toEqual({
+      lines: 44,
+      branches: 0,
+      functions: 0,
+      statements: 0,
+    });
+  });
 });
 
 describe('buildThresholdBlock', () => {
@@ -83,11 +140,11 @@ describe('buildThresholdBlock', () => {
     const found = matchThresholdBlock(CONFIG_WITH_PROSE_MENTION)!;
     const block = buildThresholdBlock({
       isSentinel: true,
-      indent: found.match[1],
+      indent: found.indent,
       thresholds: { lines: 60, branches: 90, functions: 70, statements: 60 },
     });
 
-    expect(block.startsWith(`${found.match[1]}/* ratchet:start */`)).toBe(true);
+    expect(block.startsWith(`${found.indent}/* ratchet:start */`)).toBe(true);
     expect(block).toContain('lines: 60,');
     expect(block.endsWith('/* ratchet:end */')).toBe(true);
   });
@@ -96,7 +153,7 @@ describe('buildThresholdBlock', () => {
     const found = matchThresholdBlock(CONFIG_WITH_PROSE_MENTION)!;
     const block = buildThresholdBlock({
       isSentinel: true,
-      indent: found.match[1],
+      indent: found.indent,
       thresholds: { lines: 60, branches: 90, functions: 70, statements: 60 },
     });
     const rewritten = CONFIG_WITH_PROSE_MENTION.replace(found.regex, block);
@@ -110,24 +167,12 @@ describe('buildThresholdBlock', () => {
 });
 
 describe('assertValidSyntax', () => {
-  let dir: string;
-
   it('does not throw on valid source', () => {
-    dir = mkdtempSync(join(tmpdir(), 'ratchet-sentinel-test-'));
-    try {
-      expect(() => assertValidSyntax('export default { foo: 1 };\n', 'test-pkg', dir)).not.toThrow();
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(() => assertValidSyntax('export default { foo: 1 };\n', 'test-pkg')).not.toThrow();
   });
 
   it('throws on a corrupted rewrite (unterminated block comment)', () => {
-    dir = mkdtempSync(join(tmpdir(), 'ratchet-sentinel-test-'));
-    try {
-      const corrupted = 'export default {\n  /* ratchet:end */ markers below are load-bearing:\n';
-      expect(() => assertValidSyntax(corrupted, 'test-pkg', dir)).toThrow(/test-pkg/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const corrupted = 'export default {\n  /* ratchet:end */ markers below are load-bearing:\n';
+    expect(() => assertValidSyntax(corrupted, 'test-pkg')).toThrow(/test-pkg/);
   });
 });
