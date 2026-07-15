@@ -28,7 +28,7 @@ describe('startStreamJoinPollFallback', () => {
     controller.abort();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 2);
 
     expect(mockFetchWithAuth).not.toHaveBeenCalled();
@@ -39,7 +39,7 @@ describe('startStreamJoinPollFallback', () => {
     mockFetchWithAuth.mockResolvedValue(okResponse([{ messageId: 'msg-1', parts: [{ type: 'text', text: 'x' }] }]));
     const controller = new AbortController();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn());
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
     await vi.advanceTimersByTimeAsync(0);
 
     expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
@@ -55,21 +55,65 @@ describe('startStreamJoinPollFallback', () => {
     const controller = new AbortController();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(0);
 
     expect(onSnapshot).toHaveBeenCalledWith(parts);
   });
 
-  it('given a response with no matching messageId, should not call onSnapshot', async () => {
-    mockFetchWithAuth.mockResolvedValue(okResponse([{ messageId: 'some-other-msg', parts: [] }]));
-    const controller = new AbortController();
-    const onSnapshot = vi.fn();
+  // Codex review finding (P2): the row disappearing from active-streams means either the
+  // stream finished (dropped out of the status='streaming' filter) or this 404 was never a
+  // liveness gap to begin with (e.g. a private conversation this user can't subscribe to —
+  // active-streams applies the same subscription filter the join itself did). Either way,
+  // polling further can never recover — this must be treated as terminal, not silently ignored.
+  describe('row not found (terminal — not a transient miss)', () => {
+    it('given a response with no matching messageId, should call onNotFound instead of onSnapshot', async () => {
+      mockFetchWithAuth.mockResolvedValue(okResponse([{ messageId: 'some-other-msg', parts: [] }]));
+      const controller = new AbortController();
+      const onSnapshot = vi.fn();
+      const onNotFound = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
-    await vi.advanceTimersByTimeAsync(0);
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, onNotFound);
+      await vi.advanceTimersByTimeAsync(0);
 
-    expect(onSnapshot).not.toHaveBeenCalled();
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(onNotFound).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the row disappears, should stop polling (no leaked interval, no infinite empty ticks)', async () => {
+      mockFetchWithAuth.mockResolvedValue(okResponse([]));
+      const controller = new AbortController();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 5);
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given the row is present on the first tick then disappears on the second, should poll once, then stop and call onNotFound', async () => {
+      mockFetchWithAuth
+        .mockResolvedValueOnce(okResponse([{ messageId: 'msg-1', parts: [{ type: 'text', text: 'still going' }] }]))
+        .mockResolvedValueOnce(okResponse([]));
+      const controller = new AbortController();
+      const onSnapshot = vi.fn();
+      const onNotFound = vi.fn();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, onNotFound);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onSnapshot).toHaveBeenCalledTimes(1);
+      expect(onNotFound).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+      expect(onNotFound).toHaveBeenCalledTimes(1);
+
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 3);
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
   });
 
   // Wire-trust gate — same guard the live SSE path applies (isValidPartFrame).
@@ -85,7 +129,7 @@ describe('startStreamJoinPollFallback', () => {
     const controller = new AbortController();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(0);
 
     expect(onSnapshot).toHaveBeenCalledWith([{ type: 'text', text: 'ok' }]);
@@ -96,7 +140,7 @@ describe('startStreamJoinPollFallback', () => {
     const controller = new AbortController();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(0);
 
     expect(onSnapshot).toHaveBeenCalledWith([]);
@@ -107,7 +151,7 @@ describe('startStreamJoinPollFallback', () => {
     const controller = new AbortController();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(0);
     expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
 
@@ -122,7 +166,7 @@ describe('startStreamJoinPollFallback', () => {
     mockFetchWithAuth.mockResolvedValue(okResponse([{ messageId: 'msg-1', parts: [] }]));
     const controller = new AbortController();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn());
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
     await vi.advanceTimersByTimeAsync(0);
     expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
 
@@ -140,7 +184,7 @@ describe('startStreamJoinPollFallback', () => {
     const controller = new AbortController();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(0);
     expect(onSnapshot).not.toHaveBeenCalled();
 
@@ -156,7 +200,7 @@ describe('startStreamJoinPollFallback', () => {
     const controller = new AbortController();
     const onSnapshot = vi.fn();
 
-    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot);
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
     await vi.advanceTimersByTimeAsync(0);
     expect(onSnapshot).not.toHaveBeenCalled();
 
@@ -169,7 +213,7 @@ describe('startStreamJoinPollFallback', () => {
     mockFetchWithAuth.mockResolvedValue(okResponse([{ messageId: 'msg with space', parts: [] }]));
     const controller = new AbortController();
 
-    startStreamJoinPollFallback('page/weird id', 'msg with space', controller.signal, vi.fn());
+    startStreamJoinPollFallback('page/weird id', 'msg with space', controller.signal, vi.fn(), vi.fn());
     await vi.advanceTimersByTimeAsync(0);
 
     expect(mockFetchWithAuth).toHaveBeenCalledWith(

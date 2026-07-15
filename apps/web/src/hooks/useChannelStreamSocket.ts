@@ -321,10 +321,24 @@ export function useChannelStreamSocket(
             const pollController = new AbortController();
             pollControllers.set(messageId, pollController);
             let pollSeq = 0;
-            startStreamJoinPollFallback(channelId, messageId, pollController.signal, (parts) => {
-              pollSeq += 1;
-              setStreamParts(messageId, parts, pollSeq);
-            });
+            startStreamJoinPollFallback(
+              channelId,
+              messageId,
+              pollController.signal,
+              (parts) => {
+                pollSeq += 1;
+                setStreamParts(messageId, parts, pollSeq);
+              },
+              () => {
+                // The row is gone from active-streams — the stream finished, or this 404 was
+                // never a liveness gap to begin with (e.g. a private conversation). Either way
+                // polling further is useless: drop the (now permanently stale) synthesized
+                // entry rather than leaving it frozen forever. If chat:stream_complete still
+                // arrives afterward, its own reload-from-DB path is unaffected by this.
+                pollControllers.delete(messageId);
+                removeStream(messageId);
+              },
+            );
           } else if (skipReplayCount === 0) {
             // When the store was seeded from a persisted snapshot (skipReplayCount > 0), a
             // failed join usually means the originator's process died — its in-memory

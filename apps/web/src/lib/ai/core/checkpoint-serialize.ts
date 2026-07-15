@@ -73,17 +73,32 @@ export const CHECKPOINT_MAX_SERIALIZED_BYTES = 5 * 1024 * 1024;
  * is already in the seed) rather than over-skips — a harmless, self-correcting duplicate-text
  * glitch in the one direction this module's docs already call safe, instead of a silent permanent
  * gap in the other.
+ *
+ * `wasCapped` (total exceeded `maxBytes`) and `prefixDropped` (a merged element was actually
+ * trimmed off the front) are DISTINCT, and the caller must key `rawPartsCount`'s fallback on the
+ * latter, not the former. When the single surviving part alone already exceeds `maxBytes` (see
+ * the "kept at least that one part" doc above), `wasCapped` is `true` but nothing was droppable —
+ * `survivingFromRawIndex` in that case is just where that one part FIRST started, which discards
+ * every raw frame that went on to EXTEND it (e.g. a huge merged text run built from thousands of
+ * text-delta chunks). Using it as `rawPartsCount` there would tell a rejoining client to skip
+ * almost nothing and re-replay the entire already-seeded content on top of itself — a real
+ * duplication bug a Codex review caught, distinct from (and not fixed by) `prefixDropped` alone
+ * gating the ORIGINAL over-skip bug this function exists to close.
  */
 export const capPartsToByteBudget = (
   parts: readonly AnyPart[],
   originRawIndex: readonly number[],
   maxBytes: number = CHECKPOINT_MAX_SERIALIZED_BYTES,
-): { parts: AnyPart[]; wasCapped: boolean; survivingFromRawIndex: number } => {
-  if (parts.length === 0) return { parts: [], wasCapped: false, survivingFromRawIndex: 0 };
+): { parts: AnyPart[]; wasCapped: boolean; survivingFromRawIndex: number; prefixDropped: boolean } => {
+  if (parts.length === 0) {
+    return { parts: [], wasCapped: false, survivingFromRawIndex: 0, prefixDropped: false };
+  }
 
   const sizes = parts.map((part) => Buffer.byteLength(JSON.stringify(part), 'utf8'));
   const total = sizes.reduce((sum, size) => sum + size, 0);
-  if (total <= maxBytes) return { parts: [...parts], wasCapped: false, survivingFromRawIndex: 0 };
+  if (total <= maxBytes) {
+    return { parts: [...parts], wasCapped: false, survivingFromRawIndex: 0, prefixDropped: false };
+  }
 
   let kept = parts.length;
   let runningTotal = total;
@@ -96,5 +111,6 @@ export const capPartsToByteBudget = (
     parts: parts.slice(droppedCount),
     wasCapped: true,
     survivingFromRawIndex: originRawIndex[droppedCount] ?? 0,
+    prefixDropped: droppedCount > 0,
   };
 };

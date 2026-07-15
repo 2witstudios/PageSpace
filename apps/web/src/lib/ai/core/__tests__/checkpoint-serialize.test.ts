@@ -76,7 +76,12 @@ const identityOrigins = (parts: readonly unknown[]): number[] => parts.map((_, i
 
 describe('capPartsToByteBudget', () => {
   it('given an empty array, should return it unchanged and report not capped', () => {
-    expect(capPartsToByteBudget([], [], 1000)).toEqual({ parts: [], wasCapped: false, survivingFromRawIndex: 0 });
+    expect(capPartsToByteBudget([], [], 1000)).toEqual({
+      parts: [],
+      wasCapped: false,
+      survivingFromRawIndex: 0,
+      prefixDropped: false,
+    });
   });
 
   it('given parts under the byte budget, should return them unchanged and report not capped', () => {
@@ -85,6 +90,7 @@ describe('capPartsToByteBudget', () => {
       parts,
       wasCapped: false,
       survivingFromRawIndex: 0,
+      prefixDropped: false,
     });
   });
 
@@ -98,6 +104,7 @@ describe('capPartsToByteBudget', () => {
     const result = capPartsToByteBudget(parts, identityOrigins(parts), 90);
 
     expect(result.wasCapped).toBe(true);
+    expect(result.prefixDropped).toBe(true);
     expect(result.parts[result.parts.length - 1]).toEqual(newest);
     expect(result.parts).not.toContainEqual(oldest);
   });
@@ -113,6 +120,20 @@ describe('capPartsToByteBudget', () => {
 
     expect(result.wasCapped).toBe(true);
     expect(result.parts).toEqual([newest]);
+  });
+
+  // Codex review finding (P2): when the SINGLE surviving part alone already exceeds the budget
+  // (nothing was actually droppable — `kept` never falls below 1), `wasCapped` is still `true`
+  // (the total exceeded budget) but NO PREFIX was dropped. `prefixDropped` distinguishes this
+  // from the "we actually trimmed something" case below — the caller must NOT treat this as a
+  // capped-away-content scenario.
+  it('given the only part alone exceeds the budget (nothing droppable), should report prefixDropped=false even though wasCapped=true', () => {
+    const onlyPart = text('a'.repeat(500));
+    const result = capPartsToByteBudget([onlyPart], [7], 90);
+
+    expect(result.wasCapped).toBe(true);
+    expect(result.parts).toEqual([onlyPart]);
+    expect(result.prefixDropped).toBe(false);
   });
 
   it('given a custom maxBytes, should use it instead of the default cap', () => {
@@ -139,6 +160,7 @@ describe('capPartsToByteBudget', () => {
       const result = capPartsToByteBudget([oldest, newest], [3, 9], 60);
 
       expect(result.wasCapped).toBe(true);
+      expect(result.prefixDropped).toBe(true);
       expect(result.parts).toEqual([newest]);
       expect(result.survivingFromRawIndex).toBe(9);
     });
@@ -150,6 +172,7 @@ describe('capPartsToByteBudget', () => {
       const result = capPartsToByteBudget([a, b, c], [0, 5, 12], 45);
 
       expect(result.wasCapped).toBe(true);
+      expect(result.prefixDropped).toBe(true);
       expect(result.parts).toEqual([c]);
       expect(result.survivingFromRawIndex).toBe(12);
     });

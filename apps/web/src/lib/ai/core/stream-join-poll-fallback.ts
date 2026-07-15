@@ -23,17 +23,26 @@ interface ActiveStreamsPollResponse {
  * that cadence for a near-live view. A stopgap until the AI SDK 7 Phase 3 durable transport
  * removes the per-process registry dependency entirely.
  *
- * Best-effort: a single failed tick is swallowed and retried on the next one (the stream
- * itself is durable regardless — this only affects how fresh the mid-stream view looks).
- * Stops when `signal` aborts. Does not detect stream completion itself; the caller is expected
- * to abort `signal` once `chat:stream_complete` arrives and let the normal DB-reload path take
- * over for the final, authoritative content.
+ * Best-effort: a single failed (network/non-ok) tick is swallowed and retried on the next one
+ * (the stream itself is durable regardless — this only affects how fresh the mid-stream view
+ * looks). Stops when `signal` aborts. Does not detect stream completion itself via a done
+ * sentinel; the caller is expected to abort `signal` once `chat:stream_complete` arrives and let
+ * the normal DB-reload path take over for the final, authoritative content.
+ *
+ * The row disappearing from the response IS treated as terminal, though (Codex review finding):
+ * `active-streams` filters to `status='streaming'` AND to what this user may subscribe to (same
+ * filter `stream-join` itself applies) — so a missing row means either the stream finished, or
+ * this 404 was never a liveness gap to begin with (e.g. a private conversation, distinguishable
+ * from the intended cross-instance case only by outcome, not by the join's own 404 status). Both
+ * are un-recoverable by polling further: `onNotFound` fires once and the interval stops, instead
+ * of ticking forever against a row that will never reappear.
  */
 export function startStreamJoinPollFallback(
   channelId: string,
   messageId: string,
   signal: AbortSignal,
   onSnapshot: (parts: UIMessagePart[]) => void,
+  onNotFound: () => void,
 ): void {
   if (signal.aborted) return;
 
@@ -48,7 +57,11 @@ export function startStreamJoinPollFallback(
       const data = (await res.json()) as ActiveStreamsPollResponse;
       if (signal.aborted) return;
       const row = (data.streams ?? []).find((s) => s.messageId === messageId);
-      if (!row) return;
+      if (!row) {
+        clearInterval(intervalId);
+        onNotFound();
+        return;
+      }
       onSnapshot((row.parts ?? []).filter(isValidPartFrame));
     } catch (err) {
       if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) return;
@@ -57,6 +70,9 @@ export function startStreamJoinPollFallback(
   };
 
   void tick();
+  // `tick`'s closure references `intervalId` (in the `!row` branch) before this line runs — safe
+  // because that branch only executes asynchronously, after `intervalId` is fully initialized:
+  // `void tick()` above suspends at its first `await` and returns control here synchronously.
   const intervalId = setInterval(() => void tick(), STREAM_JOIN_POLL_INTERVAL_MS);
   signal.addEventListener('abort', () => clearInterval(intervalId), { once: true });
 }

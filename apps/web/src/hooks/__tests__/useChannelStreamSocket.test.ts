@@ -445,6 +445,30 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
+
+    // Codex review finding (P2): a poll tick that finds no matching row must not tick forever —
+    // this proves the hook wires the poll module's onNotFound callback to actually clean up the
+    // stale store entry, not just that the module itself stops (covered separately in
+    // stream-join-poll-fallback.test.ts).
+    it('given a poll tick finds the row gone, should removeStream and stop polling (not leak forever)', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ streams: [] }) });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
+
+      mockFetchWithAuth.mockClear();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
   });
 
   describe('chat:stream_start from local browser session', () => {

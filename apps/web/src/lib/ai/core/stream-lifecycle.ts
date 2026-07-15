@@ -276,7 +276,7 @@ export const createStreamLifecycle = async (
     // schema for why this must travel separately from parts.length.
     const rawPartsCount = parts.length;
     const { parts: converged, originRawIndex } = convergeRawPartsWithOrigins(parts);
-    const { parts: shaped, wasCapped, survivingFromRawIndex } = capPartsToByteBudget(converged, originRawIndex);
+    const { parts: shaped, wasCapped, survivingFromRawIndex, prefixDropped } = capPartsToByteBudget(converged, originRawIndex);
     if (wasCapped && !hasWarnedSizeCap) {
       hasWarnedSizeCap = true;
       loggers.ai.warn('stream-lifecycle: parts snapshot at or over the serialized size cap', {
@@ -291,7 +291,13 @@ export const createStreamLifecycle = async (
     // `shaped[0]` actually starts at instead means the client under-skips (a harmless,
     // self-correcting duplicate) rather than over-skips (a silent, permanent gap) — see
     // capPartsToByteBudget's doc.
-    const persistedRawPartsCount = wasCapped ? survivingFromRawIndex : rawPartsCount;
+    //
+    // Keyed on `prefixDropped`, NOT `wasCapped`: `wasCapped` is also true when the single
+    // surviving part alone exceeds the budget (nothing was actually droppable) — in that case
+    // `survivingFromRawIndex` only marks where that one part FIRST started, discarding every
+    // raw frame that went on to EXTEND it, and using it as rawPartsCount would tell the client
+    // to re-replay the entire already-seeded content on top of itself.
+    const persistedRawPartsCount = prefixDropped ? survivingFromRawIndex : rawPartsCount;
     const attempt = (async () => {
       try {
         await db
