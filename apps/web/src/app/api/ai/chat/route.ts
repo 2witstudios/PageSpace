@@ -1343,7 +1343,14 @@ export async function POST(request: Request) {
           // execute(), so onFinish still fires exactly once below.
           const runResult = await runAgentWithRetry({
             writer,
-            abortSignal,
+            // Combined with the credit gate's controller (not just the plain abort registry
+            // signal) so a mid-stream credit exhaustion is visible to classifyAttempt/isRunAborted
+            // the same way it's already visible to streamText below — otherwise the run either
+            // retries against an already-exhausted balance or terminalizes as 'complete' instead
+            // of 'interrupted'. See Server Stream Durability epic PR 2 review.
+            abortSignal: creditAbortController
+              ? AbortSignal.any([abortSignal, creditAbortController.signal])
+              : abortSignal,
             baseMessages: modelMessages,
             finishToolName: FINISH_TOOL_NAME,
             pauseToolNames: [ASK_USER_TOOL_NAME],
@@ -1544,7 +1551,14 @@ export async function POST(request: Request) {
           // settlement below — that would leak the gate's hold.
           // Uses buildAssistantPersistencePayload so this path and the execute-end
           // durable path share the same extraction logic and cannot diverge.
-          if (chatId && responseMessage) {
+          //
+          // !lifecycle?.preAborted: the AI SDK always calls onFinish with a non-null
+          // responseMessage (an empty {parts: []} shell when execute() wrote nothing), even for a
+          // pre-aborted stream where the placeholder INSERT above was deliberately skipped. Without
+          // this guard, saveMessageToDatabase's upsert would INSERT a brand-new phantom empty
+          // 'interrupted' row for a request that never reached the model — see Server Stream
+          // Durability epic PR 2 review.
+          if (chatId && responseMessage && !lifecycle?.preAborted) {
             try {
               const { content: messageContent, toolCalls, toolResults, uiMessage } =
                 buildAssistantPersistencePayload(messageId, responseMessage.parts);
@@ -1590,6 +1604,8 @@ export async function POST(request: Request) {
               loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
               // Don't fail the response - persistence errors shouldn't break the chat
             }
+          } else if (lifecycle?.preAborted) {
+            loggers.ai.debug('AI Chat API: pre-aborted stream, no placeholder row to terminalize');
           } else {
             loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
           }
@@ -1742,7 +1758,13 @@ export async function POST(request: Request) {
     // downgrade an already-'complete'/'interrupted' row written earlier in the SAME request (e.g.
     // execute-end succeeded, then something later threw before the response returned). Best-effort:
     // must not itself throw or block the error response.
-    if (!assistantMessagePersisted && serverAssistantMessageId && chatId && conversationId && !lifecycle?.preAborted) {
+    //
+    // Requires `lifecycle` itself (not just `!lifecycle?.preAborted`) so this never fires for a
+    // throw that happened INSIDE startGenerationExclusive's callback, before `lifecycle` is ever
+    // assigned (line ~1297) — e.g. takeOverConversationStreams or the placeholder INSERT itself
+    // failing. In that window no placeholder row exists at all, so this upsert would INSERT a
+    // stray phantom 'interrupted' row for a request that never started generating.
+    if (!assistantMessagePersisted && serverAssistantMessageId && chatId && conversationId && lifecycle && !lifecycle.preAborted) {
       try {
         await saveMessageToDatabase({
           messageId: serverAssistantMessageId,

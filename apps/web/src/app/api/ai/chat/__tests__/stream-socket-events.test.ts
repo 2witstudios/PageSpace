@@ -991,5 +991,47 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const aborted = mockLifecycleFinish.mock.calls.filter(([flag]) => flag === true);
       expect(aborted.length).toBeGreaterThan(0);
     });
+
+    // Server Stream Durability epic PR 2 — self-review: the AI SDK always calls onFinish with a
+    // non-null responseMessage (an empty shell), even when execute() returned immediately without
+    // writing anything. For a pre-aborted stream the placeholder INSERT is deliberately skipped —
+    // without this guard, onFinish's upsert would INSERT a phantom empty 'interrupted' row for a
+    // request that never reached the model.
+    it('given the stream was pre-aborted, onFinish should NOT persist a phantom row (no placeholder was ever inserted)', async () => {
+      // preAborted's own handling calls abortController.abort() — needs a real controller,
+      // unlike the file's bare-signal default (see "given the run was aborted" above).
+      vi.mocked(createStreamAbortController).mockReturnValueOnce({ streamId: 'stream_123', signal: abortedSignal(), controller: new AbortController() });
+      mockCreateStreamLifecycle.mockResolvedValueOnce({
+        pushPart: mockLifecyclePushPart,
+        finish: mockLifecycleFinish,
+        getBufferedParts: vi.fn().mockReturnValue([]),
+        preAborted: true,
+      });
+
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: { id: 'test-message-id', role: 'assistant', parts: [] } });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: { id: 'test-message-id', role: 'assistant', parts: [] } });
+
+      const assistantSave = mockSaveMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeUndefined();
+    });
+
+    // Server Stream Durability epic PR 2 — self-review: the outer-catch cleanup must not fire
+    // when `lifecycle` was never assigned (an exception inside startGenerationExclusive's
+    // callback, before the placeholder INSERT ever ran) — otherwise it fabricates a phantom
+    // 'interrupted' row for a request that never started generating.
+    it('given the pre-generation setup throws before lifecycle is created, should NOT persist a phantom row', async () => {
+      // Persistent (not -Once): startGenerationExclusive degrades-and-retries run() unlocked
+      // once on failure (see start-generation-exclusive.ts) — a single rejection would be
+      // silently swallowed by that retry. Rejecting every call forces the error to actually
+      // propagate to the route's outer catch with `lifecycle` never assigned.
+      mockTakeOverConversationStreams.mockRejectedValue(new Error('takeover boom'));
+
+      await POST(makeRequest());
+
+      expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
+      const assistantSave = mockSaveMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
+      expect(assistantSave).toBeUndefined();
+    });
   });
 });

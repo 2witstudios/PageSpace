@@ -34,6 +34,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ op: 'eq', field, value })),
   and: vi.fn((...conds) => ({ op: 'and', conds })),
+  ne: vi.fn((field, value) => ({ op: 'ne', field, value })),
   inArray: vi.fn((field, values) => ({ op: 'inArray', field, values })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
     op: 'sql', strings: Array.from(strings), values,

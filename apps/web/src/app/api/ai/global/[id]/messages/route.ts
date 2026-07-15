@@ -1364,7 +1364,13 @@ MENTION PROCESSING:
         // "refine with the richer SDK responseMessage" step — execute-end above already
         // terminalized the row unconditionally, so when responseMessage is absent there is
         // nothing richer to refine with and nothing left to do here.
-        if (responseMessage) {
+        //
+        // !lifecycle?.preAborted: the AI SDK always calls onFinish with a non-null
+        // responseMessage (an empty {parts: []} shell when execute() wrote nothing), even for a
+        // pre-aborted stream where the placeholder INSERT above was deliberately skipped. Without
+        // this guard, the upsert would INSERT a brand-new phantom empty 'interrupted' row for a
+        // request that never reached the model — see Server Stream Durability epic PR 2 review.
+        if (responseMessage && !lifecycle?.preAborted) {
           try {
             const messageContent = extractMessageContent(responseMessage);
 
@@ -1505,7 +1511,13 @@ MENTION PROCESSING:
     // rejected by edit/delete's 409 guard. Guarded by assistantMessagePersisted so this can
     // never downgrade an already-'complete'/'interrupted' row written earlier in the SAME
     // request. Best-effort: must not itself throw or block the error response.
-    if (!assistantMessagePersisted && cleanupContext && !lifecycle?.preAborted) {
+    //
+    // Requires `lifecycle` itself (not just `!lifecycle?.preAborted`) so this never fires for a
+    // throw that happened INSIDE startGenerationExclusive's callback, before `lifecycle` is ever
+    // assigned — e.g. takeOverConversationStreams or the placeholder INSERT itself failing. In
+    // that window no placeholder row exists at all, so this upsert would INSERT a stray phantom
+    // 'interrupted' row for a request that never started generating.
+    if (!assistantMessagePersisted && cleanupContext && lifecycle && !lifecycle.preAborted) {
       try {
         const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, bufferedPartsAtError);
         await saveGlobalAssistantMessageToDatabase({
