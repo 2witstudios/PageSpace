@@ -221,9 +221,21 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     const generation = conversationMessagesActions.startLoad(conversationId);
     // True while this call's generation is still the newest `startLoad` for this
-    // conversation — a newer load (rapid conversation switching, or a second call
-    // for the same id) bumps the generation and this starts reading false.
+    // conversation — a newer load of the SAME conversation (rapid re-fetch, a
+    // second call for the same id) bumps the generation and this starts reading
+    // false. Deliberately NOT scoped to "is this conversation currently on
+    // screen" — the store caches every conversation independently, so a load for
+    // a conversation the user has since navigated away from should still commit
+    // (switching back later shows fresh data without a re-fetch).
     const isCurrent = () => conversationMessagesActions.isLoadCurrent(conversationId, generation);
+    // True only while BOTH the above holds AND this load's conversation is still
+    // the one on screen. Gates every write that is NOT conversation-keyed
+    // (useChat's single local `messages` array, the loading/error UI state) —
+    // those must never be clobbered by a load for a conversation the user has
+    // since switched away from (PR review, chatgpt-codex-connector: a slow load
+    // for conversation A resolving after a switch to B was overwriting B's
+    // useChat bookkeeping and clearing B's own in-flight loading indicator).
+    const isActiveLoad = () => isCurrent() && conversationId === currentConversationIdRef.current;
 
     setIsLoadingMessages(true);
     setMessagesLoadError(null);
@@ -238,7 +250,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         const res = await fetchWithAuth(
           `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages`,
         );
-        // Stale check after await — a newer load may have superseded this one.
+        // Stale check after await — a newer load of this conversation may have superseded this one.
         if (!isCurrent()) return;
         // The conversation isn't there. Either the send that was supposed to create it
         // never reached the server (the credit gate runs BEFORE the row is persisted,
@@ -261,15 +273,21 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       if (!isCurrent()) return;
 
       conversationMessagesActions.applyLoad(conversationId, generation, serverMessages);
-      setMessages(serverMessages);
-      setMessagesLoadError(null);
+      if (isActiveLoad()) {
+        setMessages(serverMessages);
+        setMessagesLoadError(null);
+      }
     } catch (err) {
       if (!isCurrent()) return;
       conversationMessagesActions.failLoad(conversationId, generation);
       // Keep the messages the user was already looking at — never silently blank on failure.
-      setMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
+      // Scoped to the active load: an error loading a conversation the user has
+      // since switched away from must not surface an error banner for the one now on screen.
+      if (isActiveLoad()) {
+        setMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
+      }
     } finally {
-      if (isCurrent()) {
+      if (isActiveLoad()) {
         setIsLoadingMessages(false);
       }
     }
