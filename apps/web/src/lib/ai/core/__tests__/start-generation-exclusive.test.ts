@@ -296,6 +296,35 @@ describe('startGenerationExclusive', () => {
       expect(client.release).toHaveBeenCalledTimes(1);
     });
 
+    it('given run() SUCCEEDS but withAdvisoryLock\'s post-run lock release then throws, should propagate that error and NOT invoke run a second time unlocked', async () => {
+      // Codex review finding on PR #2080: withAdvisoryLock's `finally` releases the Postgres
+      // session AFTER fn() resolves (packages/db/src/advisory-lock.ts:76-103). If the unlock
+      // query rejects AND the destroy-on-release fallback (`client.release(err)`) also throws,
+      // that exception is uncaught and escapes the finally block, overriding the successful
+      // return value — so `withAdvisoryLock`'s overall promise rejects despite `run` having
+      // already completed successfully. A `runThrew`-only flag (set only inside guardedRun's
+      // catch) would stay false here and this would be misclassified as `lock_error`,
+      // triggering degradeToUnlocked and a second, unlocked invocation of an already-succeeded
+      // `run`. `runSettled` (set on BOTH the success and failure paths) closes this.
+      const releaseError = new Error('release also failed');
+      const client: AdvisoryLockClient = {
+        query: vi
+          .fn()
+          .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // try-lock: acquired
+          .mockRejectedValueOnce(new Error('unlock query failed')), // unlock: fails
+        release: vi.fn((err?: Error) => {
+          if (err) throw releaseError; // the destroy-on-release fallback also throws
+        }),
+      };
+      const pool = makePool(client);
+      const run = vi.fn(async () => 'lifecycle-handle');
+      const sleep = vi.fn(async () => {});
+
+      await expect(startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep })).rejects.toThrow(releaseError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
     it('given a prior call on the SAME conversation had run() throw, a later call that hits a genuine lock-machinery failure should still degrade normally', async () => {
       // `runThrew` is local to each startGenerationExclusive invocation (a fresh closure per
       // call), so nothing from a prior call's rejection can leak into the next one — this
