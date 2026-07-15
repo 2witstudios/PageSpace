@@ -43,8 +43,20 @@ export function chatProxy(opts: ChatProxyOptions): Plugin {
           return;
         }
 
+        // Cap the buffered body: a chat request is small, and an unbounded POST
+        // would let a caller exhaust memory (this proxy has no rate limiting).
+        const MAX_BODY_BYTES = 1_000_000;
         const chunks: Buffer[] = [];
-        for await (const chunk of req) chunks.push(chunk as Buffer);
+        let size = 0;
+        for await (const chunk of req) {
+          size += (chunk as Buffer).length;
+          if (size > MAX_BODY_BYTES) {
+            res.statusCode = 413;
+            res.end("Payload too large");
+            return;
+          }
+          chunks.push(chunk as Buffer);
+        }
         let messages: unknown = [];
         try {
           messages = JSON.parse(Buffer.concat(chunks).toString() || "{}").messages ?? [];
@@ -54,28 +66,42 @@ export function chatProxy(opts: ChatProxyOptions): Plugin {
           return;
         }
 
-        const upstream = await fetch(`${apiUrl}/api/v1/chat/completions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          // The agent is PINNED here — the client cannot choose it.
-          body: JSON.stringify({ model: `ps-agent://${publicAgentId}`, stream: true, messages }),
-        });
+        // connect-style middleware does not await/catch an async handler's
+        // rejection, so an upstream network/stream failure would otherwise leave
+        // the client's request hanging with no response. Own the error path.
+        try {
+          const upstream = await fetch(`${apiUrl}/api/v1/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            // The agent is PINNED here — the client cannot choose it.
+            body: JSON.stringify({ model: `ps-agent://${publicAgentId}`, stream: true, messages }),
+          });
 
-        res.statusCode = upstream.status;
-        res.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
+          res.statusCode = upstream.status;
+          res.setHeader("Content-Type", upstream.headers.get("content-type") ?? "text/event-stream");
+          res.setHeader("Cache-Control", "no-cache");
 
-        if (!upstream.body) {
+          if (!upstream.body) {
+            res.end();
+            return;
+          }
+          const reader = upstream.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(Buffer.from(value));
+          }
           res.end();
-          return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (res.headersSent) {
+            // Stream already started; we can't change the status, just stop.
+            res.end();
+          } else {
+            res.statusCode = 502;
+            res.end(`Upstream chat request failed: ${message}`);
+          }
         }
-        const reader = upstream.body.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(Buffer.from(value));
-        }
-        res.end();
       });
     },
   };

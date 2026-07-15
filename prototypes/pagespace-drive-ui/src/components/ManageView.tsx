@@ -28,6 +28,10 @@ export function ManageView({ client, driveId }: ManageViewProps) {
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
   const editable = useRef(false);
+  // Which page `draft`/`totalLines` currently belong to. Selecting a new page
+  // leaves the old draft in state until the async read lands; this guards Save
+  // from writing the previous page's content to the newly-selected one.
+  const loadedForId = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +56,7 @@ export function ManageView({ client, driveId }: ManageViewProps) {
   useEffect(() => {
     if (!selectedId) return;
     let cancelled = false;
+    loadedForId.current = null; // draft no longer matches the selected page
     setLoading(true);
     setError(null);
     (async () => {
@@ -65,6 +70,7 @@ export function ManageView({ client, driveId }: ManageViewProps) {
         const text = r.content ?? "";
         setDraft(text);
         setTotalLines(r.totalLines ?? r.numberedLines?.length ?? Math.max(1, text.split("\n").length));
+        loadedForId.current = selectedId; // draft now matches the selected page
       } catch (e) {
         if (!cancelled) setError(describeError(e));
       } finally {
@@ -78,6 +84,8 @@ export function ManageView({ client, driveId }: ManageViewProps) {
 
   const save = async () => {
     if (!selectedId) return;
+    // The draft in state must belong to the page we're about to overwrite.
+    if (loadedForId.current !== selectedId) return;
     setSaving(true);
     setSaved(false);
     setError(null);
@@ -168,7 +176,7 @@ export function ManageView({ client, driveId }: ManageViewProps) {
                 <span className="text-xs font-normal text-muted-foreground">{selected.type}</span>
               </div>
               {editable.current && (
-                <Button size="sm" onClick={save} disabled={saving} className="gap-1.5">
+                <Button size="sm" onClick={save} disabled={saving || loading} className="gap-1.5">
                   {saving ? <Loader2 className="animate-spin" /> : saved ? <Check /> : <Save />}
                   {saved ? "Saved" : "Save"}
                 </Button>

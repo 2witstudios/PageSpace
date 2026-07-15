@@ -43,6 +43,18 @@ export function AskView({ chat, botName, suggestions = DEFAULT_SUGGESTIONS }: As
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Streaming can outlive the mount (switching tabs unmounts this view). Track
+  // liveness and hold the in-flight request so we can stop writing state and
+  // abort the fetch on unmount instead of leaking a background read loop.
+  const aliveRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      aliveRef.current = false;
+      abortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -72,8 +84,16 @@ export function AskView({ chat, botName, suggestions = DEFAULT_SUGGESTIONS }: As
             body: JSON.stringify({ model: `ps-agent://${chat.agentId}`, stream: true, messages }),
           };
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
-      const res = await fetch(request.url, { method: "POST", headers: request.headers, body: request.body });
+      const res = await fetch(request.url, {
+        method: "POST",
+        headers: request.headers,
+        body: request.body,
+        signal: controller.signal,
+      });
 
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => "");
@@ -86,7 +106,7 @@ export function AskView({ chat, botName, suggestions = DEFAULT_SUGGESTIONS }: As
 
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || !aliveRef.current) break;
         buffer += decoder.decode(value, { stream: true });
         const events = buffer.split("\n\n");
         buffer = events.pop() ?? "";
@@ -114,10 +134,13 @@ export function AskView({ chat, botName, suggestions = DEFAULT_SUGGESTIONS }: As
         }
       }
     } catch (e) {
+      // An abort (unmount) or a write after unmount is not a user-facing error.
+      if (!aliveRef.current || (e instanceof DOMException && e.name === "AbortError")) return;
       setError(e instanceof Error ? e.message : String(e));
       setTurns((prev) => prev.slice(0, -1)); // drop the empty assistant turn
     } finally {
-      setStreaming(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      if (aliveRef.current) setStreaming(false);
     }
   };
 
