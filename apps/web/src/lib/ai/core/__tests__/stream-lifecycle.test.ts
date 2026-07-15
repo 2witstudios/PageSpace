@@ -531,11 +531,41 @@ describe('createStreamLifecycle', () => {
       for (const call of mockUpdateSet.mock.calls) {
         const written = call[0] as { parts: unknown[]; rawPartsCount: number };
         expect(written.parts).not.toContainEqual(huge);
-        // The cap trims what's STORED, never what's reported as the raw count — a rejoining
-        // client's skip math must stay correct even when old content was dropped from parts.
-        expect(written.rawPartsCount).toBe(3);
+        // D-task yfz5p85c584z3ekvdfc3qx4e: once capping drops `huge` (raw index 0), the seed
+        // no longer reflects the frame(s) that fed it — reporting the raw total (3) here would
+        // tell a rejoining client to skip past those frames too, permanently losing that
+        // content (the live multicast replay is the only place it still exists). Reporting the
+        // raw index the surviving content (`toolPart`, raw index 1) actually starts at instead
+        // means the client only under-skips (harmless, self-correcting) rather than over-skips.
+        expect(written.rawPartsCount).toBe(1);
       }
       expect(mockLoggerWarn).toHaveBeenCalledTimes(1);
+    });
+
+    // Codex review finding (P2): when the raw buffer is many small chunks that ALL merge into
+    // ONE giant text part exceeding the cap alone, capPartsToByteBudget keeps it (nothing is
+    // droppable) but still reports wasCapped=true. rawPartsCount must fall back to the true raw
+    // total here, NOT the merged part's origin index — the seed already reflects every one of
+    // those raw chunks (they all fed the single surviving part), so skipping only 1 of e.g. 5
+    // would re-replay the whole already-seeded text on top of itself.
+    it('given many small raw chunks merge into one part that alone exceeds the cap, should persist the TRUE raw total, not the merged part\'s origin index', async () => {
+      const chunk = { type: 'text' as const, text: 'x'.repeat(6 * 1024 * 1024) };
+      // 5 raw chunks, all merging into ONE giant text part (same running text stream).
+      mockRegistryGetBufferedParts.mockReturnValue([chunk, chunk, chunk, chunk, chunk]);
+      const lifecycle = await createStreamLifecycle(params());
+      mockUpdateSet.mockClear();
+
+      // `chunk` is a plain text part (not a tool-boundary part), so the checkpoint only flushes
+      // once the dirty-flush throttle interval elapses — unlike the tool-boundary pushes above,
+      // which bypass it and flush immediately.
+      lifecycle.pushPart(chunk);
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS);
+
+      expect(mockUpdateSet).toHaveBeenCalledTimes(1);
+      const written = mockUpdateSet.mock.calls[0][0] as { parts: unknown[]; rawPartsCount: number };
+      // The true raw count (5), not 0 (the merged part's origin index, raw frame 0) — nothing
+      // was dropped, so the full raw total is still correct to skip.
+      expect(written.rawPartsCount).toBe(5);
     });
   });
 

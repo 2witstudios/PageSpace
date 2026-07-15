@@ -25,6 +25,7 @@ const {
   mockUseAuth,
   mockAddStream,
   mockAppendPart,
+  mockSetStreamParts,
   mockRemoveStream,
   mockClearPageStreams,
   mockConsumeStreamJoin,
@@ -59,6 +60,7 @@ const {
     mockUseAuth: vi.fn(),
     mockAddStream: vi.fn(),
     mockAppendPart: vi.fn(),
+    mockSetStreamParts: vi.fn(),
     mockRemoveStream: vi.fn(),
     mockClearPageStreams: vi.fn(),
     mockConsumeStreamJoin: vi.fn().mockResolvedValue(undefined),
@@ -86,13 +88,15 @@ vi.mock('@/stores/usePendingStreamsStore', () => ({
       streams: mockStreams,
       addStream: mockAddStream,
       appendPart: mockAppendPart,
+      setStreamParts: mockSetStreamParts,
       removeStream: mockRemoveStream,
       clearPageStreams: mockClearPageStreams,
     }),
   },
 }));
 
-vi.mock('@/lib/ai/core/stream-join-client', () => ({
+vi.mock('@/lib/ai/core/stream-join-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/stream-join-client')>()),
   consumeStreamJoin: mockConsumeStreamJoin,
 }));
 
@@ -279,7 +283,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
 
     const CONV_ID_2 = 'conv-2';
     mockFetchWithAuth.mockImplementation((url: string) => {
-      if (url === `/api/ai/global/${CONV_ID_2}/messages?limit=50`) return okResponse([]);
+      if (url === `/api/ai/global/${CONV_ID_2}/messages?limit=50&includeStreaming=1`) return okResponse([]);
       return defaultFetch(url);
     });
 
@@ -339,10 +343,10 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     let resolveStaleMessages!: (value: unknown) => void;
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
-      if (url === `/api/ai/global/${CONV_ID}/messages?limit=50`) {
+      if (url === `/api/ai/global/${CONV_ID}/messages?limit=50&includeStreaming=1`) {
         return new Promise((resolve) => { resolveStaleMessages = resolve; });
       }
-      if (url === '/api/ai/global/conv-2/messages?limit=50') {
+      if (url === '/api/ai/global/conv-2/messages?limit=50&includeStreaming=1') {
         return okResponse({ messages: [{ id: 'fresh-msg' }] });
       }
       return okResponse({});
@@ -398,7 +402,7 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     let resolveMessages!: (value: unknown) => void;
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
-      if (url === `/api/ai/global/conv-2/messages?limit=50`) {
+      if (url === `/api/ai/global/conv-2/messages?limit=50&includeStreaming=1`) {
         return new Promise((resolve) => { resolveMessages = resolve; });
       }
       return okResponse({ messages: [] });
@@ -426,10 +430,10 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
   it('given loadConversation\'s messages fetch returns a non-ok response, should clear initialMessages instead of leaving the previous conversation\'s messages visible', async () => {
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
-      if (url === `/api/ai/global/${CONV_ID}/messages?limit=50`) {
+      if (url === `/api/ai/global/${CONV_ID}/messages?limit=50&includeStreaming=1`) {
         return okResponse([{ id: 'stale-msg', role: 'user', parts: [] }]);
       }
-      if (url === '/api/ai/global/conv-2/messages?limit=50') {
+      if (url === '/api/ai/global/conv-2/messages?limit=50&includeStreaming=1') {
         return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) });
       }
       return okResponse({ messages: [] });
@@ -446,6 +450,22 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     });
 
     expect(result.current.initialMessages).toEqual([]);
+  });
+
+  // Leaf 5.2 (history-tab rejoin): a conversation opened from a streaming-badged history
+  // entry has an in-flight 'streaming' placeholder row that a default fetch excludes — this
+  // opts in so mergeServerAndPending can recognize and replace it with the live stream.
+  it("should always request includeStreaming=1 on the conversation's messages fetch", async () => {
+    mockFetchWithAuth.mockImplementation(defaultFetch);
+
+    const { result } = renderProvider();
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+
+    await act(async () => {
+      await result.current.loadConversation('conv-2');
+    });
+
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/ai/global/conv-2/messages?limit=50&includeStreaming=1');
   });
 });
 

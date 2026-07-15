@@ -61,16 +61,33 @@ describe('withAdvisoryLock', () => {
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 
-  it('given the try-lock query itself throws, should destroy the connection and rethrow (never resolve acquired/busy)', async () => {
+  // Leaf 5.6/5.7 (triaged D fix, fmfmzw4g4gh6u6q9cjt7ylne): the lock connection's own failure
+  // must be a STRUCTURALLY distinct, resolved outcome — never a thrown/rejected promise — so a
+  // caller can tell "the lock machinery is broken" apart from "fn threw" without guessing. Before
+  // this fix both surfaced as the same unwrapped, untagged rejected promise.
+  it('given the try-lock query itself throws, should destroy the connection and resolve connection_error (never resolve acquired/busy, never reject)', async () => {
     const client = makeClient({ query: vi.fn().mockRejectedValueOnce(new Error('connection reset')) });
     const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
     const fn = vi.fn(async () => 'unreachable');
 
-    await expect(withAdvisoryLock(pool, 'my-lock', fn)).rejects.toThrow('connection reset');
+    const result = await withAdvisoryLock(pool, 'my-lock', fn);
 
+    expect(result.outcome).toBe('connection_error');
+    expect(result).toMatchObject({ outcome: 'connection_error', error: expect.any(Error) });
     expect(fn).not.toHaveBeenCalled();
     expect(client.release).toHaveBeenCalledTimes(1);
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+  });
+
+  it('given pool.connect() itself throws, should resolve connection_error (never reject, never touch a client)', async () => {
+    const connectError = new Error('pool exhausted');
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => { throw connectError; }) };
+    const fn = vi.fn(async () => 'unreachable');
+
+    const result = await withAdvisoryLock(pool, 'my-lock', fn);
+
+    expect(result).toEqual({ outcome: 'connection_error', error: connectError });
+    expect(fn).not.toHaveBeenCalled();
   });
 
   it('given fn itself throws after acquiring, should still unlock cleanly (fn error does not poison the lock connection) and rethrow', async () => {
