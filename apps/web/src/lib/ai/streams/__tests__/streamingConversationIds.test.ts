@@ -3,6 +3,7 @@ import {
   parseStreamingConversationIds,
   addStreamingConversation,
   removeStreamingConversation,
+  applyPendingDeltas,
 } from '../streamingConversationIds';
 
 describe('parseStreamingConversationIds', () => {
@@ -74,5 +75,52 @@ describe('removeStreamingConversation', () => {
     const original = new Set(['conv-1']);
     removeStreamingConversation(original, 'conv-1');
     expect(original).toEqual(new Set(['conv-1']));
+  });
+});
+
+// Simplification-finder review finding: the fetch effect used to REPLACE state wholesale,
+// silently dropping any chat:stream_start/complete that landed while the fetch was in flight.
+describe('applyPendingDeltas', () => {
+  it('given no deltas, should return the SAME fetched set reference (no-op)', () => {
+    const fetched = new Set(['conv-1']);
+    const result = applyPendingDeltas(fetched, new Map());
+    expect(result).toBe(fetched);
+  });
+
+  it('given an add delta for an id not in the fetched snapshot, should add it', () => {
+    // A stream that started AFTER the fetch was dispatched but BEFORE it resolved — the
+    // snapshot predates it, so the fetch alone would have dropped it.
+    const fetched = new Set(['conv-1']);
+    const result = applyPendingDeltas(fetched, new Map([['conv-2', 'add']]));
+    expect(result).toEqual(new Set(['conv-1', 'conv-2']));
+  });
+
+  it('given a remove delta for an id present in the fetched snapshot, should remove it', () => {
+    // A stream that completed AFTER the fetch was dispatched but BEFORE it resolved — the
+    // snapshot (taken while it was still streaming) predates the completion.
+    const fetched = new Set(['conv-1', 'conv-2']);
+    const result = applyPendingDeltas(fetched, new Map([['conv-2', 'remove']]));
+    expect(result).toEqual(new Set(['conv-1']));
+  });
+
+  it('given a remove delta for an id NOT in the fetched snapshot, should be a no-op for that id', () => {
+    const fetched = new Set(['conv-1']);
+    const result = applyPendingDeltas(fetched, new Map([['conv-99', 'remove']]));
+    expect(result).toEqual(new Set(['conv-1']));
+  });
+
+  it('given multiple deltas, should apply all of them', () => {
+    const fetched = new Set(['conv-1', 'conv-2']);
+    const result = applyPendingDeltas(fetched, new Map([
+      ['conv-2', 'remove'],
+      ['conv-3', 'add'],
+    ]));
+    expect(result).toEqual(new Set(['conv-1', 'conv-3']));
+  });
+
+  it('should not mutate the fetched input set', () => {
+    const fetched = new Set(['conv-1']);
+    applyPendingDeltas(fetched, new Map([['conv-2', 'add']]));
+    expect(fetched).toEqual(new Set(['conv-1']));
   });
 });

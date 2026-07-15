@@ -21,6 +21,7 @@ import {
   parseStreamingConversationIds,
   addStreamingConversation,
   removeStreamingConversation,
+  applyPendingDeltas,
 } from '@/lib/ai/streams/streamingConversationIds';
 import type { AgentInfo } from '@/types/agent';
 import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
@@ -99,15 +100,25 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   // already listens to; no new socket wiring on the server side.
   const [streamingConversationIds, setStreamingConversationIds] = useState<Set<string>>(new Set());
   const socket = useSocket();
+  // Race guard (found in review): the fetch below is a snapshot taken when it was DISPATCHED,
+  // but resolves an arbitrary time later. A chat:stream_start/complete landing in that window is
+  // NEWER information than the snapshot — applying the snapshot as a blind replace would silently
+  // drop it (a stream that just started shows no badge until the next unrelated socket event or
+  // navigation re-triggers the fetch). Recorded here per fetch cycle and replayed on top of the
+  // snapshot once it resolves, then reset at the start of the next cycle — same shape as
+  // useChannelStreamSocket.ts's bootstrapGeneration guarding its own fetch-vs-live-event race.
+  const pendingDeltasRef = useRef<Map<string, 'add' | 'remove'>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
+    pendingDeltasRef.current = new Map();
     fetchWithAuth('/api/ai/chat/active-streams?scope=user')
       .then(async (response) => {
         if (cancelled || !response.ok) return;
         const data = await response.json();
         if (cancelled) return;
-        setStreamingConversationIds(parseStreamingConversationIds(data));
+        const fetched = parseStreamingConversationIds(data);
+        setStreamingConversationIds(applyPendingDeltas(fetched, pendingDeltasRef.current));
       })
       .catch((error) => {
         if (!cancelled) console.error('Failed to load streaming conversations:', error);
@@ -119,6 +130,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
     if (!socket) return;
 
     const handleStreamStart = (payload: AiStreamStartPayload) => {
+      pendingDeltasRef.current.set(payload.conversationId, 'add');
       setStreamingConversationIds((prev) => addStreamingConversation(prev, payload.conversationId));
     };
     const handleStreamComplete = (payload: AiStreamCompletePayload) => {
@@ -126,6 +138,7 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
       // socket-utils.ts) — a build old enough to omit it has nothing here to clear anyway.
       if (!payload.conversationId) return;
       const { conversationId } = payload;
+      pendingDeltasRef.current.set(conversationId, 'remove');
       setStreamingConversationIds((prev) => removeStreamingConversation(prev, conversationId));
     };
 

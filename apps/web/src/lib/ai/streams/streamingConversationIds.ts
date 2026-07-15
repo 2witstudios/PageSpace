@@ -28,3 +28,24 @@ export const removeStreamingConversation = (
   next.delete(conversationId);
   return next;
 };
+
+/**
+ * Review finding (race condition): the discovery fetch is a snapshot taken when DISPATCHED, but
+ * resolves an arbitrary time later. A chat:stream_start/complete landing in that window is NEWER
+ * information than the snapshot — applying the snapshot as a blind replace would silently drop
+ * it. `deltas` records every add/remove that happened while the fetch was in flight (see the
+ * caller's `pendingDeltasRef`); replaying them on top of the fetched snapshot means the newer
+ * information always wins, regardless of which one this particular fetch's response reflects.
+ */
+export const applyPendingDeltas = (
+  fetched: ReadonlySet<string>,
+  deltas: ReadonlyMap<string, 'add' | 'remove'>,
+): Set<string> => {
+  if (deltas.size === 0) return fetched as Set<string>;
+  const next = new Set(fetched);
+  for (const [conversationId, action] of deltas) {
+    if (action === 'add') next.add(conversationId);
+    else next.delete(conversationId);
+  }
+  return next;
+};

@@ -469,6 +469,60 @@ describe('useChannelStreamSocket', () => {
 
       expect(mockFetchWithAuth).not.toHaveBeenCalled();
     });
+
+    // Removed-behavior audit finding: onNotFound must fire the SAME reload-from-DB signal
+    // chat:stream_complete does — broadcastAiStreamComplete is itself best-effort, so if that
+    // socket event never lands, this poll noticing the row disappeared is the only remaining
+    // signal. Without it, a consumer never learns to reload the persisted message.
+    it('given a poll tick finds the row gone, should call onStreamComplete with joinFailed:true (not just removeStream silently)', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ streams: [] }) });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+    });
+
+    // Line-by-line scan finding: a re-entrant chat:stream_start for the same messageId (e.g. a
+    // socket-reconnect replay) aborts the old poll fallback and starts a new one. A fresh local
+    // `pollSeq` counter would restart at 0, and setStreamParts's per-messageId monotonic seq gate
+    // in the store would silently drop the new fallback's early writes against the old one's
+    // already-higher watermark — freezing the UI on stale content for several ticks.
+    it('given a re-entrant poll fallback restart for the same messageId, should continue the seq counter rather than resetting it', async () => {
+      vi.useFakeTimers();
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => ({ streams: [{ messageId: 'msg-1', parts: [{ type: 'text', text: 'first' }] }] }),
+      });
+
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      // First poll fallback ticks twice: seq 1, then seq 2.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      const seqsBeforeRestart = mockSetStreamParts.mock.calls.map((call) => call[2]);
+      expect(seqsBeforeRestart).toEqual([1, 2]);
+
+      // A re-entrant chat:stream_start for the SAME messageId aborts the old poll fallback and
+      // starts a new one (controllers.has(msg-1) is false since the join already failed).
+      mockConsumeStreamJoin.mockRejectedValueOnce(new StreamJoinError('Stream join failed with status 404', 404));
+      mockSetStreamParts.mockClear();
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      // The new poll fallback's first tick must continue from seq 3, not restart at 1 — a reset
+      // would be silently dropped by the store's `seq <= lastSeq` gate (lastSeq is already 2).
+      const seqsAfterRestart = mockSetStreamParts.mock.calls.map((call) => call[2]);
+      expect(seqsAfterRestart[0]).toBe(3);
+    });
   });
 
   describe('chat:stream_start from local browser session', () => {

@@ -204,6 +204,23 @@ export function useChannelStreamSocket(
     // live at different times for the same messageId — the SSE join has already failed and
     // its controller discarded by the time a poll fallback controller exists.
     const pollControllers = new Map<string, AbortController>();
+    // Review finding: a per-call `let pollSeq = 0` would reset to 0 every time a poll fallback
+    // (re)starts for the same messageId (e.g. a re-entrant chat:stream_start aborts the old one
+    // and starts a new one). setStreamParts's seq-gate is monotonic PER messageId in the store,
+    // not per poll-fallback instance — a restarted counter's early writes (seq 1, 2, 3...) would
+    // be silently dropped against the old instance's already-higher watermark, freezing the UI on
+    // stale content for several ticks until the new counter catches back up. Keyed by messageId,
+    // outside any single poll-fallback closure, so a restart continues the same monotonic count.
+    const pollSeqByMessageId = new Map<string, number>();
+    // Simplification-finder review finding: this exact loop was duplicated at both bulk-teardown
+    // sites (handleAccessRevoked, unmount cleanup). One shared helper instead of two copies that
+    // could drift.
+    const abortAllPolls = () => {
+      for (const pollController of pollControllers.values()) {
+        pollController.abort();
+      }
+      pollControllers.clear();
+    };
     // Tracks which messageIds have had onStreamComplete called to prevent
     // double-firing when both the SSE done sentinel and chat:stream_complete
     // arrive, and to gate post-error stream_complete events.
@@ -320,23 +337,39 @@ export function useChannelStreamSocket(
             pollControllers.get(messageId)?.abort();
             const pollController = new AbortController();
             pollControllers.set(messageId, pollController);
-            let pollSeq = 0;
             startStreamJoinPollFallback(
               channelId,
               messageId,
               pollController.signal,
               (parts) => {
-                pollSeq += 1;
-                setStreamParts(messageId, parts, pollSeq);
+                const nextSeq = (pollSeqByMessageId.get(messageId) ?? 0) + 1;
+                pollSeqByMessageId.set(messageId, nextSeq);
+                setStreamParts(messageId, parts, nextSeq);
               },
               () => {
                 // The row is gone from active-streams — the stream finished, or this 404 was
                 // never a liveness gap to begin with (e.g. a private conversation). Either way
-                // polling further is useless: drop the (now permanently stale) synthesized
-                // entry rather than leaving it frozen forever. If chat:stream_complete still
-                // arrives afterward, its own reload-from-DB path is unaffected by this.
+                // polling further is useless.
+                //
+                // Review finding: this must fire the SAME reload-from-DB signal
+                // chat:stream_complete does, not just drop the store entry. broadcastAiStreamComplete
+                // is itself best-effort (fire-and-forget HTTP POST, `.catch(() => {})` in
+                // socket-utils.ts) — if that socket event never arrives, this poll noticing the row
+                // disappeared is the ONLY remaining signal. Without fireComplete here, a consumer
+                // never learns to reload the persisted message: the synthesized bubble would vanish
+                // with nothing replacing it, worse than the pre-poll-fallback behavior (a frozen but
+                // still-visible stale snapshot). fireComplete's own processed-guard makes this safe
+                // to call even if chat:stream_complete ALSO eventually arrives — the later call
+                // no-ops.
                 pollControllers.delete(messageId);
+                pollSeqByMessageId.delete(messageId);
+                joinFailed.delete(messageId);
                 removeStream(messageId);
+                try {
+                  fireComplete(messageId, conversationId, { joinFailed: true });
+                } finally {
+                  fireOwnFinalize(messageId);
+                }
               },
             );
           } else if (skipReplayCount === 0) {
@@ -523,6 +556,7 @@ export function useChannelStreamSocket(
       if (pollController) {
         pollController.abort();
         pollControllers.delete(payload.messageId);
+        pollSeqByMessageId.delete(payload.messageId);
       }
       // If the SSE join failed, whatever parts we hold are a stale snapshot at best
       // — the authoritative message is in the DB. Dropping the store entry BEFORE
@@ -606,10 +640,7 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
-      for (const pollController of pollControllers.values()) {
-        pollController.abort();
-      }
-      pollControllers.clear();
+      abortAllPolls();
       // Release every own-stream claim we handed out. This is the ONLY chance: `cancelled`
       // is latched on this effect closure, so every future runBootstrap — including the
       // reconnect re-bootstrap and rejoinActiveStreams, which both call through
@@ -657,10 +688,7 @@ export function useChannelStreamSocket(
         controller.abort();
         releaseBootstrapConsumer(msgId);
       }
-      for (const pollController of pollControllers.values()) {
-        pollController.abort();
-      }
-      pollControllers.clear();
+      abortAllPolls();
       clearPageStreams(channelId);
     };
   }, [socket, channelId]);
