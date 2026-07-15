@@ -880,12 +880,17 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
     // callback, before the placeholder INSERT ever ran) — otherwise it fabricates a phantom
     // 'interrupted' row for a request that never started generating.
     it('given the pre-generation setup throws before lifecycle is created, should NOT persist a phantom row', async () => {
-      // Persistent (not -Once): startGenerationExclusive degrades-and-retries run() unlocked
-      // once on failure — a single rejection would be silently swallowed by that retry.
+      // Persistent (not -Once) so this stays a valid regression test regardless: a `run`
+      // failure now propagates once and is never retried unlocked (see
+      // start-generation-exclusive.ts's guardedRun/runThrew — the double-generation/
+      // double-billing fix), so takeOverConversationStreams below is asserted to run exactly
+      // once. If that guard ever regresses, a persistent rejection means the retried call
+      // would ALSO fail loudly here rather than silently succeeding and masking the bug.
       mockTakeOverConversationStreams.mockRejectedValue(new Error('takeover boom'));
 
       await POST(makeRequest(), makeContext());
 
+      expect(mockTakeOverConversationStreams).toHaveBeenCalledTimes(1);
       expect(mockCreateStreamLifecycle).not.toHaveBeenCalled();
       const assistantSave = mockSaveGlobalAssistantMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave).toBeUndefined();
