@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Bot,
+  Eye,
   FileText,
   Moon,
   Settings2,
@@ -9,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { buildClient, describeError, type DriveRow } from "./lib/pagespace";
-import { config, type ViewMode } from "./lib/config";
+import { config, type Section, type Audience } from "./lib/config";
 import { AskView } from "./components/AskView";
 import { DocsView } from "./components/DocsView";
 import { ManageView } from "./components/ManageView";
@@ -27,8 +28,8 @@ export default function App() {
   const [token, setToken] = useState(config.token);
   const [drives, setDrives] = useState<DriveRow[]>([]);
   const [driveId, setDriveId] = useState(config.driveId);
-  const [agentId, setAgentId] = useState<string | null>(config.agentId || null);
-  const [mode, setMode] = useState<ViewMode>("ask");
+  const [audience, setAudience] = useState<Audience>("visitor");
+  const [section, setSection] = useState<Section>("ask");
   const [error, setError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dark, setDark] = useState(() => localStorage.getItem(THEME_KEY) === "dark");
@@ -57,32 +58,16 @@ export default function App() {
     };
   }, [client]);
 
-  // Resolve the agent page for this drive (env override, else first AI_CHAT).
-  useEffect(() => {
-    if (!client || !driveId || config.agentId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await client.pages.list({ driveId, recursive: true, ls: true });
-        if (cancelled) return;
-        setAgentId(res.pages.find((p) => p.type === "AI_CHAT")?.id ?? null);
-      } catch {
-        /* leave agent null; chat surface shows a friendly disabled state */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client, driveId]);
-
   const activeDrive = drives.find((d) => d.id === driveId) ?? null;
-  const canManage = activeDrive?.role === "OWNER" || activeDrive?.role === "ADMIN";
-  const effectiveMode: ViewMode = mode === "manage" && !canManage ? "ask" : mode;
+  const canBeAdmin = activeDrive?.role === "OWNER" || activeDrive?.role === "ADMIN";
+  // Non-admins can only ever be a visitor; the admin view is gated by drive role.
+  const effAudience: Audience = audience === "admin" && !canBeAdmin ? "visitor" : audience;
+  const effSection: Section = section === "manage" && effAudience !== "admin" ? "ask" : section;
 
-  const tabs: { key: ViewMode; label: string; icon: typeof Bot }[] = [
+  const tabs: { key: Section; label: string; icon: typeof Bot }[] = [
     { key: "ask", label: "Ask", icon: Bot },
     { key: "docs", label: "Docs", icon: FileText },
-    ...(canManage ? [{ key: "manage" as const, label: "Manage", icon: ShieldCheck }] : []),
+    ...(effAudience === "admin" ? [{ key: "manage" as const, label: "Manage", icon: ShieldCheck }] : []),
   ];
 
   return (
@@ -106,10 +91,10 @@ export default function App() {
             {tabs.map((tab) => (
               <button
                 key={tab.key}
-                onClick={() => setMode(tab.key)}
+                onClick={() => setSection(tab.key)}
                 className={cn(
                   "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  effectiveMode === tab.key
+                  effSection === tab.key
                     ? "bg-card text-foreground shadow-xs"
                     : "text-muted-foreground hover:text-foreground",
                 )}
@@ -122,10 +107,22 @@ export default function App() {
         )}
 
         <div className="ml-auto flex items-center gap-1">
-          {canManage && (
-            <span className="mr-1 hidden items-center gap-1 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground sm:flex">
-              <ShieldCheck className="size-3.5 text-success" /> Admin
-            </span>
+          {canBeAdmin && (
+            <div className="mr-1 hidden items-center rounded-lg border border-border p-0.5 sm:flex" title="Preview the site as a public visitor, or as the drive admin">
+              {(["visitor", "admin"] as const).map((a) => (
+                <button
+                  key={a}
+                  onClick={() => setAudience(a)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                    effAudience === a ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {a === "visitor" ? <Eye className="size-3.5" /> : <ShieldCheck className="size-3.5" />}
+                  {a === "visitor" ? "Visitor" : "Admin"}
+                </button>
+              ))}
+            </div>
           )}
           <Button variant="ghost" size="icon" onClick={() => setDark((d) => !d)} title="Toggle theme">
             {dark ? <Sun /> : <Moon />}
@@ -146,9 +143,16 @@ export default function App() {
               {error}
             </div>
           </div>
-        ) : effectiveMode === "ask" ? (
-          <AskView apiUrl={apiUrl} token={token.trim()} agentId={agentId} botName={`${config.botName} Assistant`} />
-        ) : effectiveMode === "docs" ? (
+        ) : effSection === "ask" ? (
+          <AskView
+            chat={
+              effAudience === "admin"
+                ? { kind: "direct", apiUrl, token: token.trim(), agentId: config.ownerAgentId || null }
+                : { kind: "proxy" }
+            }
+            botName={effAudience === "admin" ? "Docs Editor" : `${config.botName} Assistant`}
+          />
+        ) : effSection === "docs" ? (
           driveId ? <DocsView client={client} driveId={driveId} /> : null
         ) : driveId ? (
           <ManageView client={client} driveId={driveId} />

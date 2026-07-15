@@ -5,11 +5,14 @@ import { ArrowUp, Bot, Loader2, Sparkles } from "lucide-react";
 import { Button } from "./ui";
 
 /*
- * The public chat surface. It talks to a PageSpace agent through the
- * OpenAI-compatible completions endpoint (POST /api/v1/chat/completions),
- * streaming the reply. This is deliberately NOT the SDK — the SDK's only
- * agent method is a single-shot ask; streaming lives on the endpoint. The
- * agent brings its own system prompt, tools, and the whole drive as context.
+ * The chat surface. It streams from a PageSpace agent over the OpenAI-compatible
+ * completions endpoint (deliberately NOT the SDK — the SDK's agent method is
+ * single-shot; streaming lives on the endpoint). Two wirings:
+ *  - "proxy": the public/customer path. Posts to the dev-server proxy, which
+ *    holds the token and pins the public read-only agent. The customer holds no
+ *    edit key, so they can chat but can't reconfigure the agent or edit anything.
+ *  - "direct": the owner path. Posts straight to the endpoint with the owner's
+ *    own edit token and the owner (write-capable) agent.
  */
 
 interface ChatTurn {
@@ -17,10 +20,12 @@ interface ChatTurn {
   content: string;
 }
 
+export type ChatConfig =
+  | { kind: "proxy" }
+  | { kind: "direct"; apiUrl: string; token: string; agentId: string | null };
+
 interface AskViewProps {
-  apiUrl: string;
-  token: string;
-  agentId: string | null;
+  chat: ChatConfig;
   botName: string;
   suggestions?: string[];
 }
@@ -31,7 +36,8 @@ const DEFAULT_SUGGESTIONS = [
   "What page types can I create with the CLI?",
 ];
 
-export function AskView({ apiUrl, token, agentId, botName, suggestions = DEFAULT_SUGGESTIONS }: AskViewProps) {
+export function AskView({ chat, botName, suggestions = DEFAULT_SUGGESTIONS }: AskViewProps) {
+  const ready = chat.kind === "proxy" || !!chat.agentId;
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -44,7 +50,7 @@ export function AskView({ apiUrl, token, agentId, botName, suggestions = DEFAULT
 
   const send = async (text: string) => {
     const question = text.trim();
-    if (!question || streaming || !agentId) return;
+    if (!question || streaming || !ready) return;
     setError(null);
     setInput("");
 
@@ -52,19 +58,22 @@ export function AskView({ apiUrl, token, agentId, botName, suggestions = DEFAULT
     setTurns([...history, { role: "assistant", content: "" }]);
     setStreaming(true);
 
+    const messages = history.map((t) => ({ role: t.role, content: t.content }));
+    const request =
+      chat.kind === "proxy"
+        ? {
+            url: "/proxy/chat",
+            headers: { "Content-Type": "application/json" } as Record<string, string>,
+            body: JSON.stringify({ messages }),
+          }
+        : {
+            url: `${chat.apiUrl.replace(/\/+$/, "")}/api/v1/chat/completions`,
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${chat.token}` },
+            body: JSON.stringify({ model: `ps-agent://${chat.agentId}`, stream: true, messages }),
+          };
+
     try {
-      const res = await fetch(`${apiUrl.replace(/\/+$/, "")}/api/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          model: `ps-agent://${agentId}`,
-          stream: true,
-          messages: history.map((t) => ({ role: t.role, content: t.content })),
-        }),
-      });
+      const res = await fetch(request.url, { method: "POST", headers: request.headers, body: request.body });
 
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => "");
@@ -134,7 +143,7 @@ export function AskView({ apiUrl, token, agentId, botName, suggestions = DEFAULT
                   <button
                     key={s}
                     onClick={() => send(s)}
-                    disabled={!agentId}
+                    disabled={!ready}
                     className="rounded-lg border border-border bg-card px-4 py-3 text-left text-sm shadow-xs transition-colors hover:bg-accent disabled:opacity-50"
                   >
                     {s}
@@ -194,11 +203,11 @@ export function AskView({ apiUrl, token, agentId, botName, suggestions = DEFAULT
               }
             }}
             rows={1}
-            placeholder={agentId ? "Ask the support bot…" : "No agent configured for this drive"}
-            disabled={!agentId}
+            placeholder={ready ? "Ask the support bot…" : "No agent configured for this drive"}
+            disabled={!ready}
             className="max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none placeholder:text-muted-foreground"
           />
-          <Button type="submit" size="icon" disabled={streaming || !input.trim() || !agentId} className="rounded-xl">
+          <Button type="submit" size="icon" disabled={streaming || !input.trim() || !ready} className="rounded-xl">
             {streaming ? <Loader2 className="animate-spin" /> : <ArrowUp />}
           </Button>
         </form>

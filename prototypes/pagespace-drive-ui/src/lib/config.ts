@@ -14,8 +14,16 @@ export const config = {
   apiUrl: (env.VITE_PAGESPACE_API_URL as string | undefined) ?? (env.DEV ? window.location.origin : "https://pagespace.ai"),
   token: (env.VITE_PAGESPACE_TOKEN as string | undefined) ?? "",
   driveId: (env.VITE_PAGESPACE_DRIVE_ID as string | undefined) ?? "",
-  agentId: (env.VITE_PAGESPACE_AGENT_ID as string | undefined) ?? "",
+  // Public agent (read-only). The dev proxy pins it server-side via
+  // PAGESPACE_PUBLIC_AGENT_ID; the client id here is only for display.
+  publicAgentId:
+    (env.VITE_PAGESPACE_PUBLIC_AGENT_ID as string | undefined) ??
+    (env.VITE_PAGESPACE_AGENT_ID as string | undefined) ??
+    "",
+  // Owner agent (write-capable). Owners chat with this directly with their token.
+  ownerAgentId: (env.VITE_PAGESPACE_OWNER_AGENT_ID as string | undefined) ?? "",
   botName: (env.VITE_PAGESPACE_BOT_NAME as string | undefined) ?? "Support",
 };
 
-export type ViewMode = "ask" | "docs" | "manage";
+export type Section = "ask" | "docs" | "manage";
+export type Audience = "visitor" | "admin";

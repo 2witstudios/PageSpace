@@ -1,6 +1,7 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { chatProxy } from "./chat-proxy";
 
 // The PageSpace API sends no Access-Control-Allow-Origin header, so a
 // browser's own fetch() to https://pagespace.ai is always blocked,
@@ -10,15 +11,28 @@ import tailwindcss from "@tailwindcss/vite";
 // browser enforcement mechanism, so it never applies to the proxy's own
 // outbound request. Demo/dev workaround only; a real deployed SPA needs
 // either a same-origin reverse proxy or server-side CORS headers.
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: {
-    port: 5184,
-    proxy: {
-      "/api": {
-        target: "https://pagespace.ai",
-        changeOrigin: true,
+export default defineConfig(({ mode }) => {
+  // Empty prefix loads ALL vars from .env files (including the non-VITE,
+  // server-only ones the chat proxy needs). These never reach the browser.
+  const env = loadEnv(mode, process.cwd(), "");
+  return {
+    plugins: [
+      react(),
+      tailwindcss(),
+      chatProxy({
+        token: env.PAGESPACE_PROXY_TOKEN,
+        publicAgentId: env.PAGESPACE_PUBLIC_AGENT_ID,
+        apiUrl: env.PAGESPACE_API_URL,
+      }),
+    ],
+    server: {
+      port: 5184,
+      proxy: {
+        "/api": {
+          target: "https://pagespace.ai",
+          changeOrigin: true,
+        },
       },
     },
-  },
+  };
 });
