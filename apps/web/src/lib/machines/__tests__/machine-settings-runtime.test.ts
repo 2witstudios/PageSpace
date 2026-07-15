@@ -33,6 +33,7 @@ const {
   mockFindDrive,
   mockSessionFind,
   mockSessionRemove,
+  mockSessionRemoveIfSandbox,
   mockHostKill,
 } = vi.hoisted(() => ({
   mockTrashPage: vi.fn(),
@@ -50,6 +51,7 @@ const {
   mockFindDrive: vi.fn(),
   mockSessionFind: vi.fn(),
   mockSessionRemove: vi.fn(),
+  mockSessionRemoveIfSandbox: vi.fn(),
   mockHostKill: vi.fn(),
 }));
 
@@ -72,6 +74,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args: unknown[]) => ({ and: args })),
   eq: vi.fn((...args: unknown[]) => ({ eq: args })),
   inArray: vi.fn((...args: unknown[]) => ({ inArray: args })),
+  isNull: vi.fn((column: unknown) => ({ isNull: column })),
   sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: strings.join('?'), values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -90,12 +93,13 @@ vi.mock('@pagespace/db/schema/integrations', () => ({
   globalAssistantConfig: { machines: 'machines', machineAccess: 'machineAccess' },
 }));
 vi.mock('@pagespace/db/schema/machine-branches', () => ({
-  machineBranches: { machineId: 'machineId', sandboxId: 'sandboxId' },
+  machineBranches: { id: 'id', machineId: 'machineId', sandboxId: 'sandboxId', spriteTornDownAt: 'spriteTornDownAt' },
 }));
 vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', () => ({
   createDbMachineSessionStore: vi.fn(async () => ({
     findBySessionKey: (...args: unknown[]) => mockSessionFind(...args),
     remove: (...args: unknown[]) => mockSessionRemove(...args),
+    removeIfSandbox: (...args: unknown[]) => mockSessionRemoveIfSandbox(...args),
   })),
   deriveMachineSessionKey: vi.fn((input: { pageId: string }) => `key-${input.pageId}`),
   getSandboxSessionSecret: vi.fn(() => 'secret'),
@@ -144,7 +148,10 @@ beforeEach(() => {
   mockApplyPageMutation.mockResolvedValue({});
   mockFindPage.mockResolvedValue({ driveId: 'drive-1' });
   mockFindDrive.mockResolvedValue({ ownerId: 'tenant-1' });
-  mockSessionFind.mockImplementation(async (key: string) => ({ sandboxId: `own-${key}` }));
+  mockSessionFind.mockImplementation(async (key: string) => ({
+    sandboxId: `own-${key}`,
+    spriteInstanceId: `inst-${key}`,
+  }));
   mockSessionRemove.mockResolvedValue(undefined);
   mockHostKill.mockResolvedValue(undefined);
 });
@@ -325,11 +332,72 @@ describe('createMachineSpriteTeardown().teardown', () => {
 
     await createMachineSpriteTeardown().teardown(MACHINE);
 
-    expect(mockHostKill.mock.calls.map((c) => c[0])).toEqual([
-      { machineId: 'sb-branch' },
-      { machineId: `own-key-${MACHINE}` },
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      'sb-branch',
+      `own-key-${MACHINE}`,
     ]);
-    expect(mockSessionRemove).toHaveBeenCalledWith(`key-${MACHINE}`);
+    // Every kill carries the INSTANCE we mean to destroy. Without it the kill is
+    // name-keyed, and a name is reused across re-creates — so a Sprite
+    // re-provisioned under this key would be destroyed in place of the dead one.
+    expect(mockHostKill).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedInstanceId: `inst-key-${MACHINE}` }),
+    );
+    // CAS on sandboxId — a key-only delete could destroy the pointer to a
+    // replacement Sprite a concurrent acquire just provisioned into this row.
+    expect(mockSessionRemoveIfSandbox).toHaveBeenCalledWith({
+      sessionKey: `key-${MACHINE}`,
+      sandboxId: `own-key-${MACHINE}`,
+      // The INSTANCE — a name-only CAS cannot tell a replacement VM from the one
+      // we just killed, and deleting the row of a live replacement orphans it.
+      spriteInstanceId: `inst-key-${MACHINE}`,
+    });
+  });
+
+  it('records teardown INTENT before any kill, so a failed kill is reclaimable by the reconciler', async () => {
+    // Without this, a failed kill is indistinguishable from a Machine someone
+    // merely dragged to the trash — whose Sprite must NOT be destroyed (a trash
+    // is reversible; a kill is not). Written BEFORE the kill so a crash
+    // mid-teardown leaves the row reclaimable rather than stranded.
+    const setCallsBeforeFirstKill: unknown[] = [];
+    mockHostKill.mockImplementation(async () => {
+      setCallsBeforeFirstKill.push(...mockUpdateSet.mock.calls.map((c) => c[0]));
+      mockHostKill.mockImplementation(async () => {});
+    });
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([{ id: 'branch-row-1', sandboxId: 'sb-branch' }]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(setCallsBeforeFirstKill).toContainEqual({ teardownRequestedAt: expect.any(Date) });
+  });
+
+  it('STAMPS the branch row on a confirmed kill rather than deleting it', async () => {
+    // Deleting it would destroy re-creatable branch config on a REVERSIBLE
+    // soft-delete — and cascade away its branch-scoped machine_agent_terminals
+    // (FK onDelete: cascade), so a restore would come back without them.
+    mockSelectWhere
+      .mockResolvedValueOnce([]) // children of the root — none
+      .mockResolvedValueOnce([{ id: 'branch-row-1', sandboxId: 'sb-branch' }]);
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    expect(mockUpdateSet).toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
+  });
+
+  it('leaves the branch row UNSTAMPED when its kill fails, so the reconciler can retry it', async () => {
+    mockSelectWhere
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'branch-row-1', sandboxId: 'sb-branch' }]);
+    mockHostKill.mockImplementation(async ({ machineId }: { machineId: string }) => {
+      if (machineId === 'sb-branch') throw new Error('sprite unreachable');
+    });
+
+    await createMachineSpriteTeardown().teardown(MACHINE);
+
+    // The row is the only pointer to the orphaned sandboxId — stamping it as
+    // torn down would hide a live, billing Sprite from the reconciler forever.
+    expect(mockUpdateSet).not.toHaveBeenCalledWith({ spriteTornDownAt: expect.any(Date) });
   });
 
   it('tears down nested Machine pages hidden by the cascade-trash (descendants first, root last)', async () => {
@@ -344,10 +412,10 @@ describe('createMachineSpriteTeardown().teardown', () => {
 
     await createMachineSpriteTeardown().teardown(MACHINE);
 
-    expect(mockHostKill.mock.calls.map((c) => c[0])).toEqual([
-      { machineId: 'sb-child-branch' },
-      { machineId: 'own-key-child-machine' },
-      { machineId: `own-key-${MACHINE}` },
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      'sb-child-branch',
+      'own-key-child-machine',
+      `own-key-${MACHINE}`,
     ]);
   });
 
@@ -363,7 +431,9 @@ describe('createMachineSpriteTeardown().teardown', () => {
 
     await expect(createMachineSpriteTeardown().teardown(MACHINE)).rejects.toThrow('1 machine(s)');
     // The root's own Sprite was still killed — one failure never strands the rest.
-    expect(mockHostKill.mock.calls.map((c) => c[0])).toContainEqual({ machineId: `own-key-${MACHINE}` });
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toContain(
+      `own-key-${MACHINE}`,
+    );
   });
 
   it('terminates and tears down each machine ONCE even when the page tree contains a parentId cycle', async () => {
@@ -375,9 +445,9 @@ describe('createMachineSpriteTeardown().teardown', () => {
 
     await createMachineSpriteTeardown().teardown(MACHINE);
 
-    expect(mockHostKill.mock.calls.map((c) => c[0])).toEqual([
-      { machineId: 'own-key-child-machine' },
-      { machineId: `own-key-${MACHINE}` },
+    expect(mockHostKill.mock.calls.map((c) => (c[0] as { machineId: string }).machineId)).toEqual([
+      'own-key-child-machine',
+      `own-key-${MACHINE}`,
     ]);
   });
 

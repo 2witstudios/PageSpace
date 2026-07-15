@@ -445,12 +445,23 @@ export async function propagateClaudeCredential({
   );
 }
 
-async function safeKillSprite(host: MachineHost, machineId: string): Promise<void> {
+/**
+ * Destroy a Sprite we provisioned but do NOT want to keep (a failed clone, or a
+ * redundant one that lost a provisioning race), best-effort and identity-guarded.
+ *
+ * Takes the live `handle` rather than a bare name because the kill is name-keyed
+ * and names are REUSED across re-creates: passing `handle.spriteInstanceId` as
+ * the guard ensures we destroy the VM WE just provisioned, never a replacement a
+ * concurrent spawn put under the same name. Swallows any error — an unrecorded
+ * Sprite left alive is billing with no row anywhere (no trigger, no reclaim), so
+ * killing it is the only cleanup available; if that fails too we can do no
+ * better, and the original failure is what the caller reports.
+ */
+async function safeKillSprite(host: MachineHost, handle: MachineHandle): Promise<void> {
   try {
-    await host.kill({ machineId });
+    await host.kill({ machineId: handle.machineId, expectedInstanceId: handle.spriteInstanceId });
   } catch {
-    // best-effort — a partially-provisioned Sprite that fails to clone is
-    // still torn down on a best-effort basis rather than left orphaned.
+    // best-effort — see above.
   }
 }
 
@@ -481,7 +492,7 @@ async function reconcileProvisionCollision({
   if (row && row.sandboxId === handle.machineId) {
     return { ok: true, sandboxId: row.sandboxId, branchName: row.branchName, resumed: true };
   }
-  await safeKillSprite(deps.host, handle.machineId);
+  await safeKillSprite(deps.host, handle);
   return { row };
 }
 
@@ -577,6 +588,8 @@ export async function spawnBranch({
       id: existing.id,
       previousSandboxId: existing.sandboxId,
       sandboxId: handle.machineId,
+      // WHICH VM this now is. `sandboxId` is the reused name and cannot say.
+      spriteInstanceId: handle.spriteInstanceId ?? null,
       now: deps.now(),
     });
     if (!updated) {
@@ -601,6 +614,8 @@ export async function spawnBranch({
       branchName,
       sessionKey,
       sandboxId: handle.machineId,
+      // WHICH VM this is — `sandboxId` is only the (reused) name.
+      spriteInstanceId: handle.spriteInstanceId ?? null,
       now: deps.now(),
     });
   } catch (error) {
@@ -611,7 +626,15 @@ export async function spawnBranch({
       if (reconciled.row) {
         return { ok: true, sandboxId: reconciled.row.sandboxId, branchName: reconciled.row.branchName, resumed: true };
       }
+      return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
     }
+    // ANY other failure to record the row (connection blip, aborted tx, statement
+    // timeout) would otherwise leave the Sprite we just provisioned ALIVE with no
+    // row anywhere — so nothing is ever deleted, no trigger fires, no reclaim is
+    // enqueued, and the VM bills forever, unreachable. Kill it: the row is the
+    // only thing that could ever have found it again. (`provisionFreshMachine`
+    // has always done this on its own save failure; this path did not.)
+    await safeKillSprite(deps.host, handle);
     return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
   }
 
@@ -711,7 +734,10 @@ export async function killBranch({
   if (!existing) return { ok: false, reason: 'not_found' };
 
   try {
-    await host.kill({ machineId: existing.sandboxId });
+    // Identity-guarded: the kill is name-keyed, and a name is reused across
+    // re-creates, so without this a Sprite re-provisioned under this branch's key
+    // would be destroyed in place of the one we meant.
+    await host.kill({ machineId: existing.sandboxId, expectedInstanceId: existing.spriteInstanceId ?? undefined });
   } catch {
     // Sprite may still be running — keep the tracking row so a retry can still
     // find and kill it later. There is no reaper: an untracked-but-live Sprite
@@ -719,6 +745,17 @@ export async function killBranch({
     return { ok: false, reason: 'error' };
   }
 
-  await store.remove(machineId, projectName, branchName);
+  // CAS on sandboxId, NOT a name-keyed delete: `spawnBranch` re-provisions a
+  // vanished branch under this same (machine, project, branch) identity, so a
+  // concurrent spawn can write a REPLACEMENT Sprite into this row between our
+  // kill above and this delete. Deleting by name would then destroy the pointer
+  // to that brand-new, LIVE Sprite — leaving it billing forever, invisible even
+  // to the orphan reconciler. Losing the CAS is the correct outcome: the winner's
+  // Sprite is live and tracked, and the one we killed was already redundant.
+  await store.removeIfSandbox({
+    id: existing.id,
+    sandboxId: existing.sandboxId,
+    spriteInstanceId: existing.spriteInstanceId,
+  });
   return { ok: true };
 }

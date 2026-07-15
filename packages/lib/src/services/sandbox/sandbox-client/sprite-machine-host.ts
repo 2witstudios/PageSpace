@@ -17,6 +17,7 @@
  */
 
 import {
+  MachineSpriteReplacedError,
   MachineStreamOpenTimeoutError,
   type MachineHandle,
   type MachineHost,
@@ -27,6 +28,7 @@ import type { ExecSandboxClient, ExecutableSandbox } from './types';
 import {
   withWakeRetry,
   asPreOpenDrop,
+  isSpriteGoneStatus,
   spawnWithSelfHealingCwd,
   type SpriteCommandLike,
   type SpritesSdk,
@@ -142,6 +144,7 @@ function wrapSpriteHandle({
 }): MachineHandle {
   return {
     machineId: exec.sandboxId,
+    spriteInstanceId: exec.spriteInstanceId ?? null,
     egressPolicyToken: exec.egressPolicyToken,
     exec: (args) => exec.runCommand(args),
     writeFiles: (files) => exec.writeFiles(files),
@@ -262,8 +265,60 @@ export function createSpriteMachineHost({
       return wrapSpriteHandle({ sdk, exec, streamOpenTimeoutMs });
     },
 
-    async kill({ machineId }) {
-      await client.stop({ sandboxId: machineId });
+    /**
+     * Idempotent by contract: a Sprite the control plane says is ALREADY GONE is
+     * a successful kill, not a failure — mirroring `attach` above, which maps a
+     * not-found error to a null handle rather than throwing.
+     *
+     * Every caller depends on this. `teardownOneMachine` derives
+     * `spriteTornDown` from whether this throws, so a not-found error used to
+     * report a live orphaned Sprite for one that had in fact already been
+     * destroyed; `killBranch` and the orphan reconciler
+     * (`machine-orphan-reconcile.ts`) would likewise refuse to release a
+     * tracking row whose Sprite no longer exists, leaving a permanently
+     * un-clearable candidate.
+     *
+     * Gated on `isSpriteGoneStatus` — an authoritative 404/410 — NOT the looser
+     * `isSpriteNotFoundError` the read path uses. That one also accepts
+     * `ENOTFOUND` (a DNS failure) and message heuristics, which are safe when a
+     * false positive merely costs a redundant provision, but here a false
+     * positive is destructive: callers treat "did not throw" as proof the Sprite
+     * is dead and release its ONLY pointer. A transient DNS blip would then
+     * strand every Sprite in the batch, billing forever. Anything that leaves the
+     * Sprite's fate unknown (auth, rate limit, 5xx, socket, DNS) throws, which
+     * keeps the row — and the retry — intact.
+     */
+    async kill({ machineId, expectedInstanceId }) {
+      try {
+        // Identity guard. The kill is NAME-keyed (`deleteSprite(name)`) and a name
+        // is REUSED across re-creates, so without this we would happily destroy a
+        // REPLACEMENT Sprite — a live VM someone re-provisioned under the same
+        // session key after the one we meant to kill was already gone. Read who
+        // actually lives at this name first; if it is not our target, our target
+        // is already dead and there is nothing to do. (A replace between this read
+        // and the delete below is a residual TOCTOU, but the DB-side CAS is keyed
+        // on the same instance id, so a replacement still cannot have its pointer
+        // dropped.)
+        if (expectedInstanceId != null) {
+          const current = await sdk.getSprite(machineId);
+          if (current.id != null && current.id !== expectedInstanceId) {
+            // A DIFFERENT VM holds this name now, so the one we were told to kill
+            // is already gone. THROW rather than return success: "success" means
+            // "confirmed destroyed", and every caller acts on it by releasing the
+            // Sprite's last pointer (deleting the tracking row and its rescued
+            // outbox entry). If the caller's instance id were stale — the row not
+            // yet updated after a re-provision — that release would drop the only
+            // pointer to the LIVE VM standing here, billing forever. Refusing keeps
+            // the pointer and surfaces the staleness as a retry, which is the
+            // safe way to be wrong.
+            throw new MachineSpriteReplacedError(machineId, expectedInstanceId, current.id);
+          }
+        }
+        await client.stop({ sandboxId: machineId });
+      } catch (error) {
+        if (isSpriteGoneStatus(error)) return;
+        throw error;
+      }
     },
   };
 }

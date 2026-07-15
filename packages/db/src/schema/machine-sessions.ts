@@ -37,8 +37,23 @@ export const machineSessions = pgTable('machine_sessions', {
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
 
-  // Fly Sprite id — used to reconnect and to tear down.
+  // Fly Sprite NAME — our derived session key. NOT an identity: it is reused
+  // across re-creates, so a Sprite destroyed and re-provisioned under this same
+  // key answers to the same value while being a physically different VM.
   sandboxId: text('sandboxId').notNull(),
+
+  /**
+   * The platform's id for the Sprite INSTANCE this row points at — the VM's
+   * actual identity (see `SpriteInstanceLike.id`). NULL for rows written before
+   * this column existed, or when the platform reported no id.
+   *
+   * Load-bearing for teardown safety: a kill and a row release must both be able
+   * to tell "the VM I meant" from "a replacement that took its name". Comparing
+   * `sandboxId` cannot — it is the same string for both — so a re-provision
+   * racing a teardown would let us drop the pointer to a LIVE VM (orphaning it) or
+   * destroy it outright.
+   */
+  spriteInstanceId: text('spriteInstanceId'),
 
   // Proof that a specific egress policy was applied to a specific Sprite INSTANCE
   // — a token over (sprite id, policy hash); see
@@ -58,6 +73,26 @@ export const machineSessions = pgTable('machine_sessions', {
   egressPolicyToken: text('egressPolicyToken'),
 
   lastActiveAt: timestamp('lastActiveAt', { mode: 'date' }).defaultNow().notNull(),
+
+  /**
+   * When a teardown of this Machine's own Sprite was REQUESTED — i.e.
+   * `deleteMachine` ran and meant to destroy it. NULL = nobody has asked for this
+   * Sprite to die. (The row itself is DELETED once the kill is confirmed, so a
+   * row that still has this set is a teardown that never completed.)
+   *
+   * This is an INTENT marker, and it is what the orphan reconciler requires
+   * before it destroys anything. "The owning page is trashed" is NOT sufficient
+   * intent: `pageService.trashPage` (the generic page DELETE, bulk-delete, and
+   * folder cascade-trash) trashes a MACHINE page WITHOUT any teardown, and that
+   * trash is reversible — a restore is expected to hand the user back a Machine
+   * with its filesystem intact. A `host.kill` is an irreversible DESTROY, so a
+   * reconciler keyed on `isTrashed` alone would silently wipe the disk of every
+   * Machine anyone ever moved to the trash. See `machine-orphan-reconcile.ts`
+   * (which does still reclaim a never-torn-down Sprite once its page is past the
+   * hard-purge cutoff — at that point the page is being erased, so leaving the
+   * VM alive would strand it forever).
+   */
+  teardownRequestedAt: timestamp('teardownRequestedAt', { mode: 'date' }),
 
   // Watermark for the idle-storage reconcile cron (Machine Epic 3): the
   // persistent filesystem accrues cost whether the Machine is active or

@@ -71,6 +71,25 @@
 # hour); in-service serialization covering ALL callers is tracked follow-up.
 0 * * * * flock -n /run/reconcile-machine-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-machine-storage >> /var/log/cron/reconcile-machine-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-machine-storage.log
 
+# Orphaned sprite reconcile - Every 30 minutes
+# Destroys Sprites (billing microVMs) that nothing in the product can reach any
+# more. Two sources — see machine-orphan-reconcile.ts in @pagespace/lib:
+#   (A) machine_sprite_reclaims, the outbox. AFTER DELETE triggers (migration
+#       0210) rescue a sandboxId out of machine_sessions/machine_branches as its
+#       row is cascaded away by ANY page/drive/user hard delete — the 30-day
+#       purge, "delete permanently", account erasure. The pointer outlives the
+#       resource, so no delete path can strand a VM, and none of them need a
+#       guard (erasure must never be blocked by a Sprite we failed to kill).
+#   (B) tracking rows under a trashed page whose teardown was REQUESTED but never
+#       confirmed — a deleteMachine whose kill failed.
+# A Machine merely dragged to the trash is left ALONE: its Sprite hibernates and
+# a restore is expected to hand the disk back (a kill is irreversible, a trash is
+# not). Every effect is safe under concurrency (the kill treats a 404 as success;
+# the release writes are compare-and-swaps), so unlike the storage reconcile this
+# needs no advisory lock — flock -n just keeps this container's own ticks from
+# doing redundant work.
+*/30 * * * * flock -n /run/reconcile-orphaned-sprites.lock cron-curl GET __WEB_URL__/api/cron/reconcile-orphaned-sprites >> /var/log/cron/reconcile-orphaned-sprites.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-orphaned-sprites.log
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default

@@ -28,6 +28,7 @@ function makeStore(): MachineSessionStore {
         pageId: input.pageId,
         userId: input.userId,
         sandboxId: input.sandboxId,
+        spriteInstanceId: input.spriteInstanceId,
         lastActiveAt: input.now,
         egressPolicyToken: input.egressPolicyToken,
       });
@@ -44,6 +45,14 @@ function makeStore(): MachineSessionStore {
     },
     remove: async (sessionKey) => {
       rows.delete(sessionKey);
+    },
+    removeIfSandbox: async ({ sessionKey, sandboxId }) => {
+      // Mirrors the real store: a row whose sandboxId changed under us now points
+      // at a LIVE replacement Sprite — deleting it would orphan that VM.
+      const row = rows.get(sessionKey);
+      if (!row || row.sandboxId !== sandboxId) return false;
+      rows.delete(sessionKey);
+      return true;
     },
   };
 }
@@ -79,9 +88,9 @@ function makeSpriteWorld() {
         sandboxId = `sbx-${counter}`;
         byName.set(name, sandboxId);
       }
-      return { sandboxId };
+      return { sandboxId, spriteInstanceId: null };
     },
-    get: async ({ sandboxId }) => ({ sandboxId }),
+    get: async ({ sandboxId }) => ({ sandboxId, spriteInstanceId: null }),
     stop: async () => {},
   };
 
@@ -89,6 +98,7 @@ function makeSpriteWorld() {
     const fs = fsFor(sandboxId);
     return {
       sandboxId,
+      spriteInstanceId: null,
       runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       writeFiles: async (files) => {
         for (const f of files) {

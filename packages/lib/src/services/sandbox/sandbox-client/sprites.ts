@@ -919,6 +919,10 @@ export function withKillSession<T extends { name: string; client: { baseURL: str
 function wrap(sprite: SpriteInstanceLike, egressPolicyToken?: string): ExecutableSandbox {
   return {
     sandboxId: sprite.name,
+    // The VM's actual identity. `sandboxId` above is only our reused NAME, so
+    // anything that must act on THIS VM — a kill, a compare-and-swap against a
+    // tracking row — has to key on this instead (see `SpriteInstanceLike.id`).
+    spriteInstanceId: sprite.id ?? null,
     // Proof of THIS VM's confirmed lockdown, for the caller to persist. Undefined
     // on the `get` path (which applies no policy) and whenever the Sprite's
     // identity is unknown — both of which the caller must treat as "unproven".
@@ -1065,6 +1069,35 @@ export function isSpriteNotFoundError(error: unknown): boolean {
   if (/notfound/i.test(name)) return true;
   const message = typeof e.message === 'string' ? e.message.toLowerCase() : '';
   return /\bnot found\b|no such|does not exist|\b404\b|\b410\b|\bgone\b|vanished/.test(message);
+}
+
+/**
+ * STRICT sibling of {@link isSpriteNotFoundError}, for the DESTROY path only:
+ * proof, from the control plane itself, that a Sprite is already gone.
+ *
+ * Only an authoritative HTTP 404/410 counts. Deliberately does NOT accept the
+ * defensive `code`/`name`/message heuristics above, because they are calibrated
+ * for a READ (`get`), where a false positive costs a redundant provision — while
+ * here a false positive is DESTRUCTIVE. `isSpriteNotFoundError` treats
+ * `ENOTFOUND` (a DNS resolution failure — a transport error, no HTTP status) and
+ * any message containing "gone"/"no such" as not-found. If `kill()` accepted
+ * those, a brief DNS blip during the orphan-reconcile cron would report every
+ * kill in the batch as a success, and the reconciler would then release the
+ * tracking row — the ONLY pointer — of every one of those still-running Sprites.
+ * They would bill RAM forever, unreachable: precisely the bug the reconciler
+ * exists to fix, inflicted at scale.
+ *
+ * So: a kill is idempotent ONLY against a control plane that positively says the
+ * Sprite is not there. Anything else (auth, rate limit, 5xx, DNS, socket) leaves
+ * the Sprite's fate UNKNOWN and must surface as a failure, which keeps the row —
+ * and therefore the retry — intact.
+ */
+export function isSpriteGoneStatus(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const e = error as { status?: unknown; statusCode?: unknown };
+  const status =
+    typeof e.status === 'number' ? e.status : typeof e.statusCode === 'number' ? e.statusCode : undefined;
+  return status === 404 || status === 410;
 }
 
 /**
