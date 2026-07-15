@@ -175,4 +175,14 @@ describe('assertValidSyntax', () => {
     const corrupted = 'export default {\n  /* ratchet:end */ markers below are load-bearing:\n';
     expect(() => assertValidSyntax(corrupted, 'test-pkg')).toThrow(/test-pkg/);
   });
+
+  it('accepts TS-only syntax (satisfies, type assertions) that a JS-only check would wrongly reject', () => {
+    const tsOnlySyntax = `
+      interface Thresholds { lines: number }
+      const t = { lines: 44 } satisfies Thresholds;
+      const u = t as Thresholds;
+      export default t;
+    `;
+    expect(() => assertValidSyntax(tsOnlySyntax, 'test-pkg')).not.toThrow();
+  });
 });

@@ -3,10 +3,7 @@
  * matching, rewriting, and pre-write syntax check.
  */
 
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import ts from 'typescript';
 
 // Markers must occupy their own line (only leading/trailing whitespace besides
 // the marker) — real usage always looks like that, whereas a prose comment
@@ -76,19 +73,19 @@ export function parseThresholds(matchText) {
   };
 }
 
-// Writes `source` to a throwaway .mjs file (in the OS temp dir, never the
-// repo) and runs `node --check` on it — catches any rewrite that produces
-// unparseable output (e.g. a sentinel match landing mid-comment/mid-token)
-// before it ever reaches disk, rather than trusting the regex match alone.
+// Runs a TypeScript syntax-only check (no type-checking, no file I/O, no
+// subprocess) on the rewritten config string — catches any rewrite that
+// produces unparseable output (e.g. a sentinel match landing mid-comment/
+// mid-token) before it ever reaches disk, rather than trusting the regex
+// match alone. Uses the TypeScript parser rather than `node --check` because
+// these are .ts files: a config using TS-only syntax (`satisfies`, a type
+// assertion, a generic) is valid input that a JS-only syntax check would
+// wrongly reject.
 export function assertValidSyntax(source, label) {
-  const dir = mkdtempSync(join(tmpdir(), 'coverage-ratchet-check-'));
-  const checkPath = join(dir, 'check.mjs');
-  try {
-    writeFileSync(checkPath, source);
-    execFileSync(process.execPath, ['--check', checkPath], { stdio: 'pipe' });
-  } catch (err) {
-    throw new Error(`${label}: rewritten config fails a syntax check — refusing to write.\n${err.stderr?.toString() ?? err.message}`);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  const { diagnostics } = ts.transpileModule(source, { reportDiagnostics: true });
+  const errors = (diagnostics ?? []).filter((d) => d.category === ts.DiagnosticCategory.Error);
+  if (errors.length > 0) {
+    const messages = errors.map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n')).join('\n');
+    throw new Error(`${label}: rewritten config fails a syntax check — refusing to write.\n${messages}`);
   }
 }
