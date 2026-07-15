@@ -66,6 +66,12 @@ jobs:
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          # v8 coverage instrumentation is memory-heavy; the default per-worker heap
+          # ceiling (~2-4GB in a constrained container) is occasionally too tight for
+          # apps/web's ~930-file suite, causing an intermittent
+          # "Ineffective mark-compacts near heap limit" crash. ubuntu-latest runners
+          # have 16GB RAM, so raising the ceiling well below that is safe headroom.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
