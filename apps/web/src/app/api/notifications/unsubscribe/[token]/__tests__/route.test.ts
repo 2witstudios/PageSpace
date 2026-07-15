@@ -9,6 +9,7 @@ const mockUpdate = vi.hoisted(() => vi.fn());
 const mockUpdateSet = vi.hoisted(() => vi.fn());
 const mockUpdateWhere = vi.hoisted(() => vi.fn());
 const mockUpdateReturning = vi.hoisted(() => vi.fn());
+const mockTransaction = vi.hoisted(() => vi.fn());
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -18,6 +19,7 @@ vi.mock('@pagespace/db/db', () => ({
     },
     insert: mockInsert,
     update: mockUpdate,
+    transaction: mockTransaction,
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -75,6 +77,21 @@ beforeEach(() => {
   mockInsert.mockReturnValue({ values: mockInsertValues });
   mockInsertValues.mockResolvedValue(undefined);
   mockPrefFindFirst.mockResolvedValue(undefined);
+
+  // The token claim and the preference write run inside db.transaction(). The
+  // real driver rolls back and rethrows if the callback throws; the mock runs
+  // the callback against the same spies and lets its rejection propagate, which
+  // is exactly the signal the route's rollback logic depends on.
+  mockTransaction.mockImplementation((cb: (tx: unknown) => unknown) =>
+    cb({
+      query: {
+        emailUnsubscribeTokens: { findFirst: mockTokenFindFirst },
+        emailNotificationPreferences: { findFirst: mockPrefFindFirst },
+      },
+      insert: mockInsert,
+      update: mockUpdate,
+    }),
+  );
 });
 
 describe('GET /api/notifications/unsubscribe/[token]', () => {
@@ -193,6 +210,23 @@ describe('POST /api/notifications/unsubscribe/[token]', () => {
     expect(res.status).toBe(400);
     expect(mockInsert).not.toHaveBeenCalled();
     expect(mockInsertValues).not.toHaveBeenCalled();
+  });
+
+  it('given the preference write fails, should 500 and roll the token claim back so a retry can succeed', async () => {
+    // The claim (usedAt) and the opt-out write share one transaction. If the
+    // write throws after the token is stamped, committing would spend the token
+    // with no opt-out recorded — the user stays subscribed but any retry 400s and
+    // the GET path reports success. The transaction must roll back and re-throw.
+    tokenClaimSucceeds('PRODUCT_UPDATE');
+    mockPrefFindFirst.mockResolvedValue(undefined); // take the insert path
+    mockInsertValues.mockRejectedValue(new Error('transient db error'));
+
+    const res = await POST(req(), params('tok'));
+
+    expect(res.status).toBe(500);
+    // The write ran inside the transaction wrapper, so the real driver rolls the
+    // usedAt claim back on this rejection (the token is not permanently spent).
+    expect(mockTransaction).toHaveBeenCalledOnce();
   });
 
   it('should work for any notification type, not just product updates', async () => {

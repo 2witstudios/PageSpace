@@ -36,9 +36,24 @@ const VALID_NOTIFICATION_TYPES = new Set<string>([
   'PRODUCT_UPDATE',
 ]);
 
+type UnsubscribeFailure = { ok: false; status: number; error: string };
 type UnsubscribeOutcome =
   | { ok: true; userId: string; notificationType: NotificationType }
-  | { ok: false; status: number; error: string };
+  | UnsubscribeFailure;
+
+/**
+ * Thrown inside the transaction to roll the token claim back on a non-success.
+ * Once the gated UPDATE has stamped `usedAt`, returning an error would COMMIT
+ * that consumption while writing no opt-out — the token is then spent forever
+ * and a retry can never apply it. Throwing instead aborts the transaction, so
+ * the claim is undone and the same token can be presented again.
+ */
+class UnsubscribeAbort extends Error {
+  constructor(readonly outcome: UnsubscribeFailure) {
+    super(outcome.error);
+    this.name = 'UnsubscribeAbort';
+  }
+}
 
 /**
  * Consume a one-time unsubscribe token and record the opt-out.
@@ -46,68 +61,93 @@ type UnsubscribeOutcome =
  * Shared by GET (the footer link a human clicks) and POST (RFC 8058 one-click,
  * which Gmail/Yahoo invoke from the `List-Unsubscribe-Post` header on bulk mail).
  * Both must have identical effect; only the response shape differs.
+ *
+ * The token claim and the preference write happen in ONE transaction: a
+ * transient failure on the preference write (or any error after the claim) rolls
+ * the claim back, so we never end up with a spent token and no opt-out — which
+ * would strand the recipient subscribed while the GET path reports success.
  */
 async function applyUnsubscribe(token: string): Promise<UnsubscribeOutcome> {
   const tokenHash = hashToken(token);
 
-  // Claim the token in ONE statement. A read-then-write leaves a window where two
-  // concurrent hits (a mail client's one-click POST and the human clicking the
-  // link) both see an unused token and both proceed. Gating the UPDATE on
-  // `usedAt IS NULL` and taking the returned row means exactly one caller wins.
-  const [record] = await db
-    .update(emailUnsubscribeTokens)
-    .set({ usedAt: new Date() })
-    .where(and(
-      eq(emailUnsubscribeTokens.tokenHash, tokenHash),
-      gt(emailUnsubscribeTokens.expiresAt, new Date()),
-      isNull(emailUnsubscribeTokens.usedAt)
-    ))
-    .returning({
-      userId: emailUnsubscribeTokens.userId,
-      notificationType: emailUnsubscribeTokens.notificationType,
+  let result: UnsubscribeOutcome;
+  try {
+    result = await db.transaction(async (tx): Promise<UnsubscribeOutcome> => {
+      // Claim the token in ONE statement. A read-then-write leaves a window where
+      // two concurrent hits (a mail client's one-click POST and the human
+      // clicking the link) both see an unused token and both proceed. Gating the
+      // UPDATE on `usedAt IS NULL` and taking the returned row means exactly one
+      // caller wins.
+      const [record] = await tx
+        .update(emailUnsubscribeTokens)
+        .set({ usedAt: new Date() })
+        .where(and(
+          eq(emailUnsubscribeTokens.tokenHash, tokenHash),
+          gt(emailUnsubscribeTokens.expiresAt, new Date()),
+          isNull(emailUnsubscribeTokens.usedAt)
+        ))
+        .returning({
+          userId: emailUnsubscribeTokens.userId,
+          notificationType: emailUnsubscribeTokens.notificationType,
+        });
+
+      // Nothing matched: 0 rows were written, so committing this empty
+      // transaction consumes nothing. (Already-used / expired / unknown token.)
+      if (!record) {
+        loggers.api.warn('Invalid or expired unsubscribe token attempted');
+        return { ok: false, status: 400, error: 'Invalid or expired unsubscribe link' };
+      }
+
+      const userId = record.userId;
+      const notificationType = record.notificationType as NotificationType;
+
+      // From here the token IS claimed; any non-success must roll it back.
+      if (!userId || !notificationType) {
+        throw new UnsubscribeAbort({ ok: false, status: 400, error: 'Invalid unsubscribe token' });
+      }
+
+      if (!VALID_NOTIFICATION_TYPES.has(notificationType)) {
+        loggers.api.warn('Invalid notification type in unsubscribe token', { notificationType });
+        throw new UnsubscribeAbort({ ok: false, status: 400, error: 'Invalid notification type' });
+      }
+
+      const existingPreference = await tx.query.emailNotificationPreferences.findFirst({
+        where: and(
+          eq(emailNotificationPreferences.userId, userId),
+          eq(emailNotificationPreferences.notificationType, notificationType)
+        ),
+      });
+
+      if (existingPreference) {
+        await tx
+          .update(emailNotificationPreferences)
+          .set({ emailEnabled: false, updatedAt: new Date() })
+          .where(and(
+            eq(emailNotificationPreferences.userId, userId),
+            eq(emailNotificationPreferences.notificationType, notificationType)
+          ));
+      } else {
+        await tx
+          .insert(emailNotificationPreferences)
+          .values({ userId, notificationType, emailEnabled: false });
+      }
+
+      return { ok: true, userId, notificationType };
     });
-
-  if (!record) {
-    loggers.api.warn('Invalid or expired unsubscribe token attempted');
-    return { ok: false, status: 400, error: 'Invalid or expired unsubscribe link' };
+  } catch (error) {
+    // A deliberate abort carries its own 400; anything else (a transient DB
+    // error) rolled the claim back and must surface so the caller returns 500
+    // and the recipient can retry with the same token.
+    if (error instanceof UnsubscribeAbort) return error.outcome;
+    throw error;
   }
 
-  const userId = record.userId;
-  const notificationType = record.notificationType as NotificationType;
-
-  if (!userId || !notificationType) {
-    return { ok: false, status: 400, error: 'Invalid unsubscribe token' };
+  // Audit only a committed opt-out.
+  if (result.ok) {
+    audit({ eventType: 'data.write', userId: result.userId, resourceType: 'notification_prefs', resourceId: 'self' });
   }
 
-  if (!VALID_NOTIFICATION_TYPES.has(notificationType)) {
-    loggers.api.warn('Invalid notification type in unsubscribe token', { notificationType });
-    return { ok: false, status: 400, error: 'Invalid notification type' };
-  }
-
-  const existingPreference = await db.query.emailNotificationPreferences.findFirst({
-    where: and(
-      eq(emailNotificationPreferences.userId, userId),
-      eq(emailNotificationPreferences.notificationType, notificationType)
-    ),
-  });
-
-  if (existingPreference) {
-    await db
-      .update(emailNotificationPreferences)
-      .set({ emailEnabled: false, updatedAt: new Date() })
-      .where(and(
-        eq(emailNotificationPreferences.userId, userId),
-        eq(emailNotificationPreferences.notificationType, notificationType)
-      ));
-  } else {
-    await db
-      .insert(emailNotificationPreferences)
-      .values({ userId, notificationType, emailEnabled: false });
-  }
-
-  audit({ eventType: 'data.write', userId, resourceType: 'notification_prefs', resourceId: 'self' });
-
-  return { ok: true, userId, notificationType };
+  return result;
 }
 
 /**
