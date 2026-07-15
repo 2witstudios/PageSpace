@@ -5,6 +5,14 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   test: {
+    // The default 'threads' pool runs workers as node:worker_threads, which do
+    // NOT inherit --max-old-space-size from NODE_OPTIONS the way a separate
+    // process does — each worker's V8 isolate keeps its own (unraised) heap
+    // ceiling regardless of the parent's flags. 'forks' spawns real child
+    // processes instead, so CI's NODE_OPTIONS heap bump (see ci.yml) actually
+    // takes effect and the v8-coverage-instrumented run of this ~930-file
+    // suite no longer crashes with "Ineffective mark-compacts near heap limit".
+    pool: 'forks',
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
