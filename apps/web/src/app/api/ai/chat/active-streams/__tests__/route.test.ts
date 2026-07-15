@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
-const { mockOrderBy } = vi.hoisted(() => ({ mockOrderBy: vi.fn() }));
+const { mockOrderBy, mockMaterializeInterruptedStream } = vi.hoisted(() => ({
+  mockOrderBy: vi.fn(),
+  mockMaterializeInterruptedStream: vi.fn(),
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -68,6 +71,13 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@pagespace/lib/ai/global-channel-id', () => ({
   parseGlobalChannelId: vi.fn(() => null),
+}));
+
+// Materialization is its own unit with its own tests (materialize-interrupted-stream.test.ts).
+// Stubbed here so these tests exercise the lazy sweep's DECISION (which rows get reaped), not
+// how a row is turned into an interrupted message.
+vi.mock('@/lib/ai/core/materialize-interrupted-stream', () => ({
+  materializeInterruptedStream: mockMaterializeInterruptedStream,
 }));
 
 import { GET } from '../route';
@@ -249,6 +259,81 @@ describe('GET /api/ai/chat/active-streams', () => {
     const body = await response.json();
 
     expect(body.streams).toEqual([]);
+  });
+
+  // The lazy sweep: this query already reads every 'streaming' row on the channel, so a row
+  // that is not live AND is provably dead (not mere staleness) is reaped here instead of
+  // waiting on a cron or the next send's takeover.
+  describe('the lazy materialization sweep', () => {
+    it('given a provably-dead row (crashed process), materializes it as interrupted', async () => {
+      const parts = [{ type: 'text', text: 'partial before crash' }];
+      const longAgo = new Date(Date.now() - 5 * 60 * 1000);
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-dead',
+          conversationId: 'conv-1',
+          userId: 'user-2',
+          displayName: 'Alice',
+          browserSessionId: 'session-2',
+          parts,
+          startedAt: longAgo,
+          lastHeartbeatAt: longAgo,
+        },
+      ]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith({
+        messageId: 'msg-dead',
+        channelId: mockChannelId,
+        conversationId: 'conv-1',
+        userId: 'user-2',
+        parts,
+      });
+    });
+
+    it('given a live, checkpointing row, does not materialize it', async () => {
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-live',
+          conversationId: 'conv-1',
+          userId: 'user-2',
+          displayName: 'Alice',
+          browserSessionId: 'session-2',
+          parts: [],
+          startedAt: new Date(Date.now() - 5 * 60 * 1000),
+          lastHeartbeatAt: new Date(Date.now() - 10 * 1000),
+        },
+      ]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+    });
+
+    // A long-running generation whose heartbeat rode all the way to the cap is ambiguous, not
+    // dead — isProvablyDead refuses to judge it (see stream-liveness.ts). Reaping it here would
+    // destroy a still-generating stream's only crash-recovery snapshot.
+    it('given a long-lived stream whose heartbeat is silent by DESIGN (rode to the cap), does not materialize it', async () => {
+      const startedAt = new Date(Date.now() - 65 * 60 * 1000);
+      mockOrderBy.mockResolvedValueOnce([
+        {
+          messageId: 'msg-long-silent',
+          conversationId: 'conv-1',
+          userId: 'user-1',
+          displayName: 'Me',
+          browserSessionId: 'session-1',
+          parts: [],
+          startedAt,
+          // Beat stopped almost exactly at the 60-minute cap — ambiguous, not proof of death.
+          lastHeartbeatAt: new Date(startedAt.getTime() + 60 * 60 * 1000 - 1_000),
+        },
+      ]);
+
+      await GET(makeRequest());
+
+      expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+    });
   });
 
   it('given no active streams, should return an empty streams array', async () => {

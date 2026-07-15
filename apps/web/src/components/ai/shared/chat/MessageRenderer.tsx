@@ -33,6 +33,8 @@ interface TextBlockProps {
   onCancelEdit?: () => void;
   /** Whether this message is currently being streamed (for progressive markdown rendering) */
   isStreaming?: boolean;
+  /** The generation died mid-flight; this is a real but partial, terminal reply. */
+  isInterrupted?: boolean;
 }
 
 /**
@@ -51,11 +53,17 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   isEditing,
   onSaveEdit,
   onCancelEdit,
-  isStreaming = false
+  isStreaming = false,
+  isInterrupted = false,
 }) => {
   const content = parts.map(part => part.text).join('');
 
-  if (!content.trim() && !isEditing) return null;
+  // An interrupted reply may have died before a single part ever arrived — content is then
+  // literally empty. That is not "nothing to show": it is the honest, terminal fact that the
+  // generation produced nothing before it was cut short, and hiding it would recreate the
+  // silent-loss problem this status exists to surface. Only a genuinely empty, non-terminal
+  // block still renders as nothing.
+  if (!content.trim() && !isEditing && !isInterrupted) return null;
 
   return (
     <div
@@ -89,6 +97,16 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
               />
             </div>
           </div>
+          {isInterrupted && (
+            <div className="mt-1 flex items-center gap-2 text-xs" data-testid="interrupted-affordance">
+              <span className="rounded bg-amber-100 dark:bg-amber-950/40 px-1.5 py-0.5 font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                Interrupted
+              </span>
+              {onRetry && (
+                <span className="text-gray-500 dark:text-gray-400">Generation was cut short — retry to continue.</span>
+              )}
+            </div>
+          )}
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-2">
             <div className="text-xs text-gray-500">
@@ -262,6 +280,8 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // Check if this message has tool calls (for showing undo button on assistant messages)
   const hasToolCalls = message.role === 'assistant' && groupedParts.some(g => isProcessedToolPart(g) || isToolRunGroupPart(g));
 
+  const isInterrupted = message.role === 'assistant' && message.status === 'interrupted';
+
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
 
@@ -374,6 +394,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 onSaveEdit={handleSaveEdit}
                 onCancelEdit={() => setIsEditing(false)}
                 isStreaming={isStreaming}
+                isInterrupted={isLastTextBlock && isInterrupted}
               />
             );
           } else if (isFileGroupPart(group)) {

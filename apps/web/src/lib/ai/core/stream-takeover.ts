@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { abortStreamByMessageId, wasRecentlyFinishedHere } from '@/lib/ai/core/stream-abort-registry';
@@ -10,6 +10,7 @@ import {
   reconcileDeadStreamRows,
 } from '@/lib/ai/core/stream-abort-mark';
 import { TAKEOVER_SETTLE_TIMEOUT_MS } from '@/lib/ai/core/stream-horizons';
+import { materializeInterruptedStream } from '@/lib/ai/core/materialize-interrupted-stream';
 
 /**
  * Per-conversation in-flight guard. Used by both chat routes (POST /api/ai/chat and
@@ -75,6 +76,11 @@ export const takeOverConversationStreams = async ({
         userId: aiStreamSessions.userId,
         lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
         startedAt: aiStreamSessions.startedAt,
+        // The debounced parts snapshot — needed only if this row ends up in `reconcile` and gets
+        // materialized into an interrupted message. Selected unconditionally since it rides the
+        // same query as everything else here and there are at most a handful of in-flight rows
+        // per conversation.
+        parts: aiStreamSessions.parts,
       })
       .from(aiStreamSessions)
       .where(and(
@@ -117,42 +123,28 @@ export const takeOverConversationStreams = async ({
     const { reconcile } = decideStreamTakeover({ rows, abortedMessageIds: aborted, now });
 
     if (reconcile.length > 0) {
-      // Its OWN catch, deliberately.
+      // Per-row, deliberately — since Server Stream Durability PR 3, reconciling a row means
+      // materializing its parts snapshot into an honest `status: 'interrupted'` message, not just
+      // wiping the session row. `materializeInterruptedStream` never throws (it catches and logs
+      // its own DB failures per step), so unlike the old bulk UPDATE, one row's write failing can
+      // no longer take out the whole batch or misreport what happened to the others.
       //
-      // By this point the aborts above have already landed: real in-process generations have
-      // been STOPPED. If this UPDATE then throws and the outer catch swallows it, we return
-      // `{aborted: [], reconciled: []}` — "nothing happened" — which is a lie. Streams were
-      // stopped, and their rows are still `status='streaming'`, so every reader treats them as
-      // live: /active-streams advertises them, clients render a Stop button for a generation that
-      // is already dead. The one thing the caller must be told accurately is what was actually
-      // aborted, and the old shape guaranteed it would be told the opposite.
-      //
-      // The rows self-heal: a stopped generation stops beating, so within
-      // STREAM_HEARTBEAT_STALE_MS the liveness predicate calls them dead, /active-streams stops
-      // serving them, and the next takeover reconciles them. That is exactly the failure mode the
-      // heartbeat exists to absorb — so the right move is to report the truth and let it, not to
-      // fail the send.
-      try {
-        // Conditional on status so a stream that terminated on its own between the
-        // SELECT and here isn't retroactively relabelled 'aborted'.
-        await db
-          .update(aiStreamSessions)
-          .set({ status: 'aborted', completedAt: new Date(), parts: [], abortRequestedAt: null })
-          .where(and(
-            inArray(aiStreamSessions.messageId, reconcile),
-            eq(aiStreamSessions.status, 'streaming'),
-          ));
-      } catch (error) {
-        loggers.ai.warn('AI Chat API: takeover aborted streams but could not reconcile their rows', {
-          conversationId,
+      // A row whose materialization fails simply stays `status='streaming'` and is picked up again
+      // by the next takeover, the abort-mark reconciler, or the active-streams lazy sweep — the
+      // same self-heal this module already relies on for heartbeat-driven reconciliation: a
+      // stopped generation stops beating, so within STREAM_HEARTBEAT_STALE_MS the liveness
+      // predicate calls it dead and the next pass reconciles it.
+      const rowById = new Map(rows.map((r) => [r.messageId, r]));
+      for (const messageId of reconcile) {
+        const row = rowById.get(messageId);
+        if (!row) continue;
+        await materializeInterruptedStream({
+          messageId,
           channelId,
-          // The streams ARE stopped. These rows will read 'streaming' until their heartbeat
-          // goes stale (~2 min), then be reconciled by the next takeover.
-          aborted,
-          unreconciled: reconcile,
-          error: error instanceof Error ? error.message : 'unknown',
+          conversationId,
+          userId: row.userId,
+          parts: row.parts,
         });
-        return { aborted, reconciled: [] };
       }
     }
 

@@ -7,8 +7,9 @@ import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { isStreamRowLive } from '@/lib/ai/core/stream-liveness';
+import { isStreamRowLive, isProvablyDead } from '@/lib/ai/core/stream-liveness';
 import { filterSubscribableStreams } from '@/lib/ai/core/stream-subscription-authz';
+import { materializeInterruptedStream } from '@/lib/ai/core/materialize-interrupted-stream';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -104,6 +105,23 @@ export async function GET(request: Request) {
     // their own streams, plus streams in explicitly shared conversations.
     const live = rows.filter((r) => isStreamRowLive(r, now));
     const streams = await filterSubscribableStreams({ userId, rows: live });
+
+    // Lazy reap: this query already reads every 'streaming' row on the channel, so any row that
+    // is not live and is PROVABLY dead (never mere staleness — see isProvablyDead) is reaped here
+    // rather than waiting on a cron or the next send's takeover. Fire-and-forget: a channel with
+    // no more traffic on it would otherwise never trigger a takeover again, and this response must
+    // not wait on a reap of rows the caller didn't even ask to see.
+    for (const row of rows) {
+      if (isStreamRowLive(row, now)) continue;
+      if (!isProvablyDead(row, now)) continue;
+      void materializeInterruptedStream({
+        messageId: row.messageId,
+        channelId,
+        conversationId: row.conversationId,
+        userId: row.userId,
+        parts: row.parts,
+      });
+    }
 
     return NextResponse.json({
       streams: streams.map((s) => ({
