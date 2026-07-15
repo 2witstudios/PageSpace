@@ -14,16 +14,21 @@ export default defineConfig({
     // suite no longer crashes with "Ineffective mark-compacts near heap limit".
     pool: 'forks',
     // Trimming the reporters (below) didn't fully fix it either: 2 forks still
-    // hit the identical FATAL ERROR after all their assigned tests passed. Root
-    // cause: the v8 coverage provider retains precise per-script coverage data
-    // for every file a process has ever run, for that process's whole lifetime —
-    // it never gets released between files. With the default fork count (~one
-    // per CPU) on this ~930-file suite, each long-lived worker accumulates that
-    // data across ~300 sequential files before finishing, eventually exceeding
-    // even an 8GB ceiling. Raising maxForks shrinks each worker's file share
-    // (and thus its accumulated coverage memory) well before it can build up
-    // that far.
-    poolOptions: { forks: { minForks: 1, maxForks: 8 } },
+    // hit the identical FATAL ERROR after all their assigned tests passed —
+    // confirmed via CI log as a graceful per-process V8 ceiling breach (exit
+    // code 1, all tests still reported passed), NOT a system-level OOM-kill.
+    // Raising maxForks to 8 (tried next) made that per-process crash disappear,
+    // but instead caused a genuine system-level OOM-kill (exit 137, "runner has
+    // received a shutdown signal") — 8 truly concurrent coverage-instrumented
+    // forks summed past the 16GB runner's physical RAM even though no single
+    // one hit its own ceiling. That run proved the default (~one fork per CPU,
+    // ~3 on this runner) does NOT exceed total system memory — both prior
+    // failures at that concurrency were clean, non-signal exits. So: lock
+    // concurrency to a known-safe, deliberately low value (rather than trust
+    // the runner's exact CPU count) and spend the confirmed headroom entirely
+    // on the per-process ceiling (see NODE_OPTIONS in ci.yml) instead of on
+    // more parallel forks.
+    poolOptions: { forks: { minForks: 3, maxForks: 3 } },
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
