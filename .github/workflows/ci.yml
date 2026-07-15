@@ -66,22 +66,17 @@ jobs:
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-          # v8 coverage instrumentation is memory-heavy. `coverage.all: false` (see
-          # apps/web/vitest.config.ts) addresses the actual memory driver — hundreds
-          # of never-tested files no longer get instrumented for nothing — but at
-          # 8192MB (confirmed via CI log) 2 of the default-concurrency forks still
-          # hit the ceiling, cleanly, at some point after processing many files —
-          # never any single identifiably-heavy file nearby, consistent with genuine
-          # cumulative growth across each fork's file share. `all: false` measurably
-          # helped (no more of the multi-hundred-MB-over-ceiling thrashing seen at
-          # 14GB under a *locked* 3-fork pool) so raising the ceiling further should
-          # now be safe — moved to 12288MB (still leaving ~4GB of the runner's 16GB
-          # for Postgres + OS), deliberately below the 14336MB that induced ~53min
-          # of GC-thrashing under a rigid fork-count lock. Left fork concurrency at
-          # its (unlocked) default this time — a dynamically-scaling pool should
-          # degrade more gracefully near a high ceiling than one hard-pinned to a
-          # fixed size.
-          NODE_OPTIONS: --max-old-space-size=12288
+          # v8 coverage instrumentation is memory-heavy. `coverage.all: false` plus
+          # sharding the run into 3 sequential batches (see apps/web/package.json's
+          # test:coverage script and apps/web/scripts/test-coverage-sharded.mjs) is
+          # the actual fix — see that script's header comment and
+          # apps/web/vitest.config.ts's git history for the full trail of
+          # single-invocation fork-count/heap-ceiling tuning attempts that either
+          # crashed, OOM-killed the job, or destabilized the runner itself under
+          # sustained memory pressure. This ceiling is now just modest headroom for
+          # a single shard's share of the suite (~1/3 of ~930 files), not the
+          # primary defense.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's

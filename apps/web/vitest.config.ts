@@ -2,6 +2,33 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+// Kept as its own binding (rather than inline under `coverage.thresholds`)
+// because scripts/test-coverage-sharded.mjs and ../../scripts/coverage-ratchet.mjs
+// both regex-parse this exact block directly from this file's source text —
+// do not change its shape (the ratchet-marker comments below, or the
+// per-glob object literal syntax) without checking both scripts. Do not
+// write the two marker comments adjacent to each other anywhere else in
+// this file (even in prose) — both scripts' regexes match the FIRST
+// occurrence, and a second one earlier in the file would shadow the real
+// block.
+const coverageThresholds = {
+  /* ratchet:start */
+  lines: 44,
+  branches: 85,
+  functions: 56,
+  statements: 44,
+  /* ratchet:end */
+  // Store-first rendering foundations (E1 PR3): new pure modules gated
+  // at 100% branch. Single-star globs deliberately exclude __tests__/
+  // subdirectories — test files carry their own incidental branches
+  // (e.g. it.each fixtures) that have no bearing on source coverage.
+  'src/lib/ai/streams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+  'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+  'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+  'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+  'src/stores/pendingStreams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+}
+
 export default defineConfig({
   plugins: [react()],
   test: {
@@ -10,24 +37,23 @@ export default defineConfig({
     // process does — each worker's V8 isolate keeps its own (unraised) heap
     // ceiling regardless of the parent's flags. 'forks' spawns real child
     // processes instead, so CI's NODE_OPTIONS heap bump (see ci.yml) actually
-    // takes effect and the v8-coverage-instrumented run of this ~930-file
-    // suite no longer crashes with "Ineffective mark-compacts near heap limit".
+    // takes effect.
     pool: 'forks',
-    // Fork-count/ceiling tuning alone couldn't fix the coverage-run OOM (see
-    // this file's and ci.yml's git history for the full trail — 4 different
-    // combinations tried: graceful per-process crashes, a system-level OOM-kill
-    // at high concurrency, and a ~53-minute GC-thrashing hang at a high ceiling
-    // with low, locked concurrency). Switching the coverage provider to
-    // 'istanbul' was also tried and reverted: its babel-counter instrumentation
-    // counts branches differently than v8's precise coverage, which silently
-    // dropped several files below their 100% thresholds (e.g. lines 98.96%,
-    // branches 98.02% on src/lib/ai/streams/*.ts) — fixing that would mean
-    // writing new tests, out of scope for a CI-infra fix. Addressed the actual
-    // memory driver instead: `coverage.all` (see below) was leaving hundreds of
-    // never-tested source files instrumented for no reason. Reverted
-    // concurrency to the pool's default (proven safe against total system
-    // memory across two earlier runs) and kept a modest heap bump as headroom,
-    // not as the primary fix.
+    // The coverage run's memory footprint could not be solved by tuning fork
+    // count and heap ceiling within a single `vitest run` invocation — every
+    // combination tried either crashed 1-2 forks near the end, OOM-killed the
+    // whole job, or destabilized the runner itself (a ~53min GC-thrashing hang
+    // and a ~12min unresponsive stall, both ending in an external shutdown
+    // signal — see git history on this file and ci.yml for the full trail,
+    // including a reverted attempt at the 'istanbul' coverage provider that
+    // silently broke 100%-threshold guarantees via different branch counting).
+    // `coverage.all: false` (below) measurably helped but wasn't sufficient
+    // alone. The actual fix is structural: package.json's `test:coverage` runs
+    // scripts/test-coverage-sharded.mjs instead of `vitest run --coverage`
+    // directly — it runs the suite in 3 sequential shards so each shard's
+    // fork pool fully tears down (releasing its accumulated coverage memory)
+    // before the next starts, bounding peak memory to roughly a third of the
+    // whole suite at any moment instead of the whole thing at once.
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
@@ -64,28 +90,13 @@ export default defineConfig({
         '**/drizzle/**',
         '**/node_modules/**',
       ],
-      thresholds: {
-        // The /* ratchet:start */.../* ratchet:end */ markers below are load-bearing:
-        // ../../scripts/coverage-ratchet.mjs matches this exact comment-delimited region
-        // to rewrite only these four scalars and never touch the per-glob keys after
-        // ratchet:end. Do not remove/move the markers, and do not add new scalar
-        // thresholds inside them — see that script's header comment for why.
-        /* ratchet:start */
-        lines: 44,
-        branches: 85,
-        functions: 56,
-        statements: 44,
-        /* ratchet:end */
-        // Store-first rendering foundations (E1 PR3): new pure modules gated
-        // at 100% branch. Single-star globs deliberately exclude __tests__/
-        // subdirectories — test files carry their own incidental branches
-        // (e.g. it.each fixtures) that have no bearing on source coverage.
-        'src/lib/ai/streams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
-        'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
-        'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
-        'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
-        'src/stores/pendingStreams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
-      },
+      // A per-shard run (VITEST_COVERAGE_SHARD, set only by
+      // scripts/test-coverage-sharded.mjs) must not self-enforce these — its
+      // own file subset isn't the right denominator for thresholds calibrated
+      // against the whole suite. The sharding script re-checks these exact
+      // values itself after merging all shards' coverage. A plain
+      // `vitest run --coverage` (no sharding) still enforces normally.
+      thresholds: process.env.VITEST_COVERAGE_SHARD ? undefined : coverageThresholds,
     },
   },
   resolve: {

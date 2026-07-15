@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch --yes",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "node scripts/test-coverage-sharded.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.87",
@@ -148,6 +148,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.18",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "istanbul-lib-coverage": "^3.2.2",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
