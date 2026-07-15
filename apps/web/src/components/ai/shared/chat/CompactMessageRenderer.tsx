@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { RotateCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { CompactToolCallRenderer, CompactToolRunGroup } from './tool-calls';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -257,6 +259,11 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   const { getToolCallOpen, setToolCallOpen } = useToolCallOpenState();
 
   const isInterrupted = message.role === 'assistant' && message.status === 'interrupted';
+  // CompactTextBlock already renders its own retry button whenever it has non-empty content —
+  // this guards the message-level retry button below from double-rendering for that case.
+  const hasNonEmptyTextBlock = groupedParts.some(
+    (g) => isTextGroupPart(g) && g.parts.map((p) => p.text).join('').trim() !== '',
+  );
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
@@ -429,6 +436,21 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             </span>
             {canRetry && (
               <span className="text-gray-500 dark:text-gray-400">Cut short — retry to continue.</span>
+            )}
+            {/* CompactTextBlock is the only other place a retry button lives, and it only
+                renders for non-empty content — this is the sole retry control for an
+                empty/tool-only interrupted message. Gated on !hasNonEmptyTextBlock so a message
+                that DID stream real text doesn't show the button twice. */}
+            {canRetry && !hasNonEmptyTextBlock && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRetry}
+                className="h-4 px-0.5"
+                title="Retry this message"
+              >
+                <RotateCw className="h-2 w-2" />
+              </Button>
             )}
           </div>
         )}

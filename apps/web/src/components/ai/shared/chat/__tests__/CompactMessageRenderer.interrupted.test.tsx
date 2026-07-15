@@ -71,6 +71,20 @@ describe('CompactMessageRenderer — interrupted affordance', () => {
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
   });
 
+  // The regression this guards against: CompactTextBlock never renders on empty content, so
+  // its footer (the only place the retry BUTTON usually lives) never appears either.
+  it('given an interrupted message with zero content and a retry handler, still exposes an actual retry button', () => {
+    render(
+      <CompactMessageRenderer
+        message={assistantMessage({ status: 'interrupted', parts: [{ type: 'text', text: '' }] })}
+        onRetry={() => {}}
+        isLastAssistantMessage
+      />,
+    );
+
+    expect(screen.getByTitle('Retry this message')).toBeInTheDocument();
+  });
+
   it('given an interrupted message with ONLY a tool part (no text ever arrived), still shows the badge', () => {
     render(
       <CompactMessageRenderer
@@ -90,6 +104,41 @@ describe('CompactMessageRenderer — interrupted affordance', () => {
     );
 
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
+  });
+
+  it('given an interrupted message with ONLY a tool part and a retry handler, still exposes an actual retry button', () => {
+    render(
+      <CompactMessageRenderer
+        message={assistantMessage({
+          status: 'interrupted',
+          parts: [
+            {
+              type: 'tool-search',
+              toolCallId: 'tc-1',
+              toolName: 'search',
+              input: { q: 'hello' },
+              state: 'input-available',
+            } as unknown as UIMessage['parts'][number],
+          ],
+        })}
+        onRetry={() => {}}
+        isLastAssistantMessage
+      />,
+    );
+
+    expect(screen.getByTitle('Retry this message')).toBeInTheDocument();
+  });
+
+  it('given an interrupted message WITH real text content and a retry handler, shows exactly ONE retry button', () => {
+    render(
+      <CompactMessageRenderer
+        message={assistantMessage({ status: 'interrupted' })}
+        onRetry={() => {}}
+        isLastAssistantMessage
+      />,
+    );
+
+    expect(screen.getAllByTitle('Retry this message')).toHaveLength(1);
   });
 
   it('given a USER message with status "interrupted" (should never happen, but must never mislabel), shows no badge', () => {

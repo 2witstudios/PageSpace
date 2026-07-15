@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
+import { RotateCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { ToolCallRenderer, ToolRunGroup } from './tool-calls';
 
 import { StreamingMarkdown } from './StreamingMarkdown';
@@ -263,6 +265,13 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   const hasToolCalls = message.role === 'assistant' && groupedParts.some(g => isProcessedToolPart(g) || isToolRunGroupPart(g));
 
   const isInterrupted = message.role === 'assistant' && message.status === 'interrupted';
+  // TextBlock already renders its own retry button in its footer whenever it has non-empty
+  // content — the message-level retry button below exists ONLY for the case TextBlock can't
+  // cover (empty or tool-only content, where no TextBlock ever renders). Without this check, a
+  // normal interrupted message with real text would show two retry buttons.
+  const hasNonEmptyTextBlock = groupedParts.some(
+    (g) => isTextGroupPart(g) && g.parts.map((p) => p.text).join('').trim() !== '',
+  );
 
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
@@ -429,6 +438,21 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             </span>
             {canRetry && (
               <span className="text-gray-500 dark:text-gray-400">Generation was cut short — retry to continue.</span>
+            )}
+            {/* An interrupted message with empty or tool-only content never renders a TextBlock
+                (its footer is where the retry button normally lives) — this is the only retry
+                control such a message gets. Gated on !hasNonEmptyTextBlock so a message that DID
+                stream real text before dying doesn't show this button twice. */}
+            {canRetry && !hasNonEmptyTextBlock && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRetry}
+                className="h-5 px-1"
+                title="Retry this message"
+              >
+                <RotateCw className="h-2.5 w-2.5" />
+              </Button>
             )}
           </div>
         )}

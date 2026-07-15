@@ -69,6 +69,21 @@ describe('MessageRenderer — interrupted affordance', () => {
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
   });
 
+  // The regression this guards against: an empty-content interrupted message never renders a
+  // TextBlock, so TextBlock's own footer (the only place the retry BUTTON usually lives) never
+  // appears either — the hint text alone is not an actionable control.
+  it('given an interrupted message with zero content and a retry handler, still exposes an actual retry button', () => {
+    render(
+      <MessageRenderer
+        message={assistantMessage({ status: 'interrupted', parts: [{ type: 'text', text: '' }] })}
+        onRetry={() => {}}
+        isLastAssistantMessage
+      />,
+    );
+
+    expect(screen.getByTitle('Retry this message')).toBeInTheDocument();
+  });
+
   // The badge must not be coupled to any one part shape: a stream can die mid-tool-call, before
   // any trailing text ever arrives, leaving `parts` entirely tool-only (no text-group at all).
   // Nesting the badge inside the text block's own render would make it vanish for exactly this
@@ -92,6 +107,43 @@ describe('MessageRenderer — interrupted affordance', () => {
     );
 
     expect(screen.getByText('Interrupted')).toBeInTheDocument();
+  });
+
+  it('given an interrupted message with ONLY a tool part and a retry handler, still exposes an actual retry button', () => {
+    render(
+      <MessageRenderer
+        message={assistantMessage({
+          status: 'interrupted',
+          parts: [
+            {
+              type: 'tool-search',
+              toolCallId: 'tc-1',
+              toolName: 'search',
+              input: { q: 'hello' },
+              state: 'input-available',
+            } as unknown as UIMessage['parts'][number],
+          ],
+        })}
+        onRetry={() => {}}
+        isLastAssistantMessage
+      />,
+    );
+
+    expect(screen.getByTitle('Retry this message')).toBeInTheDocument();
+  });
+
+  // The other half of the fix: a message that DID stream real text before dying already gets a
+  // retry button from TextBlock's own footer — the message-level button must not duplicate it.
+  it('given an interrupted message WITH real text content and a retry handler, shows exactly ONE retry button', () => {
+    render(
+      <MessageRenderer
+        message={assistantMessage({ status: 'interrupted' })}
+        onRetry={() => {}}
+        isLastAssistantMessage
+      />,
+    );
+
+    expect(screen.getAllByTitle('Retry this message')).toHaveLength(1);
   });
 
   it('given a USER message with status "interrupted" (should never happen, but must never mislabel), shows no badge', () => {
