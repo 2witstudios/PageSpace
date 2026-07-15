@@ -3,7 +3,7 @@ import { finishTool, FINISH_TOOL_NAME } from './finish-tool';
 import { z } from 'zod';
 import { generateText, UIMessage, type ToolSet, type Tool } from 'ai';
 import { db } from '@pagespace/db/db'
-import { eq, and, sql } from '@pagespace/db/operators'
+import { eq, and, ne, sql } from '@pagespace/db/operators'
 import { pages, chatMessages, drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
@@ -489,14 +489,16 @@ export const agentCommunicationTools = {
         // 4. Load conversation history if continuing an existing conversation
         let messages: UIMessage[] = [];
         if (conversationId) {
-          // Load existing conversation history
+          // Load existing conversation history. Excludes 'streaming' placeholders — this
+          // feeds the target agent's own model context. See Server Stream Durability epic PR 2.
           const dbMessages = await db
             .select()
             .from(chatMessages)
             .where(and(
               eq(chatMessages.pageId, agentId),
               eq(chatMessages.conversationId, conversationId),
-              eq(chatMessages.isActive, true)
+              eq(chatMessages.isActive, true),
+              ne(chatMessages.status, 'streaming')
             ))
             .orderBy(chatMessages.createdAt);
 

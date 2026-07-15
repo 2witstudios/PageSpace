@@ -23,6 +23,7 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  ne: vi.fn(),
   and: vi.fn(),
   desc: vi.fn(),
 }));
@@ -104,6 +105,7 @@ const dbRow = (parts: UIMessage['parts'], overrides: Record<string, unknown> = {
     isActive: true,
     editedAt: null,
     messageType: 'standard' as const,
+    status: 'complete' as const,
     ...overrides,
   };
 };
@@ -229,6 +231,34 @@ describe('applyAskUserResultsToPageMessage', () => {
     expect(result).toEqual({ merged: false });
     expect(saveMessageToDatabase).not.toHaveBeenCalled();
   });
+
+  it('preserves an interrupted row as interrupted — does not silently flip it back to complete', async () => {
+    selectRows = [dbRow([pendingPart('q1')], { status: 'interrupted' })];
+
+    const result = await applyAskUserResultsToPageMessage({
+      messageId: 'msg-1',
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      results: [{ toolCallId: 'q1', output: { answers: [{ header: 'Auth', question: 'Which?', selectedLabel: 'OAuth' }] } }],
+    });
+
+    expect(result).toEqual({ merged: true });
+    expect(saveMessageToDatabase).toHaveBeenCalledTimes(1);
+    expect(saveMessageToDatabase.mock.calls[0][0].status).toBe('interrupted');
+  });
+
+  it('persists a complete row as complete', async () => {
+    selectRows = [dbRow([pendingPart('q1')], { status: 'complete' })];
+
+    await applyAskUserResultsToPageMessage({
+      messageId: 'msg-1',
+      pageId: 'page-1',
+      conversationId: 'conv-1',
+      results: [{ toolCallId: 'q1', output: { answers: [{ header: 'Auth', question: 'Which?', selectedLabel: 'OAuth' }] } }],
+    });
+
+    expect(saveMessageToDatabase.mock.calls[0][0].status).toBe('complete');
+  });
 });
 
 describe('dismissPendingAskUserForPageConversation', () => {
@@ -258,5 +288,14 @@ describe('dismissPendingAskUserForPageConversation', () => {
     await dismissPendingAskUserForPageConversation({ pageId: 'page-1', conversationId: 'conv-1' });
 
     expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  it('preserves an interrupted row as interrupted on dismiss', async () => {
+    selectRows = [dbRow([pendingPart('q1')], { status: 'interrupted' })];
+
+    await dismissPendingAskUserForPageConversation({ pageId: 'page-1', conversationId: 'conv-1' });
+
+    expect(saveMessageToDatabase).toHaveBeenCalledTimes(1);
+    expect(saveMessageToDatabase.mock.calls[0][0].status).toBe('interrupted');
   });
 });

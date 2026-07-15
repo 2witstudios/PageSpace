@@ -56,6 +56,16 @@ export async function PATCH(
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
 
+    // A 'streaming' row is mid-flight: its content is a placeholder the generation is about
+    // to overwrite via the execute-end/onFinish upsert. Editing it now would be silently
+    // clobbered the moment that upsert lands. See Server Stream Durability epic PR 2.
+    if (message.status === 'streaming') {
+      return NextResponse.json(
+        { error: 'This message is still generating and cannot be edited yet' },
+        { status: 409 }
+      );
+    }
+
     // Store original content for activity logging
     const originalContent = message.content;
 
@@ -176,6 +186,16 @@ export async function DELETE(
     const message = await globalConversationRepository.getMessageById(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+    }
+
+    // A 'streaming' row is mid-flight: deleting it now would race the execute-end/onFinish
+    // upsert, which does not check isActive and would resurrect the row's content into an
+    // inactive-but-visible-again state. See Server Stream Durability epic PR 2.
+    if (message.status === 'streaming') {
+      return NextResponse.json(
+        { error: 'This message is still generating and cannot be deleted yet' },
+        { status: 409 }
+      );
     }
 
     // Store content for audit trail before deletion

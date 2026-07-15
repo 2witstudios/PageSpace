@@ -87,7 +87,7 @@ import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/ag
 // execute_tool would hit that tool's allowlist check and be rejected.
 const ALWAYS_UPFRONT_TOOLS = new Set(['web_search', 'generate_image']);
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { chatMessages, pages, drives } from '@pagespace/db/schema/core';
 import { userProfiles } from '@pagespace/db/schema/members';
@@ -108,7 +108,7 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext } from '@/lib/ai/shared/buildPageContext';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
@@ -144,6 +144,20 @@ export async function POST(request: Request) {
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
   let serverAssistantMessageId: string | undefined;
+  // Set once the assistant placeholder row has received a terminal write (execute-end or
+  // onFinish). The outer catch's best-effort cleanup below must not fire once this is true —
+  // it would otherwise downgrade an already-'complete' row to 'interrupted' if something threw
+  // AFTER a successful persist but before the response was returned. See Server Stream
+  // Durability epic PR 2 — Codex review: a stream stopped before any content (or before
+  // createUIMessageStream even finishes constructing) must not leave the placeholder stuck at
+  // 'streaming' forever (excluded from reads, 409s on edit/delete).
+  let assistantMessagePersisted = false;
+  // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
+  // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
+  // from, so by the time the outer catch below runs, a fresh getBufferedParts() call would
+  // always see an empty buffer. Falls back to a fresh (empty) capture in the outer catch when
+  // this was never set (i.e. the throw happened somewhere else, before finish() ever ran).
+  let bufferedPartsAtStreamError: ReturnType<StreamLifecycleHandle['getBufferedParts']> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // True once the stream/error handler owns the hold's release. Any earlier
@@ -1126,13 +1140,19 @@ export async function POST(request: Request) {
     if (askUserSyncPromise) await askUserSyncPromise;
 
     const pageId = chatId as string;
+    // Exclude 'streaming' placeholders — this load is the model-context source AND the
+    // compaction source (prepareHistoryForModel below), so a placeholder here would both
+    // poison this job's own turn (it hasn't finished writing yet) and risk being silently
+    // summarized into a durable compaction. 'interrupted' rows stay included — they are
+    // terminal, real partial output. See Server Stream Durability epic PR 2.
     const dbMessages = await db
       .select()
       .from(chatMessages)
       .where(and(
         eq(chatMessages.pageId, pageId),
         eq(chatMessages.conversationId, conversationId),
-        eq(chatMessages.isActive, true)
+        eq(chatMessages.isActive, true),
+        ne(chatMessages.status, 'streaming')
       ))
       .orderBy(chatMessages.createdAt);
 
@@ -1149,6 +1169,7 @@ export async function POST(request: Request) {
         isActive: msg.isActive,
         editedAt: msg.editedAt,
         messageType: msg.messageType === 'todo_list' ? 'todo_list' : 'standard',
+        status: msg.status,
       })
     ));
 
@@ -1236,7 +1257,7 @@ export async function POST(request: Request) {
           channelId: chatId!,
         });
 
-        return createStreamLifecycle({
+        const streamLifecycle = await createStreamLifecycle({
           messageId: serverAssistantMessageId!,
           channelId: chatId!,
           conversationId: conversationId!,
@@ -1246,6 +1267,31 @@ export async function POST(request: Request) {
           streamId,
           isShared: isConversationShared,
         });
+
+        // Assistant message row at stream start (Server Stream Durability epic, PR 2): a
+        // 'streaming' placeholder so history can show in-flight entries and pre-checkpoint
+        // process death doesn't silently lose the reply. Same critical section as
+        // takeover+lifecycle-create (PR 4 seam note) so a second send can never observe a
+        // stream row without its placeholder, or vice versa. Skipped when pre-aborted — the
+        // user pressed Stop before streamText ever ran, so there is no generation to show and
+        // no execute-end/onFinish write will ever arrive to flip this row out of 'streaming'.
+        if (!streamLifecycle.preAborted) {
+          await db.insert(chatMessages).values({
+            id: serverAssistantMessageId!,
+            pageId: chatId!,
+            conversationId: conversationId!,
+            role: 'assistant',
+            content: '',
+            toolCalls: null,
+            toolResults: null,
+            isActive: true,
+            userId: null,
+            sourceAgentId: null,
+            status: 'streaming',
+          });
+        }
+
+        return streamLifecycle;
       },
     });
 
@@ -1298,7 +1344,14 @@ export async function POST(request: Request) {
           // execute(), so onFinish still fires exactly once below.
           const runResult = await runAgentWithRetry({
             writer,
-            abortSignal,
+            // Combined with the credit gate's controller (not just the plain abort registry
+            // signal) so a mid-stream credit exhaustion is visible to classifyAttempt/isRunAborted
+            // the same way it's already visible to streamText below — otherwise the run either
+            // retries against an already-exhausted balance or terminalizes as 'complete' instead
+            // of 'interrupted'. See Server Stream Durability epic PR 2 review.
+            abortSignal: creditAbortController
+              ? AbortSignal.any([abortSignal, creditAbortController.signal])
+              : abortSignal,
             baseMessages: modelMessages,
             finishToolName: FINISH_TOOL_NAME,
             pauseToolNames: [ASK_USER_TOOL_NAME],
@@ -1425,28 +1478,43 @@ export async function POST(request: Request) {
           // idempotent upsert: onFinish, when it runs, refines this write with the
           // richer SDK responseMessage (better tool ordering). When onFinish never
           // runs, this write stands as the sole record of the message.
+          //
+          // Status: a run the user (or the credit gate) stopped is 'interrupted', not
+          // 'complete' — its content, even if non-empty, was cut short, not delivered in
+          // full. Unconditional now (not gated on buffered content or abort): a run that
+          // exhausted its retries without ever aborting or producing a responseMessage
+          // (a sustained provider outage, say) used to fall through BOTH this block and
+          // onFinish's `if (responseMessage)` guard, leaving the placeholder stuck at
+          // 'streaming' forever — excluded from every reader by default AND rejected by
+          // edit/delete's 409 guard, an invisible, permanently-locked ghost row. See
+          // Server Stream Durability epic PR 2 — Codex + CodeRabbit review.
           if (chatId && serverAssistantMessageId) {
             const bufferedParts = lifecycle!.getBufferedParts();
-            if (bufferedParts.length > 0) {
-              const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
-              try {
-                await saveMessageToDatabase({
-                  messageId: serverAssistantMessageId,
-                  pageId: chatId,
-                  conversationId: conversationId!,
-                  userId: null,
-                  role: 'assistant',
-                  ...payload,
-                });
-              } catch (e) {
-                loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
-              }
+            const aborted = isRunAborted({ agentRun, abortSignal });
+            const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+            try {
+              await saveMessageToDatabase({
+                messageId: serverAssistantMessageId,
+                pageId: chatId,
+                conversationId: conversationId!,
+                userId: null,
+                role: 'assistant',
+                ...payload,
+                status: aborted ? 'interrupted' : 'complete',
+              });
+              assistantMessagePersisted = true;
+            } catch (e) {
+              loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
             }
           }
         },
         onFinish: async ({ responseMessage }) => {
           // Clean up abort controller from registry
           removeStream({ streamId });
+
+          // Computed once and reused below (persist status + lifecycle.finish's aborted flag)
+          // so the two can never disagree about whether this run was stopped.
+          const aborted = isRunAborted({ agentRun, abortSignal });
 
           loggers.ai.debug('AI Chat API: onFinish callback triggered for AI response');
           
@@ -1484,7 +1552,14 @@ export async function POST(request: Request) {
           // settlement below — that would leak the gate's hold.
           // Uses buildAssistantPersistencePayload so this path and the execute-end
           // durable path share the same extraction logic and cannot diverge.
-          if (chatId && responseMessage) {
+          //
+          // !lifecycle?.preAborted: the AI SDK always calls onFinish with a non-null
+          // responseMessage (an empty {parts: []} shell when execute() wrote nothing), even for a
+          // pre-aborted stream where the placeholder INSERT above was deliberately skipped. Without
+          // this guard, saveMessageToDatabase's upsert would INSERT a brand-new phantom empty
+          // 'interrupted' row for a request that never reached the model — see Server Stream
+          // Durability epic PR 2 review.
+          if (chatId && responseMessage && !lifecycle?.preAborted) {
             try {
               const { content: messageContent, toolCalls, toolResults, uiMessage } =
                 buildAssistantPersistencePayload(messageId, responseMessage.parts);
@@ -1514,6 +1589,7 @@ export async function POST(request: Request) {
                 toolCalls,
                 toolResults,
                 uiMessage,
+                status: aborted ? 'interrupted' : 'complete',
                 ...(page?.driveId && userId && isConversationShared && {
                   mentionNotify: {
                     driveId: page.driveId,
@@ -1522,12 +1598,15 @@ export async function POST(request: Request) {
                   },
                 }),
               });
+              assistantMessagePersisted = true;
 
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
             } catch (error) {
               loggers.ai.error('AI Chat API: Failed to save AI response message', error as Error);
               // Don't fail the response - persistence errors shouldn't break the chat
             }
+          } else if (lifecycle?.preAborted) {
+            loggers.ai.debug('AI Chat API: pre-aborted stream, no placeholder row to terminalize');
           } else {
             loggers.ai.warn('AI Chat API: No chatId or response message provided, skipping persistence');
           }
@@ -1628,7 +1707,7 @@ export async function POST(request: Request) {
           // Reflect a user stop, including one that landed during inter-attempt backoff or
           // raced in after the loop broke (onAbort only fires while a streamText is live).
           // finish() is idempotent, so this is a no-op if onAbort already ran.
-          lifecycle!.finish(agentRun?.terminalReason === 'aborted' || abortSignal.aborted);
+          lifecycle!.finish(aborted);
         },
       });
 
@@ -1640,6 +1719,10 @@ export async function POST(request: Request) {
       };
     } catch (streamError) {
       removeStream({ streamId });
+      // Captured BEFORE finish() for the same reason as the outer catch below — this inner
+      // catch's own finish() call would otherwise clear the buffer before the outer catch's
+      // cleanup ever gets a chance to read it.
+      bufferedPartsAtStreamError = lifecycle.getBufferedParts();
       lifecycle.finish(true);
       loggers.ai.error('AI Chat API: Failed to create stream', streamError as Error, {
         message: streamError instanceof Error ? streamError.message : 'Unknown error',
@@ -1659,7 +1742,45 @@ export async function POST(request: Request) {
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
+    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
+    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
+    // silently discard any real partial content the cleanup write below is meant to preserve.
+    // Prefers bufferedPartsAtStreamError (captured by the INNER catch above, before ITS OWN
+    // finish() call already cleared the registry) when set — a fresh getBufferedParts() call
+    // here would otherwise always see [] for exactly the createUIMessageStream-threw case this
+    // cleanup exists for.
+    const bufferedPartsAtError = bufferedPartsAtStreamError ?? lifecycle?.getBufferedParts() ?? [];
     lifecycle?.finish(true);
+
+    // Last-resort cleanup: something threw before execute-end or onFinish ever got a chance to
+    // settle the placeholder row (e.g. createUIMessageStream itself failed to construct). Without
+    // this, the row is stuck at 'streaming' forever — excluded from every reader by default AND
+    // rejected by edit/delete's 409 guard. Guarded by assistantMessagePersisted so this can never
+    // downgrade an already-'complete'/'interrupted' row written earlier in the SAME request (e.g.
+    // execute-end succeeded, then something later threw before the response returned). Best-effort:
+    // must not itself throw or block the error response.
+    //
+    // Requires `lifecycle` itself (not just `!lifecycle?.preAborted`) so this never fires for a
+    // throw that happened INSIDE startGenerationExclusive's callback, before `lifecycle` is ever
+    // assigned (line ~1297) — e.g. takeOverConversationStreams or the placeholder INSERT itself
+    // failing. In that window no placeholder row exists at all, so this upsert would INSERT a
+    // stray phantom 'interrupted' row for a request that never started generating.
+    if (!assistantMessagePersisted && serverAssistantMessageId && chatId && conversationId && lifecycle && !lifecycle.preAborted) {
+      try {
+        await saveMessageToDatabase({
+          messageId: serverAssistantMessageId,
+          pageId: chatId,
+          conversationId,
+          userId: null,
+          role: 'assistant',
+          ...buildAssistantPersistencePayload(serverAssistantMessageId, bufferedPartsAtError),
+          status: 'interrupted',
+        });
+      } catch (cleanupError) {
+        loggers.ai.error('AI Chat API: failed to terminalize placeholder row after error', cleanupError as Error);
+      }
+    }
+
     loggers.ai.error('AI Chat API Error', error as Error, {
       userId,
       chatId,

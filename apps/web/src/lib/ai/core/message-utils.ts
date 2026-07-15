@@ -97,7 +97,9 @@ interface ToolPart {
 }
 
 /** Extended UIMessage with extra fields stored in our database */
-type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null };
+type MessageStatus = 'streaming' | 'complete' | 'interrupted';
+
+type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null; status?: MessageStatus };
 
 interface DatabaseMessage {
   id: string;
@@ -112,6 +114,7 @@ interface DatabaseMessage {
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
   userName?: string | null;
+  status?: MessageStatus;
 }
 
 
@@ -127,6 +130,7 @@ interface GlobalAssistantMessage {
   isActive: boolean;
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
+  status?: MessageStatus;
 }
 
 interface ReconstructableMessage {
@@ -291,7 +295,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 
     try {
       const structured = await reconstructFromStructuredContent(dbMessage, parsed);
-      return { ...structured, userName: dbMessage.userName } as ExtendedUIMessage;
+      return { ...structured, userName: dbMessage.userName, status: dbMessage.status } as ExtendedUIMessage;
     } catch (error) {
       // Reconstruction failed (e.g. S3 presign error) — fall back to the
       // original plain-text content rather than leaking the raw structured
@@ -305,11 +309,14 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
         editedAt: dbMessage.editedAt,
         messageType: dbMessage.messageType || 'standard',
         userName: dbMessage.userName,
+        status: dbMessage.status,
       } as ExtendedUIMessage;
     }
   }
 
-  // Simple text message
+  // Simple text message. A 'streaming' row's content is '' here — the empty text part below
+  // is already graceful (renders as nothing, not an error); `status` lets callers filter or
+  // flag it explicitly instead of guessing from empty content.
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
@@ -317,6 +324,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
+    status: dbMessage.status,
     userName: dbMessage.userName,
   } as ExtendedUIMessage;
 }
@@ -498,6 +506,7 @@ export async function saveMessageToDatabase({
   uiMessage,
   sourceAgentId,
   mentionNotify,
+  status = 'complete',
 }: {
   messageId: string;
   pageId: string;
@@ -510,6 +519,15 @@ export async function saveMessageToDatabase({
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
   sourceAgentId?: string | null; // ID of the AI agent that sent this message (for agent-to-agent communication)
   mentionNotify?: { driveId: string; triggeredByUserId: string; mentionerName?: string };
+  /**
+   * Terminal status for a formerly-'streaming' placeholder row. Defaults to 'complete' — every
+   * OTHER caller (ask_agent, consult, edits, ask-user-resume merges, etc.) persists a finished
+   * message, never a mid-flight one. The stream-lifecycle terminal writers (execute-end,
+   * onFinish) pass 'interrupted' explicitly when the run was aborted, so a stopped reply — with
+   * or without partial content — reads as terminal-but-cut-short rather than falsely 'complete'.
+   * See Server Stream Durability epic PR 2.
+   */
+  status?: 'complete' | 'interrupted';
 }) {
   try {
     let structuredContent = content;
@@ -550,6 +568,7 @@ export async function saveMessageToDatabase({
         createdAt: new Date(),
         isActive: true,
         sourceAgentId: sourceAgentId ?? null, // Track which AI agent sent this message
+        status,
       })
       .onConflictDoUpdate({
         target: chatMessages.id,
@@ -558,6 +577,10 @@ export async function saveMessageToDatabase({
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
           sourceAgentId: sourceAgentId ?? null,
+          // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'
+          // (never back to 'streaming' — this function is only ever called with a terminal
+          // status, per the param doc above).
+          status,
         },
         where: eq(chatMessages.conversationId, conversationId),
       })
@@ -599,7 +622,8 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
     });
 
     try {
-      return await reconstructFromStructuredContent(dbMessage, parsed);
+      const structured = await reconstructFromStructuredContent(dbMessage, parsed);
+      return { ...structured, status: dbMessage.status } as ExtendedUIMessage;
     } catch (error) {
       loggers.ai.error('Failed to reconstruct structured global assistant message content', error as Error, { messageId: dbMessage.id });
       return {
@@ -609,11 +633,14 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
         createdAt: dbMessage.createdAt,
         editedAt: dbMessage.editedAt,
         messageType: dbMessage.messageType || 'standard',
+        status: dbMessage.status,
       } as ExtendedUIMessage;
     }
   }
 
-  // Simple text message
+  // Simple text message. A 'streaming' row's content is '' here — the empty text part below
+  // is already graceful (renders as nothing, not an error); `status` lets callers filter or
+  // flag it explicitly instead of guessing from empty content.
   return {
     id: dbMessage.id,
     role: dbMessage.role as 'user' | 'assistant' | 'system',
@@ -621,6 +648,7 @@ export async function convertGlobalAssistantMessageToUIMessage(dbMessage: Global
     createdAt: dbMessage.createdAt,
     editedAt: dbMessage.editedAt,
     messageType: dbMessage.messageType || 'standard',
+    status: dbMessage.status,
   } as ExtendedUIMessage;
 }
 
@@ -637,6 +665,7 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolCalls,
   toolResults,
   uiMessage,
+  status = 'complete',
 }: {
   messageId: string;
   conversationId: string;
@@ -646,6 +675,9 @@ export async function saveGlobalAssistantMessageToDatabase({
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   uiMessage?: UIMessage; // Pass the complete UIMessage to preserve part ordering
+  /** Terminal status for a formerly-'streaming' placeholder row. See saveMessageToDatabase's
+   * param doc for the full rationale — same contract, mirrored for the global assistant table. */
+  status?: 'complete' | 'interrupted';
 }) {
   try {
     let structuredContent = content;
@@ -676,6 +708,7 @@ export async function saveGlobalAssistantMessageToDatabase({
         toolResults: toolResults ? JSON.stringify(toolResults) : null,
         createdAt: new Date(),
         isActive: true,
+        status,
       })
       .onConflictDoUpdate({
         target: messages.id,
@@ -683,6 +716,8 @@ export async function saveGlobalAssistantMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
+          // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'.
+          status,
         },
         where: eq(messages.conversationId, conversationId),
       })

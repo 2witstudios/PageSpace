@@ -63,4 +63,35 @@ describe('mergeServerAndPending', () => {
     expect(result).not.toBe(server);
     expect(server).toHaveLength(1);
   });
+
+  // Server Stream Durability epic PR 2: once a client opts into includeStreaming=1, a
+  // server-loaded 'streaming' row for the SAME id as the live pending stream is an empty
+  // placeholder — strictly staler than the pending stream's own buffered parts. The live
+  // version must win, swapped in at the same position (not appended as a duplicate).
+  it('replaces a server-loaded streaming placeholder with the live pending message at the same position', () => {
+    const placeholder = { ...makeMsg('pending-1', ''), status: 'streaming' as const };
+    const server = [makeMsg('m1', 'hello'), placeholder, makeMsg('m2', 'world')];
+    const parts = [{ type: 'text' as const, text: 'streaming so far...' }];
+    const result = mergeServerAndPending(server, parts, 'pending-1');
+    expect(result).toHaveLength(3);
+    expect(result[0].id).toBe('m1');
+    expect(result[1].id).toBe('pending-1');
+    expect(result[1].parts).toEqual(parts);
+    expect(result[2].id).toBe('m2');
+  });
+
+  it('keeps the server-loaded row when its status is complete, even if IDs match (existing dedup behavior)', () => {
+    const finished = { ...makeMsg('pending-1', 'finished response'), status: 'complete' as const };
+    const server = [makeMsg('m1', 'hello'), finished];
+    const parts = [{ type: 'text' as const, text: 'streaming...' }];
+    const result = mergeServerAndPending(server, parts, 'pending-1');
+    expect(result).toBe(server);
+  });
+
+  it('keeps the server-loaded row when status is absent (legacy/pre-PR2 shape)', () => {
+    const server = [makeMsg('m1', 'hello'), makeMsg('pending-1', 'finished response')];
+    const parts = [{ type: 'text' as const, text: 'streaming...' }];
+    const result = mergeServerAndPending(server, parts, 'pending-1');
+    expect(result).toBe(server);
+  });
 });
