@@ -114,7 +114,9 @@ vi.mock('@pagespace/db/db', () => {
 
   const insert = vi.fn(() => ({
     values: vi.fn(() => ({
-      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
+      })),
     })),
   }));
 
@@ -270,6 +272,7 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('test-message-id'),
+  isCuid: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock('@/lib/logging/mask', () => ({

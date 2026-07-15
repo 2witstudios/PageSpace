@@ -178,6 +178,7 @@ vi.mock('ai', () => ({
 
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('generated_id'),
+  isCuid: vi.fn().mockReturnValue(true),
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 

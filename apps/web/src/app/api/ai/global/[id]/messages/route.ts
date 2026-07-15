@@ -3,6 +3,7 @@ import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream,
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
@@ -438,7 +439,7 @@ export async function POST(
     let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
-        const messageId = userMessage.id || createId();
+        const messageId = resolveMessageId(userMessage.id);
         const messageContent = extractMessageContent(userMessage);
         
         // Process @mentions in the user message

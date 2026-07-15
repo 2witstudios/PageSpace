@@ -35,6 +35,7 @@ import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
+import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 
@@ -561,7 +562,7 @@ export async function POST(request: Request) {
     let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
-        const messageId = userMessage.id || createId();
+        const messageId = resolveMessageId(userMessage.id);
         const messageContent = extractMessageContent(userMessage);
 
         // Process @mentions in the user message

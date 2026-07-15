@@ -110,7 +110,11 @@ vi.mock('@pagespace/db/db', () => {
       };
     }),
   }));
-  const insert = vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) }));
+  const insert = vi.fn(() => ({
+    values: vi.fn(() => ({
+      onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
+    })),
+  }));
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
   // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
   // exactly as before. Its own retry/degrade behavior is covered by
@@ -236,7 +240,10 @@ vi.mock('ai', () => ({
   createUIMessageStreamResponse: vi.fn().mockReturnValue(new Response('', { status: 200 })),
 }));
 
-vi.mock('@paralleldrive/cuid2', () => ({ createId: vi.fn().mockReturnValue('test-message-id') }));
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn().mockReturnValue('test-message-id'),
+  isCuid: vi.fn().mockReturnValue(true),
+}));
 vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`) }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },

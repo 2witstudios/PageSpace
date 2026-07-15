@@ -6,6 +6,7 @@ import {
   type ToolUIPart,
 } from 'ai';
 import { db } from '@pagespace/db/db'
+import { eq } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -524,7 +525,19 @@ export async function saveMessageToDatabase({
       });
     }
 
-    await db.insert(chatMessages)
+    // Scoped upsert: `where` gates the ON CONFLICT DO UPDATE to a row already in the
+    // CALLER's own conversation. A client-supplied messageId (accepted unvalidated by
+    // both chat routes) can collide with a row that belongs to a DIFFERENT conversation
+    // — the id space is a single global primary key, not conversation-scoped. Without
+    // this, Postgres would run the update unconditionally: overwriting that row's
+    // content and re-parenting it into the caller's conversation via the `conversationId`
+    // write below. With the `where`, a cross-conversation collision makes Postgres skip
+    // the conflict action entirely for that row (no insert, no update — DO NOTHING in
+    // effect), which is why `conversationId` is no longer in `set`: it can only ever run
+    // when the row is already in this same conversation, where it would be a no-op
+    // anyway. `.returning()` reports which rows were actually touched, letting the
+    // caller detect (and log) a rejected collision instead of silently doing nothing.
+    const result = await db.insert(chatMessages)
       .values({
         id: messageId,
         pageId,
@@ -544,10 +557,18 @@ export async function saveMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          conversationId, // Update conversationId if message is reprocessed
           sourceAgentId: sourceAgentId ?? null,
-        }
-      });
+        },
+        where: eq(chatMessages.conversationId, conversationId),
+      })
+      .returning({ id: chatMessages.id });
+
+    if (result.length === 0) {
+      loggers.ai.warn(
+        'saveMessageToDatabase: client-supplied id collided with a message in a different conversation — rejected',
+        { messageId, conversationId, pageId },
+      );
+    }
 
     // Fire-and-forget mention notifications for assistant messages only
     if (mentionNotify && role === 'assistant' && content.trim()) {
@@ -640,7 +661,11 @@ export async function saveGlobalAssistantMessageToDatabase({
       });
     }
 
-    await db.insert(messages)
+    // Scoped upsert — see the comment on the equivalent chatMessages upsert above.
+    // This table never wrote conversationId in `set` (so it never re-parented), but it
+    // DID silently overwrite another conversation's content on a colliding id — the
+    // `where` closes that too.
+    const result = await db.insert(messages)
       .values({
         id: messageId,
         conversationId,
@@ -658,8 +683,17 @@ export async function saveGlobalAssistantMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
-        }
-      });
+        },
+        where: eq(messages.conversationId, conversationId),
+      })
+      .returning({ id: messages.id });
+
+    if (result.length === 0) {
+      loggers.ai.warn(
+        'saveGlobalAssistantMessageToDatabase: client-supplied id collided with a message in a different conversation — rejected',
+        { messageId, conversationId },
+      );
+    }
 
     debugLogAI('Global Assistant: Message saved to database with tools');
   } catch (error) {
