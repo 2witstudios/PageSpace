@@ -9,8 +9,10 @@ import ts from 'typescript';
 // the marker) — real usage always looks like that, whereas a prose comment
 // mentioning the markers (e.g. "the /* ratchet:start */.../* ratchet:end */
 // markers below are load-bearing") has other text sharing the line and is
-// correctly rejected.
-export const SENTINEL_REGEX = /^([ \t]*)\/\* ratchet:start \*\/[ \t]*\n[\s\S]*?^[ \t]*\/\* ratchet:end \*\/[ \t]*$/m;
+// correctly rejected. `\r?` tolerates CRLF line endings: .gitattributes does
+// not force LF for .ts files, so a Windows/core.autocrlf checkout can have
+// \r\n here even though the repo's own files are LF.
+export const SENTINEL_REGEX = /^([ \t]*)\/\* ratchet:start \*\/[ \t]*\r?\n[\s\S]*?^[ \t]*\/\* ratchet:end \*\/[ \t]*\r?$/m;
 const SENTINEL_REGEX_GLOBAL = new RegExp(SENTINEL_REGEX.source, `${SENTINEL_REGEX.flags}g`);
 
 export const PLAIN_REGEX = /thresholds:\s*\{[^}]+\}/s;

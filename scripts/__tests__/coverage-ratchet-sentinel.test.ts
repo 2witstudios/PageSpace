@@ -75,6 +75,15 @@ describe('matchThresholdBlock', () => {
     expect(matchThresholdBlock('export default {}')).toBeNull();
   });
 
+  it('matches a well-formed sentinel block with CRLF line endings (Windows/core.autocrlf checkouts)', () => {
+    const crlfConfig = CONFIG_WITH_PROSE_MENTION.replace(/\n/g, '\r\n');
+    const found = matchThresholdBlock(crlfConfig);
+
+    expect(found).not.toBeNull();
+    expect(found!.isSentinel).toBe(true);
+    expect(found!.match[0]).toContain('lines: 44,');
+  });
+
   it('throws instead of guessing when two well-formed sentinel blocks exist', () => {
     const twoSentinels = `thresholds: {
         /* ratchet:start */
