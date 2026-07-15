@@ -133,6 +133,14 @@ curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
 
 Rehydrate the chat box from those messages and the customer picks up mid conversation. A teammate can open the same thread in PageSpace and take over. The conversation is not trapped in your database. It is a page in the workspace.
 
+## Before you make it public
+
+This is the working bot, not a hardened production service. You do not have to build much more, but two things are on you before it goes on a real site.
+
+First, keep the token on your server. The \`mcp_\` key inherits your drive access, so it never belongs in the browser. Your route handler holds it and the customer only ever talks to your route. The examples above already do this.
+
+Second, add rate limiting. The endpoint does not do per-request rate limiting for you. It caps how many calls run at once and it stops when your credits run out, but nothing stops one visitor from sending request after request, and every request spends your drive's credits. On a public page that is an open door to drain your balance. Put a limit in the route that fronts the endpoint: throttle by IP or session, cap messages per minute, and reject anything over the line before it reaches PageSpace. It is a few lines in the same route handler that already holds the token.
+
 Count what you did not build: no model, no system prompt to maintain (it lives on the agent page, editable by your support lead without a deploy), no tools to write (you turn on the agent's built-in search and read), no vector store to build or keep in sync since [the drive is the context](/blog/your-workspace-is-the-context) and the agent searches it directly, and no conversation store. You brought a chat box and a scoped key. PageSpace brought the rest. The full reference is in the [Agent API docs](/docs/features/agent-api).
 `,
     author: "Jono",
