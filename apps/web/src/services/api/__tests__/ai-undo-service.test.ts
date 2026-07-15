@@ -40,6 +40,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...args) => args),
   gte: vi.fn((a, b) => ({ field: a, op: 'gte', value: b })),
   lt: vi.fn((a, b) => ({ field: a, op: 'lt', value: b })),
+  ne: vi.fn((a, b) => ({ field: a, op: 'ne', value: b })),
   desc: vi.fn((a) => ({ field: a, direction: 'desc' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({

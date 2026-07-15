@@ -207,6 +207,9 @@ export const conversationRepository = {
     offset: number,
     userId: string
   ): Promise<ConversationStats[]> {
+    // 'streaming' rows are excluded from both CTEs — an in-flight placeholder must never
+    // become a conversation's last-message preview (it's empty) or inflate its message
+    // count. See Server Stream Durability epic PR 2.
     const result = await db.execute<ConversationStats>(sql`
       WITH ranked_messages AS (
         SELECT
@@ -225,6 +228,7 @@ export const conversationRepository = {
         FROM chat_messages
         WHERE "pageId" = ${agentId}
           AND "isActive" = true
+          AND status != 'streaming'
       ),
       conversation_stats AS (
         SELECT
@@ -235,6 +239,7 @@ export const conversationRepository = {
         FROM chat_messages
         WHERE "pageId" = ${agentId}
           AND "isActive" = true
+          AND status != 'streaming'
         GROUP BY "conversationId"
       ),
       first_user_messages AS (

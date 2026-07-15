@@ -23,6 +23,10 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const pageId = searchParams.get('pageId');
     const conversationId = searchParams.get('conversationId'); // Optional filter
+    // Stale-tab rollout protection: clients deployed before this PR never send this param, so
+    // they never see 'streaming' placeholder rows — only updated clients that know how to
+    // dedup them against a live stream bubble opt in. See Server Stream Durability epic PR 2.
+    const includeStreaming = searchParams.get('includeStreaming') === '1';
 
     if (!pageId) {
       return NextResponse.json({ error: 'pageId is required' }, { status: 400 });
@@ -47,7 +51,8 @@ export async function GET(request: Request) {
     // Get messages from repository
     const dbMessages = await chatMessageRepository.getMessagesForPage(
       pageId,
-      conversationId || undefined
+      conversationId || undefined,
+      includeStreaming
     );
 
     // Convert to UIMessage format with tool calls and results

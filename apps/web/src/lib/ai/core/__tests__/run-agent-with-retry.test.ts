@@ -1,7 +1,7 @@
 import { describe, it } from 'vitest';
 import type { FinishReason, ModelMessage, UIMessageChunk, UIMessageStreamWriter } from 'ai';
 import { assert } from './riteway';
-import { runAgentWithRetry, type AgentStreamResult } from '../run-agent-with-retry';
+import { runAgentWithRetry, isRunAborted, type AgentStreamResult } from '../run-agent-with-retry';
 
 interface FakeAttempt {
   finishReason: FinishReason;
@@ -168,6 +168,50 @@ describe('runAgentWithRetry', () => {
         finishes: chunks.filter((c) => c.type === 'finish').length,
       },
       expected: { starts: 1, finishes: 1 },
+    });
+  });
+});
+
+describe('isRunAborted', () => {
+  const abortSignal = (aborted: boolean): AbortSignal => {
+    const ac = new AbortController();
+    if (aborted) ac.abort();
+    return ac.signal;
+  };
+
+  it('given terminalReason is aborted, should return true regardless of the live signal', async () => {
+    assert({
+      given: "agentRun.terminalReason === 'aborted', abortSignal not (yet) aborted",
+      should: 'return true',
+      actual: isRunAborted({ agentRun: { terminalReason: 'aborted' }, abortSignal: abortSignal(false) }),
+      expected: true,
+    });
+  });
+
+  it('given the live abortSignal is aborted, should return true regardless of terminalReason', async () => {
+    assert({
+      given: 'abortSignal.aborted === true, agentRun.terminalReason undefined',
+      should: 'return true',
+      actual: isRunAborted({ agentRun: undefined, abortSignal: abortSignal(true) }),
+      expected: true,
+    });
+  });
+
+  it('given neither is aborted, should return false', async () => {
+    assert({
+      given: 'a clean run: no terminalReason, signal not aborted',
+      should: 'return false',
+      actual: isRunAborted({ agentRun: { terminalReason: undefined }, abortSignal: abortSignal(false) }),
+      expected: false,
+    });
+  });
+
+  it('given a non-aborted terminalReason (e.g. exhausted retry) and a live non-aborted signal, should return false', async () => {
+    assert({
+      given: "agentRun.terminalReason === 'exhausted', abortSignal not aborted",
+      should: 'return false — an exhausted retry is not the same as a user/gate abort',
+      actual: isRunAborted({ agentRun: { terminalReason: 'exhausted' }, abortSignal: abortSignal(false) }),
+      expected: false,
     });
   });
 });
