@@ -108,8 +108,12 @@ describe('takeOverConversationStreams', () => {
       failed: false,
     }));
     mockAwaitAbortSettled.mockResolvedValue(settled());
-    mockReconcileDead.mockResolvedValue(undefined);
-    mockMaterializeInterruptedStream.mockResolvedValue(undefined);
+    mockReconcileDead.mockResolvedValue([]);
+    // Defaults to "succeeded" — materializeInterruptedStream now reports success/failure via its
+    // return value, and most tests here are about ELIGIBILITY (which rows get materialized), not
+    // about materialize's own failure handling (that's materialize-interrupted-stream.test.ts's
+    // job). Tests exercising the accurate-reporting behavior override this per-case.
+    mockMaterializeInterruptedStream.mockResolvedValue(true);
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
   });

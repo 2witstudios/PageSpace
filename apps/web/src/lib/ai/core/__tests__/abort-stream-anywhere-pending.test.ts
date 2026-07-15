@@ -44,7 +44,7 @@ describe('abortStreamAnywhere', () => {
     vi.mocked(abortConversationStreams).mockResolvedValue({ aborted: [] });
     vi.mocked(markAbortRequested).mockResolvedValue({ marked: [], failed: false });
     vi.mocked(awaitAbortSettled).mockResolvedValue({ aborted: [], reconcile: [], stillLive: [], code: 'aborted' });
-    vi.mocked(reconcileDeadStreamRows).mockResolvedValue(undefined);
+    vi.mocked(reconcileDeadStreamRows).mockResolvedValue([]);
     vi.mocked(recordPendingAbort).mockResolvedValue(undefined);
   });
 

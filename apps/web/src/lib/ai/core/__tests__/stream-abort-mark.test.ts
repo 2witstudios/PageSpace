@@ -91,6 +91,10 @@ beforeEach(() => {
   mockUpdateWhere.mockImplementation(whereResult);
   mockReturning.mockResolvedValue([]);
   mockSelectWhere.mockResolvedValue([]);
+  // Defaults to "succeeded" — most tests here are about WHICH rows get read/handed off, not
+  // about materialize's own success/failure reporting (that's covered explicitly below and in
+  // materialize-interrupted-stream.test.ts).
+  mockMaterializeInterruptedStream.mockResolvedValue(true);
 });
 
 const selectConditions = (): Predicate['conds'] =>
@@ -527,18 +531,37 @@ describe('reconcileDeadStreamRows — materializes each dead row as an interrupt
   });
 
   it('does nothing when there is nothing to reconcile', async () => {
-    await reconcileDeadStreamRows({ messageIds: [] });
+    await expect(reconcileDeadStreamRows({ messageIds: [] })).resolves.toEqual([]);
 
     expect(mockSelectWhere).not.toHaveBeenCalled();
     expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
   });
 
-  it('warns and does not throw when the read itself fails', async () => {
+  it('warns and does not throw when the read itself fails, reporting nothing reconciled', async () => {
     mockSelectWhere.mockRejectedValueOnce(new Error('db down'));
 
-    await expect(reconcileDeadStreamRows({ messageIds: ['msg-dead'] })).resolves.toBeUndefined();
+    await expect(reconcileDeadStreamRows({ messageIds: ['msg-dead'] })).resolves.toEqual([]);
     expect(mockLoggerWarn).toHaveBeenCalled();
     expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+  });
+
+  it('returns only the messageIds materializeInterruptedStream actually succeeded on', async () => {
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-ok', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts: [], startedAt: new Date() },
+      { messageId: 'msg-failed', channelId: 'page-1', conversationId: 'conv-2', userId: 'user-2', parts: [], startedAt: new Date() },
+    ]);
+    mockMaterializeInterruptedStream
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const reconciled = await reconcileDeadStreamRows({ messageIds: ['msg-ok', 'msg-failed'] });
+
+    assert({
+      given: 'one row that materializes successfully and one that does not',
+      should: 'report only the successful one as reconciled — never claim a retryable ghost row was handled',
+      actual: reconciled,
+      expected: ['msg-ok'],
+    });
   });
 });
 

@@ -279,13 +279,19 @@ export const awaitAbortSettled = async ({
  * them through `decideAbortOutcome`'s messageId-only contract — that keeps this the only place
  * that needs the wider column set, and re-applies the same `status='streaming'` guard against
  * whatever landed between the caller's read and here.
+ *
+ * Returns the messageIds actually driven terminal — a subset of `messageIds`, never assumed to
+ * be all of them. `materializeInterruptedStream` never throws but can still fail partway (and
+ * report so via its own return value); a caller that reports every requested id as "reconciled"
+ * regardless of whether the row read even found it, or the write actually landed, would silently
+ * misreport a retryable ghost row as handled.
  */
 export const reconcileDeadStreamRows = async ({
   messageIds,
 }: {
   messageIds: readonly string[];
-}): Promise<void> => {
-  if (messageIds.length === 0) return;
+}): Promise<string[]> => {
+  if (messageIds.length === 0) return [];
 
   let rows: { messageId: string; channelId: string; conversationId: string; userId: string; parts: unknown[]; startedAt: Date }[];
   try {
@@ -310,14 +316,19 @@ export const reconcileDeadStreamRows = async ({
       messageIds,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    return;
+    return [];
   }
 
   // Concurrent, not sequential — `materializeInterruptedStream` never throws (it catches and
   // logs its own DB failures per step) and each row is independent, so there is no correctness
   // reason to serialize a mass-crash-recovery batch (potentially dozens of rows after an
   // instance dies) into N sequential round trips.
-  await Promise.all(rows.map((row) => materializeInterruptedStream(row)));
+  const results = await Promise.all(rows.map(async (row) => {
+    const ok = await materializeInterruptedStream(row);
+    return ok ? row.messageId : null;
+  }));
+
+  return results.filter((id): id is string => id !== null);
 };
 
 /**

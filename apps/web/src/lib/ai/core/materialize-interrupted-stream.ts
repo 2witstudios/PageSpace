@@ -71,8 +71,16 @@ export interface MaterializableStreamRow {
  * — building the payload from `row.parts` — lives INSIDE the same try/catch as the DB write:
  * a malformed parts snapshot must degrade exactly like a failed write, not escape uncaught to
  * a caller that assumes this function never throws.
+ *
+ * Returns whether the row was actually driven fully terminal (message written AND the session
+ * row settled) — `false` on any failure. Callers that aggregate this into a "reconciled" count
+ * or log line MUST use the return value rather than assuming every call they made succeeded:
+ * a `Promise.all` over several rows tells you nothing about which ones actually landed, and a
+ * batch reported as "reconciled" when some rows silently stayed `'streaming'` is exactly the
+ * misreporting bug (a log that attests to nothing) this module's sibling functions already
+ * guard against.
  */
-export const materializeInterruptedStream = async (row: MaterializableStreamRow): Promise<void> => {
+export const materializeInterruptedStream = async (row: MaterializableStreamRow): Promise<boolean> => {
   const now = new Date();
 
   try {
@@ -160,9 +168,10 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
     // Leave the session row at 'streaming' — the next sweep (takeover, reconciler, or the
     // active-streams lazy pass) will find this row again and retry the whole thing. Settling
     // it here would report the stream over while its reply was never actually saved.
-    return;
+    return false;
   }
 
+  let settled = true;
   try {
     await db
       .update(aiStreamSessions)
@@ -174,6 +183,7 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
         eq(aiStreamSessions.status, 'streaming'),
       ));
   } catch (error) {
+    settled = false;
     loggers.ai.warn('materializeInterruptedStream: could not settle session row', {
       messageId: row.messageId,
       error: error instanceof Error ? error.message : 'unknown',
@@ -191,4 +201,6 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
       error: error instanceof Error ? error.message : 'unknown',
     });
   });
+
+  return settled;
 };

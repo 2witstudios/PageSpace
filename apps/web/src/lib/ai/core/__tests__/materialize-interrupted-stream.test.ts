@@ -291,6 +291,10 @@ describe('materializeInterruptedStream — the defensive insert-if-missing path'
 });
 
 describe('materializeInterruptedStream — settling the session row', () => {
+  it('reports true when both the message write and the session settle succeed', async () => {
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(true);
+  });
+
   it('settles ai_stream_sessions terminal only after the message write succeeds', async () => {
     await materializeInterruptedStream(pageRow({ messageId: 'msg-settle' }));
 
@@ -314,7 +318,7 @@ describe('materializeInterruptedStream — settling the session row', () => {
   it('does not settle the session row when the message write fails', async () => {
     mockOnConflictDoUpdate.mockRejectedValue(new Error('db down'));
 
-    await materializeInterruptedStream(pageRow());
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
 
     expect(mockUpdateSet).not.toHaveBeenCalled();
     assert({
@@ -325,27 +329,27 @@ describe('materializeInterruptedStream — settling the session row', () => {
     });
   });
 
-  it('logs but does not throw when the session-row settle itself fails', async () => {
+  it('logs but does not throw when the session-row settle itself fails, and reports false (not truly reconciled)', async () => {
     mockUpdateWhere.mockRejectedValue(new Error('db down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalled();
   });
 
-  it('logs a non-Error message-write rejection without throwing', async () => {
+  it('logs a non-Error message-write rejection without throwing, and reports false', async () => {
     mockOnConflictDoUpdate.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ error: 'unknown' }),
     );
   });
 
-  it('logs a non-Error session-settle rejection without throwing', async () => {
+  it('logs a non-Error session-settle rejection without throwing, and reports false', async () => {
     mockUpdateWhere.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ error: 'unknown' }),
@@ -373,10 +377,10 @@ describe('materializeInterruptedStream — broadcast', () => {
     expect(mockBroadcastAiStreamComplete).not.toHaveBeenCalled();
   });
 
-  it('logs but does not throw when the broadcast itself fails', async () => {
+  it('logs but does not throw when the broadcast itself fails — a broadcast failure alone does not undo an otherwise-successful materialization', async () => {
     mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(true);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining('broadcast failed'),
       expect.objectContaining({ error: 'socket down' }),
@@ -386,7 +390,7 @@ describe('materializeInterruptedStream — broadcast', () => {
   it('logs a non-Error broadcast rejection without throwing', async () => {
     mockBroadcastAiStreamComplete.mockRejectedValue('a rejected string, not an Error instance');
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(true);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining('broadcast failed'),
       expect.objectContaining({ error: 'unknown' }),
@@ -395,11 +399,11 @@ describe('materializeInterruptedStream — broadcast', () => {
 });
 
 describe('materializeInterruptedStream — never throws', () => {
-  it('resolves even when every DB call rejects', async () => {
+  it('resolves (with false, since the session row never settled) even when every DB call rejects', async () => {
     mockOnConflictDoUpdate.mockResolvedValue(undefined);
     mockUpdateWhere.mockRejectedValue(new Error('db down'));
     mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
 
-    await expect(materializeInterruptedStream(pageRow())).resolves.toBeUndefined();
+    await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
   });
 });

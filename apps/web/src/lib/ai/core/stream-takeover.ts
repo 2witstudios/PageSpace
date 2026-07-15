@@ -122,6 +122,10 @@ export const takeOverConversationStreams = async ({
     // subscriber and destroy its only crash-recovery snapshot.
     const { reconcile } = decideStreamTakeover({ rows, abortedMessageIds: aborted, now });
 
+    // Populated below with only the ids ACTUALLY driven terminal — never assumed from
+    // `reconcile` itself, which is only what we attempted.
+    let locallyReconciled: string[] = [];
+
     if (reconcile.length > 0) {
       // `reconcile` mixes two DIFFERENT kinds of row, and they must be handled differently —
       // conflating them is exactly the race that used to silently clobber fresher content with a
@@ -146,12 +150,15 @@ export const takeOverConversationStreams = async ({
       const justAbortedStillAlive = reconcile.filter((id) => !provablyDead.includes(id));
 
       // `materializeInterruptedStream` never throws (it catches and logs its own DB failures per
-      // step), so a batch of independent rows can run concurrently without one row's failure
-      // taking out the others or needing its own try/catch here.
-      await Promise.all(provablyDead.map((messageId) => {
+      // step) and returns whether it actually succeeded — a batch of independent rows can run
+      // concurrently without one row's failure taking out the others, but the RESULT must still
+      // be checked per-row: `Promise.all` resolving tells you nothing about which calls actually
+      // landed, and reporting every id as reconciled regardless would be exactly the misreporting
+      // bug this module's own docblock warns against.
+      const materializedIds = (await Promise.all(provablyDead.map(async (messageId) => {
         const row = rowById.get(messageId);
-        if (!row) return Promise.resolve();
-        return materializeInterruptedStream({
+        if (!row) return null;
+        const ok = await materializeInterruptedStream({
           messageId,
           channelId,
           conversationId,
@@ -159,8 +166,10 @@ export const takeOverConversationStreams = async ({
           parts: row.parts,
           startedAt: row.startedAt,
         });
-      }));
+        return ok ? messageId : null;
+      }))).filter((id): id is string => id !== null);
 
+      let wipedIds: string[] = [];
       if (justAbortedStillAlive.length > 0) {
         try {
           // Conditional on status so a stream that terminated on its own between the SELECT and
@@ -172,6 +181,7 @@ export const takeOverConversationStreams = async ({
               inArray(aiStreamSessions.messageId, justAbortedStillAlive),
               eq(aiStreamSessions.status, 'streaming'),
             ));
+          wipedIds = justAbortedStillAlive;
         } catch (error) {
           loggers.ai.warn('AI Chat API: takeover aborted streams but could not clear their session rows', {
             conversationId,
@@ -183,6 +193,8 @@ export const takeOverConversationStreams = async ({
           });
         }
       }
+
+      locallyReconciled = [...materializedIds, ...wipedIds];
     }
 
     // A live row this instance does not own. This USED to be the end of the road — it was logged
@@ -234,12 +246,13 @@ export const takeOverConversationStreams = async ({
       });
 
       remotelyAborted = outcome.aborted;
-      remotelyReconciled = outcome.reconcile;
       stillLive = outcome.stillLive;
 
       // Rows whose owner is provably gone (stale heartbeat) — nothing is running, but nothing
       // wrote their terminal status either. Same licence decideStreamTakeover already grants.
-      await reconcileDeadStreamRows({ messageIds: outcome.reconcile });
+      // `outcome.reconcile` is only what's ELIGIBLE to be driven terminal — reconcileDeadStreamRows
+      // returns what it ACTUALLY materialized, which is what belongs in the caller's own report.
+      remotelyReconciled = await reconcileDeadStreamRows({ messageIds: outcome.reconcile });
 
       if (stillLive.length > 0) {
         // The honest, narrower successor to the old warn. It no longer means "we cannot stop
@@ -259,8 +272,9 @@ export const takeOverConversationStreams = async ({
     // Rows driven terminal by the cross-instance path are reconciled just as surely as the ones
     // this instance reconciled directly. Leaving them out under-reports what the takeover actually
     // did — and this module's own docblock is emphatic that a log which misreports attests to
-    // nothing, which is the same defect as a test that cannot fail.
-    const allReconciled = [...reconcile, ...remotelyReconciled];
+    // nothing, which is the same defect as a test that cannot fail. `locallyReconciled` (not
+    // `reconcile`) is what was actually driven terminal, not merely attempted.
+    const allReconciled = [...locallyReconciled, ...remotelyReconciled];
 
     // Only claim a takeover when one actually happened.
     //
