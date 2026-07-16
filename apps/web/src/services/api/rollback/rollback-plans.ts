@@ -13,6 +13,22 @@ import type { ActivityLogForRollback } from './types';
 
 type Values = Record<string, unknown>;
 
+/**
+ * Restore the changed fields for a page/drive rollback: the listed updatedFields
+ * from previousValues, or — when no updatedFields were recorded — every
+ * previousValue. Shared by the page and drive plans.
+ */
+function restoreChangedFields(activity: ActivityLogForRollback): Values {
+  const previousValues = activity.previousValues || {};
+  const updateData: Values = {};
+  if (activity.updatedFields) {
+    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
+  } else if (Object.keys(previousValues).length > 0) {
+    Object.assign(updateData, previousValues);
+  }
+  return updateData;
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────
 
 export type PageRollbackPlan =
@@ -37,13 +53,7 @@ export function planPageRollback(
     return { kind: 'trash-created' };
   }
 
-  const previousValues = activity.previousValues || {};
-  const updateData: Values = {};
-  if (activity.updatedFields) {
-    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
-  } else if (Object.keys(previousValues).length > 0) {
-    Object.assign(updateData, previousValues);
-  }
+  const updateData = restoreChangedFields(activity);
 
   // A create already returned above, so only an update injects the snapshot here.
   if (resolvedContentSnapshot && activity.operation === 'update') {
@@ -77,13 +87,7 @@ export function planDriveRollback(activity: ActivityLogForRollback): DriveRollba
     return { kind: 'trash-created' };
   }
 
-  const previousValues = activity.previousValues || {};
-  const updateData: Values = {};
-  if (activity.updatedFields) {
-    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
-  } else if (Object.keys(previousValues).length > 0) {
-    Object.assign(updateData, previousValues);
-  }
+  const updateData = restoreChangedFields(activity);
 
   if (Object.keys(updateData).length === 0) {
     throw new Error('No values to restore');
