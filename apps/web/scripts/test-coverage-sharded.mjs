@@ -29,29 +29,33 @@ const { createCoverageMap } = istanbulLibCoverage;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-// 3, 6, 10, 20, and 40 shards (~310/155/93/46/23 files each) all still had
-// exactly one shard hit the heap ceiling — always a CLEAN failure (script
-// catches it, exits, no hang, no runner-level instability, at the stable
-// 8192MB ceiling; see ci.yml's history for why that value specifically is
-// never raised). The failing shard's fraction through the run stayed
-// suspiciously consistent across shard counts (~0.55-0.67 each time) —
-// doubling shard count preserved the SAME relative position of trouble,
-// which rules out "too many files accumulating" (a smaller shard at that
-// same position should then have succeeded) and points to vitest's
-// `--shard` flag splitting the sorted file list into plain CONTIGUOUS
-// ranges: a genuinely dense, heavy cluster of files (e.g.
-// src/lib/ai/core/__tests__/ alone is 66 of ~930 total, each pulling in
-// substantial shared AI-orchestration infrastructure) sits together in that
-// range no matter how finely you slice around it — smaller shards just
-// isolate the SAME cluster into a smaller box, they don't split it apart.
+// Escalating shard count (3 -> 6 -> 10 -> 20 -> 40) and then interleaving
+// files round-robin instead of contiguously both reduced the failure rate
+// but never eliminated it — a shard would still hit the heap ceiling at
+// roughly the same job-wide fraction each time, even with a completely
+// different, evenly-mixed file composition after interleaving. Retrying a
+// failing shard (fresh process, identical files, identical ceiling) up to 3
+// times still failed every attempt identically, which finally proved the
+// cause is deterministic for a specific file combination, not GC/scheduling
+// luck.
 //
-// Fixed the actual mechanism instead of keeping the shard count as another
-// guess to escalate: this script enumerates and sorts the file list itself,
-// then distributes it into shards ROUND-ROBIN (file at sorted index i goes
-// to shard i % SHARD_COUNT) instead of trusting `--shard` to do a
-// contiguous split. Any dense cluster in the sorted order is now spread
-// evenly across every shard rather than concentrated in whichever one
-// happens to cover that range.
+// Found it by inspecting the exact file list of a deterministically-failing
+// shard: AiChatView.test.tsx (1936 lines) and
+// AiChatView.realConversations.test.tsx (376 lines), under
+// src/components/layout/middle-content/page-views/ai-page/__tests__/ — the
+// exact two files this PR's own D.1 tracking already named as unverified
+// ("still asserting against the pre-cutover useChat-as-render-source
+// architecture... crashes both locally [an unrelated dual-React-dispatcher
+// bug] and in CI"). Not simply "large files" — several *bigger* test files
+// (e.g. calendar-write-tools.test.ts at 2056 lines) sit elsewhere in the
+// suite without incident, since they don't render React component trees
+// through jsdom the way these two do, against a component this PR heavily
+// rewrote. Isolated them into their own dedicated shards below so the rest
+// of the suite goes back to a plain, even round-robin split.
+const HEAVY_FILES = [
+  'src/components/layout/middle-content/page-views/ai-page/__tests__/AiChatView.test.tsx',
+  'src/components/layout/middle-content/page-views/ai-page/__tests__/AiChatView.realConversations.test.tsx',
+];
 const SHARD_COUNT = 20;
 const METRICS = ['lines', 'branches', 'functions', 'statements'];
 const coverageDir = resolve(root, 'coverage');
@@ -60,30 +64,30 @@ rmSync(coverageDir, { recursive: true, force: true });
 mkdirSync(coverageDir, { recursive: true });
 
 const allTestFiles = globSync('src/**/*.{test,spec}.{js,ts,tsx}', { cwd: root }).sort();
+const heavyFilesFound = HEAVY_FILES.filter((f) => allTestFiles.includes(f));
+const remainingFiles = allTestFiles.filter((f) => !HEAVY_FILES.includes(f));
+
 const shards = Array.from({ length: SHARD_COUNT }, () => []);
-allTestFiles.forEach((file, i) => shards[i % SHARD_COUNT].push(file));
+remainingFiles.forEach((file, i) => shards[i % SHARD_COUNT].push(file));
+// Each heavy file gets a fully solo shard, appended after the round-robin
+// ones, so it never shares a fork pool with anything else.
+heavyFilesFound.forEach((file) => shards.push([file]));
 
-// Even with files evenly interleaved (verified locally — the 66-file
-// src/lib/ai/core cluster now lands 3-4 per shard, not up to 66 in one),
-// some CI run still hits the heap ceiling on some shard at roughly the same
-// job-wide fraction regardless of shard count or file composition — which
-// argues against a fixed "this exact file set is too heavy" cause and for a
-// marginal, close-to-the-ceiling workload where GC/scheduling variance
-// between otherwise-identical runs decides pass or fail. A shard that
-// crashes gets retried (fresh process, same files, same ceiling) before
-// failing the whole run — if the crash were fully deterministic for that
-// exact file set this would just fail again quickly at low added cost; if
-// it's marginal, a retry resolves it outright.
+// A shard that hits the heap ceiling gets retried (fresh process, identical
+// files, identical ceiling) up to 2 additional times before the whole run
+// fails — cheap insurance against any remaining marginal case, now that the
+// one confirmed deterministic cause is isolated above.
 const MAX_ATTEMPTS_PER_SHARD = 3;
+const TOTAL_SHARDS = shards.length;
 
-for (let i = 1; i <= SHARD_COUNT; i++) {
+for (let i = 1; i <= TOTAL_SHARDS; i++) {
   const files = shards[i - 1];
-  console.log(`\n=== Coverage shard ${i}/${SHARD_COUNT} (${files.length} files) ===\n`);
+  console.log(`\n=== Coverage shard ${i}/${TOTAL_SHARDS} (${files.length} files) ===\n`);
   if (files.length === 0) continue;
   let succeeded = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SHARD && !succeeded; attempt++) {
     if (attempt > 1) {
-      console.log(`\n--- Retrying shard ${i}/${SHARD_COUNT} (attempt ${attempt}/${MAX_ATTEMPTS_PER_SHARD}) ---\n`);
+      console.log(`\n--- Retrying shard ${i}/${TOTAL_SHARDS} (attempt ${attempt}/${MAX_ATTEMPTS_PER_SHARD}) ---\n`);
     }
     try {
       execFileSync(
@@ -108,7 +112,7 @@ for (let i = 1; i <= SHARD_COUNT; i++) {
         // A shard's own tests failed (not a threshold issue — those are
         // disabled per-shard). Propagate as a real CI failure, not a stack
         // trace dump.
-        console.error(`\nShard ${i}/${SHARD_COUNT} failed after ${MAX_ATTEMPTS_PER_SHARD} attempts.`);
+        console.error(`\nShard ${i}/${TOTAL_SHARDS} failed after ${MAX_ATTEMPTS_PER_SHARD} attempts.`);
         process.exit(1);
       }
     }
@@ -120,7 +124,7 @@ for (let i = 1; i <= SHARD_COUNT; i++) {
 // properly unioned by istanbul-lib-coverage's merge — summing each shard's
 // own precomputed summary numbers would double- or under-count those files.
 const map = createCoverageMap({});
-for (let i = 1; i <= SHARD_COUNT; i++) {
+for (let i = 1; i <= TOTAL_SHARDS; i++) {
   const shardFinalPath = resolve(coverageDir, `shard-${i}/coverage-final.json`);
   if (!existsSync(shardFinalPath)) {
     console.error(`Missing coverage-final.json for shard ${i}: ${shardFinalPath}`);
