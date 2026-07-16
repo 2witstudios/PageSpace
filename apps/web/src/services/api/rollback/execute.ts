@@ -9,7 +9,7 @@
  * every handler, createPageVersion, and logRollbackActivity.
  */
 import type { db } from '@pagespace/db/db';
-import type { ActivityAction, ActivityActionResult } from '@/types/activity-actions';
+import type { ActivityAction, ActivityActionResult, ActivityActionPreview } from '@/types/activity-actions';
 import type { DeferredWorkflowTrigger, ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { withTx, type RollbackDeps, type PageUpdateContext, type PageMutationMeta } from './deps';
@@ -36,7 +36,6 @@ import {
   redoRoleChange,
   redoMessageChange,
 } from './redo-executors';
-import type { ActivityActionPreview } from '@/types/activity-actions';
 
 /**
  * Result of executing a rollback
