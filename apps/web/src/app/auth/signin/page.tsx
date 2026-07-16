@@ -21,6 +21,7 @@ import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
 import { resolveSigninNext } from "@/lib/auth/resolve-signin-next";
 import { detectInAppBrowser, getPreferredBrowserName } from "@/lib/auth/browser-detection";
+import { useSigninRecovery } from "./useSigninRecovery";
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
@@ -38,6 +39,12 @@ function SignInForm() {
   }, []);
 
   const nextPath = resolveSigninNext({ paramNext: searchParams.get('next'), browserPath });
+
+  // Silent session recovery: before showing the form, try to heal the session (live cookie
+  // → redirect; expired cookie + device token → refresh → redirect). This restores the
+  // recovery the 2026-07-07 middleware change defeated. See ./signin-recovery.ts.
+  const { recovering } = useSigninRecovery(nextPath);
+
   const {
     handleGoogleSignIn,
     handleAppleSignIn,
@@ -114,6 +121,21 @@ function SignInForm() {
       setShowMagicLink(true);
     }
   }, []);
+
+  // While silent recovery is in flight, show a minimal loading state rather than the form,
+  // so a user who is about to be auto-redirected never sees the form flash.
+  if (recovering) {
+    return (
+      <AuthShell>
+        <div className="text-center">
+          <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+            Welcome back
+          </h1>
+          <p className="mt-2 text-sm text-muted-foreground">Loading...</p>
+        </div>
+      </AuthShell>
+    );
+  }
 
   // On-prem: passkey + magic link sign-in (no OAuth)
   if (onPrem) {
