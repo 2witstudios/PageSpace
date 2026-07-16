@@ -69,6 +69,8 @@ import { useContextMenu } from './hooks/useContextMenu';
 import { useExternalSheets } from './hooks/useExternalSheets';
 import { useSheetPersistence } from './hooks/useSheetPersistence';
 import { useSheetKeyboardShortcuts } from './hooks/useSheetKeyboardShortcuts';
+import { useEditingSession } from '@/stores/useEditingSession';
+import { shouldRegisterSheetEditing } from './core/editing';
 
 interface SheetViewProps {
   page: TreePage;
@@ -190,6 +192,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   );
 
   const evaluation = useMemo(() => evaluateSheet(sheet, evaluationOptions), [sheet, evaluationOptions]);
+
+  // Register an editing session while a cell is being edited, the formula bar is
+  // focused, or the document is dirty — protecting sheet edits from auth-refresh
+  // interruption and SWR clobbering (SheetView was the only unregistered editor).
+  const isEditingActive = shouldRegisterSheetEditing({
+    isEditingCell: !!editingCell,
+    isFormulaFocused,
+    isDirty: !!documentState?.isDirty,
+  });
+  useEditingSession(`sheet-${page.id}`, isEditingActive, 'document', {
+    pageId: page.id,
+    componentName: 'SheetView',
+  });
 
   // Find-in-sheet: highlight set + current match (scrolls into view).
   const { findAddressSet, currentFindAddress } = useSheetFind(sheet, evaluation.display, gridRef);
