@@ -85,8 +85,6 @@ interface ActiveStream {
   held: boolean;
   /** Flush any remaining content, then the usage chunk + [DONE], and end the response. */
   finish: () => void;
-  /** Abandon the stream without writing (client went away). */
-  drop: () => void;
 }
 
 export function createMockOpenRouter() {
@@ -208,7 +206,7 @@ export function createMockOpenRouter() {
       }
     };
 
-    const entry: ActiveStream = { held: mode === 'held', finish, drop: cleanup };
+    const entry: ActiveStream = { held: mode === 'held', finish };
     activeStreams.add(entry);
 
     // The client hung up (user hit Stop, or the app aborted upstream): stop the timer and
