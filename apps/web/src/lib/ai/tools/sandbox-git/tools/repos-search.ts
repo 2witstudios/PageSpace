@@ -81,7 +81,15 @@ export const REPOS_SEARCH_TOOL_ROWS: GitToolRow[] = [
         cwd: cwdField,
       })
       .strict(),
-    validate: ({ name }) => validateRepoName(name),
+    validate: ({ name, visibility }) => {
+      const nameOk = validateRepoName(name);
+      if (!nameOk.ok) return nameOk;
+      // Defense-in-depth: buildRepoCreateArgs falls through to --public when
+      // visibility is absent, so require it explicitly even if execute is reached
+      // without the schema layer. Visibility of a remote repo must be chosen.
+      if (!visibility) return { ok: false, error: 'visibility is required (private or public)' };
+      return { ok: true };
+    },
     buildArgs: ({ name, visibility, description }) => ({ args: buildRepoCreateArgs({ name, visibility, description }) }),
   }),
   defineRow({

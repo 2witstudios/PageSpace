@@ -96,6 +96,12 @@ describe('row validators — extra branches', () => {
   test('gh_workflow_run bad input name fails', () => {
     assert({ given: 'gh_workflow_run, bad input key', should: 'fail validate', actual: rowFor('gh_workflow_run').validate!({ workflow: 'ci.yml', ref: 'main', inputs: { 'a=b': 'x' } }).ok, expected: false });
   });
+  test('gh_repo_create missing visibility fails (defense-in-depth)', () => {
+    assert({ given: 'gh_repo_create with a valid name but no visibility', should: 'fail validate rather than fall through to --public', actual: rowFor('gh_repo_create').validate!({ name: 'tool' }).ok, expected: false });
+  });
+  test('gh_repo_create invalid name fails before the visibility check', () => {
+    assert({ given: 'gh_repo_create with a flag-like name', should: 'fail validate on the name', actual: rowFor('gh_repo_create').validate!({ name: '--x', visibility: 'private' }).ok, expected: false });
+  });
 });
 
 describe('at-least-one-field validators — each operand', () => {
