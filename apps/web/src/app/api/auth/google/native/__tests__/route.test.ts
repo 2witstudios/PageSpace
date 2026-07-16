@@ -139,6 +139,8 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  isSafeReturnUrl: vi.fn(() => true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -158,7 +160,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const mockNewUser = {
@@ -588,15 +590,17 @@ describe('POST /api/auth/google/native', () => {
   });
 
   describe('session management', () => {
-    it('should revoke existing sessions before creating new one (session fixation prevention)', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(2);
-
+    it('should revoke prior sessions scoped to the request deviceId (device-scoped, not nuclear)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith(
+      // deviceId is required by the schema, so the helper always receives it and
+      // revokes only THIS device's sessions — other devices stay signed in.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockNewUser.id,
-        'new_login'
+        'device-123',
+        'new_login',
+        'Google native',
       );
     });
 

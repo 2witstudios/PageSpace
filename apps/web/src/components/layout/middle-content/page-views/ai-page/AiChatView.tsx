@@ -39,17 +39,19 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
-import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useRenderedMessages } from '@/hooks/useRenderedMessages';
+import { useActiveStream, getActiveStreamById } from '@/hooks/useActiveStream';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
+import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
+import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
+import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
-import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
-import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
-import { useShallow } from 'zustand/react/shallow';
 
 // Shared hooks and components
 import {
@@ -144,12 +146,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // can detect that the user has since switched away before applying a
   // stale setIdentity call.
   const currentConversationIdRef = useRef<string | null>(null);
-  // Tracks the conversationId of the most recent loadMessagesForConversation call so
-  // stale in-flight fetches (from a previous conversation) are silently dropped.
-  const loadRequestedIdRef = useRef<string | null>(null);
-  // When set to a conversationId, the load-on-select effect skips the fetch for that
-  // id on its next fire (messages are already provided inline, avoiding a double-fetch).
-  const skipLoadEffectRef = useRef<string | null>(null);
+  // Tracks the (id) the load-on-select effect last acted on, so an `isPersisted`
+  // flip for the SAME id (our own send adopting a just-created conversation) does
+  // not re-trigger a fetch — only a genuine id change does. See the effect below.
+  const lastHandledIdentityRef = useRef<string | null>(null);
   // Mirrors the identity hook's isPersisted for the callbacks that must read it
   // outside of render (the message loader, the stream-completion handler).
   const isPersistedRef = useRef<boolean>(true);
@@ -193,15 +193,23 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const isStreaming = status === 'submitted' || status === 'streaming';
 
   // ============================================
-  // AUTHORITATIVE MESSAGE LOADER (the ONE setMessages writer)
+  // AUTHORITATIVE MESSAGE LOADER (the ONE conversation-store load writer)
   // ============================================
-  // Fetches the latest DB messages for a conversation and writes them to useChat
-  // via setMessages. All other paths (init, history-select, pull-up, undo) funnel
-  // through here so there is never a competing write from a stale in-flight fetch.
+  // Fetches the latest DB messages for a conversation and commits them to
+  // `useConversationMessagesStore` via startLoad/applyLoad/failLoad — the
+  // store's `loadGeneration` gate (not a local id-comparison ref) is what
+  // drops a stale in-flight fetch superseded by a newer load of the same or a
+  // different conversation. All other paths (init, history-select, pull-up,
+  // undo) funnel through here so there is never a competing write.
+  //
+  // Also writes the same messages to useChat via setMessages: useChat is
+  // never the render source post-cutover, but it stays the transport/
+  // controller, and `regenerate()` indexes directly into its own local
+  // `messages` (crashes if empty, throws "not found" on an unknown id) — so
+  // its bookkeeping copy must still reflect the loaded history.
   //
   // Pass preloadedMessages to skip the network round-trip when the caller already
   // has fresh data (e.g. useConversations.loadConversation already fetched them).
-  // The stale-guard and pending-stream reconciliation still run in both paths.
   const loadMessagesForConversation = useCallback(async (
     conversationId: string,
     preloadedMessages?: UIMessage[],
@@ -213,7 +221,24 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // empty after a reload.
     if (conversationId === currentConversationIdRef.current && !isPersistedRef.current) return;
 
-    loadRequestedIdRef.current = conversationId;
+    const generation = conversationMessagesActions.startLoad(conversationId);
+    // True while this call's generation is still the newest `startLoad` for this
+    // conversation — a newer load of the SAME conversation (rapid re-fetch, a
+    // second call for the same id) bumps the generation and this starts reading
+    // false. Deliberately NOT scoped to "is this conversation currently on
+    // screen" — the store caches every conversation independently, so a load for
+    // a conversation the user has since navigated away from should still commit
+    // (switching back later shows fresh data without a re-fetch).
+    const isCurrent = () => conversationMessagesActions.isLoadCurrent(conversationId, generation);
+    // True only while BOTH the above holds AND this load's conversation is still
+    // the one on screen. Gates every write that is NOT conversation-keyed
+    // (useChat's single local `messages` array, the loading/error UI state) —
+    // those must never be clobbered by a load for a conversation the user has
+    // since switched away from (PR review, chatgpt-codex-connector: a slow load
+    // for conversation A resolving after a switch to B was overwriting B's
+    // useChat bookkeeping and clearing B's own in-flight loading indicator).
+    const isActiveLoad = () => isCurrent() && conversationId === currentConversationIdRef.current;
+
     setIsLoadingMessages(true);
     setMessagesLoadError(null);
 
@@ -227,8 +252,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         const res = await fetchWithAuth(
           `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages`,
         );
-        // Stale check after await — user may have switched conversation.
-        if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+        // Stale check after await — a newer load of this conversation may have superseded this one.
+        if (!isCurrent()) return;
         // The conversation isn't there. Either the send that was supposed to create it
         // never reached the server (the credit gate runs BEFORE the row is persisted,
         // so a 402 leaves nothing behind), or it was deleted elsewhere. Fall back to
@@ -243,38 +268,28 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         }
         if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
         const data = await res.json();
-        if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+        if (!isCurrent()) return;
         serverMessages = (data as ConversationMessagesResponse).messages ?? [];
       }
 
-      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+      if (!isCurrent()) return;
 
-      // Reconcile with any in-flight own stream so a DB reload during an active
-      // stream doesn't drop the streaming bubble or duplicate it once persisted.
-      // NOTE: prod runs multiple web instances — live tokens from a stream on another
-      // instance won't be in the pending store; the persisted message still shows up
-      // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
-      // Scoped by conversation, not `[0]`. getOwnStreams filters by pageId only, and a
-      // user can genuinely have two own streams on one page (send, then hit New Chat
-      // while it is still running) — in which case `[0]` may be the OTHER conversation's
-      // and the in-flight bubble for this one gets dropped on a DB reload.
-      const ownStream = usePendingStreamsStore
-        .getState()
-        .getOwnStreams(page.id)
-        .find((s) => s.conversationId === conversationId);
-      const merged =
-        ownStream?.conversationId === conversationId && ownStream.messageId
-          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
-          : serverMessages;
-
-      setMessages(merged);
-      setMessagesLoadError(null);
+      conversationMessagesActions.applyLoad(conversationId, generation, serverMessages);
+      if (isActiveLoad()) {
+        setMessages(serverMessages);
+        setMessagesLoadError(null);
+      }
     } catch (err) {
-      if (!shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) return;
+      if (!isCurrent()) return;
+      conversationMessagesActions.failLoad(conversationId, generation);
       // Keep the messages the user was already looking at — never silently blank on failure.
-      setMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
+      // Scoped to the active load: an error loading a conversation the user has
+      // since switched away from must not surface an error banner for the one now on screen.
+      if (isActiveLoad()) {
+        setMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
+      }
     } finally {
-      if (shouldApplyLoadedMessages(conversationId, loadRequestedIdRef.current)) {
+      if (isActiveLoad()) {
         setIsLoadingMessages(false);
       }
     }
@@ -412,9 +427,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       // Only reached via the undo-triggered reload path (onUndoApplied below)
       // — history-select goes straight through setIdentity, letting the
       // load-on-select effect below do the (one, authoritative) fetch. Doesn't
-      // touch activeTab/skipLoadEffectRef: an undo can land while the user is
-      // on a different tab, and currentConversationId isn't changing here so
-      // the load-on-select effect won't double-fire regardless.
+      // touch activeTab: an undo can land while the user is on a different tab,
+      // and currentConversationId isn't changing here so the load-on-select
+      // effect won't double-fire regardless.
       void loadMessagesForConversation(conversationId, messages);
     },
     onConversationLoadError: (_conversationId, error) => {
@@ -423,20 +438,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       setMessagesLoadError(error);
     },
     onConversationCreate: (conversationId) => {
-      // createConversation() already generated this id synchronously and
-      // called this callback before its persist POST resolves — adopt it
-      // immediately so a send fired right after "New Chat" can't race.
-      skipLoadEffectRef.current = conversationId;
-      setIdentity(conversationId);
+      // createConversation() already generated this id synchronously and called
+      // this callback before its persist POST resolves — adopt it immediately so
+      // a send fired right after "New Chat" can't race. isPersisted: false (not
+      // the setIdentity default of true) is what makes the load-on-select effect
+      // below skip fetching messages for an id with nothing behind it yet — no
+      // separate skip-ref needed, this IS the honest state of a just-minted id.
+      setIdentity(conversationId, { isPersisted: false });
       setMessages([]);
       setActiveTab('chat');
     },
     onConversationDelete: () => {
-      // Mint a fresh cuid, not a sentinel. skipLoadEffectRef FIRST — otherwise the
-      // load-on-select effect fires for an id with nothing behind it and
-      // setMessages([]) lands on top of whatever the user does next.
+      // Mint a fresh cuid, not a sentinel — isPersisted: false means the
+      // load-on-select effect has nothing to fetch for it.
       const nextId = createId();
-      skipLoadEffectRef.current = nextId;
       setIdentity(nextId, { isPersisted: false });
       setMessages([]);
     },
@@ -488,6 +503,65 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     refreshConversations();
   }, [currentConversationId, conversations, isPersisted, refreshConversations]);
 
+  // Conversation-scoped, mirroring selectChannelRemoteStreams. A page channel carries
+  // every conversation's streams; without the filter, a stream running in a DIFFERENT
+  // conversation on this page renders into the one on screen — which on its own looks
+  // exactly like duplication.
+  //
+  // The scoping is UNCONDITIONAL, including while the conversation is still unpersisted.
+  //
+  // It is tempting to drop the filter for a not-yet-sent conversation ("it owns no
+  // streams, so there is nothing to confuse it with") in order to restore the one
+  // deliberate property of the old `${pageId}-default` sentinel: two people opening a
+  // fresh AI page shared an id, so each could watch the other's stream. Do not. That
+  // property WAS a privacy leak. Conversations are private by default, and the page
+  // channel carries every conversation on the page — so on a shared AI page, an
+  // unfiltered surface renders another user's PRIVATE conversation token by token to
+  // anyone who opens the page. (The client-side filter is not the only defence any
+  // more — see the conversation-scoped authorization on /active-streams and
+  // /stream-join — but it must not be the hole either.)
+  //
+  // It also mistargets Stop: hitting "New Chat" mid-stream would leave the blank chat
+  // showing `effectiveIsStreaming` with a Stop button wired to the OLD conversation.
+  //
+  // A surface that never sent anything simply doesn't render someone else's stream. If
+  // that stream turns out to be this user's own conversation, onStreamComplete's
+  // late-joiner sync adopts it and the message appears.
+  //
+  // Facade only (container-agnostic consumer rule, PR 4 board): both `streams` and
+  // `renderedMessages` below read exclusively through useActiveStream/useRenderedMessages
+  // — never usePendingStreamsStore/useConversationMessagesStore directly.
+  const { streams: remoteStreams, ownStreamMessageId } = useActiveStream(page.id, currentConversationId);
+
+  const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
+
+  // The store-first render source: DB-confirmed + optimistic-sent + live-streaming
+  // messages for the active conversation, merged at render (not at write) so no
+  // effect ordering can blank a live stream. useChat's own `messages` (destructured
+  // above) is never rendered post-cutover — it stays the transport/controller only
+  // (see loadMessagesForConversation's docblock for why it is still kept in sync).
+  const renderedMessages = useRenderedMessages(page.id, currentConversationId);
+  const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+
+  // TRANSITIONAL (see useOwnStreamMirror) — copies this tab's own live assistant
+  // reply from useChat's local state into usePendingStreamsStore so it renders via
+  // the same store-first path a remote/rejoining tab uses. `ownAssistantMessage`
+  // deliberately reads raw `messages` (useChat), not `plainMessages`: this is the
+  // ONE place that must read the SDK's own live-growing content in order to copy it
+  // OUT into the store — reading the store here would be circular.
+  const lastMessage = messages[messages.length - 1];
+  const ownAssistantMessage = useMemo(
+    () => (lastMessage && lastMessage.role === 'assistant' ? { id: lastMessage.id, parts: lastMessage.parts } : undefined),
+    [lastMessage],
+  );
+  useOwnStreamMirror({
+    status,
+    ownAssistantMessage,
+    pageId: page.id,
+    conversationId: currentConversationId ?? '',
+    triggeredBy: { userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' },
+  });
+
   // Find in page
   const findQuery = useFindStore((s) => s.query);
   const findIndex = useFindStore((s) => s.currentIndex);
@@ -502,7 +576,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       return;
     }
     const q = findQuery.toLowerCase();
-    const ids = messages
+    const ids = plainMessages
       .filter((m) => {
         const text = (m.parts ?? [])
           .filter((p) => p.type === 'text')
@@ -513,7 +587,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       .map((m) => m.id);
     setFindMatchIds(ids);
     reportMatches(ids.length);
-  }, [isFindOpen, findQuery, messages, reportMatches]);
+  }, [isFindOpen, findQuery, plainMessages, reportMatches]);
 
   const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
   const currentFindMsgId = findMatchIds[findIndex] ?? null;
@@ -521,13 +595,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const streamingAssistantText = useMemo(() => {
     if (!isStreaming) return null;
-    const last = messages[messages.length - 1];
+    const last = plainMessages[plainMessages.length - 1];
     if (!last || last.role !== 'assistant') return null;
     return (last.parts ?? [])
       .filter((p) => p.type === 'text')
       .map((p) => (p as { type: 'text'; text: string }).text)
       .join('');
-  }, [messages, isStreaming]);
+  }, [plainMessages, isStreaming]);
   // Show a loading indicator (not a blank) both during init and during any
   // subsequent message-fetch triggered by conversation switch or refresh.
   const isLoading = !isInitialized || isLoadingMessages;
@@ -535,14 +609,64 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // ============================================
   // MESSAGE ACTIONS (shared hook)
   // ============================================
-  const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
-    useMessageActions({
-      agentId: page.id,
-      conversationId: currentConversationId,
-      messages,
-      setMessages,
-      regenerate,
-    });
+  // useMessageActions is SHARED across AiChatView/GlobalAssistantView/SidebarChatTab;
+  // only AiChatView is cut over to store-first rendering in this PR, so it is left
+  // untouched (its internal optimistic writes still target useChat's setMessages,
+  // which no longer renders here but stays correct for the other, not-yet-cut-over
+  // surfaces). `messages: plainMessages` feeds it the actual rendered view, so
+  // `lastAssistantMessageId`/`lastUserMessageId` and its internal lookups reflect
+  // what the user sees, not useChat's separate bookkeeping copy.
+  const {
+    handleEdit: handleEditBase,
+    handleDelete: handleDeleteBase,
+    handleRetry: handleRetryBase,
+    lastAssistantMessageId,
+    lastUserMessageId,
+  } = useMessageActions({
+    agentId: page.id,
+    conversationId: currentConversationId,
+    messages: plainMessages,
+    setMessages,
+    regenerate,
+  });
+
+  // The sender's own tab never receives its own chat:message_edited/chat:message_deleted
+  // broadcast back (useChannelStreamSocket filters on isOwnStream before invoking
+  // onMessageEdited/onMessageDeleted — see below) — so without an explicit store write
+  // here, editing or deleting your own message would show no visual change at all.
+  // Applied only AFTER the base call resolves (network-confirmed), so a failure — which
+  // useMessageActions already rolls its own copy back for and rethrows — leaves the
+  // store untouched too.
+  const handleEdit = useCallback(async (messageId: string, newContent: string) => {
+    const original = plainMessages.find((m) => m.id === messageId);
+    await handleEditBase(messageId, newContent);
+    if (!currentConversationId || !original) return;
+    const payload: MessageEditPayload = {
+      messageId,
+      parts: original.parts.map((p) => (p.type === 'text' ? { ...p, text: newContent } : p)),
+      editedAt: new Date(),
+    };
+    conversationMessagesActions.applyEdit(currentConversationId, payload);
+  }, [handleEditBase, plainMessages, currentConversationId]);
+
+  const handleDelete = useCallback(async (messageId: string) => {
+    await handleDeleteBase(messageId);
+    if (!currentConversationId) return;
+    conversationMessagesActions.applyDelete(currentConversationId, messageId);
+  }, [handleDeleteBase, currentConversationId]);
+
+  const handleRetry = useCallback(async () => {
+    // Same computation useMessageActions.handleRetry runs internally (against
+    // the same plainMessages source) to decide which rows to DELETE
+    // server-side — shared via getAssistantMessagesAfterLastUser so the two
+    // call sites can't drift, computed here BEFORE the base call so we know
+    // what to remove from the store once those deletes (and the regenerate()
+    // call) have gone out.
+    const toRemove = getAssistantMessagesAfterLastUser(plainMessages).map((m) => m.id);
+    await handleRetryBase();
+    if (!currentConversationId) return;
+    for (const id of toRemove) conversationMessagesActions.applyDelete(currentConversationId, id);
+  }, [handleRetryBase, plainMessages, currentConversationId]);
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -591,17 +715,34 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // Load-on-select guarantee: whenever currentConversationId changes to a real
   // (non-placeholder) id, reload the latest messages from the DB — unless
-  // resolveConversation already prefetched them for this exact id (init path)
-  // or the caller opted out via skipLoadEffectRef (new-conversation path,
-  // which has no messages to fetch yet). History-select also funnels through
-  // here now — one authoritative fetch path for every conversation switch.
+  // resolveConversation already prefetched them for this exact id (init path).
+  // History-select also funnels through here now — one authoritative fetch
+  // path for every conversation switch.
+  //
+  // `lastHandledIdentityRef` distinguishes a genuine id change (always reloads,
+  // including switching away and back — the epic wants a stream still visible
+  // on return) from an `isPersisted` flip on the SAME id (our own send calling
+  // adoptConversationAsPersisted on a conversation whose first message may not
+  // be saved yet — must not fetch). Set it whenever the id changes, BEFORE the
+  // `isPersisted` check, so a not-yet-persisted id is remembered as "seen" and
+  // its later true-flip is recognized as the same identity rather than a switch.
   useEffect(() => {
     if (!currentConversationId) return;
-    if (!isPersisted) return;
-    if (skipLoadEffectRef.current === currentConversationId) {
-      skipLoadEffectRef.current = null; // consume the skip token
+    const isSameIdentityAsLastHandled = lastHandledIdentityRef.current === currentConversationId;
+    lastHandledIdentityRef.current = currentConversationId;
+    if (!isPersisted) {
+      // No load will run for an unpersisted identity (the early-return at the
+      // top of loadMessagesForConversation skips it) — so if the user switched
+      // here while a load for the PREVIOUS conversation was still in flight,
+      // that load's own `isActiveLoad()` gate will read false when it resolves
+      // (conversationId no longer matches currentConversationIdRef) and never
+      // clear isLoadingMessages itself. Without this, a fresh/New Chat view can
+      // get stuck showing a loading state forever (PR review, chatgpt-codex-connector).
+      setIsLoadingMessages(false);
+      setMessagesLoadError(null);
       return;
     }
+    if (isSameIdentityAsLastHandled) return;
     if (preloadedMessagesRef.current?.id === currentConversationId) {
       const preloaded = preloadedMessagesRef.current.messages;
       preloadedMessagesRef.current = null;
@@ -617,49 +758,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     isStreaming,
     { pageId: page.id, componentName: 'AiChatView' }
   );
-
-  // Conversation-scoped, mirroring selectChannelRemoteStreams. A page channel carries
-  // every conversation's streams; without the filter, a stream running in a DIFFERENT
-  // conversation on this page renders into the one on screen — which on its own looks
-  // exactly like duplication.
-  //
-  // The scoping is UNCONDITIONAL, including while the conversation is still unpersisted.
-  //
-  // It is tempting to drop the filter for a not-yet-sent conversation ("it owns no
-  // streams, so there is nothing to confuse it with") in order to restore the one
-  // deliberate property of the old `${pageId}-default` sentinel: two people opening a
-  // fresh AI page shared an id, so each could watch the other's stream. Do not. That
-  // property WAS a privacy leak. Conversations are private by default, and the page
-  // channel carries every conversation on the page — so on a shared AI page, an
-  // unfiltered surface renders another user's PRIVATE conversation token by token to
-  // anyone who opens the page. (The client-side filter is not the only defence any
-  // more — see the conversation-scoped authorization on /active-streams and
-  // /stream-join — but it must not be the hole either.)
-  //
-  // It also mistargets Stop: hitting "New Chat" mid-stream would leave the blank chat
-  // showing `effectiveIsStreaming` with a Stop button wired to the OLD conversation.
-  //
-  // A surface that never sent anything simply doesn't render someone else's stream. If
-  // that stream turns out to be this user's own conversation, onStreamComplete's
-  // late-joiner sync adopts it and the message appears.
-  const remoteStreams = usePendingStreamsStore(
-    useShallow((state) =>
-      currentConversationId === null
-        ? []
-        : state.getRemotePageStreams(page.id).filter((s) => s.conversationId === currentConversationId)
-    )
-  );
-
-  // Subscribe to a primitive (messageId | undefined) so token appends to the
-  // own stream don't churn this hook's identity and re-render ChatLayout per chunk.
-  const ownStreamMessageId = usePendingStreamsStore(
-    (state) =>
-      currentConversationId === null
-        ? undefined
-        : state.getOwnStreams(page.id).find((s) => s.conversationId === currentConversationId)?.messageId
-  );
-
-  const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
 
   const remoteStreamingUser = !effectiveIsStreaming
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
@@ -707,23 +805,39 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   usePageSocketRoom(page.id);
   const { rejoinActiveStreams } = useChannelStreamSocket(page.id, {
+    // These three fire only for a REMOTE tab's action (useChannelStreamSocket already
+    // drops own-tab events via isOwnStream before invoking the callback) — the local
+    // user's own edit/delete/send is handled separately (handleSendMessage's
+    // addOptimisticSend; handleEdit/handleDelete above).
+    //
+    // Written to BOTH the store (render) AND useChat via setMessages (bookkeeping) —
+    // same dual-write shape as loadMessagesForConversation's, not a NEW two-way sync
+    // (rail 11): both writes are independent, terminal applications of the SAME
+    // upstream event, not one container's state flowing into the other. Required
+    // because `regenerate()` and `useAskUserAnswering` (via plainMessages, but
+    // `regenerate` itself indexes useChat's OWN local array) need useChat's copy to
+    // still reflect a remote edit/delete/message — otherwise a retry right after a
+    // collaborator's edit on a shared conversation could regenerate against stale
+    // history (PR review finding, independently confirmed by three review passes).
     onUserMessage: (message, payload) => {
-      if (payload.conversationId !== currentConversationId) return;
+      if (payload.conversationId !== currentConversationId || !currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+      conversationMessagesActions.applyRemoteUserMessage(currentConversationId, message);
     },
     onMessageEdited: (payload) => {
-      if (payload.conversationId !== currentConversationId) return;
-      setMessages((prev) =>
-        applyMessageEdit(prev, {
-          messageId: payload.messageId,
-          parts: payload.parts,
-          editedAt: new Date(payload.editedAt),
-        }),
-      );
+      if (payload.conversationId !== currentConversationId || !currentConversationId) return;
+      const editPayload: MessageEditPayload = {
+        messageId: payload.messageId,
+        parts: payload.parts,
+        editedAt: new Date(payload.editedAt),
+      };
+      setMessages((prev) => applyMessageEdit(prev, editPayload));
+      conversationMessagesActions.applyEdit(currentConversationId, editPayload);
     },
     onMessageDeleted: (payload) => {
-      if (payload.conversationId !== currentConversationId) return;
+      if (payload.conversationId !== currentConversationId || !currentConversationId) return;
       setMessages((prev) => applyMessageDelete(prev, payload.messageId));
+      conversationMessagesActions.applyDelete(currentConversationId, payload.messageId);
     },
     onUndoApplied: (payload) => {
       if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
@@ -740,7 +854,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       refreshConversations();
     },
     onStreamComplete: (messageId, completedConvId) => {
-      const stream = usePendingStreamsStore.getState().streams.get(messageId);
+      const stream = getActiveStreamById(messageId);
 
       // The conversation row is definitely on the server by now (the stream that just
       // finished wrote to it). If the cached list still doesn't have it, the optimistic
@@ -762,25 +876,38 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       }
 
       if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationId) {
-        // REPLACE by id — do not skip. An existing message with this id is NOT proof we already
-        // have the content.
+        // COMMIT by id — do not skip. An existing entry with this id is NOT proof we
+        // already have the content.
         //
-        // The server names the assistant message (`generateId: () => serverAssistantMessageId`),
-        // so useChat's copy shares the stream's `messageId`. useChat does not roll back on error,
-        // so a mid-stream network drop leaves its HALF-STREAMED message in the array — and that
-        // is precisely when recovery rejoins the multicast and `stream.parts` accumulates the
-        // FULL reply. Skipping threw the complete version away and left the user with the
-        // truncated one, the real text stranded in the DB until they navigated away and back.
+        // The mirror (useOwnStreamMirror/planOwnStreamMirror) removes the stream from
+        // usePendingStreamsStore the instant `status` leaves submitted/streaming — which
+        // can race AHEAD of this handler for the own-tab case. If nothing commits the
+        // final content into useConversationMessagesStore before that removal is
+        // rendered, the reply flashes to missing (selectRenderedMessages has no
+        // confirmed row AND no more active stream for this id). This write is what
+        // closes that gap. Also covers cross-instance recovery: a mid-stream network
+        // drop can leave the local copy half-streamed, and it's precisely then that
+        // rejoin-recovery accumulates the FULL reply into `stream.parts` — the real text
+        // must not stay stranded in the DB until the user navigates away and back.
         //
-        // Replacing is correct for the duplicate case too (same id = same message; stream.parts
-        // is the authoritative copy), so it subsumes the original de-dup intent.
+        // `applyConfirmedMessage` (upsert-by-id — REPLACES an existing entry, unlike
+        // `applyRemoteUserMessage`'s no-op-if-present) is required here, not optional:
+        // a DB reload mid-stream can have already seeded `messages` with a
+        // 'streaming'-status placeholder/half-streamed row under this same id, and
+        // the whole point of this branch is to overwrite that with the full content.
+        //
+        // Also replaces the entry in useChat (dual-write, same rationale as the socket
+        // handlers above) — covers the cross-instance-recovery case, where the
+        // recovered content never went through this tab's own useChat stream and would
+        // otherwise leave regenerate()'s bookkeeping short of it.
         const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
         setMessages((prev) => {
           const i = prev.findIndex((m) => m.id === messageId);
-          return i === -1
-            ? [...prev, synthesized]
-            : prev.map((m, j) => (j === i ? synthesized : m));
+          return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
         });
+        if (currentConversationId) {
+          conversationMessagesActions.applyConfirmedMessage(currentConversationId, synthesized);
+        }
         return;
       }
 
@@ -810,10 +937,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             // unpersisted conversation that triggered it.
             if (isPersistedRef.current) return;
             setIdentity(persisted.id);
-            setMessages((prev) =>
-              prev.some((m) => m.id === messageId)
-                ? prev
-                : [...prev, synthesizeAssistantMessage(messageId, parts, startedAt)],
+            conversationMessagesActions.applyConfirmedMessage(
+              persisted.id,
+              synthesizeAssistantMessage(messageId, parts, startedAt),
             );
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));
@@ -840,8 +966,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = messages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = messages[messages.length - 1];
+      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
+      const lastOverallMsg = plainMessages[plainMessages.length - 1];
       // During streaming the last overall message is the in-progress assistant reply;
       // the baseline should be the previously-finalized message before it.
       const streamingAssistantIdx =
@@ -855,7 +981,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     if (isStreaming) return;
 
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return;
     const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
     const text = textParts.map((p) => (p as { text: string }).text).join('');
@@ -867,7 +993,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         ? current
         : { id: lastAssistantMsg.id, text }
     );
-  }, [messages, isStreaming, isVoiceModeActive]);
+  }, [plainMessages, isStreaming, isVoiceModeActive]);
 
   // ============================================
   // HANDLERS
@@ -914,8 +1040,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     contextRef,
   ]);
 
+  // plainMessages (store-rendered), not useChat's raw `messages`: "answerable"
+  // is decided by whether the ask_user part sits on the conversation's LAST
+  // message, and a remote edit/delete/message on this conversation updates
+  // the store but no longer updates useChat's local array (leaf 4.3 — those
+  // socket handlers write only to the store). Reading plainMessages keeps
+  // this decision matched to what the user actually sees on screen.
   const askUserAnswering = useAskUserAnswering({
-    messages,
+    messages: plainMessages,
     status,
     addToolResult,
     wrapSend,
@@ -924,13 +1056,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   // A send creates the conversations row server-side under exactly this id, so the id
   // becomes real the moment the POST leaves. Flipping isPersisted re-runs the
-  // load-on-select effect for the SAME id, though — and that effect would fetch a
-  // conversation whose first message has not been written yet and setMessages([]) over
-  // the optimistic user bubble and the in-flight stream. Claim the skip token first.
+  // load-on-select effect for the SAME id, but `lastHandledIdentityRef` (set when this
+  // id was first adopted as unpersisted) recognizes it as the same identity, not a
+  // switch — so it does not fetch a conversation whose first message may not be
+  // written yet, over the optimistic user bubble and the in-flight stream.
   const adoptConversationAsPersisted = useCallback(() => {
     if (isPersistedRef.current) return;
-    const id = currentConversationIdRef.current;
-    if (id) skipLoadEffectRef.current = id;
     setPersisted(true);
   }, [setPersisted]);
 
@@ -943,6 +1074,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const files = getFilesForSend();
     if (!trimmed && files.length === 0) return;
     if (!canSendMessage) return;
+    if (!currentConversationId) return;
 
     clearInputDraft();
     clearFiles();
@@ -950,8 +1082,27 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     adoptConversationAsPersisted();
 
+    // Client-minted id, parts-form send (PR 3 board, Assumption B): the `{text, files}`
+    // shorthand silently drops any id passed alongside it, so the message would push
+    // under an SDK-generated id useConversationMessagesStore never saw. buildUserMessage
+    // + the parts-form call is the only path that preserves the id end to end.
+    // Written to the store immediately (mode: 'optimistic') because the sender's own
+    // tab never receives its own chat:user_message broadcast back (own-tab dedup in
+    // useChannelStreamSocket) — without this, the bubble would only ever appear once
+    // useChat's own stream-start local push happened to line up, i.e. never for the
+    // user message itself.
+    // buildUserMessage's declared return type is the SDK's generic CreateUIMessage<UIMessage>
+    // (id/role optional, since that type also covers server-constructed continuations), but
+    // this call always supplies both — the cast reflects that fact, not a type escape hatch.
+    const userMessage = buildUserMessage({
+      id: createId(),
+      text: trimmed.length > 0 ? trimmed : undefined,
+      files: files.length > 0 ? files : undefined,
+    }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
     wrapSend(() => sendMessage(
-      { text: trimmed, files: files.length > 0 ? files : undefined },
+      userMessage,
       {
         body: {
           chatId: page.id,
@@ -995,12 +1146,17 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
     }
-    if (!text.trim()) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
     if (!canSendMessage) return;
+    if (!currentConversationId) return;
 
     adoptConversationAsPersisted();
+    const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
     wrapSend(() => sendMessage(
-      { text: text.trim() },
+      userMessage,
       {
         body: {
           chatId: page.id,
@@ -1163,7 +1319,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   <AiUsageMonitor pageId={page.id} compact />
                 )}
 
-                <TasksDropdown messages={messages} driveId={driveId} />
+                <TasksDropdown messages={plainMessages} driveId={driveId} />
 
                 {currentConversation && (
                   <ConversationShareToggle
@@ -1253,7 +1409,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           <ChatLayout
             ref={chatLayoutRef}
             conversationId={currentConversationId}
-            messages={messages}
+            messages={plainMessages}
             input={input}
             onInputChange={setInput}
             onSend={handleSendMessage}

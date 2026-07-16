@@ -114,7 +114,9 @@ vi.mock('@pagespace/db/db', () => {
 
   const insert = vi.fn(() => ({
     values: vi.fn(() => ({
-      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: vi.fn(() => ({
+        returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
+      })),
     })),
   }));
 

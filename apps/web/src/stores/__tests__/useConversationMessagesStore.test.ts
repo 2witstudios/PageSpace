@@ -75,4 +75,23 @@ describe('useConversationMessagesStore', () => {
     addOptimisticSend('c1', msg('opt1'));
     expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] });
   });
+
+  it('given isLoadCurrent with the generation returned by startLoad, should return true; with a stale generation, should return false', () => {
+    const { startLoad, isLoadCurrent } = useConversationMessagesStore.getState();
+    const gen1 = startLoad('c1');
+    expect(isLoadCurrent('c1', gen1)).toBe(true);
+    const gen2 = startLoad('c1');
+    expect(isLoadCurrent('c1', gen1)).toBe(false);
+    expect(isLoadCurrent('c1', gen2)).toBe(true);
+  });
+
+  it('given applyConfirmedMessage for a new id, should append it; for an existing id, should replace its content in place', () => {
+    const { startLoad, applyLoad, applyConfirmedMessage, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('m1')]);
+    applyConfirmedMessage('c1', { id: 'm2', role: 'assistant', parts: [] });
+    expect(getEntry('c1').messages.map((m) => m.id)).toEqual(['m1', 'm2']);
+    applyConfirmedMessage('c1', { id: 'm1', role: 'assistant', parts: [{ type: 'text', text: 'confirmed' }] });
+    expect(getEntry('c1').messages[0]).toMatchObject({ id: 'm1', parts: [{ type: 'text', text: 'confirmed' }] });
+  });
 });

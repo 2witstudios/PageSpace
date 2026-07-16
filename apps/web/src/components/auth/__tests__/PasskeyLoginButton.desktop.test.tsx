@@ -30,6 +30,12 @@ vi.mock('@/lib/desktop-auth', () => ({
   handleDesktopAuthResponse: vi.fn(),
 }));
 
+// The web path sends a stable per-browser device identity from analytics.
+vi.mock('@/lib/analytics', () => ({
+  getOrCreateDeviceId: vi.fn(() => 'web-device-id'),
+  getDeviceName: vi.fn(() => 'Web Browser'),
+}));
+
 import { PasskeyLoginButton } from '../PasskeyLoginButton';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { isDesktopPlatform, getDevicePlatformFields } from '@/lib/desktop-auth';
@@ -206,5 +212,57 @@ describe('PasskeyLoginButton — web path (regression guard)', () => {
     expect((window as unknown as { electron?: ElectronBridge }).electron).toBeUndefined();
     // Ensure the component actually mounted (sanity check).
     expect(container).toBeTruthy();
+  });
+
+  it('sends a stable per-browser device identity in the verify request body', async () => {
+    // Full happy-path plumbing so the verify POST actually fires.
+    vi.mocked(startAuthentication).mockResolvedValue({ id: 'assertion' } as never);
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ options: { challenge: 'ch', allowCredentials: [{ id: 'cred' }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ success: true, redirectUrl: '/dashboard', csrfToken: 'c' }),
+      });
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    render(<PasskeyLoginButton csrfToken="csrf-token-value" onSuccess={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /sign in with passkey/i }));
+
+    const verifyCall = fetchSpy.mock.calls.find(
+      ([url]) => url === '/api/auth/passkey/authenticate',
+    );
+    expect(verifyCall).toBeDefined();
+    const body = JSON.parse((verifyCall![1] as { body: string }).body);
+    expect(body.platform).toBe('web');
+    expect(body.deviceId).toBe('web-device-id');
+    expect(body.deviceName).toBe('Web Browser');
+  });
+
+  it('persists the device token the route returns so silent recovery keeps working', async () => {
+    vi.mocked(startAuthentication).mockResolvedValue({ id: 'assertion' } as never);
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ options: { challenge: 'ch', allowCredentials: [{ id: 'cred' }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          redirectUrl: '/dashboard',
+          csrfToken: 'c',
+          deviceToken: 'ps_dev_web_rotated',
+        }),
+      }) as unknown as typeof fetch;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+
+    render(<PasskeyLoginButton csrfToken="csrf-token-value" onSuccess={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /sign in with passkey/i }));
+
+    expect(setItemSpy).toHaveBeenCalledWith('deviceToken', 'ps_dev_web_rotated');
+    setItemSpy.mockRestore();
   });
 });

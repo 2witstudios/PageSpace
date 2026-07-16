@@ -21,6 +21,22 @@ import { useOAuthSignIn } from "@/hooks/useOAuthSignIn";
 import { isOnPrem } from "@/lib/deployment-mode";
 import { resolveSigninNext } from "@/lib/auth/resolve-signin-next";
 import { detectInAppBrowser, getPreferredBrowserName } from "@/lib/auth/browser-detection";
+import { useSigninRecovery } from "./useSigninRecovery";
+
+// Shared loading shell: the Suspense fallback (searchParams boundary) and the in-flight
+// silent-recovery state render the same minimal screen, so users never see it change shape.
+function AuthLoading() {
+  return (
+    <AuthShell>
+      <div className="text-center">
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+          Welcome back
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">Loading...</p>
+      </div>
+    </AuthShell>
+  );
+}
 
 function SignInForm() {
   const [showMagicLink, setShowMagicLink] = useState(false);
@@ -38,6 +54,17 @@ function SignInForm() {
   }, []);
 
   const nextPath = resolveSigninNext({ paramNext: searchParams.get('next'), browserPath });
+
+  // Silent session recovery: before showing the form, try to heal the session (live cookie
+  // → redirect; expired cookie + device token → refresh → redirect). This restores the
+  // recovery the 2026-07-07 middleware change defeated. See ./signin-recovery.ts.
+  //
+  // Gate on `browserPath` being resolved: under a middleware rewrite the deep link lives in
+  // the browser URL (read post-mount above), so `nextPath` is undefined on the first render.
+  // Starting recovery before then would redirect a recovered user to the default dashboard
+  // instead of the page they originally opened.
+  const { recovering } = useSigninRecovery(nextPath, browserPath !== null);
+
   const {
     handleGoogleSignIn,
     handleAppleSignIn,
@@ -114,6 +141,12 @@ function SignInForm() {
       setShowMagicLink(true);
     }
   }, []);
+
+  // While silent recovery is in flight, show a minimal loading state rather than the form,
+  // so a user who is about to be auto-redirected never sees the form flash.
+  if (recovering) {
+    return <AuthLoading />;
+  }
 
   // On-prem: passkey + magic link sign-in (no OAuth)
   if (onPrem) {
@@ -304,18 +337,7 @@ function SignInForm() {
 
 export default function SignIn() {
   return (
-    <Suspense
-      fallback={
-        <AuthShell>
-          <div className="text-center">
-            <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
-              Welcome back
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">Loading...</p>
-          </div>
-        </AuthShell>
-      }
-    >
+    <Suspense fallback={<AuthLoading />}>
       <SignInForm />
     </Suspense>
   );

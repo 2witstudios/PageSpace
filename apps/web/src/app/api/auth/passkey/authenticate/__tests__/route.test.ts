@@ -84,6 +84,7 @@ vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -126,7 +127,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const validPayload = {
@@ -193,10 +194,12 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(csrfCookie).toContain('mock-csrf-token');
     });
 
-    it('revokes existing sessions before creating new one', async () => {
+    it('revokes prior sessions via the device-scoped helper before creating new one', async () => {
       await POST(createRequest());
 
-      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
+      // No deviceId in the default payload → helper receives undefined and applies
+      // its legacy all-web-session fallback internally.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('user-1', undefined, 'passkey_login', 'passkey');
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
         type: 'user',
@@ -204,26 +207,10 @@ describe('POST /api/auth/passkey/authenticate', () => {
       }));
     });
 
-    it('logs when existing sessions are revoked', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(3);
+    it('scopes revocation to the supplied deviceId (does not nuke other devices)', async () => {
+      await POST(createRequest({ ...validPayload, platform: 'web', deviceId: 'device-A' }));
 
-      await POST(createRequest());
-
-      expect(loggers.auth.info).toHaveBeenCalledWith('Revoked all sessions on passkey login', expect.objectContaining({
-        userId: 'user-1',
-        count: 3,
-      }));
-    });
-
-    it('does not log when no sessions are revoked', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
-
-      await POST(createRequest());
-
-      expect(loggers.auth.info).not.toHaveBeenCalledWith(
-        'Revoked all sessions on passkey login',
-        expect.objectContaining({ userId: 'user-1' }),
-      );
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('user-1', 'device-A', 'passkey_login', 'passkey');
     });
 
     it('passes clientIP as createdByIp when not unknown', async () => {
