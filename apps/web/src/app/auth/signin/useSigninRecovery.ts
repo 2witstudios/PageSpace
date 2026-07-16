@@ -9,7 +9,7 @@ import { decideSigninRecovery, type SigninRecoveryInput } from './signin-recover
 
 const DEFAULT_NEXT = '/dashboard';
 
-function isNativeShell(): boolean {
+function detectNativeShell(): boolean {
   if (typeof window === 'undefined') return false;
   return !!window.electron?.isDesktop || isCapacitorApp();
 }
@@ -69,7 +69,7 @@ export function useSigninRecovery(
 
     const run = async () => {
       const observed: SigninRecoveryInput = {
-        isNativeShell: isNativeShell(),
+        isNativeShell: detectNativeShell(),
         // Read fresh from the store rather than subscribing: this effect runs once and must
         // see the flag's value when recovery starts, not restart when it later changes.
         authFailedPermanently: useAuthStore.getState().authFailedPermanently,
@@ -109,7 +109,13 @@ export function useSigninRecovery(
       }
     };
 
-    void run();
+    // Fail open: recovery is best-effort, so an unexpected rejection anywhere in the driver
+    // must fall back to showing the form — never strand the page on the loading state (this
+    // is the app's primary auth entry point). `refreshAuthSession` resolves a result today,
+    // but its type makes no never-throw guarantee, and neither does a dynamic import inside it.
+    void run().catch(() => {
+      if (!cancelled) setRecovering(false);
+    });
 
     return () => {
       cancelled = true;

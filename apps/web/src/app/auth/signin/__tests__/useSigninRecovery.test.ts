@@ -162,6 +162,50 @@ describe('useSigninRecovery', () => {
     expect(replace).not.toHaveBeenCalledWith('/dashboard');
   });
 
+  it('fails open to the form if the device-token refresh rejects (never strands on loading)', async () => {
+    // The driver is best-effort: a thrown rejection anywhere must fall back to the form
+    // rather than leave the page stuck on the loading state forever.
+    mockMe(false);
+    localStorage.setItem('deviceToken', 'dt_valid');
+    refreshAuthSession.mockRejectedValue(new Error('boom'));
+
+    const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+    await waitFor(() => expect(result.current.recovering).toBe(false));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('fails open to the form if the /api/auth/me fetch itself rejects', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down');
+      }),
+    );
+
+    const { result } = renderHook(() => useSigninRecovery('/dashboard', true));
+
+    await waitFor(() => expect(result.current.recovering).toBe(false));
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('runs recovery only once even if the component re-renders while ready stays true', async () => {
+    const fetchSpy = vi.fn(async () => ({ ok: false }) as Response);
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const { rerender, result } = renderHook(
+      ({ n }: { n: number }) => useSigninRecovery(`/dashboard?r=${n}`, true),
+      { initialProps: { n: 1 } },
+    );
+
+    await waitFor(() => expect(result.current.recovering).toBe(false));
+    // A re-render with ready still true (e.g. a searchParams-driven update) must not re-run.
+    rerender({ n: 2 });
+    await Promise.resolve();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('completes recovery under React StrictMode (does not get stuck on loading)', async () => {
     mockMe(false); // unrecoverable → terminal 'show-form' → recovering flips false
 
