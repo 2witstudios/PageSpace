@@ -16,6 +16,7 @@
  *    analytics row must not fail a send that succeeded.
  */
 
+import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
 import { broadcastRecipients } from '@pagespace/db/schema/email-broadcasts';
@@ -71,6 +72,24 @@ export async function loadAlreadySentEmails(broadcastId: string): Promise<Set<st
  * reachable again in minutes rather than never.
  */
 export const CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/**
+ * Proof that a particular worker holds a particular claim.
+ *
+ * Ownership has to be provable, not assumed. A write keyed only on `(broadcastId, userId)`
+ * cannot distinguish the worker currently holding a recipient from one whose lease expired
+ * ten minutes ago and is only now getting around to reporting — and letting the latter
+ * write would revoke the former's claim mid-send. Carrying this back and requiring it to
+ * still match turns "I once had this" into "I still have this".
+ *
+ * An opaque id rather than the `claimed_at` stamp, because that comparison cannot be made
+ * to work: Postgres keeps microseconds, a JS Date holds milliseconds, so a stamp read back
+ * through the driver never equals the stored value. The fence would match nothing and
+ * quietly stop releasing anything — failing OPEN in the one place that must fail closed.
+ */
+export interface ClaimLease {
+  readonly token: string;
+}
 
 /**
  * The lease's clock is POSTGRES'S, never a worker's.
@@ -135,13 +154,21 @@ function foreverFromNowSql() {
  * That holds because claiming is this module's contract: every durable send is
  * claim -> send -> record, and a caller that records without claiming has already given
  * up its protection against double-sending, which is a bigger problem than a stale count.
+ *
+ * @returns the lease on success — proof, for the later write, that this worker is the one
+ *   holding the recipient. Without it a write cannot tell "release MY lease" from "revoke
+ *   a stranger's", and a worker whose send hung past its lease would clobber the rival
+ *   that legitimately took over. `null` means someone else owns them: do not send.
  */
 export async function claimRecipient(
   broadcastId: string,
   input: { userId: string; email: string },
   opts: { leaseMs?: number } = {},
-): Promise<boolean> {
+): Promise<ClaimLease | null> {
   const leaseMs = opts.leaseMs ?? CLAIM_LEASE_MS;
+  // Minted here, not read back, so the token this worker believes it holds is by
+  // construction the one the row carries — no round-trip, nothing to lose in conversion.
+  const token = createId();
 
   const rows = await db
     .insert(broadcastRecipients)
@@ -151,12 +178,14 @@ export async function claimRecipient(
       recipientEmail: input.email,
       status: 'pending',
       claimedAt: dbNow(),
+      claimedBy: token,
       attempts: 1,
     })
     .onConflictDoUpdate({
       target: [broadcastRecipients.broadcastId, broadcastRecipients.userId],
       set: {
         claimedAt: dbNow(),
+        claimedBy: token,
         recipientEmail: input.email,
         attempts: sql`${broadcastRecipients.attempts} + 1`,
         updatedAt: dbNow(),
@@ -173,7 +202,7 @@ export async function claimRecipient(
 
   // No row back means the conflict path's WHERE rejected the update: someone else owns
   // this recipient, or already mailed them.
-  return rows.length > 0;
+  return rows.length > 0 ? { token } : null;
 }
 
 /**
@@ -194,6 +223,9 @@ async function parkClaimAgainstRetry(broadcastId: string, userId: string): Promi
       .update(broadcastRecipients)
       .set({
         claimedAt: foreverFromNowSql(),
+        // Drop the token too: a park must be unreleasable, and a lease that matches
+        // nothing is a lease nobody can use to undo this.
+        claimedBy: null,
         errorMessage: 'sent but not recorded — parked so no retry re-sends; see LedgerWriteFailed',
         updatedAt: new Date(),
       })
@@ -354,6 +386,7 @@ export async function recordSkip(
 export async function recordFailure(
   broadcastId: string,
   input: { userId: string; email: string; error: string },
+  lease: ClaimLease | null = null,
 ): Promise<void> {
   try {
     await db
@@ -373,20 +406,83 @@ export async function recordFailure(
           errorMessage: input.error,
           // Not incremented here either — see recordSent. The claim counted this try.
           //
-          // RELEASE the lease: this send is over, so holding the recipient for the rest of
-          // the lease would make a prompt retry a no-op. After a provider blip, every
-          // failed row would refuse to be reclaimed for ~5 minutes and the run would log
-          // "claimed by another worker" about a worker that does not exist.
-          claimedAt: null,
+          // RELEASE the lease, but only when we can prove it is OURS (see setWhere). This
+          // send is over, so continuing to hold the recipient would make a prompt retry a
+          // no-op: after a provider blip every failed row would refuse to be reclaimed for
+          // ~5 minutes while the run logged "claimed by another worker" about a worker
+          // that does not exist. Releasing without the proof is worse than not releasing —
+          // it hands the recipient to a third worker while the second is mid-send.
+          ...(lease ? { claimedAt: null, claimedBy: null } : {}),
           updatedAt: new Date(),
         },
-        // Same guard as recordSkip: a late failure must never unmark a real send.
-        setWhere: sql`${broadcastRecipients.status} <> 'sent'`,
+        setWhere: lease
+          ? and(
+              // A late failure must never unmark a real send...
+              ne(broadcastRecipients.status, 'sent'),
+              // ...nor speak for a claim we no longer hold. `sendOne` has no timeout, so a
+              // send CAN outlive its lease (the codebase anticipates exactly this: a send
+              // Resend accepts whose response never arrives). By then another worker may
+              // have legitimately reclaimed the recipient — or an unrecorded send may have
+              // parked the row. Matching on the exact stamp means a stale worker updates
+              // nothing rather than clobbering either.
+              eq(broadcastRecipients.claimedBy, lease.token),
+            )
+          : // No lease to prove ownership with: record the failure, but leave the claim
+            // alone. A stale status is recoverable; a revoked lease is a double-send.
+            ne(broadcastRecipients.status, 'sent'),
       });
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
     console.warn(`[broadcast] failure write failed for ${input.userId}: ${why}`);
   }
+}
+
+/**
+ * The durable ledger for ONE broadcast run, wired for `runBroadcast`.
+ *
+ * Exists to keep the lease honest. `claimRecipient` hands back proof of ownership, and
+ * `recordFailure` needs that proof — but `runBroadcast` is storage-agnostic and has no
+ * business carrying a database token between its hooks. So the proof is remembered here,
+ * by the worker that earned it: this object IS one worker's knowledge of what it holds.
+ *
+ * Per-run and per-process on purpose. The map is not a cache to be shared or persisted —
+ * a lease another process stamped is precisely the thing this worker must NOT claim to
+ * own. Losing the map (a crash) loses nothing that matters: the leases expire.
+ *
+ *   const ledger = createBroadcastLedger(broadcastId, 'PRODUCT_UPDATE');
+ *   await runBroadcast({ ...rest, claim: ledger.claim, record: ledger.record,
+ *                        onSkip: ledger.onSkip, onFailure: ledger.onFailure });
+ */
+export function createBroadcastLedger(
+  broadcastId: string,
+  notificationType: NotificationTypeValue,
+  opts: { leaseMs?: number } = {},
+) {
+  /** userId -> the lease THIS run holds. Absent means we hold nothing for them. */
+  const held = new Map<string, ClaimLease>();
+
+  return {
+    claim: async (r: { userId: string; email: string }): Promise<boolean> => {
+      const lease = await claimRecipient(broadcastId, r, opts);
+      if (!lease) {
+        // Someone else owns them. Drop any lease we thought we had: it is stale by
+        // definition, and acting on it later is the bug this whole seam prevents.
+        held.delete(r.userId);
+        return false;
+      }
+      held.set(r.userId, lease);
+      return true;
+    },
+
+    record: (entry: SentLedgerEntry): Promise<void> =>
+      recordSent(broadcastId, entry, notificationType),
+
+    onSkip: (skip: { userId: string; email: string | null; reason: SkipReason }): Promise<void> =>
+      recordSkip(broadcastId, skip),
+
+    onFailure: (failure: { userId: string; email: string; error: string }): Promise<void> =>
+      recordFailure(broadcastId, failure, held.get(failure.userId) ?? null),
+  };
 }
 
 /** Per-status counts for the admin progress view, straight from the ledger. */

@@ -217,6 +217,21 @@ export const broadcastRecipients = pgTable(
      */
     claimedAt: timestamp('claimed_at', { mode: 'date' }),
 
+    /**
+     * WHICH claim currently holds this row — a fresh opaque id per successful claim.
+     *
+     * `claimed_at` says a lease exists; this says whose it is. A later write needs the
+     * difference: a worker whose send outlived its lease (there is no timeout on the
+     * provider call) must not be able to report a failure that revokes the claim of the
+     * worker which legitimately took over, and hand the recipient to a third.
+     *
+     * Deliberately not `claimed_at` itself. That comparison cannot be made to work:
+     * Postgres stores microseconds, a JS Date holds milliseconds, so a stamp read back
+     * through the driver never equals the stored value and the fence silently matches
+     * nothing — which fails OPEN, in the one place that must fail closed.
+     */
+    claimedBy: text('claimed_by'),
+
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
   },

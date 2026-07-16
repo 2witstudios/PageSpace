@@ -63,7 +63,7 @@ async function currentRow() {
 
 describe('claimRecipient against a real database', () => {
   it('given a fresh recipient, should claim them', async () => {
-    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBe(true);
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).not.toBeNull();
 
     const row = await currentRow();
     expect(row.status).toBe('pending');
@@ -71,8 +71,8 @@ describe('claimRecipient against a real database', () => {
   });
 
   it('given a rival holding a fresh lease, should refuse the second claim', async () => {
-    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBe(true);
-    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBe(false);
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).not.toBeNull();
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBeNull();
   });
 
   it('should let exactly ONE of many concurrent workers win', async () => {
@@ -85,7 +85,7 @@ describe('claimRecipient against a real database', () => {
       Array.from({ length: 8 }, () => claimRecipient(broadcastId, { userId, email: 'ada@example.com' })),
     );
 
-    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
     // ...and exactly one row exists, not eight.
     const rows = await db
       .select()
@@ -97,7 +97,7 @@ describe('claimRecipient against a real database', () => {
   it('given an expired lease, should let a retry reclaim the recipient', async () => {
     // Otherwise a worker that crashed mid-send would strand this person as `pending`
     // forever and nobody would ever mail them.
-    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBe(true);
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).not.toBeNull();
 
     // Age the claim past its lease rather than sleeping.
     await db
@@ -107,7 +107,7 @@ describe('claimRecipient against a real database', () => {
 
     expect(
       await claimRecipient(broadcastId, { userId, email: 'ada@example.com' }, { leaseMs: 60_000 }),
-    ).toBe(true);
+    ).not.toBeNull();
   });
 
   it('should never reclaim a recipient already sent, however old the lease', async () => {
@@ -120,7 +120,7 @@ describe('claimRecipient against a real database', () => {
 
     expect(
       await claimRecipient(broadcastId, { userId, email: 'ada@example.com' }, { leaseMs: 1 }),
-    ).toBe(false);
+    ).toBeNull();
     expect((await currentRow()).status).toBe('sent');
   });
 
@@ -128,18 +128,69 @@ describe('claimRecipient against a real database', () => {
     // The provider-blip path: without the release, every failed row would refuse to be
     // reclaimed for the rest of its lease, and a retry 30s later would mail NOBODY while
     // reporting each one as "claimed by another worker".
-    await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
-    await recordFailure(broadcastId, { userId, email: 'ada@example.com', error: 'rate limited' });
+    const lease = await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
+    await recordFailure(broadcastId, { userId, email: 'ada@example.com', error: 'rate limited' }, lease);
 
     expect((await currentRow()).claimedAt).toBeNull();
     // Immediately — no waiting for a lease to drain.
-    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBe(true);
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).not.toBeNull();
   });
 
   // The "parked after an unrecorded send" path is pinned in record-adapter.test.ts
   // instead: triggering a genuine ledger-write failure here would mean contriving a DB
   // fault (the upsert cannot fail on well-formed input), and a test that fakes the very
   // failure it is testing proves nothing the mocked one doesn't prove more directly.
+
+  it('should NOT let a stale worker revoke the lease of the one that took over', async () => {
+    // The interleaving that makes an unfenced release a double-send, run for real:
+    //   A claims R and calls the provider; the send hangs (sendOne has no timeout).
+    //   A's lease expires. B legitimately reclaims R and starts sending.
+    //   A's hung send finally errors, and A reports the failure.
+    // If A's report is keyed only on (broadcastId, userId), it wipes B's lease and marks
+    // the row failed while B is still in flight — and a third worker then claims R and
+    // sends a second copy. A's proof no longer matches, so A must change nothing.
+    const staleLease = await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
+    expect(staleLease).not.toBeNull();
+
+    // A's lease ages out; B takes over and holds a fresh one.
+    await db
+      .update(broadcastRecipients)
+      .set({ claimedAt: new Date(Date.now() - 10 * 60_000) })
+      .where(eq(broadcastRecipients.broadcastId, broadcastId));
+    const bLease = await claimRecipient(broadcastId, { userId, email: 'ada@example.com' }, { leaseMs: 60_000 });
+    expect(bLease).not.toBeNull();
+
+    // A's late failure report, carrying its long-dead lease.
+    await recordFailure(broadcastId, { userId, email: 'ada@example.com', error: 'socket hang up' }, staleLease);
+
+    const row = await currentRow();
+    expect(row.claimedAt).not.toBeNull();                       // B's lease survived...
+    expect(row.claimedBy).toBe(bLease!.token);
+    expect(row.status).toBe('pending');                          // ...and B is still sending.
+    // The payoff: nobody else can take the recipient out from under B.
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBeNull();
+  });
+
+  it('should NOT let a stale worker unpark a recipient whose send went unrecorded', async () => {
+    // The sharper version: an unfenced release also reverses the park, which exists exactly
+    // for the operator re-running a day later — outside Resend's idempotency window, where
+    // the second copy is real.
+    const staleLease = await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
+
+    // Another worker sent, could not record it, and parked the row — exactly as
+    // parkClaimAgainstRetry does: a lease far in the future, and NO token, so there is no
+    // proof anyone can present to release it.
+    await db
+      .update(broadcastRecipients)
+      .set({ claimedAt: new Date(Date.now() + 100 * 365 * 24 * 60 * 60_000), claimedBy: null })
+      .where(eq(broadcastRecipients.broadcastId, broadcastId));
+
+    await recordFailure(broadcastId, { userId, email: 'ada@example.com', error: 'socket hang up' }, staleLease);
+
+    // Still parked: the recipient has the email, and no retry may send another.
+    expect((await currentRow()).claimedAt!.getTime()).toBeGreaterThan(Date.now() + 365 * 24 * 60 * 60_000);
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBeNull();
+  });
 
   it('should count one attempt per worker that takes the recipient', async () => {
     await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });

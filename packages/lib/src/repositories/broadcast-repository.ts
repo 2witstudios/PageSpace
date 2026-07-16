@@ -23,6 +23,7 @@ import type { NotificationTypeValue } from '@pagespace/db/schema/notifications';
 import {
   claimRecipient,
   countRecipientsByStatus,
+  createBroadcastLedger,
   loadAlreadySentEmails,
   loadAlreadySentUserIds,
   recordFailure,
@@ -176,7 +177,13 @@ export const broadcastRepository = {
 
   loadAlreadySentUserIds,
   loadAlreadySentEmails,
-  /** Take ownership of a recipient before mailing them — call this BEFORE the provider. */
+  /**
+   * The durable ledger for one run, wired for `runBroadcast` — what the worker should use.
+   * It claims before the provider call and remembers the lease, so a failure report can
+   * prove it still owns the recipient instead of revoking a rival's claim.
+   */
+  createBroadcastLedger,
+  /** The raw claim, for callers that manage their own lease. Prefer createBroadcastLedger. */
   claimRecipient,
   recordSent,
   recordSkip,

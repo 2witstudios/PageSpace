@@ -1,5 +1,5 @@
 {
-  "id": "7b11c4c6-5caa-4992-af53-6785139b1074",
+  "id": "3c30b20b-d230-4b60-95f2-8eecfb5d8276",
   "prevId": "6eec56b6-f4ef-4049-a987-343d50f9220b",
   "version": "7",
   "dialect": "postgresql",
@@ -19684,6 +19684,12 @@
         "claimed_at": {
           "name": "claimed_at",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_by": {
+          "name": "claimed_by",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },

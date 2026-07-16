@@ -153,16 +153,30 @@ describe('claimRecipient', () => {
   // coalesces the ledger AFTER both workers have already handed mail to the provider.
   // These pin the predicate that decides which of two racing workers gets the recipient.
 
-  it('given a row came back, should report the recipient claimed', async () => {
+  it('given a row came back, should hand back a lease token as proof of ownership', async () => {
+    // The token is what a later write uses to prove it STILL holds the recipient, rather
+    // than assuming it does. Minted client-side, so nothing is lost round-tripping it.
     returningRows = [{ id: 'r1' }];
-    expect(await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' })).toBe(true);
+    const lease = await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    expect(lease?.token).toEqual(expect.any(String));
+    // ...and it is the token the row was stamped with.
+    expect(recipientInserts()[0].values?.claimedBy).toBe(lease?.token);
+  });
+
+  it('should mint a DIFFERENT token per claim, so one lease cannot stand in for another', async () => {
+    returningRows = [{ id: 'r1' }];
+    const first = await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+    const second = await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    expect(first?.token).not.toBe(second?.token);
   });
 
   it('given no row came back, should report the recipient NOT claimed', async () => {
     // The conflict path's WHERE rejected the update: someone else owns them, or they were
     // already mailed. Either way this worker must not send.
     returningRows = [];
-    expect(await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' })).toBe(false);
+    expect(await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' })).toBeNull();
   });
 
   it("should insert a pending row stamped with the DATABASE's clock", async () => {
@@ -216,9 +230,29 @@ describe('claimRecipient', () => {
     // A terminal outcome must not keep holding the recipient: after a provider blip, every
     // failed row refusing to be reclaimed for ~5m would make the retry mail nobody while
     // logging "claimed by another worker" about a worker that does not exist.
+    const lease = { token: 'lease_abc' };
+    await recordFailure('b1', { userId: 'u1', email: 'ada@example.com', error: 'rate limited' }, lease);
+
+    expect(recipientInserts()[0].conflict?.set).toMatchObject({ claimedAt: null, claimedBy: null });
+  });
+
+  it('should release the lease ONLY against the exact stamp it was given', async () => {
+    // `sendOne` has no timeout, so a send can outlive its lease. By then another worker may
+    // legitimately hold the recipient — releasing on (broadcastId, userId) alone would
+    // revoke THAT worker's claim mid-send and hand the person to a third.
+    const lease = { token: 'lease_abc' };
+    await recordFailure('b1', { userId: 'u1', email: 'ada@example.com', error: 'rate limited' }, lease);
+
+    const call = recipientInserts()[0];
+    expect(setWhereSql(call)).toContain('"broadcast_recipients"."claimed_by" =');
+    expect(setWhereParams(call)).toContain('lease_abc');
+  });
+
+  it('given no lease to prove ownership, should record the failure but NOT touch the claim', async () => {
+    // A stale status is recoverable; a revoked lease is a double-send.
     await recordFailure('b1', { userId: 'u1', email: 'ada@example.com', error: 'rate limited' });
 
-    expect(recipientInserts()[0].conflict?.set).toMatchObject({ claimedAt: null });
+    expect(recipientInserts()[0].conflict?.set).not.toHaveProperty('claimedAt');
   });
 
   it('should reclaim a recipient whose worker crashed and let the lease expire', async () => {
@@ -315,6 +349,8 @@ describe('recordSent', () => {
     const { sql } = compile(updateCalls[0].set?.claimedAt);
     expect(sql).toContain('now()');
     expect(sql).toContain('100 years');
+    // ...and no token, so no lease can ever match and undo the park.
+    expect(updateCalls[0].set).toMatchObject({ claimedBy: null });
   });
 
   it('given the park ALSO fails, should still raise the original ledger failure', async () => {
@@ -395,7 +431,8 @@ describe('recordFailure', () => {
 
   it('should never unmark a real send', async () => {
     await recordFailure('b1', { userId: 'u1', email: 'ada@example.com', error: 'late error' });
-    expect(setWhereSql(recipientInserts()[0])).toContain("<> 'sent'");
+    expect(setWhereSql(recipientInserts()[0])).toContain('"broadcast_recipients"."status" <>');
+    expect(setWhereParams(recipientInserts()[0])).toContain('sent');
   });
 
   it('should not re-count an attempt the claim already counted', async () => {
