@@ -1,6 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import { usePendingStreamsStore, type PendingStream } from '@/stores/usePendingStreamsStore';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
+import { selectActiveStream, type ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
 const EMPTY_STREAMS: PendingStream[] = [];
 
@@ -47,6 +48,25 @@ export const useActiveStream = (
 
   return { streams, ownStreamMessageId };
 };
+
+/**
+ * Facade — a conversation's live stream identity `{messageId, conversationId, isOwn}`, or
+ * undefined when nothing is live for it. THE read that replaces the stop-slot claim protocols
+ * (PR 5A): see `selectActiveStream` for why a selector cannot have the "slot belongs to somebody
+ * else" bugs the slots had.
+ *
+ * `useShallow` is what makes this stable per-token: `selectActiveStream` projects three
+ * primitives out of a store entry whose `parts` array grows on every chunk, so consumers
+ * (the Stop button, the composer's disabled state, the AISelector) re-render when the stream
+ * STARTS and ENDS, not on every token.
+ */
+export const useConversationActiveStream = (
+  pageId: string | null,
+  conversationId: string | null,
+): ActiveStream | undefined =>
+  usePendingStreamsStore(
+    useShallow((state) => selectActiveStream(state.streams, { pageId, conversationId })),
+  );
 
 /**
  * Imperative facade counterpart to `useActiveStream`, for event handlers (socket

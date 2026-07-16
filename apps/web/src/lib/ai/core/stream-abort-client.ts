@@ -88,47 +88,23 @@ export const reportAbortOutcomes = (results: readonly AbortResult[]): void => {
   });
 };
 
-// Track active streams by chat/conversation ID
-const activeStreams = new Map<string, string>();
-
-// Header name must match server-side
-const STREAM_ID_HEADER = 'X-Stream-Id';
-
-/**
- * Store a streamId for a chat instance
- */
-export const setActiveStreamId = ({
-  chatId,
-  streamId,
-}: {
-  chatId: string;
-  streamId: string;
-}): void => {
-  activeStreams.set(chatId, streamId);
-};
-
-/**
- * Get the active streamId for a chat instance
- */
-export const getActiveStreamId = ({
-  chatId,
-}: {
-  chatId: string;
-}): string | undefined => {
-  return activeStreams.get(chatId);
-};
-
-/**
- * Clear the streamId for a chat instance (call when stream completes)
- */
-export const clearActiveStreamId = ({ chatId }: { chatId: string }): void => {
-  activeStreams.delete(chatId);
-};
-
-/**
- * Abort an active stream by calling the server-side abort endpoint
- * Returns true if abort was requested, false if no active stream
- */
+// NO activeStreams chatId->streamId MAP (PR 5A, leaf 5.5.8).
+//
+// It existed so Stop could name a generation precisely. It could not:
+//   - It was populated only once the response HEADERS landed. A real send spends 0.5-3s before
+//     that, which is exactly when a user who spotted a typo hits Stop — the map was EMPTY.
+//   - It was torn down by each surface's conversation-change cleanup, so a Stop after a
+//     mid-stream switch was a map MISS.
+//   - It was keyed by a transport-local chatId that surfaces had to keep unique by hand (hence
+//     the sidebar's `sidebar:<convId>` namespace), and one surface's cleanup could delete
+//     another's entry.
+// In every one of those windows the abort silently no-op'd: the local fetch stopped, the button
+// flipped back to Send, and the server — which deliberately survives client disconnect — kept
+// generating, kept running write tools, and kept billing.
+//
+// Both replacements are names nobody has to maintain a map for: the assistant messageId (recorded
+// in usePendingStreamsStore at stream_start, immune to the surface moving) and the conversationId
+// captured at send. See decideStopAction.
 /**
  * Abort by CONVERSATION — the only name the client holds from t=0.
  *
@@ -159,66 +135,6 @@ export const abortActiveStreamByConversation = async ({
     });
     return await parseAbortResult(response);
   } catch {
-    return NETWORK_FAILURE;
-  }
-};
-
-export const abortActiveStream = async ({
-  chatId,
-  /**
-   * The conversation this chat is streaming, when known. Used ONLY as a fallback: if the
-   * activeStreams map has no entry — which is the norm before the response headers land — we
-   * still have a name for the stream, and Stop must not silently no-op. See
-   * abortActiveStreamByConversation.
-   */
-  conversationId,
-}: {
-  chatId: string;
-  conversationId?: string | null;
-}): Promise<AbortResult> => {
-  const streamId = activeStreams.get(chatId);
-
-  if (!streamId) {
-    if (conversationId) {
-      return abortActiveStreamByConversation({ conversationId });
-    }
-    return { aborted: false, code: 'not_found', reason: 'No active stream for this chat' };
-  }
-
-  try {
-    const response = await fetchWithAuth('/api/ai/abort', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // Send the conversation ALONGSIDE the streamId, not instead of it. The server prefers the
-      // precise name, but a streamId can fail to resolve — a stream started by a worker running the
-      // previous image has no `stream_id` on its row at all. Without a second name to fall back to,
-      // that Stop is reported as "nothing in flight" and the client stays silent by design, while
-      // the generation runs on and bills. Exactly the rolling-deploy window this design claims to
-      // turn into a loud, honest warning.
-      body: JSON.stringify({ streamId, conversationId: conversationId ?? undefined }),
-    });
-
-    const result = await parseAbortResult(response);
-
-    // Forget the stream only once it is settled — stopped, or already gone. On 'unconfirmed' the
-    // generation may still be running, so the streamId is the name a retry needs; and on a
-    // transport error (401/429/500) we never learned anything at all. Keep it in both cases.
-    //
-    // AND ONLY IF THE SLOT IS STILL OURS. The map is keyed by chatId, which is constant across
-    // turns, while this request can take seconds (a cross-instance Stop waits for the owner to
-    // confirm). The user can send turn 2 inside that window: its headers land, it claims the slot,
-    // and then THIS abort resolves and would delete the name of a generation that is still running.
-    // `forgetStream` already guards the same slot on the body-completion path; this is the other
-    // door into it.
-    const settled = result.code === 'aborted' || result.code === 'not_found';
-    if (settled && activeStreams.get(chatId) === streamId) {
-      activeStreams.delete(chatId);
-    }
-
-    return result;
-  } catch (error) {
-    // Network error - keep streamId for retry
-    console.error('Failed to abort stream:', error);
     return NETWORK_FAILURE;
   }
 };
@@ -301,7 +217,6 @@ const withBodyCompletion = (response: Response, onDone: () => void): Response =>
  * `browserSessionId` check.
  */
 export const createStreamTrackingFetch = ({
-  getChatId,
   getChannelId,
 }: {
   /**
@@ -313,23 +228,18 @@ export const createStreamTrackingFetch = ({
    * forever after — so the first transport a surface ever builds is the only one it will
    * ever use, and every later one is constructed and thrown away.
    *
-   * Baking `chatId` into this closure therefore froze it at whatever conversation the surface
-   * happened to start with. After a single conversation switch the map was WRITTEN under the
-   * old id and READ under the new one: `abortActiveStream({chatId})` was a guaranteed miss,
-   * the local fetch stopped, and the server kept generating and kept billing. Same for
-   * `channelId` after an agent switch: the wrong channel got marked as consuming, so the tab
-   * failed to recognise its OWN stream on the socket, joined its own multicast, and rendered
-   * the reply twice.
+   * Baking `channelId` into this closure therefore froze it at whatever agent the surface
+   * happened to start with: after an agent switch the wrong channel got marked as consuming, so
+   * the tab failed to recognise its OWN stream on the socket, joined its own multicast, and
+   * rendered the reply twice.
    *
-   * The server already compensates for this freeze on the URL side (see the note in
-   * /api/ai/global/[id]/messages — the id segment is likewise baked in and never updates).
-   * Nothing had propagated that lesson to the tracking keys.
+   * (`getChatId` is gone with the activeStreams map — PR 5A, leaf 5.5.8. It had the same
+   * staleness bug, with a worse consequence: the abort silently named nothing and the server
+   * kept billing.)
    */
-  getChatId: () => string | null;
   getChannelId: () => string | undefined;
 }): typeof fetch => {
   return async (url, options) => {
-    const chatId = getChatId();
     const channelId = getChannelId();
     const urlString = url instanceof Request ? url.url : url.toString();
     const merged = new Headers(options?.headers);
@@ -349,32 +259,11 @@ export const createStreamTrackingFetch = ({
       throw error;
     }
 
-    // Extract streamId from response headers (for global assistant route)
-    const streamId = response.headers.get(STREAM_ID_HEADER);
-    if (streamId && chatId) {
-      setActiveStreamId({ chatId, streamId });
-    }
+    // NOTE: the X-Stream-Id response header is no longer read here. It fed the activeStreams map,
+    // whose only consumer was an abort-by-chatId path that could not work in the windows that
+    // mattered (see the map's deletion note above). The server still sends it.
 
-    // The streamId names THIS generation, and it dies with it. Forget it when the body ends.
-    //
-    // It used to be cleared only on a conversation switch or unmount, so from the SECOND turn of a
-    // conversation onward the map held the PREVIOUS turn's streamId until the new response headers
-    // landed. A Stop pressed in that window (the 0.5-3s TTFB gap — the single most likely moment
-    // for it) therefore named a stream that had already finished. The server now falls back to the
-    // conversation and stops the right generation regardless, but there is no reason to hand it a
-    // name we know is dead.
-    // Forget only OUR OWN stream. The map slot is keyed by chatId, which is constant across turns,
-    // so an unconditional delete would let a stream that is ENDING wipe the name of one that is
-    // still RUNNING: send turn 2 while turn 1 is still streaming (exactly what the takeover exists
-    // for), turn 2's headers land and claim the slot, then turn 1's body finally closes — and
-    // deletes turn 2's streamId. Stop would then have no precise name for a live generation.
-    const forgetStream = () => {
-      if (!chatId || !streamId) return;
-      if (getActiveStreamId({ chatId }) !== streamId) return;
-      clearActiveStreamId({ chatId });
-    };
-
-    if (!channelId) return withBodyCompletion(response, forgetStream);
+    if (!channelId) return response;
 
     const consumedChannelId = channelId;
     if (!response.ok) {
@@ -384,7 +273,6 @@ export const createStreamTrackingFetch = ({
 
     return withBodyCompletion(response, () => {
       unmarkChannelConsuming(consumedChannelId);
-      forgetStream();
     });
   };
 };

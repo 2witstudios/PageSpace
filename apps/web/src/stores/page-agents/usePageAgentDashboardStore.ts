@@ -71,44 +71,6 @@ interface AgentState {
   //
   // An identity-less slot therefore cross-wired them: a stream on the dashboard's agent B
   // lit up the sidebar's Stop button for agent A, and clicking it aborted B while A's own
-  // stream was never stopped — and kept generating, and kept billing. A boolean cannot
-  // express "whose", so it lied. Now a reader must name the agent it is asking about, and
-  // a slot belonging to someone else simply doesn't answer.
-  /**
-   * Which agents are currently streaming. Ask via `selectIsAgentStreaming(myAgentId)`.
-   *
-   * KEYED BY (AGENT, CONVERSATION) — see agentStreamKey.
-   *
-   * Not a single slot, and not agent alone. The surfaces that read this hold different
-   * agents AND different conversations within the same agent, and can stream at the same
-   * time. Every coarser key forced them to share one answer, and every bug this state has
-   * shed came from that: a boolean cannot say WHOSE, and an agent id cannot say WHICH
-   * CONVERSATION. Ownership is per stream, so the key is per stream.
-   *
-   * WITHIN a key, at most one stream is *expected* — a new send takes over the conversation
-   * (stream-takeover.ts) — but that is NOT a guarantee, and this state must not pretend it
-   * is. Takeover's abort registry is in-process, so a stream running on another web instance
-   * cannot be stopped from here ("this send runs alongside it", stream-takeover.ts), and the
-   * whole takeover is best-effort on a DB error. PageSpace runs multi-instance, so two live
-   * streams in one conversation is rare but real.
-   *
-   * When that happens this state holds ONE entry for the key: the first claimant wins
-   * (shouldClaimAgentStopSlot) and the second stream runs without a Stop of its own. That is
-   * a known, accepted limitation of the same family as the cross-instance rejoin gap — not
-   * something the key can fix, because the second stream is unreachable from this process
-   * anyway (its abort registry entry lives elsewhere). Adding a messageId axis would let the
-   * state DESCRIBE it without being able to ACT on it.
-   */
-  streamingAgentIds: Readonly<Record<string, true>>;
-  /**
-   * Stop controls, keyed by the agent each belongs to. Ask via `selectAgentStop(myAgentId)`.
-   *
-   * The union return type is deliberate: `(() => void)` would let TypeScript's void-return
-   * rule accept a function returning ANYTHING — which is how an updater-shaped value
-   * (`() => async () => {}`) slipped into a plain VALUE setter and stored the outer wrapper.
-   * Calling it merely returned the inner fn: a Stop button that did nothing.
-   */
-  agentStops: Readonly<Record<string, () => void | Promise<void>>>;
 
   // Sidebar tab state (for dashboard context only - GlobalAssistantView <-> RightPanel sync)
   activeTab: SidebarTab;
@@ -125,9 +87,6 @@ interface AgentState {
   clearConversation: () => void;
   loadMostRecentConversation: () => Promise<void>;
 
-  // Both name the stream — this state has no meaning without (agent, conversation).
-  setAgentStreaming: (key: AgentStreamKey, isStreaming: boolean) => void;
-  setAgentStop: (key: AgentStreamKey, stop: (() => void | Promise<void>) | null) => void;
 }
 
 const IDLE_IDENTITY: ConversationIdentityState = { status: 'idle' };
@@ -163,8 +122,6 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
   isConversationMessagesLoading: false,
   conversationAgentId: null,
   conversationLoadSignal: 0,
-  streamingAgentIds: {},
-  agentStops: {},
   activeTab: 'history', // Default for dashboard (no chat tab in dashboard context)
 
   /**
@@ -439,75 +396,23 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
     }
   },
 
-  /** Declare whether THIS stream is running. Never touches another stream's state. */
-  setAgentStreaming: (key: AgentStreamKey, isStreaming: boolean) => {
-    const k = agentStreamKey(key);
-    if (k === null) {
-      // A write we cannot key is a claim silently dropped — the stream would run with no
-      // flag and no Stop, and nothing would ever say so. Be loud instead of quiet.
-      if (isStreaming) {
-        console.warn('[dashboardStore] setAgentStreaming with an unidentified stream — dropped', key);
-      }
-      return;
-    }
-    set((state) => {
-      const next = { ...state.streamingAgentIds };
-      if (isStreaming) next[k] = true;
-      else delete next[k];
-      return { streamingAgentIds: next };
-    });
-  },
-
-  /** Install (or clear) THIS stream's stop control. Never touches another stream's. */
-  setAgentStop: (key: AgentStreamKey, stop: (() => void | Promise<void>) | null) => {
-    const k = agentStreamKey(key);
-    if (k === null) {
-      if (stop) {
-        console.warn('[dashboardStore] setAgentStop with an unidentified stream — dropped', key);
-      }
-      return;
-    }
-    set((state) => {
-      const next = { ...state.agentStops };
-      if (stop) next[k] = stop;
-      else delete next[k];
-      return { agentStops: next };
-    });
-  },
   };
 });
 
-/**
- * Identifies ONE stream: an agent, and the conversation within it.
- *
- * Both halves are required. The dashboard and the sidebar hold different agents AND, for
- * the same agent, different conversations (each keeps its own; "New Chat" in either
- * diverges them). A key missing either half answers a question the reader did not ask.
- */
-export interface AgentStreamKey {
-  agentId: string | null | undefined;
-  conversationId: string | null | undefined;
-}
-
-/** null when the stream is not yet fully identified — an un-named stream owns nothing. */
-export const agentStreamKey = ({ agentId, conversationId }: AgentStreamKey): string | null =>
-  agentId != null && conversationId != null ? `${agentId}::${conversationId}` : null;
-
-/**
- * Ask "is MY stream running?" — never "is something running?".
- *
- * The distinction is the bug this slot's identity exists to prevent: the dashboard and the
- * sidebar hold different agents, so an un-named answer belongs to somebody else's stream.
- */
-export const selectIsAgentStreaming = (key: AgentStreamKey) =>
-  (state: AgentState): boolean => {
-    const k = agentStreamKey(key);
-    return k !== null && state.streamingAgentIds[k] === true;
-  };
-
-/** The stop control, but only if it is MY agent's. Otherwise null — it is not mine to call. */
-export const selectAgentStop = (key: AgentStreamKey) =>
-  (state: AgentState): (() => void | Promise<void>) | null => {
-    const k = agentStreamKey(key);
-    return (k !== null ? state.agentStops[k] : undefined) ?? null;
-  };
+// NO agentStreaming/agentStops SLOTS (PR 5A, leaf 5.5.7).
+//
+// This store used to hold "which agent is streaming" and "the stop control for that agent",
+// keyed by (agent, conversation). Both were projections of a fact usePendingStreamsStore already
+// records for every live stream — {messageId, conversationId, isOwn}, written on bootstrap AND
+// live stream_start — and both are now read there via `useConversationActiveStream(agentId,
+// conversationId)`.
+//
+// The identity apparatus that went with them (AgentStreamKey, agentStreamKey,
+// selectIsAgentStreaming, selectAgentStop) existed because a SLOT has to answer "whose stream is
+// this?" — the dashboard and sidebar are co-mounted and hold different agents, and an un-named
+// answer belonged to somebody else's stream. A pendingStreams entry carries agent (as pageId) AND
+// conversation AND messageId, which is strictly more identity than the key ever had, so the
+// question no longer needs asking.
+//
+// This store now keeps only what it is actually for: agent selection, conversation identity, and
+// the active tab.

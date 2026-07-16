@@ -21,7 +21,7 @@ describe('useSendHandoff', () => {
   // never flips to 'error' (sendMessage was never reached), and pendingSend sits
   // registered until the 15s safety timeout fires with no visible error at all.
   it('given sendFn returns a promise that rejects, should end pendingSend immediately and surface an error (not wait for the 15s safety timeout)', async () => {
-    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready'));
+    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready', false));
 
     await act(async () => {
       result.current.wrapSend(() => Promise.reject(new Error('network down')));
@@ -35,7 +35,7 @@ describe('useSendHandoff', () => {
   });
 
   it('given sendFn throws synchronously, should end pendingSend and rethrow (existing behavior preserved)', () => {
-    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready'));
+    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready', false));
 
     expect(() => {
       result.current.wrapSend(() => {
@@ -47,7 +47,7 @@ describe('useSendHandoff', () => {
   });
 
   it('given sendFn returns a promise that resolves, should NOT surface an error and should leave pendingSend for the streaming-status effect to clear', async () => {
-    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready'));
+    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready', false));
 
     await act(async () => {
       result.current.wrapSend(() => Promise.resolve('ok'));
@@ -59,8 +59,69 @@ describe('useSendHandoff', () => {
     expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(true);
   });
 
+  // THE end-condition change (PR 5A, leaf 5.7). The handoff target is the STREAM ENTRY in
+  // usePendingStreamsStore, not useChat's status.
+  //
+  // The old condition (`status === 'submitted' || 'streaming'`) ended the pendingSend the instant
+  // useChat flipped to 'submitted' — which happens BEFORE the request is even issued, and 0.5-3s
+  // before any stream exists. Nothing covered that gap except useChat's status itself, which is
+  // exactly the signal this epic removes from the render path: it is idle for a bootstrapped
+  // stream after a refresh and for every remote/cross-instance stream, so a pendingSend handing
+  // off to it handed off to nothing.
+  it('given the send is still in the submitted window with no stream entry yet, should KEEP pendingSend registered', async () => {
+    const { rerender } = renderHook(
+      ({ isStreamLive }) => {
+        const handoff = useSendHandoff('conv-1', 'submitted', isStreamLive);
+        return handoff;
+      },
+      { initialProps: { isStreamLive: false } },
+    );
+
+    await act(async () => {
+      useEditingStore.getState().startPendingSend('conv-1');
+      rerender({ isStreamLive: false });
+    });
+
+    expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(true);
+  });
+
+  it('given a stream entry appears for the conversation, should hand off and end pendingSend', async () => {
+    const { result, rerender } = renderHook(
+      ({ isStreamLive }) => useSendHandoff('conv-1', 'streaming', isStreamLive),
+      { initialProps: { isStreamLive: false } },
+    );
+
+    await act(async () => {
+      result.current.wrapSend(() => Promise.resolve('ok'));
+      await Promise.resolve();
+    });
+    expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(true);
+
+    await act(async () => {
+      rerender({ isStreamLive: true });
+    });
+
+    expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(false);
+  });
+
+  // The pendingSend key is the conversation captured AT SEND — the only name Stop has during the
+  // submitted window (see decideStopAction). It is exposed so the surface's Stop button can pass
+  // it, rather than reaching for the surface's live conversation id, which may have moved.
+  it('given an in-flight send, should expose the conversation it was made in', async () => {
+    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready', false));
+
+    expect(result.current.pendingSendConversationId).toBeNull();
+
+    await act(async () => {
+      result.current.wrapSend(() => Promise.resolve('ok'));
+      await Promise.resolve();
+    });
+
+    expect(result.current.pendingSendConversationId).toBe('conv-1');
+  });
+
   it('given sendFn returns a plain synchronous (non-thenable) value, should not throw and should not touch the error toast', () => {
-    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready'));
+    const { result } = renderHook(() => useSendHandoff('conv-1', 'ready', false));
 
     const returned = result.current.wrapSend(() => 'plain-value');
 
@@ -69,7 +130,7 @@ describe('useSendHandoff', () => {
   });
 
   it('given no conversationId, wrapSend should no-op and return undefined', () => {
-    const { result } = renderHook(() => useSendHandoff(null, 'ready'));
+    const { result } = renderHook(() => useSendHandoff(null, 'ready', false));
 
     const returned = result.current.wrapSend(() => Promise.reject(new Error('unreachable')));
 
