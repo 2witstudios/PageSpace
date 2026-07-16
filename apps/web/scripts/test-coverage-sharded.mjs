@@ -63,32 +63,55 @@ const allTestFiles = globSync('src/**/*.{test,spec}.{js,ts,tsx}', { cwd: root })
 const shards = Array.from({ length: SHARD_COUNT }, () => []);
 allTestFiles.forEach((file, i) => shards[i % SHARD_COUNT].push(file));
 
+// Even with files evenly interleaved (verified locally — the 66-file
+// src/lib/ai/core cluster now lands 3-4 per shard, not up to 66 in one),
+// some CI run still hits the heap ceiling on some shard at roughly the same
+// job-wide fraction regardless of shard count or file composition — which
+// argues against a fixed "this exact file set is too heavy" cause and for a
+// marginal, close-to-the-ceiling workload where GC/scheduling variance
+// between otherwise-identical runs decides pass or fail. A shard that
+// crashes gets retried (fresh process, same files, same ceiling) before
+// failing the whole run — if the crash were fully deterministic for that
+// exact file set this would just fail again quickly at low added cost; if
+// it's marginal, a retry resolves it outright.
+const MAX_ATTEMPTS_PER_SHARD = 3;
+
 for (let i = 1; i <= SHARD_COUNT; i++) {
   const files = shards[i - 1];
   console.log(`\n=== Coverage shard ${i}/${SHARD_COUNT} (${files.length} files) ===\n`);
   if (files.length === 0) continue;
-  try {
-    execFileSync(
-      'bunx',
-      [
-        'vitest',
-        'run',
-        '--coverage',
-        '--coverage.reporter=json',
-        `--coverage.reportsDirectory=./coverage/shard-${i}`,
-        ...files,
-      ],
-      {
-        cwd: root,
-        stdio: 'inherit',
-        env: { ...process.env, VITEST_COVERAGE_SHARD: '1' },
+  let succeeded = false;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SHARD && !succeeded; attempt++) {
+    if (attempt > 1) {
+      console.log(`\n--- Retrying shard ${i}/${SHARD_COUNT} (attempt ${attempt}/${MAX_ATTEMPTS_PER_SHARD}) ---\n`);
+    }
+    try {
+      execFileSync(
+        'bunx',
+        [
+          'vitest',
+          'run',
+          '--coverage',
+          '--coverage.reporter=json',
+          `--coverage.reportsDirectory=./coverage/shard-${i}`,
+          ...files,
+        ],
+        {
+          cwd: root,
+          stdio: 'inherit',
+          env: { ...process.env, VITEST_COVERAGE_SHARD: '1' },
+        }
+      );
+      succeeded = true;
+    } catch {
+      if (attempt === MAX_ATTEMPTS_PER_SHARD) {
+        // A shard's own tests failed (not a threshold issue — those are
+        // disabled per-shard). Propagate as a real CI failure, not a stack
+        // trace dump.
+        console.error(`\nShard ${i}/${SHARD_COUNT} failed after ${MAX_ATTEMPTS_PER_SHARD} attempts.`);
+        process.exit(1);
       }
-    );
-  } catch {
-    // A shard's own tests failed (not a threshold issue — those are disabled
-    // per-shard). Propagate as a real CI failure, not a stack trace dump.
-    console.error(`\nShard ${i}/${SHARD_COUNT} failed.`);
-    process.exit(1);
+    }
   }
 }
 
