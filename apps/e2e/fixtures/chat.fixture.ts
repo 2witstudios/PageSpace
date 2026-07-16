@@ -67,10 +67,15 @@ export async function authedContext(
  * the way".
  *
  * Shape must match what the app writes (`cookie-utils.ts:39` / `serializeConsentState`):
- * URI-encoded JSON, path=/, samesite=lax. Only `necessary` is granted — the same decision a
- * user makes by rejecting optional cookies — so no analytics/preferences behavior is enabled
- * that a real rejecting user would not have. Importing the real constants means a
- * CONSENT_VERSION bump fails these specs loudly instead of silently re-showing the banner.
+ * URI-encoded JSON (single-encoded — `readCookieValue` decodes exactly once), path=/,
+ * samesite=lax. Only `necessary` is granted, byte-identical to what `rejectNonEssential()`
+ * produces, so these specs enable no analytics or third-party script a real rejecting user
+ * would not have.
+ *
+ * `CONSENT_VERSION` is imported rather than pinned so a version bump keeps the cookie valid
+ * and the specs keep running. Note what that does NOT buy: if a bump changes what the
+ * categories MEAN, the bump flows silently into this cookie and the banner stays suppressed —
+ * nothing here fails to warn you. Re-check this decision against the new semantics by hand.
  */
 function consentCookie(url: URL): Parameters<BrowserContext['addCookies']>[0][number] {
   const state = {

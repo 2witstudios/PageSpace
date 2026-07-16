@@ -243,6 +243,20 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
     expect(await readMode()).toBe('instant');
   });
 
+  it('given an explicit mode=instant, should override the model-name triggers', async () => {
+    await fetch(`${base}/__stream-config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'instant' }),
+    });
+
+    // Would hold forever if 'instant' were treated as "unset" and the model name still won.
+    const res = await completions(E2E_HELD_STREAM_MODEL);
+    const { chunks, done } = parseSse(await res.text());
+    expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? [])).toEqual(['pong']);
+    expect(done).toBe(true);
+  });
+
   it('given no mode set, should keep the instant default so metering specs are unaffected', async () => {
     const res = await completions('openai/gpt-5.3-chat');
     const { chunks } = parseSse(await res.text());

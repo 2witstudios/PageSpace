@@ -18,15 +18,20 @@ import http from 'http';
  *   GET  /__calls   → { count, requests: [{ model, stream, messages }] }
  *   POST /__reset   → zeroes the recorder, releases open streams, restores stream config
  *
- * Streaming is controllable per-request via the MODEL NAME, so no app change is needed to
- * drive it — the seeded user's `currentAiModel` flows through as `body.model`:
- *   e2e/slow-stream → N content chunks paced on a timer (a live window to assert against)
- *   e2e/held-stream → first chunk, then held open until POST /__release-stream
- *   any other model → the original instant behavior, untouched (metering specs 09-14)
- * with:
- *   GET  /__streams        → { open, held } so a spec can wait for a stream to be live
- *   POST /__stream-config  → { chunks?, intervalMs? } overrides slow-mode pacing
+ * Streaming pacing is controllable, so a spec can assert against a live window instead of a
+ * stream that is over before the browser sees it:
+ *   POST /__stream-config  → { mode?: 'instant'|'slow'|'held', chunks?, intervalMs? }
+ *   GET  /__streams        → { open, held, mode } — wait for a stream to actually be live
  *   POST /__release-stream → flush + terminate every held stream
+ *
+ * `mode` is the control a UI spec MUST use. Model-name triggers (`e2e/slow-stream`,
+ * `e2e/held-stream`) also work, but ONLY for callers that reach this server directly: the app
+ * rewrites any model id outside its static catalog to DEFAULT_MODEL before calling the
+ * provider (`resolveProviderModel`), so a pacing model name never survives a real send.
+ *
+ * With no mode configured and an ordinary model, behavior is the original instant path,
+ * byte-for-byte — which is what keeps metering specs 09-14 unaffected. `/__reset` clears the
+ * mode, so a held stream can never leak into the next spec.
  *
  * It also serves OpenRouter's authoritative cost-reconcile endpoint:
  *   GET  /generation?id=<id> → { data: { total_cost: <number> } }
@@ -98,9 +103,11 @@ export function createMockOpenRouter() {
   const activeStreams = new Set<ActiveStream>();
   let streamChunks = DEFAULT_STREAM_CHUNKS;
   let streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
-  // Applied to every streaming completion whatever model it names. 'instant' keeps the
-  // original behavior, so specs that never set a mode (09-14) see no change at all.
-  let streamMode: StreamMode = 'instant';
+  // Applied to every streaming completion whatever model it names. `null` means "no override
+  // configured" — distinct from an explicit 'instant', which deliberately overrides the
+  // model-name triggers below. Specs that never set a mode (09-14) leave this null and see the
+  // original behavior unchanged.
+  let streamMode: StreamMode | null = null;
 
   const completionUsage = {
     prompt_tokens: MOCK_PROMPT_TOKENS,
@@ -250,7 +257,7 @@ export function createMockOpenRouter() {
       finishStreams('all');
       streamChunks = DEFAULT_STREAM_CHUNKS;
       streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
-      streamMode = 'instant';
+      streamMode = null;
       return writeJson(res, 200, { ok: true });
     }
     // Live-stream introspection: lets a spec expect.poll() until the app's request has
@@ -261,7 +268,7 @@ export function createMockOpenRouter() {
       // `mode` is reported so a spec (or a human debugging one) can tell "the stream already
       // finished" apart from "the mode never took effect" — the two look identical from
       // open:0 alone, and the difference is the whole ballgame.
-      return writeJson(res, 200, { open, held, mode: streamMode });
+      return writeJson(res, 200, { open, held, mode: streamMode ?? 'instant' });
     }
     // Select the pacing mode and/or override slow-mode pacing.
     // Body: { mode?: 'instant'|'slow'|'held', chunks?, intervalMs? }. Reset by /__reset.
@@ -334,18 +341,18 @@ export function createMockOpenRouter() {
       const model = body.model ?? 'e2e/stub';
 
       if (stream) {
-        // Pacing is chosen by the explicit mode first — the model name cannot be relied on,
-        // because the app rewrites unknown ids to its DEFAULT_MODEL before calling the
-        // provider. The model-name triggers below still serve callers that reach the mock
-        // directly. Either way, an unset mode + an ordinary model = the original instant path.
+        // An explicitly configured mode always wins — including 'instant', which is how a
+        // direct-to-mock caller opts OUT of the model-name triggers. The model name cannot be
+        // relied on for app-driven sends: the app rewrites unknown ids to its DEFAULT_MODEL
+        // before calling the provider. With no mode configured and an ordinary model this
+        // yields 'instant' and falls through to the original path, untouched.
         const mode: StreamMode =
-          streamMode !== 'instant'
-            ? streamMode
-            : model === E2E_SLOW_STREAM_MODEL
-              ? 'slow'
-              : model === E2E_HELD_STREAM_MODEL
-                ? 'held'
-                : 'instant';
+          streamMode ??
+          (model === E2E_SLOW_STREAM_MODEL
+            ? 'slow'
+            : model === E2E_HELD_STREAM_MODEL
+              ? 'held'
+              : 'instant');
         if (mode !== 'instant') return startControlledStream(res, id, model, mode);
 
         res.writeHead(200, {

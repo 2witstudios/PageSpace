@@ -102,6 +102,7 @@
     "next-ws": "^2.2.7",
     "ollama-ai-provider-v2": "^3.6.0",
     "pdfjs-dist": "5.4.296",
+    "pg": "^8.16.3",
     "react": "^19.1.2",
     "react-day-picker": "^9.11.3",
     "react-dom": "^19.1.2",
@@ -125,8 +126,7 @@
     "use-stick-to-bottom": "^1.1.1",
     "ws": "^8.18.3",
     "zod": "^4.1.8",
-    "zustand": "^5.0.6",
-    "pg": "^8.16.3"
+    "zustand": "^5.0.6"
   },
   "devDependencies": {
     "@pagespace/sdk": "workspace:*",

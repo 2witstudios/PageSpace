@@ -21,9 +21,11 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 // A real send does substantial work before the provider call (location context, DB writes, a
 // page-version write to the content store), and the held-stream case deliberately keeps a
-// stream open. Playwright's 30s default kills those mid-flight; the assertions themselves
-// still poll, so a passing run is no slower for this.
-test.setTimeout(90_000);
+// stream open — Playwright's 30s default kills those mid-flight. The budget is set above the
+// sum of the per-assertion ceilings below so that a genuine failure surfaces as the targeted
+// assertion error rather than an opaque "Test timeout exceeded". Observed runtime is ~5s per
+// test, so a passing run never approaches this.
+test.setTimeout(150_000);
 
 test.beforeEach(async ({ request }) => {
   await resetMock(request);
@@ -72,10 +74,10 @@ test.describe('chat e2e harness smoke', () => {
 
     await sendChatMessage(page, 'hello');
 
-    // The request reached the model and is live — no sleep, no race. The ceiling is generous
-    // because a send does real work first (context resolution, DB writes, a page-version write
-    // to the content store) before the provider call — it routinely exceeds expect.poll's 5s
-    // default. This still fails fast on a genuine break; it never sleeps on success.
+    // The request reached the model and is live — no sleep, no race. The ceiling exceeds
+    // expect.poll's 5s default because a send does real work first (context resolution, DB
+    // writes, a page-version write to the content store); measured at ~6s to reach the
+    // provider. It still fails fast on a genuine break and never sleeps on success.
     await expect
       .poll(() => mockStreams(request).then((s) => s.open), { timeout: 30_000 })
       .toBeGreaterThan(0);

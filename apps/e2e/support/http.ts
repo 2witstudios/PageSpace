@@ -75,12 +75,19 @@ export async function setStreamConfig(
   });
 }
 
-/** How many mock streams are open right now, and how many are held awaiting release. */
+/**
+ * How many mock streams are open right now, how many are held awaiting release, and the
+ * pacing mode in force.
+ *
+ * `mode` is surfaced deliberately: from `open: 0` alone a spec cannot tell "the stream already
+ * finished" from "the mode never took effect", and those have opposite fixes. Assert on it
+ * when a poll for `open`/`held` times out unexpectedly.
+ */
 export async function mockStreams(
   request: APIRequestContext,
-): Promise<{ open: number; held: number }> {
+): Promise<{ open: number; held: number; mode: 'instant' | 'slow' | 'held' }> {
   const res = await request.get(`${MOCK_BASE}/__streams`);
-  return (await res.json()) as { open: number; held: number };
+  return (await res.json()) as { open: number; held: number; mode: 'instant' | 'slow' | 'held' };
 }
 
 /**
