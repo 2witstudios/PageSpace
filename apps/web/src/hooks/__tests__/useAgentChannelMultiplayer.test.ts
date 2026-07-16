@@ -114,7 +114,7 @@ describe('useAgentChannelMultiplayer', () => {
   });
 
   describe('local message synthesis on stream complete', () => {
-    it("given a stream finalizes whose conversationId matches the active agent conversation, the synthesized assistant message should be appended via setLocalMessages", () => {
+    it("given OUR OWN stream finalizes whose conversationId matches the active agent conversation, the synthesized assistant message should be appended via setLocalMessages", () => {
       pendingStreams.current = new Map([
         [
           'msg-done',
@@ -122,9 +122,15 @@ describe('useAgentChannelMultiplayer', () => {
             messageId: 'msg-done',
             pageId: AGENT.id,
             conversationId: 'conv-active',
-            triggeredBy: { userId: 'someone-else', displayName: 'X' },
+            triggeredBy: { userId: 'me', displayName: 'Me' },
             parts: [{ type: 'text', text: 'final response text' }],
-            isOwn: false,
+            // OUR OWN stream. This dual-write is local bookkeeping for the tab that made the
+            // request; the fixture previously said `isOwn: false` (userId 'someone-else'), which
+            // asserted that ANOTHER tab's finished reply gets appended into this chat's array —
+            // encoding the bug rather than the contract. useOwnStreamMirror reads this array to
+            // find its own live stream, so a foreign message landing after ours makes it
+            // re-target onto a finished message. See the foreign-stream test below.
+            isOwn: true,
           },
         ],
       ]);

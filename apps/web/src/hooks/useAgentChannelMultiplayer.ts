@@ -119,12 +119,23 @@ export function useAgentChannelMultiplayer({
         // navigated away and back. Replacing is right in both cases: same id means same message,
         // and `stream.parts` is the authoritative, complete version of it.
         const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
+        // OUR OWN stream only. `chat:stream_complete` carries no own-tab filter (unlike the
+        // user/edit/delete handlers, which all drop own-tab events), so this also fires for a
+        // stream from ANOTHER TAB — `isOwn` is browserSessionId-scoped, so a second tab of the
+        // same user counts, no collaborator needed. Appending that tab's finished reply into THIS
+        // chat's array is meaningless for the local bookkeeping this write exists for, and
+        // actively harmful: useOwnStreamMirror reads this array to find its own live stream, and
+        // a foreign message landing after ours makes it re-target onto a finished message — an
+        // isOwn phantom whose Stop aborts nothing, silently, while our generation keeps billing.
+        // Same gate AiChatView's stream_complete dual-write carries.
+        if (stream.isOwn) {
         setLocalMessagesRef.current((prev) => {
-          const i = prev.findIndex((m) => m.id === messageId);
-          return i === -1
-            ? [...prev, synthesized]
-            : prev.map((m, j) => (j === i ? synthesized : m));
-        });
+            const i = prev.findIndex((m) => m.id === messageId);
+            return i === -1
+              ? [...prev, synthesized]
+              : prev.map((m, j) => (j === i ? synthesized : m));
+          });
+        }
         return;
       }
       if (shouldReloadOnComountComplete(stream, completedConvId, agentConversationIdRef.current)) {
