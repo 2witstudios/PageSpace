@@ -6,14 +6,14 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, gte, gt, lte, count, asc, not, inArray } from '@pagespace/db/operators'
+import { eq, and, desc, gt, count, asc, not, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members'
 import { channelMessages } from '@pagespace/db/schema/chat'
 import { messages } from '@pagespace/db/schema/conversations';
-import type { ActivityAction, ActivityActionPreview, ActivityActionResult, ActivityChangeSummary } from '@/types/activity-actions';
+import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 import {
   canUserRollback,
   isRollbackableOperation,
@@ -33,8 +33,6 @@ import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
-  isValidOperation,
-  getOperationSummaryLabel,
   REDO_ALLOW_MISSING_TARGET,
   ROLLBACK_ALLOW_MISSING_TARGET,
   AGENT_CONFIG_ROLLBACK_FIELDS,
@@ -42,13 +40,12 @@ import {
 import { getConflictFields, classifyUndoGroupConflict, isNoOpChange } from './rollback/conflict';
 import type { ActivityLogForRollback } from './rollback/types';
 import {
-  getChangeDescription,
   buildChangeSummary,
-  buildRollbackTargetValues,
   buildActionTargetValues,
   getEffectiveOperation,
   isRollingBackRollback,
 } from './rollback/target-values';
+import { mapActivityRow, buildHistoryConditions } from './rollback/activity-mapping';
 
 // Re-export the shared activity shape so existing consumers keep importing it here.
 export type { ActivityLogForRollback };
@@ -368,40 +365,7 @@ export async function getActivityById(
       isAiGenerated: activity.isAiGenerated,
     });
 
-    return {
-      id: activity.id,
-      timestamp: activity.timestamp,
-      userId: activity.userId,
-      actorEmail: activity.actorEmail,
-      actorDisplayName: activity.actorDisplayName,
-      operation: activity.operation,
-      resourceType: activity.resourceType as ActivityResourceType,
-      resourceId: activity.resourceId,
-      resourceTitle: activity.resourceTitle,
-      driveId: activity.driveId,
-      pageId: activity.pageId,
-      isAiGenerated: activity.isAiGenerated,
-      aiProvider: activity.aiProvider,
-      aiModel: activity.aiModel,
-      contentSnapshot: activity.contentSnapshot,
-      contentRef: activity.contentRef,
-      contentFormat: activity.contentFormat as PageContentFormat | null,
-      contentSize: activity.contentSize,
-      updatedFields: activity.updatedFields as string[] | null,
-      previousValues: activity.previousValues as Record<string, unknown> | null,
-      newValues: activity.newValues as Record<string, unknown> | null,
-      metadata: activity.metadata as Record<string, unknown> | null,
-      streamId: activity.streamId,
-      streamSeq: activity.streamSeq,
-      changeGroupId: activity.changeGroupId,
-      changeGroupType: activity.changeGroupType as ChangeGroupType | null,
-      stateHashBefore: activity.stateHashBefore,
-      stateHashAfter: activity.stateHashAfter,
-      rollbackFromActivityId: activity.rollbackFromActivityId,
-      rollbackSourceOperation: activity.rollbackSourceOperation as ActivityOperation | null,
-      rollbackSourceTimestamp: activity.rollbackSourceTimestamp,
-      rollbackSourceTitle: activity.rollbackSourceTitle,
-    };
+    return mapActivityRow(activity);
   } catch (error) {
     loggers.api.error('[RollbackService] Error fetching activity', {
       activityId,
@@ -2647,23 +2611,13 @@ export async function getPageVersionHistory(
   });
 
   try {
-    const conditions = [eq(activityLogs.pageId, pageId)];
-
-    if (startDate) {
-      conditions.push(gte(activityLogs.timestamp, startDate));
-    }
-    if (endDate) {
-      conditions.push(lte(activityLogs.timestamp, endDate));
-    }
-    if (actorId) {
-      conditions.push(eq(activityLogs.userId, actorId));
-    }
-    if (operation && isValidOperation(operation)) {
-      conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
-    }
-    if (includeAiOnly) {
-      conditions.push(eq(activityLogs.isAiGenerated, true));
-    }
+    const conditions = buildHistoryConditions(eq(activityLogs.pageId, pageId), {
+      startDate,
+      endDate,
+      actorId,
+      operation,
+      includeAiOnly,
+    });
 
     const [activities, countResult] = await Promise.all([
       db
@@ -2686,40 +2640,7 @@ export async function getPageVersionHistory(
     });
 
     return {
-      activities: activities.map((a) => ({
-        id: a.id,
-        timestamp: a.timestamp,
-        userId: a.userId,
-        actorEmail: a.actorEmail,
-        actorDisplayName: a.actorDisplayName,
-        operation: a.operation,
-        resourceType: a.resourceType as ActivityResourceType,
-        resourceId: a.resourceId,
-        resourceTitle: a.resourceTitle,
-        driveId: a.driveId,
-        pageId: a.pageId,
-        isAiGenerated: a.isAiGenerated,
-        aiProvider: a.aiProvider,
-        aiModel: a.aiModel,
-        contentSnapshot: a.contentSnapshot,
-        contentRef: a.contentRef,
-        contentFormat: a.contentFormat as PageContentFormat | null,
-        contentSize: a.contentSize,
-        updatedFields: a.updatedFields as string[] | null,
-        previousValues: a.previousValues as Record<string, unknown> | null,
-        newValues: a.newValues as Record<string, unknown> | null,
-        metadata: a.metadata as Record<string, unknown> | null,
-        streamId: a.streamId,
-        streamSeq: a.streamSeq,
-        changeGroupId: a.changeGroupId,
-        changeGroupType: a.changeGroupType as ChangeGroupType | null,
-        stateHashBefore: a.stateHashBefore,
-        stateHashAfter: a.stateHashAfter,
-        rollbackFromActivityId: a.rollbackFromActivityId,
-        rollbackSourceOperation: a.rollbackSourceOperation as ActivityOperation | null,
-        rollbackSourceTimestamp: a.rollbackSourceTimestamp,
-        rollbackSourceTitle: a.rollbackSourceTitle,
-      })),
+      activities: activities.map(mapActivityRow),
       total: countResult[0]?.value ?? 0,
     };
   } catch (error) {
@@ -2750,23 +2671,13 @@ export async function getDriveVersionHistory(
   });
 
   try {
-    const conditions = [eq(activityLogs.driveId, driveId)];
-
-    if (startDate) {
-      conditions.push(gte(activityLogs.timestamp, startDate));
-    }
-    if (endDate) {
-      conditions.push(lte(activityLogs.timestamp, endDate));
-    }
-    if (actorId) {
-      conditions.push(eq(activityLogs.userId, actorId));
-    }
-    if (operation && isValidOperation(operation)) {
-      conditions.push(eq(activityLogs.operation, operation as typeof activityLogs.operation.enumValues[number]));
-    }
-    if (resourceType) {
-      conditions.push(eq(activityLogs.resourceType, resourceType as typeof activityLogs.resourceType.enumValues[number]));
-    }
+    const conditions = buildHistoryConditions(eq(activityLogs.driveId, driveId), {
+      startDate,
+      endDate,
+      actorId,
+      operation,
+      resourceType,
+    });
 
     const [activities, countResult] = await Promise.all([
       db
@@ -2789,40 +2700,7 @@ export async function getDriveVersionHistory(
     });
 
     return {
-      activities: activities.map((a) => ({
-        id: a.id,
-        timestamp: a.timestamp,
-        userId: a.userId,
-        actorEmail: a.actorEmail,
-        actorDisplayName: a.actorDisplayName,
-        operation: a.operation,
-        resourceType: a.resourceType as ActivityResourceType,
-        resourceId: a.resourceId,
-        resourceTitle: a.resourceTitle,
-        driveId: a.driveId,
-        pageId: a.pageId,
-        isAiGenerated: a.isAiGenerated,
-        aiProvider: a.aiProvider,
-        aiModel: a.aiModel,
-        contentSnapshot: a.contentSnapshot,
-        contentRef: a.contentRef,
-        contentFormat: a.contentFormat as PageContentFormat | null,
-        contentSize: a.contentSize,
-        updatedFields: a.updatedFields as string[] | null,
-        previousValues: a.previousValues as Record<string, unknown> | null,
-        newValues: a.newValues as Record<string, unknown> | null,
-        metadata: a.metadata as Record<string, unknown> | null,
-        streamId: a.streamId,
-        streamSeq: a.streamSeq,
-        changeGroupId: a.changeGroupId,
-        changeGroupType: a.changeGroupType as ChangeGroupType | null,
-        stateHashBefore: a.stateHashBefore,
-        stateHashAfter: a.stateHashAfter,
-        rollbackFromActivityId: a.rollbackFromActivityId,
-        rollbackSourceOperation: a.rollbackSourceOperation as ActivityOperation | null,
-        rollbackSourceTimestamp: a.rollbackSourceTimestamp,
-        rollbackSourceTitle: a.rollbackSourceTitle,
-      })),
+      activities: activities.map(mapActivityRow),
       total: countResult[0]?.value ?? 0,
     };
   } catch (error) {
