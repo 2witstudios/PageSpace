@@ -72,7 +72,7 @@ test.describe('chat e2e harness smoke', () => {
     const page = await context.newPage();
     await gotoChatPage(page, user.driveId, pageId);
 
-    await sendChatMessage(page, 'hello');
+    await sendChatMessage(page.getByTestId('ai-chat-view'), 'hello');
 
     // The request reached the model and is live — no sleep, no race. The ceiling exceeds
     // expect.poll's 5s default because a send does real work first (context resolution, DB
@@ -111,7 +111,7 @@ test.describe('chat e2e harness smoke', () => {
     const page = await context.newPage();
     await gotoChatPage(page, user.driveId, pageId);
 
-    await sendChatMessage(page, 'hold please');
+    await sendChatMessage(page.getByTestId('ai-chat-view'), 'hold please');
 
     await expect
       .poll(() => mockStreams(request).then((s) => s.held), { timeout: 30_000 })

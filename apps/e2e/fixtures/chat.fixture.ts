@@ -1,4 +1,4 @@
-import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import {
   CONSENT_COOKIE_NAME,
   CONSENT_VERSION,
@@ -106,7 +106,16 @@ export async function gotoChatPage(page: Page, driveId: string, pageId: string):
 }
 
 /**
- * Type into the composer and send.
+ * Type into a surface's composer and send.
+ *
+ * `scope` SHOULD be a surface root (`getByTestId('ai-chat-view')`, `'sidebar-chat-tab'`,
+ * `'global-assistant-view'`), not the bare page. The chat surfaces mount simultaneously and
+ * each renders its own composer, so with the right sidebar open an unscoped
+ * `getByTestId('chat-send')` matches TWO elements and fails Playwright's strict mode.
+ * (Verified live: sidebar open → unscoped `chat-textarea`/`chat-send` resolve 2 each, while
+ * `sidebar-chat-tab`-scoped resolve 1.) Passing the whole `page` works only while every other
+ * surface stays closed — which is true by default today, and is exactly the kind of
+ * accidental precondition that breaks a later spec.
  *
  * The retry is load-bearing, not defensive padding. `ai-chat-view` becomes visible from the
  * server-rendered markup, BEFORE React has hydrated the composer — and a `fill()` that lands
@@ -116,11 +125,13 @@ export async function gotoChatPage(page: Page, driveId: string, pageId: string):
  * click, which is a genuinely confusing thing to debug from a timeout alone.
  *
  * Retrying `fill` until Send actually enables makes hydration a settled precondition rather
- * than a race, with no arbitrary sleep: it proceeds the instant the composer is live.
+ * than a race, with no arbitrary sleep: it proceeds the instant the composer is live. NOTE it
+ * also masks the underlying product bug — a real user typing pre-hydration loses their text.
+ * See the epic-level D task; if that is fixed, this retry should tighten to a single fill.
  */
-export async function sendChatMessage(page: Page, text: string): Promise<void> {
-  const textarea = page.getByTestId('chat-textarea');
-  const send = page.getByTestId('chat-send');
+export async function sendChatMessage(scope: Page | Locator, text: string): Promise<void> {
+  const textarea = scope.getByTestId('chat-textarea');
+  const send = scope.getByTestId('chat-send');
 
   await expect(async () => {
     await textarea.fill(text);
