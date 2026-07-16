@@ -97,6 +97,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn().mockReturnValue(true),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
