@@ -521,11 +521,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Facade only (container-agnostic consumer rule, PR 4 board): both `streams` and
   // `renderedMessages` below read exclusively through useActiveStream/useRenderedMessages
   // — never usePendingStreamsStore/useConversationMessagesStore directly.
-  const { streams: remoteStreams, ownStreamMessageId } = useActiveStream(page.id, currentConversationId);
+  const { streams: remoteStreams } = useActiveStream(page.id, currentConversationId);
   // The stream identity for the conversation on screen — what Stop names (PR 5A).
   const activeStream = useConversationActiveStream(page.id, currentConversationId);
 
-  const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
+
 
   // The store-first render source: DB-confirmed + optimistic-sent + live-streaming
   // messages for the active conversation, merged at render (not at write) so no
@@ -589,6 +589,27 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     status,
     activeStream?.isOwn === true,
   );
+
+  // Scoped to the conversation ON SCREEN, and own-only — same rule as GlobalAssistantView and
+  // SidebarChatTab (PR 5A).
+  //
+  // `isStreaming` (useChat's status) cannot answer this: the SDK's Chat id is constant per
+  // surface, so a mid-stream conversation switch leaves it true for the OLD conversation. It
+  // therefore lit a Stop button under the NEW one — and that Stop was worse than useless, because
+  // `activeStream` for the new conversation is undefined and its pendingSend has been cleared, so
+  // the decision resolves to 'none': it cancelled the old conversation's LOCAL fetch and issued no
+  // server abort at all, leaving that generation running its write tools and billing while this
+  // UI flipped back to Send.
+  //
+  // A REMOTE stream is excluded for the same reason it is in the other two surfaces: it is live
+  // content worth showing, but not something this tab can stop (the server's abort is user-scoped),
+  // and folding it in here would suppress the `remoteStreamingUser` chip that names who IS
+  // generating.
+  //
+  // `pendingSendConversationId` covers the submitted window, where no store entry exists yet.
+  const effectiveIsStreaming =
+    activeStream?.isOwn === true ||
+    (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
   const streamingAssistantText = useMemo(() => {
     if (!isStreaming) return null;
