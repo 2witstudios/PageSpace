@@ -7,6 +7,7 @@ import { useSuggestionContext } from '@/components/providers/SuggestionProvider'
 import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { computeEditorPosition, isMobileWidth } from './core/layout';
+import { sheetTriggerPattern } from './core/constants';
 
 interface FloatingCellEditorProps {
   value: string;
@@ -57,10 +58,6 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
       window.visualViewport?.removeEventListener('resize', measure);
     };
   }, []);
-
-  // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
-  // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
-  const sheetTriggerPattern = /^$|^[\s(=+\-*/,<>!]$/;
 
   // Add mention support
   const suggestion = useSuggestion({
