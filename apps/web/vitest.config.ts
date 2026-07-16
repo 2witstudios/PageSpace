@@ -50,10 +50,11 @@ export default defineConfig({
     // `coverage.all: false` (below) measurably helped but wasn't sufficient
     // alone. The actual fix is structural: package.json's `test:coverage` runs
     // scripts/test-coverage-sharded.mjs instead of `vitest run --coverage`
-    // directly — it runs the suite in 3 sequential shards so each shard's
+    // directly — it runs the suite in sequential shards so each shard's
     // fork pool fully tears down (releasing its accumulated coverage memory)
-    // before the next starts, bounding peak memory to roughly a third of the
-    // whole suite at any moment instead of the whole thing at once.
+    // before the next starts, bounding peak memory to a fraction of the whole
+    // suite at any moment instead of the whole thing at once (shard count is
+    // set in that script, not here).
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',

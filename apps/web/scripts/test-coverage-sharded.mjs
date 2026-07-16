@@ -29,7 +29,14 @@ const { createCoverageMap } = istanbulLibCoverage;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-const SHARD_COUNT = 3;
+// 3 shards (~310 files each) wasn't quite enough headroom — the first real CI
+// run still hit the heap ceiling on one shard (script correctly caught it and
+// exited cleanly, no hang or system-level kill, unlike every single-invocation
+// attempt before sharding). Doubled to 6 (~155 files each) rather than raising
+// the ceiling — the ceiling was deliberately kept modest (see ci.yml) after
+// raising it destabilized the runner itself in earlier single-invocation
+// attempts.
+const SHARD_COUNT = 6;
 const METRICS = ['lines', 'branches', 'functions', 'statements'];
 const coverageDir = resolve(root, 'coverage');
 

@@ -67,15 +67,17 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           # v8 coverage instrumentation is memory-heavy. `coverage.all: false` plus
-          # sharding the run into 3 sequential batches (see apps/web/package.json's
-          # test:coverage script and apps/web/scripts/test-coverage-sharded.mjs) is
-          # the actual fix — see that script's header comment and
-          # apps/web/vitest.config.ts's git history for the full trail of
-          # single-invocation fork-count/heap-ceiling tuning attempts that either
-          # crashed, OOM-killed the job, or destabilized the runner itself under
-          # sustained memory pressure. This ceiling is now just modest headroom for
-          # a single shard's share of the suite (~1/3 of ~930 files), not the
-          # primary defense.
+          # sharding the run into sequential batches (see apps/web/package.json's
+          # test:coverage script and apps/web/scripts/test-coverage-sharded.mjs,
+          # which owns the shard count) is the actual fix — see that script's
+          # header comment and apps/web/vitest.config.ts's git history for the
+          # full trail of single-invocation fork-count/heap-ceiling tuning
+          # attempts that either crashed, OOM-killed the job, or destabilized the
+          # runner itself under sustained memory pressure. This ceiling is now
+          # just modest headroom for a single shard's share of the suite, not the
+          # primary defense — deliberately kept modest rather than raised, since
+          # raising it destabilized the runner in earlier single-invocation
+          # attempts.
           NODE_OPTIONS: --max-old-space-size=8192
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
