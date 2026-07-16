@@ -884,10 +884,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         // recovered content never went through this tab's own useChat stream and would
         // otherwise leave regenerate()'s bookkeeping short of it.
         const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
-        setMessages((prev) => {
-          const i = prev.findIndex((m) => m.id === messageId);
-          return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
-        });
+        // The useChat dual-write is for OUR OWN stream only. `chat:stream_complete` carries no
+        // own-stream filter, so on a shared conversation this handler also sees a COLLABORATOR's
+        // stream completing in our conversation — and appending their message into our transport's
+        // local array is both meaningless for the regenerate() bookkeeping this write exists for,
+        // and actively harmful: useOwnStreamMirror reads that array to find its own live stream,
+        // and a foreign message landing after ours makes it re-target onto a finished message —
+        // an isOwn phantom whose Stop aborts nothing, silently, while our generation keeps
+        // billing. Their message still renders: the cache write below is unconditional.
+        if (stream.isOwn) {
+          setMessages((prev) => {
+            const i = prev.findIndex((m) => m.id === messageId);
+            return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
+          });
+        }
         if (currentConversationId) {
           conversationMessagesActions.applyConfirmedMessage(currentConversationId, synthesized);
         }

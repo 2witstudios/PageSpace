@@ -1696,6 +1696,9 @@ describe('AiChatView stop button for reconnected own streams', () => {
     (usePendingStreamsStore as unknown as Mock).mockImplementation(
       (selector: (s: StoreState) => unknown) => selector(state)
     );
+    // `getActiveStreamById` (the imperative facade used by socket callbacks) reads getState().
+    // Point it at the SAME state, or the two disagree the way the real store never can.
+    (usePendingStreamsStore.getState as unknown as Mock).mockReturnValue(state);
   };
 
   const setupHappyInit = () => {
@@ -1877,6 +1880,52 @@ describe('AiChatView stop button for reconnected own streams', () => {
         actual: lastChatLayoutProps()?.isStreaming,
         expected: false,
       });
+    });
+  });
+
+  // `chat:stream_complete` carries NO own-stream filter (useChannelStreamSocket), so on a SHARED
+  // conversation this handler also sees a collaborator's stream completing in our conversation.
+  //
+  // Their message must reach the CACHE (it is real content in this conversation and has to render)
+  // but must never be appended into our useChat array. That array is our transport's local state:
+  // the dual-write exists only for our own regenerate() bookkeeping, and useOwnStreamMirror reads
+  // that same array to find its own live stream — a foreign message landing after ours makes the
+  // mirror re-target onto a finished message, producing an isOwn phantom whose Stop aborts nothing,
+  // silently, while our generation keeps running its write tools and billing.
+  test("given a COLLABORATOR's stream completes in our conversation, should commit it to the cache but NOT into our useChat array", async () => {
+    let onStreamComplete: ((messageId: string, completedConvId?: string) => void) | undefined;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      onStreamComplete = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
+    });
+
+    setupHappyInit();
+    setStoreSelectors({
+      remote: [{
+        messageId: 'their-msg',
+        pageId: PAGE_ID,
+        isOwn: false,
+        conversationId: CONV_ID,
+        parts: [{ type: 'text', text: 'their reply' }],
+      }],
+    });
+
+    render(<AiChatView page={page} />);
+    await waitFor(() => expect(onStreamComplete).toBeDefined());
+    mockSetMessages.mockClear();
+
+    // Sync act, not the async form: this handler's writes are synchronous, and act()'s exhaustive
+    // async flush spins this file's mocked fetch/SWR harness hard enough to exhaust a 4GB heap
+    // (see the submitted-window test below for the same note).
+    act(() => {
+      onStreamComplete?.('their-msg', CONV_ID);
+    });
+
+    assert({
+      given: "a collaborator's stream completing in our conversation",
+      should: 'not append their message into our transport-local useChat array',
+      actual: mockSetMessages.mock.calls.length,
+      expected: 0,
     });
   });
 
