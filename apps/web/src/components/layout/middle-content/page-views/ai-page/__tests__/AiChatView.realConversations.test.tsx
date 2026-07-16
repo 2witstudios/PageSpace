@@ -113,7 +113,16 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
   useDisplayPreferences: vi.fn(() => ({ preferences: { showTokenCounts: false } })),
 }));
 
-vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+// Mirror the real barrel. It exported only `clearActiveStreamId` — a function PR 5A deletes with
+// the activeStreams map — so every other import from here (useStopStream's whole abort surface)
+// silently resolved to `undefined`. Latent only because nothing in this file clicks Stop; a
+// landmine for whoever adds that test.
+vi.mock('@/lib/ai/core/client', () => ({
+  abortActiveStreamByConversation: vi.fn(async () => ({ aborted: true, code: 'aborted', reason: '' })),
+  abortActiveStreamByMessageId: vi.fn(async () => ({ aborted: true, code: 'aborted', reason: '' })),
+  reportAbortOutcome: vi.fn(),
+  reportAbortOutcomes: vi.fn(),
+}));
 vi.mock('@/lib/ai/core/stream-abort-client', () => ({
   abortActiveStream: vi.fn(),
   abortActiveStreamByMessageId: vi.fn(),

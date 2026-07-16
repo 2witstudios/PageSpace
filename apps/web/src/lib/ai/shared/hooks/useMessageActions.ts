@@ -42,6 +42,13 @@ interface UseMessageActionsOptions {
    * Optional callback when edit version changes (for forcing re-renders)
    */
   onEditVersionChange?: () => void;
+  /**
+   * Is THIS surface's own stream live for `conversationId` right now?
+   *
+   * Passed in because this hook is surface-agnostic and cannot read it. It gates the one write
+   * here that replaces the WHOLE messages array (the post-edit reconcile refetch) — see its use.
+   */
+  isOwnStreamLive?: boolean;
 }
 
 interface UseMessageActionsResult {
@@ -68,11 +75,15 @@ export function useMessageActions({
   setMessages,
   regenerate,
   onEditVersionChange,
+  isOwnStreamLive = false,
 }: UseMessageActionsOptions): UseMessageActionsResult {
   const isAgentMode = Boolean(agentId);
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  // Read after an await, so a ref rather than the captured prop.
+  const isOwnStreamLiveRef = useRef(isOwnStreamLive);
+  isOwnStreamLiveRef.current = isOwnStreamLive;
 
   // Edit a message
   const handleEdit = useCallback(
@@ -126,7 +137,21 @@ export function useMessageActions({
             const loaded = isAgentMode
               ? data.messages || []
               : Array.isArray(data) ? data : data.messages || [];
-            setMessages(loaded);
+            // NOT while our own stream is live. This is the one write here that replaces the WHOLE
+            // array, and useOwnStreamMirror reads that array to find its own live stream. DB
+            // history whose newest row is a foreign assistant message — another TAB of this same
+            // user counts, since `isOwn` is browserSessionId-scoped — makes the mirror re-target
+            // onto a finished message: our live entry goes, and Stop then aborts an id the server
+            // has no stream for (user-scoped → not_found → silent by design) while the generation
+            // keeps running its write tools and keeps billing.
+            //
+            // Skipping it costs nothing that matters: the edit is already applied optimistically
+            // above and the server has it; this refetch is explicitly "non-critical" reconciliation,
+            // and the next load re-syncs the array once the stream is over. Read through a ref
+            // because this runs after an await.
+            if (!isOwnStreamLiveRef.current) {
+              setMessages(loaded);
+            }
           }
         } catch {
           // Refetch failed — optimistic update already applied, server has the edit

@@ -10,16 +10,51 @@ type UIMessagePart = UIMessage['parts'][number];
 
 export type OwnStreamMirrorStatus = 'submitted' | 'streaming' | 'ready' | 'error';
 
-export interface PlanOwnStreamMirrorInput {
-  status: OwnStreamMirrorStatus;
-  /** The own tab's live assistant message (useChat's local state), or undefined when not actively streaming. */
-  ownAssistantMessage: { id: string; parts: UIMessagePart[] } | undefined;
-  /** The messageId `usePendingStreamsStore` currently mirrors for this tab, or undefined. */
-  mirroredMessageId: string | undefined;
+/**
+ * Everything about a stream that is fixed the moment the user hits Send, LATCHED by the caller at
+ * the rising edge of the send and handed to this planner as one value.
+ *
+ * It is a parameter rather than something derived here because a pure function cannot see when the
+ * send happened — only the caller (`useOwnStreamMirror`) can. See `planOwnStreamMirror` for why
+ * reading these live is a billing bug.
+ */
+export interface OwnStreamIdentity {
   pageId: string;
   conversationId: string;
   triggeredBy: { userId: string; displayName: string };
   startedAt: string;
+}
+
+export interface PlanOwnStreamMirrorInput {
+  status: OwnStreamMirrorStatus;
+  /** The own tab's live assistant message (useChat's local state), or undefined. */
+  ownAssistantMessage: { id: string; parts: UIMessagePart[] } | undefined;
+  /** The messageId this mirror latched for the CURRENT send, or undefined if it hasn't yet. */
+  mirroredMessageId: string | undefined;
+  /**
+   * Whether `mirroredMessageId` is still PRESENT in the store. Ignored until an id is latched.
+   *
+   * The store is not this mirror's private state — `useChannelStreamSocket`'s cleanup calls
+   * `clearPageStreams(channelId)` on every re-run of its effect, and a routine `auth:refreshed`
+   * mints a new socket, so an ordinary token refresh wipes the channel mid-stream. See the
+   * re-assert branch below.
+   */
+  mirroredEntryExists: boolean;
+  /** Latched at the rising edge of this send — never read live. */
+  streamIdentity: OwnStreamIdentity;
+  /**
+   * The parts last mirrored for `mirroredMessageId`. Used ONLY to restore a wiped entry when the
+   * message has gone from the surface's array, where `ownAssistantMessage` can no longer supply
+   * them. Empty until the first write.
+   */
+  lastMirroredParts: UIMessagePart[];
+  /**
+   * Is the surface still showing the conversation this stream was sent from?
+   *
+   * The discriminator between the two reasons an assistant id can change mid-send — see (2) on
+   * `planOwnStreamMirror`. It is the surface's state, so only the caller can supply it.
+   */
+  surfaceStillOnStreamConversation: boolean;
   /** Caller-tracked monotonic counter, bumped once per mirror tick — threaded into `setStreamParts`'s `seq` gate. */
   seq: number;
 }
@@ -34,69 +69,194 @@ export type OwnStreamMirrorOp =
         triggeredBy: { userId: string; displayName: string };
         isOwn: true;
         startedAt: string;
+        /** Only set when restoring a wiped entry whose message has left the surface's array. */
+        parts?: UIMessagePart[];
       };
     }
   | { type: 'setStreamParts'; messageId: string; parts: UIMessagePart[]; seq: number }
   | { type: 'removeStream'; messageId: string };
 
 /**
- * Whether the own tab currently has a live stream to mirror. `useChat`
- * typically retains the completed assistant message in local history after
- * a stream finishes, so `ownAssistantMessage !== undefined` alone is NOT a
- * reliable activity signal — `status` must also be submitted/streaming.
- * Exported (not just an internal check) so `useOwnStreamMirror` can use the
- * exact same definition when deciding whether to clear its `mirroredIdRef`
- * — computing that from `ownAssistantMessage?.id` alone previously left the
- * ref pointing at a completed stream's id, which then made a continuation
- * request reusing that same server-issued id (a real SDK behavior this PR
- * pins in `sdkServerIdAdoption.test.ts`) silently fail to re-mirror, since
- * `planOwnStreamMirror` saw a matching `mirroredMessageId` and skipped
- * `addStream` against a store entry that had already been removed.
+ * Is this tab's own local request in flight?
+ *
+ * The STATUS alone answers this — deliberately NOT "is there an assistant message on screen".
+ * Those are different questions, and conflating them cost a live stream twice:
+ *
+ *  - An external `setMessages()` (a surface loading another conversation's history, or clearing
+ *    the array on agent deselect) empties or replaces the array mid-send. Reading the array as
+ *    liveness turned that into "the stream ended" and removed a stream still generating
+ *    server-side — where a local stop would not have stopped it anyway.
+ *  - useChat retains the completed assistant message in local history after a stream finishes, so
+ *    the array still says "assistant message present" long after 'ready'. That is why 'ready' and
+ *    'error' end the send here regardless of what the array holds.
  */
-export const isOwnStreamMirrorActive = (
-  status: OwnStreamMirrorStatus,
-  ownAssistantMessage: { id: string; parts: UIMessagePart[] } | undefined,
-): boolean => (status === 'submitted' || status === 'streaming') && ownAssistantMessage !== undefined;
+export const isOwnStreamSending = (status: OwnStreamMirrorStatus): boolean =>
+  status === 'submitted' || status === 'streaming';
 
 /**
- * Computes the idempotent `usePendingStreamsStore` ops needed to mirror the
- * own tab's actively-streaming assistant message. Pure — the caller (
- * `useOwnStreamMirror`) applies the returned ops via the store's own
- * (already-idempotent) actions, so calling this repeatedly with the same or
- * stale input is always safe: `addStream` no-ops on an existing id,
- * `setStreamParts` no-ops on a non-advancing `seq`, `removeStream` no-ops on
- * an absent id.
+ * Computes the idempotent `usePendingStreamsStore` ops needed to mirror the own tab's actively
+ * streaming assistant message. Pure — the caller (`useOwnStreamMirror`) applies the returned ops
+ * via the store's own (already-idempotent) actions, so calling this repeatedly with the same or
+ * stale input is always safe: `addStream` no-ops on an existing id, `setStreamParts` no-ops on a
+ * non-advancing `seq`, `removeStream` no-ops on an absent id.
+ *
+ * TWO THINGS THIS DELIBERATELY DOES NOT TRUST, because the store entry it writes IS what every
+ * surface's Stop button and streaming indicator read (PR 5A deleted the `holdForStream` refs that
+ * used to hold this identity separately). Get either wrong and Stop names the wrong stream — or
+ * nothing — while the real generation keeps running its write tools and keeps BILLING, with the
+ * UI showing Send.
+ *
+ * 1. THE SURFACE'S CURRENT CONVERSATION. `useChat`'s id is constant per surface, so switching
+ *    conversation mid-flight does NOT abort the POST: the stream keeps running while the surface
+ *    moves out from under it. A send in C followed by a switch to D inside the 0.5-3s TTFB window
+ *    would otherwise record C's stream under D. Hence `streamIdentity`, latched at the send.
+ *
+ * 2. THE SURFACE'S ARRAY, as a source of "which message is my stream". An assistant id can change
+ *    mid-send for two completely different reasons, and they need opposite handling:
+ *
+ *    (a) An external `setMessages()` replaced the array — a surface's load-on-select writing
+ *        ANOTHER conversation's history, whose last entry is typically an assistant message.
+ *        Re-targeting onto it removes OUR live stream and adds a PHANTOM on a message that
+ *        finished long ago, whose Stop reports not_found and is silent by design.
+ *
+ *    (b) The SDK adopted the SERVER-issued id over its own client-generated one, mid-send. When
+ *        the route writes a data part before the `start` chunk (the ungated
+ *        `data-command-execution` path — any message carrying a command token), useChat pushes the
+ *        assistant message under a client id, React renders, the mirror latches it, and `start`
+ *        then swaps in the server id. This repo pins that behaviour in sdkServerIdAdoption.test.ts.
+ *        REFUSING to re-target here froze the entry under a name the server has never heard of:
+ *        Stop took the isOwn branch (which outranks the pendingSend fallback that WOULD have
+ *        worked), aborted a nonexistent stream, got not_found, and said nothing — while the
+ *        generation kept running its write tools and kept billing.
+ *
+ *    `surfaceStillOnStreamConversation` separates them. (a) is a load-on-select for a DIFFERENT
+ *    conversation, so the surface has moved off the stream's conversation; (b) happens with the
+ *    surface sitting exactly where it was.
+ *
+ *    THAT SEPARATION IS ONLY SAFE BECAUSE NOTHING WRITES A FOREIGN ASSISTANT MESSAGE INTO A
+ *    CHAT'S ARRAY WHILE ITS OWN STREAM IS LIVE — and that is an invariant the SURFACES uphold,
+ *    not something this function can check. It is worth naming precisely, because an earlier
+ *    version of this comment asserted it without its cost and two real bugs walked through the
+ *    gap: from in here, "the SDK renamed my stream" and "someone dropped a foreign message after
+ *    mine" are indistinguishable — in both, our message is not last and a later assistant exists.
+ *
+ *    Who upholds it: GlobalAssistantView and SidebarChatTab gate their load/refresh writes on
+ *    `isOwn*StreamForCurrentConversation` (#2061). AiChatView had NO such guard until PR 5A added
+ *    two: its `chat:stream_complete` dual-write is gated on `stream.isOwn` (that socket event
+ *    carries no own-stream filter, so it also fires for a collaborator's stream), and its
+ *    `loadMessagesForConversation` skips the array write while our own stream is live.
+ *
+ *    If a new writer into a chat's `messages` appears, it needs the same guard, or this branch
+ *    will re-target onto whatever it wrote.
  */
 export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamMirrorOp[] => {
-  const isActive = isOwnStreamMirrorActive(input.status, input.ownAssistantMessage);
-
-  if (!isActive) {
+  // The send is over: release whatever this mirror latched. The local read is what this entry
+  // represents, and it has ended.
+  if (!isOwnStreamSending(input.status)) {
     return input.mirroredMessageId !== undefined
       ? [{ type: 'removeStream', messageId: input.mirroredMessageId }]
       : [];
   }
 
-  const { id, parts } = input.ownAssistantMessage as { id: string; parts: UIMessagePart[] };
-  const ops: OwnStreamMirrorOp[] = [];
+  const id = input.ownAssistantMessage?.id;
 
-  if (input.mirroredMessageId !== id) {
-    if (input.mirroredMessageId !== undefined) {
-      ops.push({ type: 'removeStream', messageId: input.mirroredMessageId });
+  // The surface's array no longer shows our latched stream — it was emptied (agent deselect) or
+  // moved onto another conversation's history. Neither means the stream ended, and we must not
+  // adopt whatever the array now holds (see (2) above).
+  //
+  // But if our entry has ALSO been wiped in that window, this is the one case that cannot heal
+  // itself: no further token will ever arrive for a message that has left the array, so the
+  // subscription that noticed the wipe is the last chance to act. Restore the LATCHED stream, with
+  // the content we last mirrored — losing it would mean no Stop, no SWR protection, and a
+  // generation still running and billing with nothing on screen naming it.
+  if (input.mirroredMessageId !== undefined && input.mirroredMessageId !== id) {
+    // (b) The SDK renamed OUR stream — same stream, new (server-issued) name. Follow it: the old
+    // entry names nothing the server knows, and the new one is what Stop must be able to abort.
+    if (input.surfaceStillOnStreamConversation && input.ownAssistantMessage) {
+      return [
+        { type: 'removeStream', messageId: input.mirroredMessageId },
+        {
+          type: 'addStream',
+          stream: {
+            messageId: input.ownAssistantMessage.id,
+            pageId: input.streamIdentity.pageId,
+            conversationId: input.streamIdentity.conversationId,
+            triggeredBy: input.streamIdentity.triggeredBy,
+            isOwn: true,
+            startedAt: input.streamIdentity.startedAt,
+          },
+        },
+        {
+          type: 'setStreamParts',
+          messageId: input.ownAssistantMessage.id,
+          parts: input.ownAssistantMessage.parts,
+          seq: input.seq,
+        },
+      ];
     }
-    ops.push({
-      type: 'addStream',
-      stream: {
-        messageId: id,
-        pageId: input.pageId,
-        conversationId: input.conversationId,
-        triggeredBy: input.triggeredBy,
-        isOwn: true,
-        startedAt: input.startedAt,
+    // (a) The array moved off our stream. Hold what we latched and adopt nothing.
+    if (input.mirroredEntryExists) return [];
+    // ...unless our entry was ALSO wiped in that window — the one case that cannot heal itself,
+    // since no further token will ever arrive for a message that has left the array. Restore the
+    // latched stream with the content we last mirrored.
+    return [
+      {
+        type: 'addStream',
+        stream: {
+          messageId: input.mirroredMessageId,
+          pageId: input.streamIdentity.pageId,
+          conversationId: input.streamIdentity.conversationId,
+          triggeredBy: input.streamIdentity.triggeredBy,
+          isOwn: true,
+          startedAt: input.streamIdentity.startedAt,
+          parts: input.lastMirroredParts,
+        },
       },
-    });
+    ];
   }
 
-  ops.push({ type: 'setStreamParts', messageId: id, parts, seq: input.seq });
+  // Sending, but the SDK has not pushed the assistant message yet (the whole submitted window).
+  // Nothing to write, and nothing to remove — the send is still in flight.
+  if (!input.ownAssistantMessage) return [];
 
-  return ops;
+  const { parts } = input.ownAssistantMessage;
+
+  // Either the first assistant message of this send, or our own latched one whose entry has since
+  // been wiped from the store by someone else (clearPageStreams on a socket swap — see
+  // `mirroredEntryExists`). Both want the same thing: assert the stream, under the identity
+  // latched when the user hit Send.
+  //
+  // Re-asserting is free in the normal case — `applyAddStream` no-ops on an id that is present —
+  // and it is the only way back for a wiped entry, because `applySetStreamParts` no-ops when the
+  // entry is absent, so a parts-only write would silently do nothing for the rest of the send.
+  //
+  // Nothing else restores it: the socket's DB bootstrap re-runs after the wipe but DECLINES its
+  // own consuming stream by design (`shouldAttachStream({isOwn, isConsuming})` — attaching would
+  // render every token twice), so the one entry that needs restoring is exactly the one bootstrap
+  // will not restore.
+  //
+  // KNOWN, ACCEPTED INTERACTION: `chat:stream_complete` removes the entry with no isOwn skip
+  // (useChannelStreamSocket), and it can land while this tab's useChat is still draining the tail
+  // of the response body — i.e. still 'streaming'. This branch then re-adds the entry for that
+  // tail, and the falling edge removes it again when the local read ends. That is bounded by the
+  // tail and is not a phantom: while the local chat is still delivering content, the stream IS
+  // live for this tab, which is exactly what the entry means.
+  if (input.mirroredMessageId === undefined || !input.mirroredEntryExists) {
+    return [
+      {
+        type: 'addStream',
+        stream: {
+          messageId: id as string,
+          pageId: input.streamIdentity.pageId,
+          conversationId: input.streamIdentity.conversationId,
+          triggeredBy: input.streamIdentity.triggeredBy,
+          isOwn: true,
+          startedAt: input.streamIdentity.startedAt,
+        },
+      },
+      { type: 'setStreamParts', messageId: id as string, parts, seq: input.seq },
+    ];
+  }
+
+  return [{ type: 'setStreamParts', messageId: id as string, parts, seq: input.seq }];
 };

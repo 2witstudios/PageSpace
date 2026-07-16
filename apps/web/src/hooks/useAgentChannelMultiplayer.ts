@@ -4,16 +4,7 @@ import { useChannelStreamSocket } from './useChannelStreamSocket';
 import { usePageSocketRoom } from './usePageSocketRoom';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
-import {
-  usePageAgentDashboardStore,
-  selectIsAgentStreaming,
-  agentStreamKey,
-  type AgentStreamKey,
-} from '@/stores/page-agents';
-import { useStreamingRegistration } from '@/lib/ai/shared';
-import { abortActiveStreamByMessageId } from '@/lib/ai/core/stream-abort-client';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import { shouldClaimAgentStopSlot } from '@/lib/ai/streams/shouldClaimAgentStopSlot';
 import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import {
@@ -28,7 +19,6 @@ export interface UseAgentChannelMultiplayerOptions {
   /** useChat-style messages setter for local synthesis on stream completion. */
   setLocalMessages: (updater: (prev: UIMessage[]) => UIMessage[]) => void;
   /** True when the surface is locally driving a stream (e.g. via useChat). */
-  isLocallyStreaming: boolean;
   /** componentName for the editing-store metadata. */
   surfaceComponentName: string;
   /**
@@ -65,8 +55,6 @@ export function useAgentChannelMultiplayer({
   selectedAgent,
   agentConversationId,
   setLocalMessages,
-  isLocallyStreaming,
-  surfaceComponentName,
   loadConversation,
 }: UseAgentChannelMultiplayerOptions): { rejoinActiveStreams: () => void } {
   const channelId = selectedAgent?.id;
@@ -80,83 +68,17 @@ export function useAgentChannelMultiplayer({
   const agentConversationIdRef = useRef(agentConversationId);
   agentConversationIdRef.current = agentConversationId;
 
-  // Single-writer ownership of the dashboard store's stop slot. Only this
-  // surface's onOwnStreamFinalize clears the slot, and only when this surface
-  // claimed it on bootstrap. The unmount cleanup below also clears it if
-  // this surface unmounts mid-stream — useChannelStreamSocket intentionally
-  // does not fire onOwnStreamFinalize on teardown, so without the cleanup
-  // a navigate-away mid-stream would leave the slot stuck.
-  // The messageId this surface claimed the slot FOR — not a bare boolean. A channel can
-  // carry two of this user's own streams at once (send, then New Chat while it runs), and
-  // only one of them holds the slot. With a boolean, the OTHER one's finalize would
-  // release the slot out from under the stream that actually owns it, killing a live
-  // Stop button. `onOwnStreamBootstrap` can also decline to claim (conversation
-  // mismatch), while `ownStreamIds` still registers the stream for finalization — so a
-  // declined stream must never be able to release anything.
-  const ownedStopSlotRef = useRef<string | null>(null);
-  // The exact stop function we installed. Releasing on "I claimed once" is not enough:
-  // the slot is a single shared singleton, and GlobalAssistantView writes it directly
-  // from its own local status without going through the claim protocol. So by the time we
-  // release, the slot may belong to somebody else — and nulling it then would kill THEIR
-  // live Stop button and their isAgentStreaming flag. Only release what is still ours.
-  const ownedStopFnRef = useRef<(() => void) | null>(null);
-  // The agent we claimed FOR — not the agent we happen to be on now. The release can run
-  // from a cleanup triggered by an agent switch, where `channelId` has already moved on;
-  // clearing the flag against the new agent would leave the OLD one's flag set forever.
-  // The KEY we claimed for — (agent, conversation), not just the agent, and not the agent we
-  // happen to be on now (a cleanup fired by an agent switch has already moved on).
-  const ownedKeyRef = useRef<AgentStreamKey | null>(null);
-
-  // KNOWN GAP (pre-existing, unchanged by this hook's messageId scoping): the claim
-  // protocol has no HANDOFF. If a co-mounted surface was declined the slot (first writer
-  // wins) and the claimant later releases it, the declined surface does not re-claim — so
-  // it can render a live own stream with no Stop button until it remounts. Closing this
-  // needs a re-claim protocol on the dashboard store (subscribe to the slot, re-claim when
-  // it frees and our stream is still in flight), which is a change to that store's
-  // contract rather than to stream ownership. Deliberately left for a follow-up.
-  const releaseStopSlotIfStillOurs = () => {
-    if (ownedStopSlotRef.current === null) return;
-    const dashboard = usePageAgentDashboardStore.getState();
-    // A null slot is FREE, not foreign. GlobalAssistantView nulls the stop fn on ordinary
-    // paths (its effect's else-branch and cleanup, whenever agentStatus is 'ready' — which
-    // it is for the whole life of a BOOTSTRAPPED stream) without touching isAgentStreaming.
-    // Treating that as "not ours" would skip setAgentStreaming(false) and strand it true.
-    // A DIFFERENT fn means another, live stream owns the slot — leave both halves alone.
-    // A NULL slot means nobody owns it: it is free, and still ours to clear.
-    const claimedKey = ownedKeyRef.current;
-    const k = claimedKey === null ? null : agentStreamKey(claimedKey);
-    const ownedStopFn = ownedStopFnRef.current;
-    // Clear our refs FIRST, unconditionally — whatever we decide below, we no longer hold a
-    // claim, and an early return must never leave them dangling.
-    ownedStopSlotRef.current = null;
-    ownedStopFnRef.current = null;
-    ownedKeyRef.current = null;
-    if (claimedKey === null || k === null) return;
-    // Identity-guarded WITHIN the key: GlobalAssistantView installs its own local stop for
-    // this same (agent, conversation) and would otherwise have ours clobbered. Collisions
-    // across different streams are impossible by construction — the state is keyed per stream.
-    const current = dashboard.agentStops[k];
-    const stillOurs = current === ownedStopFn || current === undefined;
-    if (!stillOurs) return;
-    dashboard.setAgentStreaming(claimedKey, false);
-    dashboard.setAgentStop(claimedKey, null);
-  };
-  const releaseStopSlotRef = useRef(releaseStopSlotIfStillOurs);
-  releaseStopSlotRef.current = releaseStopSlotIfStillOurs;
-  // Keyed on channelId, NOT []. `channelId` is `selectedAgent?.id`, and the sidebar swaps
-  // agents in place without unmounting — while useChannelStreamSocket's effect (deps
-  // [socket, channelId]) tears down on that same change and, by design, does NOT fire
-  // onOwnStreamFinalize. A []-keyed cleanup would therefore never run, leaving the claim
-  // behind: the next agent's own stream would find the slot occupied and decline it, its
-  // finalize would not match the stale messageId, and the dashboard would be stuck
-  // `isAgentStreaming: true` with a Stop button wired to the previous agent's dead
-  // message. (The old boolean ref accidentally recovered from this — any own finalize
-  // released it — so scoping the release by messageId without this would be a regression.)
-  useEffect(() => {
-    return () => {
-      releaseStopSlotRef.current();
-    };
-  }, [channelId]);
+  // NO STOP-SLOT CLAIM PROTOCOL (PR 5A, leaf 5.5.7).
+  //
+  // Deleted here: the claimed-messageId/claimed-key/owned-stop-fn refs, releaseStopSlotIfStillOurs,
+  // its channelId-keyed cleanup, and the bootstrap/snapshot/finalize handlers that drove them.
+  //
+  // All of it existed to arbitrate a single shared slot in usePageAgentDashboardStore between
+  // co-mounted writers — including a documented KNOWN GAP with no fix inside that design: the
+  // protocol had no HANDOFF, so a surface declined the slot (first writer wins) never re-claimed
+  // it once the claimant released, and could render a live own stream with NO STOP BUTTON until it
+  // remounted. That gap is fixed by construction now: every surface READS
+  // `useConversationActiveStream(agentId, conversationId)`, and a read cannot be declined.
 
   const { rejoinActiveStreams } = useChannelStreamSocket(channelId, {
     onUserMessage: (message, payload) => {
@@ -197,83 +119,36 @@ export function useAgentChannelMultiplayer({
         // navigated away and back. Replacing is right in both cases: same id means same message,
         // and `stream.parts` is the authoritative, complete version of it.
         const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
+        // OUR OWN stream only. `chat:stream_complete` carries no own-tab filter (unlike the
+        // user/edit/delete handlers, which all drop own-tab events), so this also fires for a
+        // stream from ANOTHER TAB — `isOwn` is browserSessionId-scoped, so a second tab of the
+        // same user counts, no collaborator needed. Appending that tab's finished reply into THIS
+        // chat's array is meaningless for the local bookkeeping this write exists for, and
+        // actively harmful: useOwnStreamMirror reads this array to find its own live stream, and
+        // a foreign message landing after ours makes it re-target onto a finished message — an
+        // isOwn phantom whose Stop aborts nothing, silently, while our generation keeps billing.
+        // Same gate AiChatView's stream_complete dual-write carries.
+        if (stream.isOwn) {
         setLocalMessagesRef.current((prev) => {
-          const i = prev.findIndex((m) => m.id === messageId);
-          return i === -1
-            ? [...prev, synthesized]
-            : prev.map((m, j) => (j === i ? synthesized : m));
-        });
+            const i = prev.findIndex((m) => m.id === messageId);
+            return i === -1
+              ? [...prev, synthesized]
+              : prev.map((m, j) => (j === i ? synthesized : m));
+          });
+        }
         return;
       }
       if (shouldReloadOnComountComplete(stream, completedConvId, agentConversationIdRef.current)) {
         loadConversationRef.current(completedConvId!);
       }
     },
-    onOwnStreamBootstrap: ({ messageId, conversationId }) => {
-      // Conversation-scoped, same reasoning as the remote-stream filter: a channel
-      // carries every conversation's streams, so an own stream in conversation X must
-      // not make conversation Y render as streaming with a Stop button that aborts X.
-      // Only reject a KNOWN mismatch — the DB bootstrap can land before the surface has
-      // resolved its conversation, and rejecting on a null id there would drop the very
-      // stream it is about to render.
-      const activeId = agentConversationIdRef.current;
-      if (activeId !== null && conversationId !== activeId) return;
-      const dashboard = usePageAgentDashboardStore.getState();
-      if (!channelId) return;
-      // Keyed by the STREAM's OWN conversation — not the surface's active one. That is what
-      // lets the bootstrap claim land before identity resolves without owning the wrong
-      // thing: the claim names its own stream, and a reader asking about a different
-      // conversation simply never sees it.
-      const claimKey: AgentStreamKey = { agentId: channelId, conversationId };
-      const claimK = agentStreamKey(claimKey);
-      if (claimK === null) return;
-      if (!shouldClaimAgentStopSlot(dashboard.agentStops[claimK] ?? null)) return;
-      const stopFn = () => {
-        abortActiveStreamByMessageId({ messageId });
-      };
-      ownedStopSlotRef.current = messageId;
-      ownedStopFnRef.current = stopFn;
-      ownedKeyRef.current = claimKey;
-      dashboard.setAgentStreaming(claimKey, true);
-      dashboard.setAgentStop(claimKey, stopFn);
-    },
-    // A claim is only ever released by onOwnStreamFinalize — and there are paths where
-    // that event never fires (the socket effect tears down without finalizing on a
-    // socket-instance swap; if the stream ended in that gap, nothing announces it). The
-    // flag would strand true: a Stop button over a dead stream, plus permanent SWR
-    // suppression via useStreamingRegistration. Bootstrap knows the truth, so reconcile.
-    onActiveStreamsSnapshot: (liveMessageIds) => {
-      const claimed = ownedStopSlotRef.current;
-      if (claimed === null || liveMessageIds.has(claimed)) return;
-      releaseStopSlotRef.current();
-    },
-    onOwnStreamFinalize: ({ messageId }) => {
-      // Only the stream that actually claimed the slot may release it — and only if the
-      // slot still holds our stop function (see releaseStopSlotIfStillOurs).
-      if (ownedStopSlotRef.current !== messageId) return;
-      releaseStopSlotRef.current();
-    },
   });
 
-  // Channel-id-keyed registration so co-mounted surfaces (dashboard + sidebar
-  // in agent mode on the same agent) write the same key and the editing store
-  // dedups same-key writes naturally. The flag ORs the surface's local
-  // streaming flag with the dashboard store's bootstrap-driven flag so a
-  // mid-stream refresh stays SWR-protected before useChat re-engages.
-  // Scoped to OUR agent — the dashboard slot is shared with a surface that may hold another.
-  const dashboardAgentStreaming = usePageAgentDashboardStore(
-    selectIsAgentStreaming({ agentId: channelId, conversationId: agentConversationId }),
-  );
-  useStreamingRegistration(
-    selectedAgent ? `ai-channel-${selectedAgent.id}` : 'ai-channel-no-agent',
-    Boolean(selectedAgent) && (isLocallyStreaming || dashboardAgentStreaming),
-    selectedAgent
-      ? {
-          conversationId: agentConversationId || undefined,
-          componentName: surfaceComponentName,
-        }
-      : undefined,
-  );
+  // NO editing-store registration here (PR 5A, leaf 5.7): the one derived, conversation-keyed
+  // registration for the whole app lives in GlobalChatProvider (useDerivedStreamingRegistrations).
+  // This site ORed the surface's local streaming flag with the dashboard store's bootstrap-driven
+  // flag precisely because neither alone covered a mid-stream refresh — the derived registration
+  // reads live store entries directly, so there is nothing left to OR.
 
   // Reconnect-refresh: re-fetch the active agent conversation when the socket
   // transitions back to connected. Skipped on the very first connect (already

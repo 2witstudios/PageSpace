@@ -25,14 +25,6 @@ import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegra
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 
-import { clearActiveStreamId } from '@/lib/ai/core/client';
-import {
-  abortActiveStream,
-  abortActiveStreamByMessageId,
-  reportAbortOutcome,
-  reportAbortOutcomes,
-} from '@/lib/ai/core/stream-abort-client';
-import { resolveActiveAssistantMessageId } from '@/lib/ai/streams/resolveActiveAssistantMessageId';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
 import { isCapacitorApp } from '@/hooks/useCapacitor';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -40,9 +32,10 @@ import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { useRenderedMessages } from '@/hooks/useRenderedMessages';
-import { useActiveStream, getActiveStreamById } from '@/hooks/useActiveStream';
+import { useActiveStream, useConversationActiveStream, getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
+import { useStopStream } from '@/hooks/useStopStream';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
@@ -64,7 +57,6 @@ import {
   conversationIdFrom,
   isResolving,
   useChatTransport,
-  useStreamingRegistration,
   useSendHandoff,
   useAskUserAnswering,
   buildChatConfig,
@@ -136,7 +128,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
   const inputRef = useRef<ChatInputRef>(null);
   const agentSettingsRef = useRef<PageAgentSettingsTabRef>(null);
-  const prevConversationIdRef = useRef<string | null>(null);
   // Always reflects the current page.id so async callbacks can detect stale pages
   const pageIdRef = useRef(page.id);
   useEffect(() => { pageIdRef.current = page.id; }, [page.id]);
@@ -172,7 +163,6 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Third arg is the socket channel this page's streams are broadcast on — see
   // useChatTransport / consumingChannels.
   const transport = useChatTransport(page.id, '/api/ai/chat', page.id);
-  const streamTrackingId = page.id;
 
   const handleChatError = useCallback((error: Error) => {
     console.error('AiChatView: Chat error:', error);
@@ -210,6 +200,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   //
   // Pass preloadedMessages to skip the network round-trip when the caller already
   // has fresh data (e.g. useConversations.loadConversation already fetched them).
+  // Read at call time by loadMessagesForConversation, which is defined above the point where
+  // `activeStream` exists. See its use below for why a DB load must not clobber the array.
+  const ownStreamLiveRef = useRef(false);
+
   const loadMessagesForConversation = useCallback(async (
     conversationId: string,
     preloadedMessages?: UIMessage[],
@@ -276,7 +270,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
       conversationMessagesActions.applyLoad(conversationId, generation, serverMessages);
       if (isActiveLoad()) {
-        setMessages(serverMessages);
+        // The CACHE always takes the load — that is what renders. The useChat array is a different
+        // thing: transport-local bookkeeping, and the array `useOwnStreamMirror` reads to find its
+        // own live stream. Writing DB history into it while our own stream is still writing there
+        // hands the mirror somebody else's message.
+        //
+        // Concretely, on a shared conversation: I send, a collaborator's shorter reply lands and
+        // persists first, then anything that reloads (their undo, my pull-to-refresh, the Retry
+        // button) replaces the array with history whose newest row is THEIR finished reply. The
+        // conversation has not changed, so the mirror reads that as the SDK renaming my stream,
+        // re-targets onto their messageId, and my live entry is gone: Stop then aborts a message
+        // the server has no stream for — user-scoped, so `not_found`, on which reportAbortOutcome
+        // is silent — while my generation keeps running its write tools and keeps billing.
+        //
+        // This is the same clobber guard GlobalAssistantView and SidebarChatTab already carry
+        // (#2061); AiChatView never had one. It is the transport write that is unsafe, not the
+        // load — so the load still happens, and the array re-syncs on the next load once the
+        // stream is over.
+        if (!ownStreamLiveRef.current) {
+          setMessages(serverMessages);
+        }
         setMessagesLoadError(null);
       }
     } catch (err) {
@@ -531,9 +544,17 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Facade only (container-agnostic consumer rule, PR 4 board): both `streams` and
   // `renderedMessages` below read exclusively through useActiveStream/useRenderedMessages
   // — never usePendingStreamsStore/useConversationMessagesStore directly.
-  const { streams: remoteStreams, ownStreamMessageId } = useActiveStream(page.id, currentConversationId);
+  const { streams: remoteStreams } = useActiveStream(page.id, currentConversationId);
+  // The stream identity for the conversation on screen — what Stop names (PR 5A).
+  const activeStream = useConversationActiveStream(page.id, currentConversationId);
+  // The array is unsafe to replace for the WHOLE local-send lifetime, not just while a store entry
+  // happens to exist. `activeStream` alone leaves two holes: the submitted window (no entry exists
+  // yet, by design) and any moment the store is temporarily wiped (clearPageStreams on a socket
+  // swap — an ordinary auth refresh). `isStreaming` is this chat's own status and covers both;
+  // `activeStream?.isOwn` still covers a bootstrapped stream, where our status is idle.
+  ownStreamLiveRef.current = isStreaming || activeStream?.isOwn === true;
 
-  const effectiveIsStreaming = isStreaming || ownStreamMessageId !== undefined;
+
 
   // The store-first render source: DB-confirmed + optimistic-sent + live-streaming
   // messages for the active conversation, merged at render (not at write) so no
@@ -549,14 +570,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // deliberately reads raw `messages` (useChat), not `plainMessages`: this is the
   // ONE place that must read the SDK's own live-growing content in order to copy it
   // OUT into the store — reading the store here would be circular.
-  const lastMessage = messages[messages.length - 1];
-  const ownAssistantMessage = useMemo(
-    () => (lastMessage && lastMessage.role === 'assistant' ? { id: lastMessage.id, parts: lastMessage.parts } : undefined),
-    [lastMessage],
-  );
   useOwnStreamMirror({
     status,
-    ownAssistantMessage,
+    ownMessages: messages,
     pageId: page.id,
     conversationId: currentConversationId ?? '',
     triggeredBy: { userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' },
@@ -591,7 +607,33 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
   const currentFindMsgId = findMatchIds[findIndex] ?? null;
-  const { wrapSend } = useSendHandoff(currentConversationId, status);
+  // End-condition is the STORE ENTRY appearing, not useChat's status (PR 5A, leaf 5.7).
+  const { wrapSend, pendingSendConversationId } = useSendHandoff(
+    currentConversationId,
+    status,
+    activeStream?.isOwn === true,
+  );
+
+  // Scoped to the conversation ON SCREEN, and own-only — same rule as GlobalAssistantView and
+  // SidebarChatTab (PR 5A).
+  //
+  // `isStreaming` (useChat's status) cannot answer this: the SDK's Chat id is constant per
+  // surface, so a mid-stream conversation switch leaves it true for the OLD conversation. It
+  // therefore lit a Stop button under the NEW one — and that Stop was worse than useless, because
+  // `activeStream` for the new conversation is undefined and its pendingSend has been cleared, so
+  // the decision resolves to 'none': it cancelled the old conversation's LOCAL fetch and issued no
+  // server abort at all, leaving that generation running its write tools and billing while this
+  // UI flipped back to Send.
+  //
+  // A REMOTE stream is excluded for the same reason it is in the other two surfaces: it is live
+  // content worth showing, but not something this tab can stop (the server's abort is user-scoped),
+  // and folding it in here would suppress the `remoteStreamingUser` chip that names who IS
+  // generating.
+  //
+  // `pendingSendConversationId` covers the submitted window, where no store entry exists yet.
+  const effectiveIsStreaming =
+    activeStream?.isOwn === true ||
+    (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
   const streamingAssistantText = useMemo(() => {
     if (!isStreaming) return null;
@@ -623,6 +665,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     lastAssistantMessageId,
     lastUserMessageId,
   } = useMessageActions({
+    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
+    isOwnStreamLive: isStreaming || activeStream?.isOwn === true,
     agentId: page.id,
     conversationId: currentConversationId,
     messages: plainMessages,
@@ -752,56 +796,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     void loadMessagesForConversation(currentConversationId);
   }, [currentConversationId, isPersisted, loadMessagesForConversation]);
 
-  // Register streaming state with editing store
-  useStreamingRegistration(
-    `ai-chat-${page.id}`,
-    isStreaming,
-    { pageId: page.id, componentName: 'AiChatView' }
-  );
+  // NO editing-store registration here (PR 5A, leaf 5.7): the one derived, conversation-keyed
+  // registration for the whole app lives in GlobalChatProvider (useDerivedStreamingRegistrations).
 
   const remoteStreamingUser = !effectiveIsStreaming
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
     : null;
 
-  const effectiveStop = useCallback(() => {
-    // Stop the local fetch immediately for instant UI feedback.
-    chatStop();
-    // Abort by the stable assistant messageId — reaches the server registry even
-    // when the conversation id shifted mid-stream, and tears down any multicast
-    // SSE join via the resulting chat:stream_complete broadcast.
-    const messageId = resolveActiveAssistantMessageId({
-      ownStreamMessageId,
-      // 'streaming', NOT the looser isStreaming (which includes 'submitted'). useChat sets
-      // status='submitted' BEFORE issuing the request and pushes the new assistant message only
-      // inside write(), which flips to 'streaming' in the same job. So during submitted the
-      // array's last assistant message is THE PREVIOUS TURN'S reply — and passing the loose flag
-      // made this resolve to it and `return` early, aborting a message that finished minutes ago
-      // and never reaching the chatId fallback below, which would actually have worked. The local
-      // fetch stopped, the button looked like it worked, and the server kept generating and
-      // billing. Reachable on any 2nd+ turn, in the 0.5-3s window where a user hits Stop after a
-      // typo — the single most likely moment for them to hit it.
-      isStreaming: status === 'streaming',
-      lastAssistantMessageId,
-    });
-    if (messageId) {
-      void abortActiveStreamByMessageId({ messageId }).then(reportAbortOutcome);
-      return;
-    }
-    // No assistant id yet (submitted, before the first chunk). The chatId map is EMPTY here, not
-    // stale: setActiveStreamId only runs once the response headers land, and a real send spends
-    // 0.5-3s before that. So pass the conversationId — the one name we hold from t=0 — and the
-    // abort falls back to it. Without that, Stop in this window was a guaranteed no-op: the fetch
-    // was cancelled, the button flipped back to Send, and the server (which deliberately survives
-    // client disconnect) kept generating, kept running write tools, and kept billing.
-    //
-    // Both keys are tried, and they may resolve to the same stream — so their outcomes are
-    // reported together, and warn at most once. See reportAbortOutcomes.
-    const conversationId = currentConversationIdRef.current;
-    void Promise.all([
-      streamTrackingId ? abortActiveStream({ chatId: streamTrackingId, conversationId }) : null,
-      streamTrackingId !== page.id ? abortActiveStream({ chatId: page.id, conversationId }) : null,
-    ]).then((outcomes) => reportAbortOutcomes(outcomes.filter((o) => o !== null)));
-  }, [chatStop, ownStreamMessageId, status, lastAssistantMessageId, streamTrackingId, page.id]);
+  // Stop (PR 5A) — the shared action, same as GlobalAssistantView and SidebarChatTab.
+  //
+  // Replaces this surface's own resolveActiveAssistantMessageId + two-key chatId-map fallback.
+  // `activeStream` already answers what resolveActiveAssistantMessageId reconstructed from
+  // useChat's array — and answers it for bootstrapped and remote streams too, which the array
+  // never knew about. The submitted window (no store entry) falls back to the send-time
+  // conversationId rather than the chatId map, which was always EMPTY in exactly that window:
+  // setActiveStreamId only ran once the response headers landed, 0.5-3s into a real send.
+  const effectiveStop = useStopStream({
+    activeStream,
+    pendingSendConversationId,
+    rawStop: chatStop,
+  });
 
   usePageSocketRoom(page.id);
   const { rejoinActiveStreams } = useChannelStreamSocket(page.id, {
@@ -901,10 +915,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         // recovered content never went through this tab's own useChat stream and would
         // otherwise leave regenerate()'s bookkeeping short of it.
         const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
-        setMessages((prev) => {
-          const i = prev.findIndex((m) => m.id === messageId);
-          return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
-        });
+        // The useChat dual-write is for OUR OWN stream only. `chat:stream_complete` carries no
+        // own-stream filter, so on a shared conversation this handler also sees a COLLABORATOR's
+        // stream completing in our conversation — and appending their message into our transport's
+        // local array is both meaningless for the regenerate() bookkeeping this write exists for,
+        // and actively harmful: useOwnStreamMirror reads that array to find its own live stream,
+        // and a foreign message landing after ours makes it re-target onto a finished message —
+        // an isOwn phantom whose Stop aborts nothing, silently, while our generation keeps
+        // billing. Their message still renders: the cache write below is unconditional.
+        if (stream.isOwn) {
+          setMessages((prev) => {
+            const i = prev.findIndex((m) => m.id === messageId);
+            return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
+          });
+        }
         if (currentConversationId) {
           conversationMessagesActions.applyConfirmedMessage(currentConversationId, synthesized);
         }
@@ -1241,20 +1265,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     enabled: resumeEnabled,
   });
 
-  // Clean up stream tracking when conversation changes or on unmount
-  // Uses prevConversationIdRef to track the previous conversation and clear its stream ID
-  useEffect(() => {
-    // Clear previous conversation's stream ID when switching conversations
-    if (prevConversationIdRef.current && prevConversationIdRef.current !== streamTrackingId) {
-      clearActiveStreamId({ chatId: prevConversationIdRef.current });
-    }
-    prevConversationIdRef.current = streamTrackingId;
-
-    // Clear current conversation's stream ID on unmount
-    return () => {
-      clearActiveStreamId({ chatId: streamTrackingId });
-    };
-  }, [streamTrackingId]);
+  // NO activeStreams cleanup (PR 5A, leaf 5.5.8): the client chatId->streamId map is deleted.
+  // Aborts name the stream by messageId (from the store) or by the send-time conversationId —
+  // neither needs a map, so neither needs a cleanup to keep one honest.
 
   // NOTE: deliberately NO unmarkChannelConsuming() on unmount. The consuming refcount
   // is owned by the transport's response-body wrapper — one release per POST, and
