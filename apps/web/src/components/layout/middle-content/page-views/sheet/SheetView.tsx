@@ -49,6 +49,14 @@ import {
   type CopyMode,
   type PasteMode,
 } from './core/clipboard';
+import {
+  applyCellWrite,
+  applyCellDelete,
+  initialEditValueForKey,
+  isPrintableKey,
+  addRow,
+  addColumn,
+} from './core/cell-ops';
 
 interface SheetViewProps {
   page: TreePage;
@@ -81,16 +89,6 @@ type ExternalSheetState =
       title?: string;
       error: string;
     };
-
-// Utility function to check if a key should trigger direct cell editing
-const isPrintableKey = (key: string): boolean => {
-  // Single printable characters (letters, numbers, symbols)
-  if (key.length === 1 && key.match(/[\x20-\x7E]/)) {
-    return true;
-  }
-  // Special cases that should start editing
-  return key === 'F2';
-};
 
 // Get the DOM rectangle for a specific cell
 const getCellRect = (row: number, column: number, gridElement: HTMLElement | null): DOMRect | null => {
@@ -678,16 +676,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if (!cellRect) return;
 
       const currentValue = sheet.cells[cellAddress] ?? '';
-      let initialValue = currentValue;
-
-      // Handle special keys
-      if (key === 'F2') {
-        // F2 starts editing with current value
-        initialValue = currentValue;
-      } else if (key && isPrintableKey(key) && key.length === 1) {
-        // Replace content with the typed character
-        initialValue = key;
-      }
+      const initialValue = initialEditValueForKey(currentValue, key);
 
       setEditingCell({ row, column });
       setEditingValue(initialValue);
@@ -709,21 +698,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if (!editingCell || isReadOnly) return;
 
       const cellAddress = encodeCellAddress(editingCell.row, editingCell.column);
-      const trimmed = value;
 
-      applySheetUpdate((previous) => {
-        const nextCells = { ...previous.cells };
-        if (trimmed.trim() === '') {
-          delete nextCells[cellAddress];
-        } else {
-          nextCells[cellAddress] = trimmed;
-        }
-        return {
-          ...previous,
-          version: previous.version + 1,
-          cells: nextCells,
-        };
-      });
+      applySheetUpdate((previous) => applyCellWrite(previous, cellAddress, value));
 
       // Exit editing mode
       setEditingCell(null);
@@ -732,7 +708,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       setInitialKey(undefined);
 
       // Update formula bar
-      setFormulaValue(trimmed);
+      setFormulaValue(value);
 
       // Announce completion to screen readers
       setAnnouncement(`Cell ${cellAddress} updated`);
@@ -775,21 +751,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         toast.error("You don't have permission to edit this sheet");
         return;
       }
-      const trimmed = value;
-      setFormulaValue(trimmed);
-      applySheetUpdate((previous) => {
-        const nextCells = { ...previous.cells };
-        if (trimmed.trim() === '') {
-          delete nextCells[currentAddress];
-        } else {
-          nextCells[currentAddress] = trimmed;
-        }
-        return {
-          ...previous,
-          version: previous.version + 1,
-          cells: nextCells,
-        };
-      });
+      setFormulaValue(value);
+      applySheetUpdate((previous) => applyCellWrite(previous, currentAddress, value));
     },
     [applySheetUpdate, currentAddress, isReadOnly]
   );
@@ -799,11 +762,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       toast.error("You don't have permission to edit this sheet");
       return;
     }
-    applySheetUpdate((previous) => ({
-      ...previous,
-      version: previous.version + 1,
-      rowCount: previous.rowCount + 1,
-    }));
+    applySheetUpdate(addRow);
   }, [applySheetUpdate, isReadOnly]);
 
   const handleAddColumn = useCallback(() => {
@@ -811,11 +770,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       toast.error("You don't have permission to edit this sheet");
       return;
     }
-    applySheetUpdate((previous) => ({
-      ...previous,
-      version: previous.version + 1,
-      columnCount: previous.columnCount + 1,
-    }));
+    applySheetUpdate(addColumn);
   }, [applySheetUpdate, isReadOnly]);
 
   // Undo handler
@@ -1217,15 +1172,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         event.preventDefault();
         const cellAddress = encodeCellAddress(row, column);
 
-        applySheetUpdate((previous) => {
-          const nextCells = { ...previous.cells };
-          delete nextCells[cellAddress];
-          return {
-            ...previous,
-            version: previous.version + 1,
-            cells: nextCells,
-          };
-        });
+        applySheetUpdate((previous) => applyCellDelete(previous, cellAddress));
 
         // Update formula bar to show empty value
         setFormulaValue('');
@@ -1926,15 +1873,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
                 onClick={() => {
                   if (!isReadOnly && mobileActionSheet.cell) {
                     const cellAddress = encodeCellAddress(mobileActionSheet.cell.row, mobileActionSheet.cell.column);
-                    applySheetUpdate((previous) => {
-                      const nextCells = { ...previous.cells };
-                      delete nextCells[cellAddress];
-                      return {
-                        ...previous,
-                        version: previous.version + 1,
-                        cells: nextCells,
-                      };
-                    });
+                    applySheetUpdate((previous) => applyCellDelete(previous, cellAddress));
                     setFormulaValue('');
                   }
                   closeMobileActionSheet();
