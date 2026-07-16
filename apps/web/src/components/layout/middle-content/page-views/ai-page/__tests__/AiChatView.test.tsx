@@ -5,7 +5,9 @@ import userEvent from '@testing-library/user-event';
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
-const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId, mockAbortByConversation } = vi.hoisted(() => ({
+const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId, mockAbortByConversation, mockUseSendHandoff } = vi.hoisted(() => ({
+  // Returns a real pendingSendConversationId so the submitted window is reachable from a surface.
+  mockUseSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()), pendingSendConversationId: null as string | null })),
   mockFetchWithAuth: vi.fn(),
   mockSetMessages: vi.fn(),
   mockSendMessage: vi.fn(),
@@ -203,8 +205,7 @@ vi.mock('@/lib/ai/shared', async (importOriginal) => ({
   }),
   useChatTransport: vi.fn(() => ({})),
   useStreamingRegistration: vi.fn(),
-  useChatStop: vi.fn(() => mockLocalStop),
-  useSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()) })),
+  useSendHandoff: mockUseSendHandoff,
   buildChatConfig: vi.fn((params: { id: string; transport: unknown; onError?: (error: Error) => void }) => ({
     id: params.id,
     transport: params.transport,
@@ -323,6 +324,14 @@ const waitForUnpersistedIdentity = (pageId: string) =>
     expect(id !== null && isCuid(id)).toBe(true);
   });
 
+/** The default: no send in flight. See the beforeEach blocks for why this must be re-applied. */
+const resetSendHandoffMock = () => {
+  mockUseSendHandoff.mockReturnValue({
+    wrapSend: vi.fn((cb: () => void) => cb()),
+    pendingSendConversationId: null,
+  });
+};
+
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
 const CONVERSATIONS_URL = `/api/ai/page-agents/${PAGE_ID}/conversations`;
@@ -397,6 +406,10 @@ describe('AiChatView — legacy `${pageId}-default` conversation (no migration)'
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears CALLS, not implementations — a `mockReturnValue` set inside one test
+    // would otherwise leak into every later test in this file (and a surface that thinks a send is
+    // permanently in flight renders a Stop-only composer forever). Restore the default.
+    resetSendHandoffMock();
     // Real, unmocked global store — reset between tests or byConversationId
     // only grows across this file's whole run (mirrors useConversationMessagesStore.test.ts).
     useConversationMessagesStore.setState({ byConversationId: {} });
@@ -480,6 +493,7 @@ describe('AiChatView — first send on a freshly minted conversation', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSendHandoffMock();
     useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
@@ -1863,6 +1877,61 @@ describe('AiChatView stop button for reconnected own streams', () => {
         actual: lastChatLayoutProps()?.isStreaming,
         expected: false,
       });
+    });
+  });
+
+  // THE submitted window, at a surface — this epic's headline fix, and until now covered only by
+  // unit tests on decideStopAction/useSendHandoff. A real send spends 0.5-3s here: useChat has
+  // flipped to 'submitted' but has not pushed an assistant message, so NO store entry exists and
+  // there is no messageId anywhere. This is the single most likely moment for a user to hit Stop
+  // (they just spotted a typo).
+  //
+  // Before PR 5A the abort named the activeStreams chatId map, which is EMPTY in exactly this
+  // window (it only fills once the response headers land) — so Stop cancelled the local fetch,
+  // flipped the button back to Send, and the server kept generating, kept running write tools, and
+  // kept billing. The send-time conversationId is the one name the client holds from t=0.
+  // THE submitted window, at a surface — this epic's headline fix, and until now covered only by
+  // unit tests on decideStopAction/useSendHandoff. A real send spends 0.5-3s here: useChat has
+  // flipped to 'submitted' but has not pushed an assistant message, so NO store entry exists and
+  // there is no messageId anywhere. This is the single most likely moment for a user to hit Stop —
+  // they just spotted a typo.
+  //
+  // Before PR 5A the abort named the activeStreams chatId map, which is EMPTY in exactly this
+  // window (it only fills once the response headers land) — so Stop cancelled the local fetch,
+  // flipped the button back to Send, and the server kept generating, kept running write tools, and
+  // kept billing. The conversationId captured AT SEND is the one name the client holds from t=0.
+  //
+  // `onStop` is invoked WITHOUT an async act() wrapper on purpose: it performs no state update
+  // (useStopStream is a useCallback that calls rawStop, awaits the abort, and reports), so there is
+  // nothing to flush — while act()'s exhaustive flush spins this file's mocked fetch/SWR harness
+  // hard enough to exhaust a 4GB heap. Verified: the assertions below hold, in 8 renders.
+  test('given a send is in its submitted window (no store entry yet), onStop aborts by the SEND-TIME conversationId', async () => {
+    setupHappyInit();
+    setStoreSelectors({ own: [], remote: [] });
+    mockUseSendHandoff.mockReturnValue({
+      wrapSend: vi.fn((cb: () => void) => cb()),
+      pendingSendConversationId: CONV_ID,
+    });
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      expect(lastChatLayoutProps()?.isStreaming).toBe(true);
+    });
+
+    await lastChatLayoutProps()?.onStop();
+
+    assert({
+      given: 'Stop pressed in the submitted window, before any assistant message exists',
+      should: 'abort by the conversation captured at send — the only name the client holds from t=0',
+      actual: mockAbortByConversation.mock.calls.map((args) => args[0]),
+      expected: [{ conversationId: CONV_ID }],
+    });
+    assert({
+      given: 'no messageId exists yet',
+      should: 'not attempt an abort by messageId',
+      actual: mockAbortByMessageId.mock.calls.length,
+      expected: 0,
     });
   });
 
