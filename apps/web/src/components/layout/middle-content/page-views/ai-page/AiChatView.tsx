@@ -200,6 +200,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   //
   // Pass preloadedMessages to skip the network round-trip when the caller already
   // has fresh data (e.g. useConversations.loadConversation already fetched them).
+  // Read at call time by loadMessagesForConversation, which is defined above the point where
+  // `activeStream` exists. See its use below for why a DB load must not clobber the array.
+  const ownStreamLiveRef = useRef(false);
+
   const loadMessagesForConversation = useCallback(async (
     conversationId: string,
     preloadedMessages?: UIMessage[],
@@ -266,7 +270,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
       conversationMessagesActions.applyLoad(conversationId, generation, serverMessages);
       if (isActiveLoad()) {
-        setMessages(serverMessages);
+        // The CACHE always takes the load — that is what renders. The useChat array is a different
+        // thing: transport-local bookkeeping, and the array `useOwnStreamMirror` reads to find its
+        // own live stream. Writing DB history into it while our own stream is still writing there
+        // hands the mirror somebody else's message.
+        //
+        // Concretely, on a shared conversation: I send, a collaborator's shorter reply lands and
+        // persists first, then anything that reloads (their undo, my pull-to-refresh, the Retry
+        // button) replaces the array with history whose newest row is THEIR finished reply. The
+        // conversation has not changed, so the mirror reads that as the SDK renaming my stream,
+        // re-targets onto their messageId, and my live entry is gone: Stop then aborts a message
+        // the server has no stream for — user-scoped, so `not_found`, on which reportAbortOutcome
+        // is silent — while my generation keeps running its write tools and keeps billing.
+        //
+        // This is the same clobber guard GlobalAssistantView and SidebarChatTab already carry
+        // (#2061); AiChatView never had one. It is the transport write that is unsafe, not the
+        // load — so the load still happens, and the array re-syncs on the next load once the
+        // stream is over.
+        if (!ownStreamLiveRef.current) {
+          setMessages(serverMessages);
+        }
         setMessagesLoadError(null);
       }
     } catch (err) {
@@ -524,6 +547,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const { streams: remoteStreams } = useActiveStream(page.id, currentConversationId);
   // The stream identity for the conversation on screen — what Stop names (PR 5A).
   const activeStream = useConversationActiveStream(page.id, currentConversationId);
+  ownStreamLiveRef.current = activeStream?.isOwn === true;
 
 
 

@@ -1927,6 +1927,48 @@ describe('AiChatView stop button for reconnected own streams', () => {
       actual: mockSetMessages.mock.calls.length,
       expected: 0,
     });
+    // ...and the positive half, or a mutation that skipped BOTH writes would pass: their content
+    // is real content in this conversation and must still render.
+    assert({
+      given: "a collaborator's stream completing in our conversation",
+      should: 'still commit their message to the conversation cache',
+      actual: (useConversationMessagesStore.getState().byConversationId[CONV_ID]?.messages ?? [])
+        .some((m) => m.id === 'their-msg'),
+      expected: true,
+    });
+  });
+
+  // A DB load must never clobber the useChat array while OUR OWN stream is writing into it.
+  //
+  // The cache is what renders, and it always takes the load. The useChat array is a different
+  // thing: transport-local bookkeeping, and the array useOwnStreamMirror reads to find its own
+  // live stream. On a shared conversation a collaborator's shorter reply can persist first, so
+  // anything that reloads (their undo, pull-to-refresh, the Retry button) replaces the array with
+  // history whose newest row is THEIR finished reply — same conversation, so the mirror reads it
+  // as the SDK renaming our stream, re-targets onto their id, and our live entry is gone. Stop
+  // then aborts a message the server has no stream for: user-scoped → not_found → silent, while
+  // our generation keeps running its write tools and billing.
+  //
+  // GlobalAssistantView and SidebarChatTab have carried this guard since #2061; AiChatView never
+  // had one.
+  test('given our own stream is live, a messages load should update the cache but NOT clobber the useChat array', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'my-live-stream', pageId: PAGE_ID, isOwn: true, conversationId: CONV_ID }],
+    });
+
+    render(<AiChatView page={page} />);
+
+    // Wait for the messages load to have actually run.
+    await waitFor(() => expect(wasGetCalled(MESSAGES_URL)).toBe(true));
+    await waitFor(() => expect(lastChatLayoutProps()).toBeDefined());
+
+    assert({
+      given: 'a DB load landing while our own stream is live',
+      should: 'leave the transport-local useChat array alone',
+      actual: mockSetMessages.mock.calls.length,
+      expected: 0,
+    });
   });
 
   // THE submitted window, at a surface — this epic's headline fix, and until now covered only by
