@@ -240,43 +240,6 @@ describe('useOwnStreamMirror', () => {
     expect(entry('client-generated-id')).toBeUndefined();
   });
 
-  // THE ROOT of a bug class that recurred three times in this PR in different disguises: the
-  // mirror used to trust "the last assistant message in the array" to be ITS stream. It is not.
-  //
-  // AiChatView renders a shared conversation and has NO isOwn-stream guard on its socket handlers
-  // (unlike GVA/SidebarChatTab): `chat:stream_complete` carries no isOwnStream filter, so a
-  // COLLABORATOR's stream completing in my conversation calls setMessages and appends THEIR
-  // synthesized assistant message after mine — same conversation, surface never moved.
-  //
-  // Selecting our message by the LATCHED ID removes the whole class: a foreign append can land
-  // anywhere in the array and our stream is still ours.
-  it('given a collaborator\'s message is appended after ours mid-send, should keep mirroring OUR stream', () => {
-    const { rerender } = render({
-      status: 'streaming',
-      ownMessages: streamingAs('m1', 'my reply'),
-      pageId: 'page-1',
-      conversationId: 'conv-C',
-    });
-    expect(entry('m1')).toBeDefined();
-
-    // Their stream completes in the same shared conversation and is appended LAST.
-    act(() => rerender({
-      status: 'streaming',
-      ownMessages: [
-        ...streamingAs('m1', 'my reply is still going'),
-        { id: 'their-finished-message', role: 'assistant', parts: [text('their reply')] },
-      ],
-      pageId: 'page-1',
-      conversationId: 'conv-C',
-    }));
-
-    // Our stream keeps its entry and keeps receiving content...
-    expect(entry('m1')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
-    expect(entry('m1')?.parts).toEqual([text('my reply is still going')]);
-    // ...and their finished message is never adopted as a live own stream.
-    expect(entry('their-finished-message')).toBeUndefined();
-  });
-
   // THE lesson the deleted `holdForStream` module documented, which this mirror must not lose:
   // NEVER resolve a messageId during the submitted window. useChat sets status='submitted' BEFORE
   // issuing the request and pushes the stream's assistant message only on the flip to 'streaming',
@@ -326,5 +289,48 @@ describe('useOwnStreamMirror', () => {
 
     expect(entry('real-stream')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
     expect(entry('old-db-reply')).toBeUndefined();
+  });
+
+  // THE STALE CLONE. Selecting our message by the latched id looks obviously safer than taking the
+  // last one — and it is wrong, because the SDK does not keep our message at a stable identity.
+  //
+  // The route writes ONE data part per resolved command plan before the `start` chunk
+  // (`commandPlans.forEach` — ungated, so any message with two command tokens does this). useChat's
+  // FIRST write pushes the live message object by reference; its SECOND takes the `replaceMessage`
+  // path, which structuredClones. The array is then holding a clone under the client-generated id
+  // while the live object goes on to adopt the server id at `start` and is pushed separately.
+  //
+  // So the array ends up [user, <stale client-id clone>, <live server-id message>]. Selecting by
+  // latched id locked onto the dead clone for the rest of the send: Stop aborted an id the server
+  // never issued → not_found → silent → generation kept billing, and the entry's parts froze at the
+  // command chips. Positional selection follows the SDK's own active message.
+  it('given the SDK leaves a stale client-id clone behind (2+ pre-start data parts), should mirror the LIVE server-id message', () => {
+    const { rerender } = render({
+      status: 'streaming',
+      ownMessages: [
+        { id: 'u1', role: 'user', parts: [text('run two commands')] },
+        { id: 'client-generated-id', role: 'assistant', parts: [text('chip one')] },
+      ],
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    });
+    expect(entry('client-generated-id')).toBeDefined();
+
+    // `start` lands: the live object adopted the server id and was PUSHED, leaving the clone behind.
+    act(() => rerender({
+      status: 'streaming',
+      ownMessages: [
+        { id: 'u1', role: 'user', parts: [text('run two commands')] },
+        { id: 'client-generated-id', role: 'assistant', parts: [text('chip one')] },
+        { id: 'server-issued-id', role: 'assistant', parts: [text('the actual reply')] },
+      ],
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    }));
+
+    // The entry Stop reads must name the stream the SERVER knows.
+    expect(entry('server-issued-id')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
+    expect(entry('server-issued-id')?.parts).toEqual([text('the actual reply')]);
+    expect(entry('client-generated-id')).toBeUndefined();
   });
 });

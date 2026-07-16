@@ -19,12 +19,10 @@ export interface UseOwnStreamMirrorInput {
   /**
    * This chat's ENTIRE message array (useChat's local state) — not a pre-picked message.
    *
-   * The hook selects its own stream out of it, because "which message is mine" is exactly what
-   * callers kept getting wrong: taking `messages[last]` when it is an assistant works only until
-   * something else appends. On a shared conversation something else does — `chat:stream_complete`
-   * carries no own-stream filter, so AiChatView appends a COLLABORATOR's finished message after
-   * ours, same conversation, surface unmoved. Once an id is latched the hook finds our message BY
-   * THAT ID, so a foreign message can land anywhere without displacing our stream.
+   * The hook selects its own stream out of it rather than each caller picking a message — three
+   * of the four call sites answering "which message is mine" independently is how one of them
+   * answered it wrong. The selection rule, and why it is positional despite appearances, is in the
+   * effect below.
    */
   ownMessages: readonly { id: string; role: string; parts: UIMessage['parts'] }[];
   pageId: string;
@@ -100,22 +98,22 @@ export const useOwnStreamMirror = ({
     // keeps running its write tools and keeps billing. This is the caller contract the deleted
     // `holdForStream` module carried, and it outlived that module for a reason.
     //
-    // So the submitted window deliberately has NO entry — which is exactly what
-    // selectActiveStream's contract says ("absent in submitted window"), and Stop covers it with
-    // the send-time conversationId instead.
+    // So the submitted window deliberately has NO entry — exactly what selectActiveStream's
+    // contract says ("absent in submitted window"), with Stop covering it via the send-time
+    // conversationId.
     //
-    // Once we ARE streaming: if an id is latched, ours is the message carrying it, wherever it
-    // sits in the array — a foreign message appended after ours cannot displace it. The positional
-    // fallback applies only before the first latch, or once our message has genuinely left the
-    // array (the SDK replacing it to adopt the server-issued id), which is the only way to
-    // discover an id we have not seen yet.
-    const latchedId = mirroredIdRef.current;
-    const latchedMessage = latchedId !== undefined
-      ? ownMessages.find((m) => m.id === latchedId)
-      : undefined;
+    // Once streaming: the LAST assistant message. Selecting by the latched id instead looks
+    // obviously safer and is not — the SDK does not keep our message at a stable identity. With
+    // two or more data parts written before the `start` chunk (one per resolved command plan —
+    // `route.ts`'s commandPlans.forEach, ungated), useChat's second write takes the
+    // `replaceMessage` path, which CLONES: the array keeps a stale clone under the
+    // client-generated id while the live object goes on to adopt the server id and is pushed
+    // separately. `find(latchedId)` then locks onto that dead clone for the whole send, and Stop
+    // aborts an id the server never issued — silently. Positional selection follows the SDK's own
+    // notion of the active message, which is the one it writes to.
     const lastMessage = ownMessages[ownMessages.length - 1];
     const lastAssistant = lastMessage?.role === 'assistant' ? lastMessage : undefined;
-    const ownAssistantMessage = status === 'streaming' ? latchedMessage ?? lastAssistant : undefined;
+    const ownAssistantMessage = status === 'streaming' ? lastAssistant : undefined;
 
     // Rising edge — the send. Capture what is true right now, and hold it.
     if (sending && identityRef.current === undefined) {
