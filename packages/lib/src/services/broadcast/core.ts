@@ -1,6 +1,24 @@
 import { maskEmail } from '../../audit/mask-email';
 
 /**
+ * Mask an address wherever it appears in text we did not write.
+ *
+ * Masking our own prefix and then appending a provider's message verbatim defeats the
+ * whole exercise: `email-service` throws `Too many emails sent to ada@example.com` — the
+ * single most likely failure on a broadcast — and that string lands in `errors`, which the
+ * durable path writes to the broadcast row's `lastError`/`stepResults`. So the address is
+ * redacted out of the message body too, not just the part we control.
+ *
+ * The address is escaped before it becomes a pattern (it can legitimately contain `.` and
+ * `+`), and the resulting regex is a literal alternation-free string — nothing to
+ * backtrack on.
+ */
+function redactRecipient(text: string, email: string): string {
+  const literal = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(literal, 'gi'), maskEmail(email));
+}
+
+/**
  * Pure core of an email broadcast: the decisions that must be right before a mass send.
  *
  * Everything here is decidable without a database or an email provider — who we refuse
@@ -35,7 +53,7 @@ export function isLocalhostUrl(url: string): boolean {
   }
 
   // A trailing dot is the explicit root; `localhost.` and `localhost` are the same host.
-  const host = hostname.toLowerCase().replace(/\.+$/, '');
+  const host = stripTrailing(hostname.toLowerCase(), '.');
 
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
   if (host === '0.0.0.0' || host === '::' || host === '[::]') return true;
@@ -60,11 +78,13 @@ export function isLocalhostUrl(url: string): boolean {
  * and the input here is operator-set environment config — exactly the "uncontrolled
  * input" a polynomial-ReDoS check flags. This does the same job in one linear pass.
  */
-function stripTrailingSlashes(url: string): string {
-  let end = url.length;
-  while (end > 0 && url[end - 1] === '/') end--;
-  return url.slice(0, end);
+function stripTrailing(value: string, char: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === char) end--;
+  return value.slice(0, end);
 }
+
+const stripTrailingSlashes = (url: string) => stripTrailing(url, '/');
 
 /**
  * Reduce an operator-set URL to something safe to concatenate a path onto, or null if it
@@ -352,7 +372,8 @@ export class LedgerWriteFailed extends Error {
     readonly cause: unknown,
     remediation?: string,
   ) {
-    const why = cause instanceof Error ? cause.message : String(cause);
+    const rawWhy = cause instanceof Error ? cause.message : String(cause);
+    const why = redactRecipient(rawWhy, entry.email);
     super(
       `sent to ${maskEmail(entry.email)} but failed to record it in the ledger: ${why}\n` +
         (remediation ??
@@ -534,8 +555,9 @@ export async function runBroadcast(input: {
         // Fail CLOSED: an unreadable claim means we cannot prove nobody else is mailing
         // this person, and the irreversible mistake is sending, not skipping.
         const msg = error instanceof Error ? error.message : String(error);
-        errors.push(`${maskEmail(email)}: could not claim recipient: ${msg}`);
-        input.logError(`  ✗ Could not claim ${maskEmail(email)}: ${msg}`);
+        const safe = redactRecipient(msg, email);
+        errors.push(`${maskEmail(email)}: could not claim recipient: ${safe}`);
+        input.logError(`  ✗ Could not claim ${maskEmail(email)}: ${safe}`);
         continue;
       }
 
@@ -557,8 +579,9 @@ export async function runBroadcast(input: {
         sent++;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        errors.push(`${maskEmail(email)}: ${msg}`);
-        input.logError(`  ✗ Render failed for ${maskEmail(email)}: ${msg}`);
+        const safe = redactRecipient(msg, email);
+        errors.push(`${maskEmail(email)}: ${safe}`);
+        input.logError(`  ✗ Render failed for ${maskEmail(email)}: ${safe}`);
       }
       continue;
     }
@@ -568,10 +591,15 @@ export async function runBroadcast(input: {
     } catch (error) {
       // Retryable: nothing was written, so a re-run will try this address again.
       const msg = error instanceof Error ? error.message : String(error);
-      errors.push(`${maskEmail(email)}: ${msg}`);
-      input.logError(`  ✗ Send failed for ${maskEmail(email)}: ${msg}`);
+      // The provider quotes the address back at us on the likeliest error of all (the
+      // per-recipient rate limit), so redact it out of their message as well as ours.
+      const safe = redactRecipient(msg, email);
+      errors.push(`${maskEmail(email)}: ${safe}`);
+      input.logError(`  ✗ Send failed for ${maskEmail(email)}: ${safe}`);
       if (input.onFailure) {
-        await input.onFailure({ userId: user.id, email, error: msg });
+        // `error` is persisted to broadcast_recipients.errorMessage, so it is redacted
+        // too; the recipient is already identified by the row's own userId.
+        await input.onFailure({ userId: user.id, email, error: safe });
       }
       continue;
     }

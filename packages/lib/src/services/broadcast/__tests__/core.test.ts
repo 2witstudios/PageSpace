@@ -188,6 +188,45 @@ describe('runBroadcast — recipient privacy', () => {
     expect(out.errors).toEqual(['ba***@example.com: boom']);
   });
 
+  it("should redact the address out of the PROVIDER's message, not just our own prefix", async () => {
+    // The likeliest failure on a broadcast is the per-recipient rate limit, and
+    // email-service throws it as `Too many emails sent to <address>` — verbatim. Masking
+    // our prefix and appending their message unchanged would leak the address anyway,
+    // into logs AND into the broadcast row's lastError/stepResults.
+    const { result, h } = run([user('u1', 'ada@example.com')], {
+      sendOne: vi.fn(async () => {
+        throw new Error('Too many emails sent to ada@example.com. Please try again later.');
+      }),
+    });
+
+    const out = await result;
+
+    expect([...out.errors, ...h.errorLogs].join('\n')).not.toContain('ada@example.com');
+    expect(out.errors).toEqual([
+      'ad***@example.com: Too many emails sent to ad***@example.com. Please try again later.',
+    ]);
+  });
+
+  it('should redact the address before handing a failure to the durable recorder', async () => {
+    // `error` is persisted to broadcast_recipients.errorMessage; the row already knows who
+    // it is by userId, so the address adds nothing and outlives the erasure meant to
+    // remove it.
+    const failures: Array<{ error: string }> = [];
+    const { result } = run([user('u1', 'ada@example.com')], {
+      sendOne: vi.fn(async () => {
+        throw new Error('Too many emails sent to ada@example.com.');
+      }),
+      onFailure: async (f) => {
+        failures.push({ error: f.error });
+      },
+    });
+
+    await result;
+
+    expect(failures[0].error).not.toContain('ada@example.com');
+    expect(failures[0].error).toContain('ad***@example.com');
+  });
+
   it('the fatal ledger error should mask the address it reports, and keep it on the entry', async () => {
     // The message is logged; the machine-readable `entry` is what an operator acts on.
     const { result } = run([user('u1', 'ada@example.com')], {
