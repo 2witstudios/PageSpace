@@ -1,59 +1,61 @@
 import { describe, it, expect } from 'vitest';
-import { planOwnStreamMirror, isOwnStreamMirrorActive } from '../planOwnStreamMirror';
+import { planOwnStreamMirror, isOwnStreamSending } from '../planOwnStreamMirror';
 
-const BASE = {
+const IDENTITY = {
   pageId: 'page-1',
   conversationId: 'conv-1',
   triggeredBy: { userId: 'u1', displayName: 'Me' },
   startedAt: '2024-01-01T00:00:00.000Z',
+};
+
+const BASE = {
+  streamIdentity: IDENTITY,
   seq: 1,
 };
 
 const text = (t: string) => ({ type: 'text' as const, text: t });
 
 describe('planOwnStreamMirror', () => {
-  it('given no active stream and nothing mirrored, should plan no ops', () => {
-    const ops = planOwnStreamMirror({
+  it('given nothing sending and nothing mirrored, should plan no ops', () => {
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'ready',
       ownAssistantMessage: undefined,
       mirroredMessageId: undefined,
-    });
-    expect(ops).toEqual([]);
+    })).toEqual([]);
   });
 
-  it('given the stream has ended but a stale mirror entry remains, should plan removeStream', () => {
-    const ops = planOwnStreamMirror({
+  // The local stream genuinely ended (the SDK reached ready/error). This entry is this tab's
+  // mirror of its OWN local fetch, so it ends with it.
+  it('given the local stream has ended but a mirror entry remains, should plan removeStream', () => {
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'ready',
-      ownAssistantMessage: undefined,
-      mirroredMessageId: 'a1',
-    });
-    expect(ops).toEqual([{ type: 'removeStream', messageId: 'a1' }]);
+      ownAssistantMessage: { id: 'm1', parts: [text('done')] },
+      mirroredMessageId: 'm1',
+    })).toEqual([{ type: 'removeStream', messageId: 'm1' }]);
   });
 
-  it('given an error status with a stale mirror entry, should also plan removeStream', () => {
-    const ops = planOwnStreamMirror({
+  it('given an error status with a mirror entry, should also plan removeStream', () => {
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'error',
       ownAssistantMessage: undefined,
-      mirroredMessageId: 'a1',
-    });
-    expect(ops).toEqual([{ type: 'removeStream', messageId: 'a1' }]);
+      mirroredMessageId: 'm1',
+    })).toEqual([{ type: 'removeStream', messageId: 'm1' }]);
   });
 
   it('given a fresh stream start (streaming, nothing mirrored yet), should plan addStream then setStreamParts', () => {
-    const ops = planOwnStreamMirror({
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'streaming',
-      ownAssistantMessage: { id: 'a1', parts: [text('hi')] },
+      ownAssistantMessage: { id: 'm1', parts: [text('He')] },
       mirroredMessageId: undefined,
-    });
-    expect(ops).toEqual([
+    })).toEqual([
       {
         type: 'addStream',
         stream: {
-          messageId: 'a1',
+          messageId: 'm1',
           pageId: 'page-1',
           conversationId: 'conv-1',
           triggeredBy: { userId: 'u1', displayName: 'Me' },
@@ -61,81 +63,129 @@ describe('planOwnStreamMirror', () => {
           startedAt: '2024-01-01T00:00:00.000Z',
         },
       },
-      { type: 'setStreamParts', messageId: 'a1', parts: [text('hi')], seq: 1 },
+      { type: 'setStreamParts', messageId: 'm1', parts: [text('He')], seq: 1 },
     ]);
   });
 
-  it('given a submitted status (before the first chunk lands) with the assistant message already present, should treat it as active', () => {
+  // THE identity fix (PR 5A). `streamIdentity` is LATCHED by the caller at the rising edge of the
+  // send — while the surface is still on the conversation being sent to — and passed in here.
+  // This function uses it verbatim and never a "live" value, because the surface moves
+  // independently of the stream: useChat's id is constant, so switching conversation mid-flight
+  // does NOT abort the POST. Recording the stream under wherever the surface has since wandered
+  // is the epic's named past bug — Stop then names the wrong conversation (or nothing) while the
+  // real generation keeps running its write tools and keeps billing.
+  it('given the caller latched the send-time identity, should record the stream under THAT identity', () => {
     const ops = planOwnStreamMirror({
-      ...BASE,
-      status: 'submitted',
-      ownAssistantMessage: { id: 'a1', parts: [] },
+      seq: 1,
+      streamIdentity: { ...IDENTITY, conversationId: 'conv-sent-from', pageId: 'page-sent-from' },
+      status: 'streaming',
+      ownAssistantMessage: { id: 'm1', parts: [text('hi')] },
       mirroredMessageId: undefined,
     });
-    expect(ops[0]).toMatchObject({ type: 'addStream' });
+    expect(ops[0]).toEqual({
+      type: 'addStream',
+      stream: {
+        messageId: 'm1',
+        pageId: 'page-sent-from',
+        conversationId: 'conv-sent-from',
+        triggeredBy: { userId: 'u1', displayName: 'Me' },
+        isOwn: true,
+        startedAt: '2024-01-01T00:00:00.000Z',
+      },
+    });
   });
 
   it('given the same message already mirrored, should plan only setStreamParts', () => {
-    const ops = planOwnStreamMirror({
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'streaming',
-      ownAssistantMessage: { id: 'a1', parts: [text('hi there')] },
-      mirroredMessageId: 'a1',
-    });
-    expect(ops).toEqual([{ type: 'setStreamParts', messageId: 'a1', parts: [text('hi there')], seq: 1 }]);
+      ownAssistantMessage: { id: 'm1', parts: [text('Hello')] },
+      mirroredMessageId: 'm1',
+    })).toEqual([
+      { type: 'setStreamParts', messageId: 'm1', parts: [text('Hello')], seq: 1 },
+    ]);
   });
 
-  it('given the mirrored id differs from the current assistant message id, should remove the stale entry before adding the new one', () => {
-    const ops = planOwnStreamMirror({
+  // THE array-replacement fix (PR 5A). Something OUTSIDE this chat can replace useChat's messages
+  // while our stream is still in flight — the surfaces' load-on-select effects call
+  // setMessages(<another conversation's history>), whose last entry is typically an assistant
+  // message. Re-targeting the mirror onto it would (a) removeStream OUR live stream, killing its
+  // Stop button and its SWR protection while the server keeps generating and billing, and
+  // (b) addStream a PHANTOM live stream on a message that finished long ago, whose Stop aborts
+  // nothing and reports not_found — on which reportAbortOutcome is deliberately silent.
+  //
+  // Within one send the mirrored id is latched. A different id means the array moved under us,
+  // not that a new stream started: a new stream needs a new send, which passes through 'ready'
+  // and clears the latch.
+  it('given the assistant message is replaced mid-send by another conversation history, should ignore it and keep the latched stream', () => {
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'streaming',
-      ownAssistantMessage: { id: 'a2', parts: [text('new')] },
-      mirroredMessageId: 'a1',
-    });
-    expect(ops[0]).toEqual({ type: 'removeStream', messageId: 'a1' });
-    expect(ops[1]).toMatchObject({ type: 'addStream', stream: { messageId: 'a2' } });
-    expect(ops[2]).toEqual({ type: 'setStreamParts', messageId: 'a2', parts: [text('new')], seq: 1 });
+      ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old reply')] },
+      mirroredMessageId: 'm1',
+    })).toEqual([]);
+  });
+
+  // THE vanishing-message fix (PR 5A). GlobalAssistantView clears agent messages when the user
+  // deselects the agent (setAgentMessages([])) and never calls agentStop() on that path, so the
+  // agent chat stays 'streaming' with an empty array. Treating "no assistant message on screen"
+  // as "the stream ended" removed a live stream's entry — and a local stop would not have stopped
+  // the server anyway. Liveness is the STATUS's answer, not the array's.
+  it('given the message array is emptied mid-send, should keep the latched stream rather than removing it', () => {
+    expect(planOwnStreamMirror({
+      ...BASE,
+      status: 'streaming',
+      ownAssistantMessage: undefined,
+      mirroredMessageId: 'm1',
+    })).toEqual([]);
   });
 
   it('given submitted status with no assistant message pushed yet and nothing mirrored, should plan no ops', () => {
-    const ops = planOwnStreamMirror({
+    expect(planOwnStreamMirror({
       ...BASE,
       status: 'submitted',
       ownAssistantMessage: undefined,
       mirroredMessageId: undefined,
+    })).toEqual([]);
+  });
+
+  it('given a submitted status with the assistant message already present, should mirror it', () => {
+    const ops = planOwnStreamMirror({
+      ...BASE,
+      status: 'submitted',
+      ownAssistantMessage: { id: 'm1', parts: [text('He')] },
+      mirroredMessageId: undefined,
     });
-    expect(ops).toEqual([]);
+    expect(ops.map((o) => o.type)).toEqual(['addStream', 'setStreamParts']);
   });
 
   it('given identical input called twice, should produce deep-equal ops both times (idempotent)', () => {
     const input = {
       ...BASE,
       status: 'streaming' as const,
-      ownAssistantMessage: { id: 'a1', parts: [text('hi')] },
-      mirroredMessageId: 'a1',
+      ownAssistantMessage: { id: 'm1', parts: [text('Hi')] },
+      mirroredMessageId: undefined,
     };
     expect(planOwnStreamMirror(input)).toEqual(planOwnStreamMirror(input));
   });
 });
 
-describe('isOwnStreamMirrorActive', () => {
-  it('given status streaming with an assistant message, should be active', () => {
-    expect(isOwnStreamMirrorActive('streaming', { id: 'a1', parts: [] })).toBe(true);
+describe('isOwnStreamSending', () => {
+  // Liveness is the status's answer alone. It deliberately does NOT consult the message array:
+  // consulting it is what let an external setMessages() call look like "the stream ended".
+  it('given status streaming, should be sending', () => {
+    expect(isOwnStreamSending('streaming')).toBe(true);
   });
 
-  it('given status submitted with an assistant message, should be active', () => {
-    expect(isOwnStreamMirrorActive('submitted', { id: 'a1', parts: [] })).toBe(true);
+  it('given status submitted (the request is out, no chunk yet), should be sending', () => {
+    expect(isOwnStreamSending('submitted')).toBe(true);
   });
 
-  it('given status streaming with no assistant message yet, should NOT be active', () => {
-    expect(isOwnStreamMirrorActive('streaming', undefined)).toBe(false);
+  it('given status ready, should NOT be sending — this is what ends a send and clears the latch', () => {
+    expect(isOwnStreamSending('ready')).toBe(false);
   });
 
-  it('given status ready even with an assistant message still present (useChat retains completed history), should NOT be active — this is the exact case that caused the mirroredId staleness bug', () => {
-    expect(isOwnStreamMirrorActive('ready', { id: 'a1', parts: [text('done')] })).toBe(false);
-  });
-
-  it('given status error with an assistant message present, should NOT be active', () => {
-    expect(isOwnStreamMirrorActive('error', { id: 'a1', parts: [] })).toBe(false);
+  it('given status error, should NOT be sending', () => {
+    expect(isOwnStreamSending('error')).toBe(false);
   });
 });

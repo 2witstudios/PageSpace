@@ -3,7 +3,8 @@ import type { UIMessage } from 'ai';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 import {
   planOwnStreamMirror,
-  isOwnStreamMirrorActive,
+  isOwnStreamSending,
+  type OwnStreamIdentity,
   type OwnStreamMirrorStatus,
 } from '@/lib/ai/streams/planOwnStreamMirror';
 
@@ -23,12 +24,27 @@ export interface UseOwnStreamMirrorInput {
 }
 
 /**
- * Applies `planOwnStreamMirror`'s ops to `usePendingStreamsStore` on every
- * relevant change. All the decision logic lives in the pure, exhaustively
- * tested `planOwnStreamMirror` — this hook only tracks the per-tab mutable
- * bookkeeping (the currently-mirrored id, when the stream started) that a
- * pure function cannot own itself, and applies the resulting ops via the
- * store's own idempotent actions.
+ * Applies `planOwnStreamMirror`'s ops to `usePendingStreamsStore` on every relevant change. All the
+ * decision logic lives in the pure, exhaustively tested `planOwnStreamMirror` — this hook owns only
+ * the per-tab mutable bookkeeping a pure function cannot: WHEN the send started, and what was true
+ * at that instant.
+ *
+ * MOUNT ONE PER useChat INSTANCE, never one for a "mode-selected" pair. A mirror is bound to a
+ * chat; pointing it at whichever chat is on screen makes a mode switch silently repoint it, and it
+ * then releases the stream it had been mirroring.
+ *
+ * WHY THE IDENTITY IS LATCHED HERE.
+ *
+ * `pageId`/`conversationId` arrive as LIVE props — they follow the surface. The stream does not:
+ * useChat's id is constant, so switching conversation mid-flight does not abort the POST. Passing
+ * them straight through recorded a stream under wherever the surface had wandered to by the time
+ * the first chunk landed (a real 0.5-3s window). The store entry is what every Stop button reads
+ * post-PR-5A, so that mis-naming means Stop aborts the wrong conversation or nothing at all while
+ * the generation keeps running its write tools and keeps billing.
+ *
+ * So: latch on the RISING EDGE of the send — the moment status becomes submitted/streaming, which
+ * is the moment the user hit Send and the surface is still, by construction, on the conversation
+ * being sent to. Hold it for the send; release on the falling edge.
  */
 export const useOwnStreamMirror = ({
   status,
@@ -38,24 +54,40 @@ export const useOwnStreamMirror = ({
   triggeredBy,
 }: UseOwnStreamMirrorInput): void => {
   const mirroredIdRef = useRef<string | undefined>(undefined);
-  const startedAtRef = useRef<string | undefined>(undefined);
+  const identityRef = useRef<OwnStreamIdentity | undefined>(undefined);
+
+  // Read inside the effect without making the effect depend on them: they are captured only on the
+  // rising edge, so a later change must NOT re-run anything — that is the point of latching.
+  const liveRef = useRef({ pageId, conversationId, triggeredBy });
+  liveRef.current = { pageId, conversationId, triggeredBy };
 
   useEffect(() => {
-    if (ownAssistantMessage && mirroredIdRef.current !== ownAssistantMessage.id) {
-      startedAtRef.current = new Date().toISOString();
+    const sending = isOwnStreamSending(status);
+
+    // Rising edge — the send. Capture what is true right now, and hold it.
+    if (sending && identityRef.current === undefined) {
+      const live = liveRef.current;
+      identityRef.current = {
+        pageId: live.pageId,
+        conversationId: live.conversationId,
+        triggeredBy: live.triggeredBy,
+        startedAt: new Date().toISOString(),
+      };
     }
 
+    const identity = identityRef.current;
+    // Not sending and never latched: nothing to write, nothing to release.
+    if (identity === undefined) return;
+
     const store = usePendingStreamsStore.getState();
-    // seq = max(wall-clock millis, storedLastSeq + 1): wall-clock alone can
-    // repeat within the same millisecond (two mirror ticks for fast local
-    // streams, or a tick right at a remount), and applySetStreamParts drops
-    // any write with seq <= lastSeq — a repeat would silently lose that
-    // chunk. Reading the store's current lastSeq as a floor and requiring
-    // strictly-greater guarantees monotonic progress regardless of clock
-    // resolution, while still being immune to this hook remounting mid-
-    // stream (unlike a local incrementing ref, which would restart at 0/1
-    // and have every write from the new instance rejected as stale against
-    // the previous instance's already-higher lastSeq).
+    // seq = max(wall-clock millis, storedLastSeq + 1): wall-clock alone can repeat within the same
+    // millisecond (two mirror ticks for fast local streams, or a tick right at a remount), and
+    // applySetStreamParts drops any write with seq <= lastSeq — a repeat would silently lose that
+    // chunk. Reading the store's current lastSeq as a floor and requiring strictly-greater
+    // guarantees monotonic progress regardless of clock resolution, while still being immune to
+    // this hook remounting mid-stream (unlike a local incrementing ref, which would restart at 0/1
+    // and have every write from the new instance rejected as stale against the previous instance's
+    // already-higher lastSeq).
     const relevantId = ownAssistantMessage?.id ?? mirroredIdRef.current;
     const storedLastSeq = (relevantId && store.streams.get(relevantId)?.lastSeq) || 0;
     const seq = Math.max(Date.now(), storedLastSeq + 1);
@@ -64,10 +96,7 @@ export const useOwnStreamMirror = ({
       status,
       ownAssistantMessage,
       mirroredMessageId: mirroredIdRef.current,
-      pageId,
-      conversationId,
-      triggeredBy,
-      startedAt: startedAtRef.current ?? new Date().toISOString(),
+      streamIdentity: identity,
       seq,
     });
 
@@ -77,28 +106,28 @@ export const useOwnStreamMirror = ({
       else store.removeStream(op.messageId);
     }
 
-    // NOT `ownAssistantMessage?.id` unconditionally: useChat typically
-    // retains the completed assistant message in local history after a
-    // stream finishes, so that id would still be defined here even though
-    // nothing is mirrored anymore (planOwnStreamMirror just emitted
-    // removeStream for it, or emitted nothing because it was already
-    // cleared). Using the same isOwnStreamMirrorActive definition
-    // planOwnStreamMirror itself uses is what makes this the source of
-    // truth for "did we actually mirror this id" rather than "does a
-    // message with this id still exist somewhere in caller state" — a
-    // continuation/regenerate reusing that same completed id (a real SDK
-    // behavior pinned in sdkServerIdAdoption.test.ts) would otherwise look
-    // like "already mirrored" against a store entry that had already been
-    // removed, and silently never get re-mirrored.
-    mirroredIdRef.current = isOwnStreamMirrorActive(status, ownAssistantMessage) ? ownAssistantMessage?.id : undefined;
-    // Deliberately depend on ownAssistantMessage's id/parts and triggeredBy's
-    // fields rather than the objects themselves: a caller building these from
-    // useChat's live message will construct a fresh `{id, parts}` wrapper on
-    // every render even when content hasn't changed, and useChat only
-    // replaces `parts` with a new array reference on a genuine content update
-    // (ai/dist/index.mjs's ReactChatState.replaceMessage clones on write) —
-    // depending on the object itself would re-run this effect (and bump seq,
-    // triggering a store write) on every unrelated parent re-render.
+    if (!sending) {
+      // Falling edge — the send is over. Release both latches so the NEXT send starts clean: a
+      // continuation reusing this same server-issued id (a real SDK behavior, pinned in
+      // sdkServerIdAdoption.test.ts) must be able to re-mirror rather than look "already mirrored"
+      // against an entry that has just been removed.
+      mirroredIdRef.current = undefined;
+      identityRef.current = undefined;
+      return;
+    }
+
+    // Latch the first assistant id of this send, and only the first: a later DIFFERENT id means an
+    // external setMessages() replaced the array, not that a new stream began (see
+    // planOwnStreamMirror). Holding the first is what keeps the live stream's entry intact.
+    if (mirroredIdRef.current === undefined && ownAssistantMessage !== undefined) {
+      mirroredIdRef.current = ownAssistantMessage.id;
+    }
+    // Deliberately depends on ownAssistantMessage's id/parts and NOT on pageId/conversationId/
+    // triggeredBy: those are latched on the rising edge above and read through liveRef, so a
+    // surface that moves mid-stream must not re-run this. Depending on the message OBJECT is also
+    // avoided — a caller building `{id, parts}` from useChat's live message constructs a fresh
+    // wrapper every render, while useChat only replaces `parts` with a new array reference on a
+    // genuine content update (ai/dist/index.mjs's ReactChatState.replaceMessage clones on write).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, ownAssistantMessage?.id, ownAssistantMessage?.parts, pageId, conversationId, triggeredBy.userId, triggeredBy.displayName]);
+  }, [status, ownAssistantMessage?.id, ownAssistantMessage?.parts]);
 };

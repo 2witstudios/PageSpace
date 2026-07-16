@@ -44,10 +44,12 @@ export interface ActiveStream {
  * by latching the stream's conversation/messageId into refs on the first streaming render and
  * holding them.
  *
- * The store entry already IS that latch: `{messageId, conversationId, isOwn}` is written once
- * at stream_start (by the socket for bootstrapped/remote streams, by useOwnStreamMirror for
- * this tab's own local POST) and never follows the surface. Reading it back by conversation
- * gives the stream's identity, not the surface's — which is exactly what Stop must name.
+ * The store entry already IS that latch: `{messageId, conversationId, isOwn}` is written once at
+ * stream_start — by the socket for bootstrapped/remote streams, and by `useOwnStreamMirror` for
+ * this tab's own local POST, which latches the identity on the RISING EDGE of the send (see that
+ * hook: reading the surface's live conversation there recorded a stream under wherever the user
+ * had since navigated). Neither follows the surface afterwards. Reading it back by conversation
+ * therefore gives the STREAM's identity, not the surface's — which is exactly what Stop must name.
  *
  * SCOPE. By page AND conversation, following PR 4's `useActiveStream` facade rather than the
  * board's `selectActiveStream(conversationId)` shorthand: a channel carries every conversation
