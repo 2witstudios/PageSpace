@@ -747,7 +747,7 @@ const GlobalAssistantView: React.FC = () => {
         // it raw would hand useOwnStreamMirror an array whose newest row is somebody else's
         // finished message (see mergeServerMessagesWithOwnStream). Merging applies the undo AND
         // keeps our own live bubble last, which is what the mirror needs.
-        const merged = mergeServerMessagesWithOwnStream(data.messages, currentConversationId);
+        const merged = mergeServerMessagesWithOwnStream(data.messages, currentConversationId, currentMessagesRef.current);
         if (selectedAgent) {
           setAgentMessages(merged);
           setAgentStoreMessages(merged);
@@ -804,7 +804,7 @@ const GlobalAssistantView: React.FC = () => {
       // then hand the mirror an array whose newest row is the PREVIOUS turn's reply. Merging asks
       // the question at the write instead, and keeps our own live bubble last.
       const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-      const merged = mergeServerMessagesWithOwnStream(serverMessages, conversationId);
+      const merged = mergeServerMessagesWithOwnStream(serverMessages, conversationId, currentMessagesRef.current);
       if (agentId) {
         setAgentMessages(merged);
         setAgentStoreMessages(merged);
