@@ -180,6 +180,20 @@ export function PasskeyLoginButton({
 
       if (await handleDesktopAuthResponse(verifyData)) return;
 
+      // Web: now that we send a deviceId, the route mints/regenerates a web
+      // device token and returns it here. Persist it (rotating any prior token)
+      // so silent session recovery via /api/auth/device/refresh keeps working —
+      // otherwise a passkey login would leave a now-stale token in localStorage.
+      if (verifyData.deviceToken) {
+        try {
+          localStorage.setItem('deviceToken', verifyData.deviceToken);
+        } catch (storageError) {
+          // Storage may fail in private browsing or when quota is exceeded;
+          // log but never block sign-in.
+          console.warn('Failed to store device token:', storageError);
+        }
+      }
+
       // When the request carried an invite, the server already encoded the
       // correct landing path (drive on success, /dashboard?inviteError=… on
       // race). Honour the server URL for invite flows; otherwise fall back to

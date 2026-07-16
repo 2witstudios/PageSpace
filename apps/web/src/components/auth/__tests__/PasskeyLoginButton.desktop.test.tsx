@@ -240,4 +240,29 @@ describe('PasskeyLoginButton — web path (regression guard)', () => {
     expect(body.deviceId).toBe('web-device-id');
     expect(body.deviceName).toBe('Web Browser');
   });
+
+  it('persists the device token the route returns so silent recovery keeps working', async () => {
+    vi.mocked(startAuthentication).mockResolvedValue({ id: 'assertion' } as never);
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ options: { challenge: 'ch', allowCredentials: [{ id: 'cred' }] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          redirectUrl: '/dashboard',
+          csrfToken: 'c',
+          deviceToken: 'ps_dev_web_rotated',
+        }),
+      }) as unknown as typeof fetch;
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem');
+
+    render(<PasskeyLoginButton csrfToken="csrf-token-value" onSuccess={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /sign in with passkey/i }));
+
+    expect(setItemSpy).toHaveBeenCalledWith('deviceToken', 'ps_dev_web_rotated');
+    setItemSpy.mockRestore();
+  });
 });
