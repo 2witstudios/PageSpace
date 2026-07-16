@@ -96,7 +96,12 @@ function dbNow() {
 
 /** The instant a lease older than this has expired, on the database's clock. */
 function leaseFloorSql(leaseMs: number) {
-  return sql`(now() at time zone 'utc') - make_interval(secs => ${leaseMs / 1000})`;
+  return sql`${dbNow()} - make_interval(secs => ${leaseMs / 1000})`;
+}
+
+/** A lease so far out that no retry will outlive it — see parkClaimAgainstRetry. */
+function foreverFromNowSql() {
+  return sql`${dbNow()} + interval '100 years'`;
 }
 
 /**
@@ -188,7 +193,7 @@ async function parkClaimAgainstRetry(broadcastId: string, userId: string): Promi
     await db
       .update(broadcastRecipients)
       .set({
-        claimedAt: sql`(now() at time zone 'utc') + interval '100 years'`,
+        claimedAt: foreverFromNowSql(),
         errorMessage: 'sent but not recorded — parked so no retry re-sends; see LedgerWriteFailed',
         updatedAt: new Date(),
       })
