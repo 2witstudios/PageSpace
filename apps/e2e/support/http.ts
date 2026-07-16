@@ -58,6 +58,36 @@ export async function mockCallCount(request: APIRequestContext): Promise<number>
 }
 
 /**
+ * Pace the mock's slow-stream mode. `chunks` × `intervalMs` is the live window a spec gets
+ * to assert against. Reset to defaults by `resetMock`.
+ */
+export async function setStreamConfig(
+  request: APIRequestContext,
+  config: { chunks?: number; intervalMs?: number },
+): Promise<void> {
+  await request.post(`${MOCK_BASE}/__stream-config`, {
+    headers: { 'content-type': 'application/json' },
+    data: JSON.stringify(config),
+  });
+}
+
+/** How many mock streams are open right now, and how many are held awaiting release. */
+export async function mockStreams(
+  request: APIRequestContext,
+): Promise<{ open: number; held: number }> {
+  const res = await request.get(`${MOCK_BASE}/__streams`);
+  return (await res.json()) as { open: number; held: number };
+}
+
+/**
+ * End the deterministic live window: flush + terminate every held stream. Pair with
+ * `expect.poll(() => mockStreams(request))` to know the stream was live first.
+ */
+export async function releaseStreams(request: APIRequestContext): Promise<void> {
+  await request.post(`${MOCK_BASE}/__release-stream`);
+}
+
+/**
  * Override the authoritative `/generation` cost the reconcile cron will read. With `id`
  * set, only that generation's cost changes; without it, the default for all unknown ids.
  * `totalCost` is in US dollars (OpenRouter's `data.total_cost` shape).

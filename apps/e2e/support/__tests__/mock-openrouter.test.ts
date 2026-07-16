@@ -42,6 +42,9 @@ interface ParsedChunk {
   usage?: { cost?: number };
 }
 
+/** `Array.prototype.at` is past this tsconfig's lib target. */
+const last = <T>(arr: T[]): T | undefined => arr[arr.length - 1];
+
 /** Split an SSE body into its parsed `data:` payloads, dropping the [DONE] sentinel. */
 function parseSse(body: string): { chunks: ParsedChunk[]; done: boolean } {
   const datas = body
@@ -92,7 +95,7 @@ describe('mock OpenRouter — default (instant) path is untouched', () => {
 
     const contents = chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? []);
     expect(contents).toEqual(['pong']);
-    expect(chunks.at(-1)?.usage?.cost).toBe(MOCK_COST_DOLLARS);
+    expect(last(chunks)?.usage?.cost).toBe(MOCK_COST_DOLLARS);
     expect(done).toBe(true);
   });
 
@@ -126,9 +129,9 @@ describe('mock OpenRouter — slow-stream mode', () => {
     expect(contents.length).toBe(4);
     expect(contents.length).toBeGreaterThan(2);
     // Separated in time: the pacing is real, not a synchronous burst.
-    expect(contentAt.at(-1)! - contentAt[0]).toBeGreaterThanOrEqual(60);
-    expect(chunks.at(-1)?.usage?.cost).toBe(MOCK_COST_DOLLARS);
-    expect(chunks.at(-1)?.choices?.[0]?.finish_reason).toBe('stop');
+    expect(last(contentAt)! - contentAt[0]).toBeGreaterThanOrEqual(60);
+    expect(last(chunks)?.usage?.cost).toBe(MOCK_COST_DOLLARS);
+    expect(last(chunks)?.choices?.[0]?.finish_reason).toBe('stop');
     expect(done).toBe(true);
   });
 
@@ -166,7 +169,7 @@ describe('mock OpenRouter — held-stream mode', () => {
       rest += new TextDecoder().decode(value);
     }
     const { chunks, done } = parseSse(rest);
-    expect(chunks.at(-1)?.usage?.cost).toBe(MOCK_COST_DOLLARS);
+    expect(last(chunks)?.usage?.cost).toBe(MOCK_COST_DOLLARS);
     expect(done).toBe(true);
     expect(await readStreams()).toEqual({ open: 0, held: 0 });
   });

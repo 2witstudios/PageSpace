@@ -16,7 +16,17 @@ import http from 'http';
  * process from this server — can read it:
  *   GET  /__health  → { ok: true }
  *   GET  /__calls   → { count, requests: [{ model, stream, messages }] }
- *   POST /__reset   → zeroes the recorder
+ *   POST /__reset   → zeroes the recorder, releases open streams, restores stream config
+ *
+ * Streaming is controllable per-request via the MODEL NAME, so no app change is needed to
+ * drive it — the seeded user's `currentAiModel` flows through as `body.model`:
+ *   e2e/slow-stream → N content chunks paced on a timer (a live window to assert against)
+ *   e2e/held-stream → first chunk, then held open until POST /__release-stream
+ *   any other model → the original instant behavior, untouched (metering specs 09-14)
+ * with:
+ *   GET  /__streams        → { open, held } so a spec can wait for a stream to be live
+ *   POST /__stream-config  → { chunks?, intervalMs? } overrides slow-mode pacing
+ *   POST /__release-stream → flush + terminate every held stream
  *
  * It also serves OpenRouter's authoritative cost-reconcile endpoint:
  *   GET  /generation?id=<id> → { data: { total_cost: <number> } }
@@ -35,10 +45,28 @@ export const MOCK_GENERATION_COST_DOLLARS = 0.05;
 export const MOCK_PROMPT_TOKENS = 12;
 export const MOCK_COMPLETION_TOKENS = 4;
 
+/** Model name that makes the mock pace its chunks on a timer (a ~10s live window by default). */
+export const E2E_SLOW_STREAM_MODEL = 'e2e/slow-stream';
+/** Model name that makes the mock hold the stream open until POST /__release-stream. */
+export const E2E_HELD_STREAM_MODEL = 'e2e/held-stream';
+
+/** Default slow-mode pacing: 40 × 250ms ≈ a 10s window. Overridable via POST /__stream-config. */
+export const DEFAULT_STREAM_CHUNKS = 40;
+export const DEFAULT_STREAM_INTERVAL_MS = 250;
+
 interface RecordedRequest {
   model: string | undefined;
   stream: boolean;
   messageCount: number;
+}
+
+/** A chat-completions stream the mock is still writing to (slow-paced or held). */
+interface ActiveStream {
+  held: boolean;
+  /** Flush any remaining content, then the usage chunk + [DONE], and end the response. */
+  finish: () => void;
+  /** Abandon the stream without writing (client went away). */
+  drop: () => void;
 }
 
 export function createMockOpenRouter() {
@@ -48,6 +76,13 @@ export function createMockOpenRouter() {
   // default so a plain reconcile run still produces a deterministic drift.
   const generationCosts = new Map<string, number>();
   let defaultGenerationCost = MOCK_GENERATION_COST_DOLLARS;
+
+  // Streams currently open (slow-paced or held). Tracked so /__streams can report a live
+  // window, /__release-stream can flush the held ones, and /__reset + server close can
+  // guarantee nothing leaks across specs or pins the event loop.
+  const activeStreams = new Set<ActiveStream>();
+  let streamChunks = DEFAULT_STREAM_CHUNKS;
+  let streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
 
   const completionUsage = {
     prompt_tokens: MOCK_PROMPT_TOKENS,
@@ -72,6 +107,112 @@ export function createMockOpenRouter() {
     res.end(payload);
   }
 
+  const chunkBase = (id: string, model: string) => ({
+    id,
+    provider: 'e2e',
+    model,
+    object: 'chat.completion.chunk',
+    created: 0,
+  });
+
+  const contentChunkOf = (id: string, model: string, content: string) => ({
+    ...chunkBase(id, model),
+    choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }],
+  });
+
+  /**
+   * Final chunk carries finish_reason + usage (with cost) — OpenRouter's shape when
+   * usage:{include:true} is set on the request. Keeping this identical across all modes is
+   * what keeps provider parsing and billing settlement real for the paced streams too.
+   */
+  const finalChunkOf = (id: string, model: string) => ({
+    ...chunkBase(id, model),
+    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    usage: completionUsage,
+  });
+
+  /** Every write goes through here: a destroyed socket (client aborted) must never throw. */
+  function writeSse(res: http.ServerResponse, payload: unknown): void {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  }
+
+  /**
+   * Open a controllable SSE stream and register it in `activeStreams`.
+   *
+   * slow mode paces `streamChunks` content chunks `streamIntervalMs` apart; held mode
+   * writes the first chunk and then waits for a release. Both terminate through the same
+   * `finish()` so the wire shape (usage chunk + [DONE]) is mode-independent.
+   */
+  function startControlledStream(
+    res: http.ServerResponse,
+    id: string,
+    model: string,
+    mode: 'slow' | 'held',
+  ): void {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+
+    const total = Math.max(1, streamChunks);
+    let sent = 0;
+    let timer: NodeJS.Timeout | undefined;
+
+    const sendNext = (): void => {
+      writeSse(res, contentChunkOf(id, model, `chunk-${sent} `));
+      sent += 1;
+    };
+
+    const cleanup = (): void => {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+      activeStreams.delete(entry);
+    };
+
+    const finish = (): void => {
+      cleanup();
+      // Flush whatever the pacing/hold never got to, so a released stream always lands on
+      // the same terminal shape as a naturally-completed one.
+      while (sent < total) sendNext();
+      writeSse(res, finalChunkOf(id, model));
+      if (!res.writableEnded && !res.destroyed) {
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }
+    };
+
+    const entry: ActiveStream = { held: mode === 'held', finish, drop: cleanup };
+    activeStreams.add(entry);
+
+    // The client hung up (user hit Stop, or the app aborted upstream): stop the timer and
+    // stop writing. Nothing here may throw — 7.4's Stop spec depends on it. This is the
+    // connection-level close, not `req`'s (which fires as soon as the request body has
+    // been consumed, long before the client goes away). Idempotent with finish()'s
+    // cleanup, so a naturally-completed stream lands here harmlessly too.
+    res.on('close', cleanup);
+
+    // First chunk immediately in both modes: the UI gets a live bubble to assert against
+    // without waiting out an interval.
+    sendNext();
+
+    if (mode === 'held') return; // ...and there it stays, until POST /__release-stream.
+
+    if (sent >= total) return finish();
+    timer = setInterval(() => {
+      sendNext();
+      if (sent >= total) finish();
+    }, Math.max(1, streamIntervalMs));
+  }
+
+  /** Terminate every open stream (or only the held ones) through the normal finish path. */
+  function finishStreams(only: 'held' | 'all'): number {
+    const targets = [...activeStreams].filter((s) => only === 'all' || s.held);
+    for (const s of targets) s.finish();
+    return targets.length;
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = req.url ?? '';
     const method = req.method ?? 'GET';
@@ -86,7 +227,38 @@ export function createMockOpenRouter() {
       requests.length = 0;
       generationCosts.clear();
       defaultGenerationCost = MOCK_GENERATION_COST_DOLLARS;
+      // A held stream must never leak into the next spec: terminate every open stream and
+      // restore default pacing.
+      finishStreams('all');
+      streamChunks = DEFAULT_STREAM_CHUNKS;
+      streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
       return writeJson(res, 200, { ok: true });
+    }
+    // Live-stream introspection: lets a spec expect.poll() until the app's request has
+    // actually reached the model, instead of racing the UI with a sleep.
+    if (method === 'GET' && url.startsWith('/__streams')) {
+      const open = activeStreams.size;
+      const held = [...activeStreams].filter((s) => s.held).length;
+      return writeJson(res, 200, { open, held });
+    }
+    // Override slow-mode pacing. Body: { chunks?, intervalMs? }. Reset by /__reset.
+    if (method === 'POST' && url.startsWith('/__stream-config')) {
+      const raw = await readBody(req);
+      let body: { chunks?: number; intervalMs?: number } = {};
+      try {
+        body = JSON.parse(raw) as typeof body;
+      } catch {
+        /* ignore — keep current config */
+      }
+      if (typeof body.chunks === 'number' && body.chunks > 0) streamChunks = body.chunks;
+      if (typeof body.intervalMs === 'number' && body.intervalMs >= 0) {
+        streamIntervalMs = body.intervalMs;
+      }
+      return writeJson(res, 200, { ok: true, chunks: streamChunks, intervalMs: streamIntervalMs });
+    }
+    // Flush + terminate every held stream, ending the deterministic live window.
+    if (method === 'POST' && url.startsWith('/__release-stream')) {
+      return writeJson(res, 200, { ok: true, released: finishStreams('held') });
     }
     // Override the authoritative /generation cost. Body: { id?, totalCost } — with `id`
     // sets that generation's cost, without it sets the default for all unknown ids.
@@ -131,34 +303,17 @@ export function createMockOpenRouter() {
       const model = body.model ?? 'e2e/stub';
 
       if (stream) {
+        // Model-name-triggered pacing. Any other model keeps the original instant path.
+        if (model === E2E_SLOW_STREAM_MODEL) return startControlledStream(res, id, model, 'slow');
+        if (model === E2E_HELD_STREAM_MODEL) return startControlledStream(res, id, model, 'held');
+
         res.writeHead(200, {
           'content-type': 'text/event-stream',
           'cache-control': 'no-cache',
           connection: 'keep-alive',
         });
-        const contentChunk = {
-          id,
-          provider: 'e2e',
-          model,
-          object: 'chat.completion.chunk',
-          created: 0,
-          choices: [
-            { index: 0, delta: { role: 'assistant', content: 'pong' }, finish_reason: null },
-          ],
-        };
-        // Final chunk carries finish_reason + usage (with cost) — OpenRouter's shape
-        // when usage:{include:true} is set on the request.
-        const finalChunk = {
-          id,
-          provider: 'e2e',
-          model,
-          object: 'chat.completion.chunk',
-          created: 0,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-          usage: completionUsage,
-        };
-        res.write(`data: ${JSON.stringify(contentChunk)}\n\n`);
-        res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
+        res.write(`data: ${JSON.stringify(contentChunkOf(id, model, 'pong'))}\n\n`);
+        res.write(`data: ${JSON.stringify(finalChunkOf(id, model))}\n\n`);
         res.write('data: [DONE]\n\n');
         return res.end();
       }
@@ -182,6 +337,14 @@ export function createMockOpenRouter() {
 
     writeJson(res, 404, { error: `mock-openrouter: unhandled ${method} ${url}` });
   });
+
+  // server.close() waits for open connections and would hang forever on a held stream —
+  // and a live chunk timer keeps the event loop pinned. Terminate both on close.
+  const close = server.close.bind(server);
+  server.close = (cb?: (err?: Error) => void) => {
+    finishStreams('all');
+    return close(cb);
+  };
 
   return server;
 }
