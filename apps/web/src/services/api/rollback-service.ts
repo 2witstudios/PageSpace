@@ -39,6 +39,7 @@ import {
   ROLLBACK_ALLOW_MISSING_TARGET,
   AGENT_CONFIG_ROLLBACK_FIELDS,
 } from './rollback/operations';
+import { deepEqual } from './rollback/deep-equal';
 
 function getChangeDescription(activity: ActivityLogForRollback): string {
   const metadata = activity.metadata as { targetUserEmail?: string } | null;
@@ -138,44 +139,6 @@ function getEffectiveOperation(
  */
 function isRollingBackRollback(activity: ActivityLogForRollback): boolean {
   return activity.operation === 'rollback';
-}
-
-// Helper for deep value comparison that handles dates, nulls, and primitives correctly
-function deepEqual(a: unknown, b: unknown): boolean {
-  // Handle null/undefined
-  if (a === b) return true;
-  if (a == null || b == null) return a === b;
-
-  // Handle Date objects
-  if (a instanceof Date && b instanceof Date) {
-    return a.getTime() === b.getTime();
-  }
-  if (a instanceof Date || b instanceof Date) {
-    const aStr = a instanceof Date ? a.toISOString() : String(a);
-    const bStr = b instanceof Date ? b.toISOString() : String(b);
-    return aStr === bStr;
-  }
-
-  // Handle arrays
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) return false;
-    return a.every((item, i) => deepEqual(item, b[i]));
-  }
-  if (Array.isArray(a) || Array.isArray(b)) return false;
-
-  // Handle objects
-  if (typeof a === 'object' && typeof b === 'object') {
-    const keysA = Object.keys(a as object);
-    const keysB = Object.keys(b as object);
-    if (keysA.length !== keysB.length) return false;
-    return keysA.every(key =>
-      Object.prototype.hasOwnProperty.call(b, key) &&
-      deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
-    );
-  }
-
-  // Handle primitives
-  return a === b;
 }
 
 function getConflictFields(
