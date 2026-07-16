@@ -70,17 +70,14 @@ jobs:
           # sharding the run into sequential batches (see apps/web/package.json's
           # test:coverage script and apps/web/scripts/test-coverage-sharded.mjs,
           # which owns the shard count) is the actual fix — see that script's
-          # header comment and apps/web/vitest.config.ts's git history for the
-          # full trail of single-invocation fork-count/heap-ceiling tuning
-          # attempts that either crashed, OOM-killed the job, or destabilized the
-          # runner itself under sustained memory pressure (raising the ceiling
-          # alone, without sharding, caused that destabilization). With sharding
-          # now cutting each shard's file share far smaller (10 shards, see that
-          # script), raising this back to 10240MB is safe headroom rather than a
-          # repeat of that failure mode — 10240MB was already proven to fail
-          # cleanly at default concurrency in the single-invocation era, just
-          # insufficient alone before sharding existed.
-          NODE_OPTIONS: --max-old-space-size=10240
+          # header comment for the full trail. 8192MB is the ONE ceiling value
+          # that has never caused runner-level instability across every
+          # single-invocation and sharded configuration tried (raising it to
+          # 10240MB+ repeatedly triggered a genuine system-level OOM-kill /
+          # "runner has received a shutdown signal", regardless of concurrency
+          # structure) — kept deliberately at this value; shard count is the only
+          # lever that should move from here.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's

@@ -29,17 +29,18 @@ const { createCoverageMap } = istanbulLibCoverage;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-// 3 shards (~310 files each), then 6 (~155 each) — both still had exactly one
-// shard hit the heap ceiling, just a different shard each time. Both failed
-// cleanly (script caught it, exited, no hang, no runner-level instability —
-// unlike every single-invocation attempt before sharding existed), so this is
-// purely a calibration problem, not a structural one. Moving more decisively
-// (10 shards, ~93 files each) rather than incrementing by small steps, paired
-// with raising the ceiling back to 10240MB (see ci.yml) — a value already
-// proven to fail cleanly/safely at default concurrency without destabilizing
-// the runner, just insufficient alone before sharding existed. Combined with
-// a much smaller per-shard file count, it should have real headroom now.
-const SHARD_COUNT = 10;
+// 3 shards (~310 files), then 6 (~155), both had exactly one shard hit the
+// heap ceiling — but always a CLEAN failure (script catches it, exits, no
+// hang, no runner-level instability). 10 shards paired with raising the
+// ceiling to 10240MB was worse: a genuine system-level OOM-kill ("runner has
+// received a shutdown signal", exit 137) after 6 shards completed — the exact
+// same instability pattern seen in the single-invocation era every time the
+// ceiling was pushed above 8192MB, regardless of concurrency structure. That
+// makes 8192MB the one ceiling value that has NEVER caused runner-level
+// instability across every configuration tried (see ci.yml's git history);
+// only shard count actually needed to move. Pushed to 20 (~46 files each)
+// rather than incrementing again, while reverting the ceiling to 8192MB.
+const SHARD_COUNT = 20;
 const METRICS = ['lines', 'branches', 'functions', 'statements'];
 const coverageDir = resolve(root, 'coverage');
 
