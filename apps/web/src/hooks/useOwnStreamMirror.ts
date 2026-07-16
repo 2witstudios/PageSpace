@@ -61,6 +61,20 @@ export const useOwnStreamMirror = ({
   const liveRef = useRef({ pageId, conversationId, triggeredBy });
   liveRef.current = { pageId, conversationId, triggeredBy };
 
+  // SUBSCRIBE to our own entry's presence, rather than reading it once per useChat tick.
+  //
+  // The store is shared and a third party can wipe our live entry — `useChannelStreamSocket`'s
+  // cleanup runs `clearPageStreams(channelId)` whenever its effect re-runs, and both a token
+  // refresh and a reconnect after a network blip mint a new socket. Driving the repair off useChat
+  // ticks meant the wipe went unrepaired until the NEXT part arrived, which during a tool call is
+  // tens of seconds of no parts at all: `activeStream` undefined and the pendingSend long handed
+  // off, so the UI showed Send while the generation ran its write tools and billed, and Stop
+  // resolved to 'none'. The wipe itself has to drive the re-assert.
+  const mirroredEntryExists = usePendingStreamsStore((state) => {
+    const id = mirroredIdRef.current;
+    return id !== undefined && state.streams.has(id);
+  });
+
   useEffect(() => {
     const sending = isOwnStreamSending(status);
 
@@ -96,13 +110,24 @@ export const useOwnStreamMirror = ({
       status,
       ownAssistantMessage,
       mirroredMessageId: mirroredIdRef.current,
-      // The store is shared, and someone else can wipe our entry mid-send (clearPageStreams on a
-      // socket swap — an ordinary auth:refreshed does this). Tell the planner, so it can re-assert.
-      mirroredEntryExists:
-        mirroredIdRef.current !== undefined && store.streams.has(mirroredIdRef.current),
+      mirroredEntryExists,
       streamIdentity: identity,
       seq,
     });
+
+    // Latch the first assistant id of this send BEFORE applying the ops, and only the first: a
+    // later DIFFERENT id means an external setMessages() replaced the array, not that a new stream
+    // began (see planOwnStreamMirror). Holding the first is what keeps the live stream's entry
+    // intact.
+    //
+    // BEFORE, because the ops below write to the store, and the `mirroredEntryExists` subscription
+    // above reads this ref when the store notifies. Setting it afterwards meant the notification
+    // from our own addStream was evaluated against a still-undefined ref, resolved to `false`
+    // (unchanged), and never re-rendered — so the subscription latched at `false` for the whole
+    // send and a later wipe could not re-run this effect. Ordering IS the subscription here.
+    if (sending && mirroredIdRef.current === undefined && ownAssistantMessage !== undefined) {
+      mirroredIdRef.current = ownAssistantMessage.id;
+    }
 
     for (const op of ops) {
       if (op.type === 'addStream') store.addStream(op.stream);
@@ -120,12 +145,6 @@ export const useOwnStreamMirror = ({
       return;
     }
 
-    // Latch the first assistant id of this send, and only the first: a later DIFFERENT id means an
-    // external setMessages() replaced the array, not that a new stream began (see
-    // planOwnStreamMirror). Holding the first is what keeps the live stream's entry intact.
-    if (mirroredIdRef.current === undefined && ownAssistantMessage !== undefined) {
-      mirroredIdRef.current = ownAssistantMessage.id;
-    }
     // Deliberately depends on ownAssistantMessage's id/parts and NOT on pageId/conversationId/
     // triggeredBy: those are latched on the rising edge above and read through liveRef, so a
     // surface that moves mid-stream must not re-run this. Depending on the message OBJECT is also
@@ -133,5 +152,5 @@ export const useOwnStreamMirror = ({
     // wrapper every render, while useChat only replaces `parts` with a new array reference on a
     // genuine content update (ai/dist/index.mjs's ReactChatState.replaceMessage clones on write).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, ownAssistantMessage?.id, ownAssistantMessage?.parts]);
+  }, [status, ownAssistantMessage?.id, ownAssistantMessage?.parts, mirroredEntryExists]);
 };

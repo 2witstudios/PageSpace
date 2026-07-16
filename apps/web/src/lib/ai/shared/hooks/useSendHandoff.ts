@@ -54,13 +54,23 @@ export function useSendHandoff(
   // Effect-based handoff: clear pendingSend when the stream entry takes over OR on error
   useEffect(() => {
     if (!conversationId) return;
-    // The send has resolved: the stream took over (happy path — the registration now derives from
-    // the store entry), or it failed. Either way the submitted window is over.
+    // Hold the name ONLY while the request is genuinely in flight with nothing to hand off to:
+    // status submitted/streaming AND no store entry yet. That is the window it exists to cover.
     //
-    // NOT guarded on `hasPendingSendRef`: the safety timeout may already have released the
-    // editing-store hold on a slow send, and the Stop name must still be cleared when that send
-    // finally resolves — otherwise it would outlive its stream.
-    if (!isStreamLive && status !== 'error') return;
+    // Everything else is a resolution and must clear it:
+    //   - `isStreamLive` — the stream took over; the registration now derives from the store entry.
+    //   - `'error'`      — the request failed.
+    //   - `'ready'`      — the request SETTLED. Crucially this covers Stop-during-the-submitted-
+    //     window: useChat.stop() aborts the fetch and settles to 'ready', never 'error', and no
+    //     assistant message was ever pushed so `isStreamLive` never becomes true. Excluding 'ready'
+    //     leaked the name forever — and because all three surfaces OR it into their streaming flag,
+    //     and the composer renders ONLY a Stop button while that is true, the conversation wedged
+    //     unusable until unmount. 'ready' cannot arrive while the POST is still in flight, so
+    //     treating it as a resolution is safe.
+    //
+    // NOT guarded on `hasPendingSendRef`: the 15s safety timeout may already have released the
+    // editing-store hold on a slow send, and the name must still clear when that send resolves.
+    if (!isStreamLive && (status === 'submitted' || status === 'streaming')) return;
 
     if (hasPendingSendRef.current) {
       hasPendingSendRef.current = false;

@@ -191,4 +191,37 @@ describe('useSendHandoff', () => {
     // ...but the send is still in flight, so Stop must still be able to name it.
     expect(result.current.pendingSendConversationId).toBe('conv-1');
   });
+
+  // THE round-2 regression (round-3 review). `useChat.stop()` aborts the fetch and settles the
+  // status to 'ready' — NOT 'error'. Clearing only on `isStreamLive || status === 'error'` meant
+  // the single most likely path in this hook's own docblock — "a user who has spotted a typo hits
+  // Stop" during the 0.5-3s TTFB — left `pendingSendConversationId` set FOREVER: no assistant
+  // message was ever pushed, so no store entry ever existed and `isStreamLive` never became true.
+  //
+  // All three surfaces OR that value into their streaming flag, and the composer renders ONLY a
+  // Stop button while it is true (there is no Send button to fall back to) with the textarea
+  // disabled — so the conversation was wedged, unusable, until unmount. The same path covers a
+  // response that produces zero parts.
+  //
+  // 'ready' IS a resolution: it means useChat's request settled, aborted or not, and it cannot
+  // arrive while the local POST is still in flight. Only 'submitted'/'streaming' hold the name.
+  it('given the user stops during the submitted window (status settles to ready, no stream ever started), should clear the pending send rather than wedge the composer', async () => {
+    const { result, rerender } = renderHook(
+      ({ status }: { status: 'ready' | 'submitted' }) => useSendHandoff('conv-1', status, false),
+      { initialProps: { status: 'ready' } as { status: 'ready' | 'submitted' } },
+    );
+
+    await act(async () => {
+      result.current.wrapSend(() => Promise.resolve('ok'));
+      await Promise.resolve();
+    });
+    await act(async () => { rerender({ status: 'submitted' }); });
+    expect(result.current.pendingSendConversationId).toBe('conv-1');
+
+    // User hits Stop. useChat aborts the fetch and settles to 'ready' — never 'error'.
+    await act(async () => { rerender({ status: 'ready' }); });
+
+    expect(result.current.pendingSendConversationId).toBeNull();
+    expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(false);
+  });
 });
