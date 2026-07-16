@@ -29,14 +29,17 @@ const { createCoverageMap } = istanbulLibCoverage;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-// 3 shards (~310 files each) wasn't quite enough headroom — the first real CI
-// run still hit the heap ceiling on one shard (script correctly caught it and
-// exited cleanly, no hang or system-level kill, unlike every single-invocation
-// attempt before sharding). Doubled to 6 (~155 files each) rather than raising
-// the ceiling — the ceiling was deliberately kept modest (see ci.yml) after
-// raising it destabilized the runner itself in earlier single-invocation
-// attempts.
-const SHARD_COUNT = 6;
+// 3 shards (~310 files each), then 6 (~155 each) — both still had exactly one
+// shard hit the heap ceiling, just a different shard each time. Both failed
+// cleanly (script caught it, exited, no hang, no runner-level instability —
+// unlike every single-invocation attempt before sharding existed), so this is
+// purely a calibration problem, not a structural one. Moving more decisively
+// (10 shards, ~93 files each) rather than incrementing by small steps, paired
+// with raising the ceiling back to 10240MB (see ci.yml) — a value already
+// proven to fail cleanly/safely at default concurrency without destabilizing
+// the runner, just insufficient alone before sharding existed. Combined with
+// a much smaller per-shard file count, it should have real headroom now.
+const SHARD_COUNT = 10;
 const METRICS = ['lines', 'branches', 'functions', 'statements'];
 const coverageDir = resolve(root, 'coverage');
 

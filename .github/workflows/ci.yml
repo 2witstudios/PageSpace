@@ -73,12 +73,14 @@ jobs:
           # header comment and apps/web/vitest.config.ts's git history for the
           # full trail of single-invocation fork-count/heap-ceiling tuning
           # attempts that either crashed, OOM-killed the job, or destabilized the
-          # runner itself under sustained memory pressure. This ceiling is now
-          # just modest headroom for a single shard's share of the suite, not the
-          # primary defense — deliberately kept modest rather than raised, since
-          # raising it destabilized the runner in earlier single-invocation
-          # attempts.
-          NODE_OPTIONS: --max-old-space-size=8192
+          # runner itself under sustained memory pressure (raising the ceiling
+          # alone, without sharding, caused that destabilization). With sharding
+          # now cutting each shard's file share far smaller (10 shards, see that
+          # script), raising this back to 10240MB is safe headroom rather than a
+          # repeat of that failure mode — 10240MB was already proven to fail
+          # cleanly at default concurrency in the single-invocation era, just
+          # insufficient alone before sharding existed.
+          NODE_OPTIONS: --max-old-space-size=10240
         run: bunx turbo run test:coverage --filter='!@pagespace/processor'
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
