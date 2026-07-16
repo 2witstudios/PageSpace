@@ -1,11 +1,12 @@
 import { randomBytes } from 'crypto';
+import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
@@ -129,6 +130,101 @@ export async function createAgentPage(driveId: string, userId: string): Promise<
   const page = await factories.createPage(driveId, { type: 'AI_CHAT' });
   await factories.createPagePermission(page.id, userId, { canView: true, canEdit: true });
   return page.id;
+}
+
+/**
+ * Seed one AI_CHAT conversation: `chat_messages` rows sharing a conversationId, alternating
+ * user/assistant from `contents`, each a second apart so the loader's createdAt ordering is
+ * unambiguous.
+ *
+ * Plain-text `content` is deliberate and safe: `parseStructuredContent` returns null for
+ * non-JSON and the loader falls back to a simple text part
+ * (apps/web/src/lib/ai/core/message-utils.ts) — so these rows render as ordinary bubbles.
+ *
+ * Returns the conversationId.
+ */
+export async function seedChatConversation(
+  pageId: string,
+  userId: string,
+  opts: {
+    /** Message bodies, alternating user → assistant → user … Defaults to a 4-turn exchange. */
+    contents?: string[];
+    conversationId?: string;
+    /** createdAt of the first row; each subsequent row is +1s. Default: a minute ago. */
+    startedAt?: Date;
+  } = {},
+): Promise<string> {
+  const conversationId = opts.conversationId ?? createId();
+  const contents = opts.contents ?? [
+    'first user message',
+    'first assistant reply',
+    'second user message',
+    'second assistant reply',
+  ];
+  const startedAt = opts.startedAt ?? new Date(Date.now() - 60_000);
+
+  for (let i = 0; i < contents.length; i++) {
+    await factories.createChatMessage(pageId, {
+      conversationId,
+      userId,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: contents[i],
+      createdAt: new Date(startedAt.getTime() + i * 1000),
+    });
+  }
+  return conversationId;
+}
+
+export interface SeededChatPage {
+  pageId: string;
+  /** The older conversation. */
+  conversationA: string;
+  /** The newer conversation — what the page opens on. */
+  conversationB: string;
+}
+
+/**
+ * An AI_CHAT page with TWO seeded conversations, both non-empty. This is the shape the
+ * switch-and-return spec (7.3) and the history specs (7.5) need: switching between two
+ * conversations that each have enough messages to visibly render is what makes a blanked
+ * list detectable.
+ */
+export async function seedChatPage(userId: string, driveId: string): Promise<SeededChatPage> {
+  const pageId = await createAgentPage(driveId, userId);
+  const conversationA = await seedChatConversation(pageId, userId, {
+    contents: ['conversation A: user asks', 'conversation A: assistant answers'],
+    startedAt: new Date(Date.now() - 120_000),
+  });
+  const conversationB = await seedChatConversation(pageId, userId, {
+    contents: ['conversation B: user asks', 'conversation B: assistant answers'],
+    startedAt: new Date(Date.now() - 60_000),
+  });
+  return { pageId, conversationA, conversationB };
+}
+
+/**
+ * Seed history into the UNIFIED `messages` table (the global assistant's store), so
+ * GlobalAssistantView specs have something to render. Pair with `createGlobalConversation`.
+ */
+export async function seedConversationMessages(
+  conversationId: string,
+  userId: string,
+  msgs: { role: 'user' | 'assistant'; content: string }[],
+): Promise<void> {
+  const startedAt = Date.now() - msgs.length * 1000;
+  for (let i = 0; i < msgs.length; i++) {
+    await db.insert(messages).values({
+      conversationId,
+      userId,
+      role: msgs[i].role,
+      content: msgs[i].content,
+      createdAt: new Date(startedAt + i * 1000),
+    });
+  }
+  await db
+    .update(conversations)
+    .set({ lastMessageAt: new Date(startedAt + msgs.length * 1000) })
+    .where(eq(conversations.id, conversationId));
 }
 
 /** Create a global conversation owned by the user (for /api/ai/global/[id]/messages). */
