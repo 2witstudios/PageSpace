@@ -31,11 +31,13 @@ export function getEffectiveOperation(
   return activity.operation as ActivityOperation;
 }
 
+/** Human-readable description of the changed resource: title, else target email, else resourceType. */
 export function getChangeDescription(activity: ActivityLogForRollback): string {
   const metadata = activity.metadata as { targetUserEmail?: string } | null;
   return activity.resourceTitle || metadata?.targetUserEmail || activity.resourceType;
 }
 
+/** Build the single-entry ActivityChangeSummary describing what the action will undo. */
 export function buildChangeSummary(
   activity: ActivityLogForRollback,
   targetValues: Record<string, unknown> | null

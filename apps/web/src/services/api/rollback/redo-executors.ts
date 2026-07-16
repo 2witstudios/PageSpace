@@ -21,6 +21,7 @@ import type { ActivityOperation } from '@pagespace/lib/monitoring/activity-logge
 import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
 import type { ActivityLogForRollback } from './types';
 
+/** Execute a page redo: apply the redo update-data with the isTrashed cascade (orphan/restore children). */
 export async function redoPageChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -73,6 +74,7 @@ export async function redoPageChange(
   return { restoredValues: updateData, pageMutationMeta };
 }
 
+/** Execute a drive redo: apply the redo update-data with the drive-page trash/restore cascade. */
 export async function redoDriveChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -108,6 +110,7 @@ export async function redoDriveChange(
   return updateData;
 }
 
+/** Execute a permission redo plan against pagePermissions (upsert/update/delete). */
 export async function redoPermissionChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -140,6 +143,7 @@ export async function redoPermissionChange(
   }
 }
 
+/** Execute a member redo plan against driveMembers (upsert/delete/update). */
 export async function redoMemberChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -172,6 +176,7 @@ export async function redoMemberChange(
   }
 }
 
+/** Execute a role redo plan against driveRoles (reorder/insert/delete/update). */
 export async function redoRoleChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -207,6 +212,7 @@ export async function redoRoleChange(
   }
 }
 
+/** Execute an agent-config redo: apply the whitelisted fields onto the page via a revision-guarded write. */
 export async function redoAgentConfigChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -219,6 +225,7 @@ export async function redoAgentConfigChange(
   return { restoredValues: updateData, pageMutationMeta };
 }
 
+/** Execute a message redo: apply the redo update-data to the conversation table. */
 export async function redoMessageChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,

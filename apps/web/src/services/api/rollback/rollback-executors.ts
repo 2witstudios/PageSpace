@@ -22,6 +22,7 @@ import {
 import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
 import type { ActivityLogForRollback } from './types';
 
+/** Execute a page rollback: trash-created cascade (orphan children to grandparent) or field restore + orphaned-child re-parenting. */
 export async function rollbackPageChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -75,6 +76,7 @@ export async function rollbackPageChange(
   return { restoredValues: updateData, pageMutationMeta };
 }
 
+/** Execute a drive rollback: trash the created drive and its pages, or restore the recorded drive fields. */
 export async function rollbackDriveChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -113,6 +115,7 @@ export async function rollbackDriveChange(
   return plan.updateData;
 }
 
+/** Execute a permission rollback plan against pagePermissions (delete/insert/update). */
 export async function rollbackPermissionChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback
@@ -143,6 +146,7 @@ export async function rollbackPermissionChange(
   }
 }
 
+/** Execute an agent-config rollback: restore the whitelisted fields onto the page via a revision-guarded write. */
 export async function rollbackAgentConfigChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
@@ -154,6 +158,7 @@ export async function rollbackAgentConfigChange(
   return { restoredValues: updateData, pageMutationMeta };
 }
 
+/** Execute a member rollback plan against driveMembers (delete/insert/update). */
 export async function rollbackMemberChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback
@@ -184,6 +189,7 @@ export async function rollbackMemberChange(
   }
 }
 
+/** Execute a role rollback plan against driveRoles (reorder/delete/insert/update). */
 export async function rollbackRoleChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback
@@ -221,6 +227,7 @@ export async function rollbackRoleChange(
   }
 }
 
+/** Execute a message rollback: apply the plan's set to the conversation table and return the restored values. */
 export async function rollbackMessageChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback

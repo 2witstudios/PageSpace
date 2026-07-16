@@ -52,6 +52,7 @@ export const OPERATION_SUMMARY_LABELS: Record<string, string> = {
   rollback: 'Rollback',
 };
 
+/** Human-readable label for an operation, falling back to the raw operation string. */
 export function getOperationSummaryLabel(operation: string): string {
   return OPERATION_SUMMARY_LABELS[operation] ?? operation;
 }

@@ -114,6 +114,7 @@ export type PermissionRollbackPlan =
   | { op: 'insert'; values: PermissionInsertValues }
   | { op: 'update'; pageId: string; userId: string; set: Values };
 
+/** Plan a permission rollback: delete a granted permission, re-insert a revoked one, or restore updated fields. */
 export function planPermissionRollback(activity: ActivityLogForRollback): PermissionRollbackPlan {
   const metadata = activity.metadata as { permissionId?: string; targetUserId?: string } | null;
   const previousValues = activity.previousValues || {};
@@ -194,6 +195,7 @@ export type MemberRollbackPlan =
   | { op: 'insert'; values: MemberInsertValues }
   | { op: 'update'; driveId: string; userId: string; set: Values };
 
+/** Plan a member rollback: remove an added member, re-insert a removed one (dates default to now), or restore a changed role. */
 export function planMemberRollback(activity: ActivityLogForRollback, now: Date): MemberRollbackPlan {
   const metadata = activity.metadata as { memberId?: string; targetUserId?: string } | null;
   const previousValues = activity.previousValues || {};
@@ -256,6 +258,7 @@ export type RoleRollbackPlan =
   | { op: 'insert-role'; values: RoleInsertValues }
   | { op: 'update-role'; roleId: string; set: Values };
 
+/** Plan a role rollback: restore a reorder, delete a created role, re-insert a deleted one, or restore updated fields (stamped with now). */
 export function planRoleRollback(activity: ActivityLogForRollback, now: Date): RoleRollbackPlan {
   const metadata = activity.metadata as { roleId?: string } | null;
   const previousValues = activity.previousValues || {};

@@ -21,6 +21,11 @@ function toInstantMs(value: Date | unknown): number {
   return value instanceof Date ? value.getTime() : new Date(value as string).getTime();
 }
 
+/**
+ * Deep value comparison implementing the documented conflict-equality contract:
+ * NaN equals NaN, Date/string compared by instant, and object key presence is
+ * significant. Used by getConflictFields and isNoOpChange.
+ */
 export function deepEqual(a: unknown, b: unknown): boolean {
   // Fast path: strictly-equal references and primitives (also covers 0 === -0).
   if (a === b) return true;

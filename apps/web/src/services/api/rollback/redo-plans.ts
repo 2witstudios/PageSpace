@@ -63,6 +63,7 @@ export type PermissionRedoPlan =
   | { op: 'update'; pageId: string; userId: string; set: Values }
   | { op: 'delete'; pageId: string; userId: string };
 
+/** Plan a permission redo: re-grant (upsert), re-apply an update, or re-revoke (delete). */
 export function planPermissionRedo(
   activity: ActivityLogForRollback,
   targetValues: Values | null,
@@ -127,6 +128,7 @@ export function planPermissionRedo(
 
 // ─── Agent ─────────────────────────────────────────────────────────────────
 
+/** Plan an agent-config redo: re-apply the whitelisted config fields from targetValues. */
 export function planAgentRedo(
   activity: ActivityLogForRollback,
   targetValues: Values | null,
@@ -161,6 +163,7 @@ export type MemberRedoPlan =
   | { op: 'delete'; driveId: string; userId: string }
   | { op: 'update'; driveId: string; userId: string; set: Values };
 
+/** Plan a member redo: re-add (upsert, dates default to now), re-remove (delete), or re-apply a role change. */
 export function planMemberRedo(
   activity: ActivityLogForRollback,
   targetValues: Values | null,
@@ -224,6 +227,7 @@ export type RoleRedoPlan =
   | { op: 'delete-role'; roleId: string }
   | { op: 'update-role'; roleId: string; set: Values };
 
+/** Plan a role redo: reorder, re-create, re-delete, or re-apply an update (stamped with now). */
 export function planRoleRedo(
   activity: ActivityLogForRollback,
   targetValues: Values | null,
