@@ -18,9 +18,13 @@
  * only in what `onSelectWorkspace`/`onCreateWorkspace` do (activate in place
  * here; route to the machine first, there).
  *
- * Removing a workspace STOPS every agent its panes hold (`removeAgentTerminal`
- * per running pane) before dropping the local grid — it must not merely hide a
- * still-running (and still-billing) agent with no row left to reach it from.
+ * Removing a workspace STOPS every agent its panes hold (`killAgentTerminal`
+ * per running session, addressed by the PANE's own scope — a pane's checkout
+ * can differ from its workspace's) before dropping the local grid — it must
+ * not merely hide a still-running (and still-billing) agent with no row left
+ * to reach it from. Sessions another workspace's pane still shows are spared
+ * (same rule as TerminalPanes' close-and-kill: never pull a PTY out from under
+ * a pane still showing it), and two panes showing one session kill it once.
  * Removal applies to the machine's LAST workspace too: a workspace is a view of
  * terminals, and a view you cannot destroy is not a view. Zero workspaces is a
  * legal state — the middle view renders an empty state for it.
@@ -49,7 +53,7 @@ import {
   sessionWorkspaceId,
   type MachineNodeScope,
 } from '@/stores/machine-workspace/useMachineWorkspaceStore';
-import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { useAgentTerminals, killAgentTerminal } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import { isAgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import type { MachineTreeNode } from './MachineTree';
@@ -115,29 +119,54 @@ export default function WorkspaceLeaves({
   }, []);
 
   const scope = nodeScopeOf(node);
-  // Every pane in a workspace runs in the WORKSPACE's own node scope (see
-  // newWorkspace), which is this node's scope — so one scoped hook covers
-  // every pane (and every server-reported session) this node could hold.
+  // Lists this node's server-reported sessions, and removes the unclaimed ones
+  // — both genuinely AT this node's scope. Kills of a workspace's panes go
+  // through `killAgentTerminal` instead: a pane's session scope can differ
+  // from its workspace's node scope (restored server layouts), and a DELETE
+  // under the wrong scope kills a different same-named terminal, or nothing.
   const { agentTerminals, removeAgentTerminal } = useAgentTerminals(machineId, scope.projectName, scope.branchName);
 
   if (!machine) return null;
 
   const workspaces = workspacesOf(machine).filter((workspace) => isSameNodeScope(workspace.scope, scope));
   const pendingWorkspace = workspaces.find((workspace) => workspace.id === pendingRemove);
-  const pendingRunningNames = pendingWorkspace
-    ? panesOf(pendingWorkspace)
-        .map((pane) => pane.scope?.name)
-        .filter((name): name is string => name !== undefined)
+  // What confirming the pending removal will actually stop: the workspace's
+  // panes' sessions, each addressed by the PANE's own scope, deduped by session
+  // identity (two panes can legitimately show one session — kill it once), and
+  // sparing any session a pane of ANOTHER workspace still shows — the same
+  // rule as TerminalPanes' close-and-kill, which must never pull a PTY out
+  // from under a pane still showing it.
+  const shownElsewhere = new Set(
+    workspacesOf(machine)
+      .filter((workspace) => workspace.id !== pendingWorkspace?.id)
+      .flatMap(panesOf)
+      .flatMap((pane) => (pane.scope ? [sessionWorkspaceId(pane.scope)] : [])),
+  );
+  const pendingKillScopes = pendingWorkspace
+    ? [
+        ...new Map(
+          panesOf(pendingWorkspace)
+            .flatMap((pane) => (pane.scope ? [pane.scope] : []))
+            .map((paneScope) => [sessionWorkspaceId(paneScope), paneScope] as const),
+        ),
+      ]
+        .filter(([id]) => !shownElsewhere.has(id))
+        .map(([, paneScope]) => paneScope)
     : [];
 
-  const localNames = new Set(
-    workspaces.flatMap((workspace) =>
-      panesOf(workspace)
-        .map((pane) => pane.scope?.name)
-        .filter((name): name is string => name !== undefined),
-    ),
+  // "Claimed" compares full session identity — the (project, branch, name)
+  // triple via `sessionWorkspaceId` — against every pane on the MACHINE, not
+  // pane names at this node alone: a same-named session at another checkout
+  // must not mask this one, and a session shown by a cross-scope pane in some
+  // other workspace is not unclaimed.
+  const localSessionIds = new Set(
+    workspacesOf(machine)
+      .flatMap(panesOf)
+      .flatMap((pane) => (pane.scope ? [sessionWorkspaceId(pane.scope)] : [])),
   );
-  const unclaimedSessions = agentTerminals.filter((terminal) => !localNames.has(terminal.name));
+  const unclaimedSessions = agentTerminals.filter(
+    (terminal) => !localSessionIds.has(sessionWorkspaceId({ ...scope, name: terminal.name })),
+  );
 
   const adopt = (name: string) => {
     openTerminal({ ...scope, name });
@@ -302,8 +331,8 @@ export default function WorkspaceLeaves({
         title="Remove workspace?"
         description={
           pendingWorkspace
-            ? pendingRunningNames.length > 0
-              ? `Remove workspace "${pendingWorkspace.name}"? This stops its ${pendingRunningNames.length} running agent${pendingRunningNames.length === 1 ? '' : 's'} — this cannot be undone.`
+            ? pendingKillScopes.length > 0
+              ? `Remove workspace "${pendingWorkspace.name}"? This stops its ${pendingKillScopes.length} running agent${pendingKillScopes.length === 1 ? '' : 's'} — this cannot be undone.`
               : `Remove workspace "${pendingWorkspace.name}"?`
             : ''
         }
@@ -311,8 +340,9 @@ export default function WorkspaceLeaves({
           if (pendingRemove === null) return;
           // Stop every running agent this workspace's panes hold BEFORE
           // dropping the local entry — otherwise the agent (and its billing)
-          // survives with no sidebar row left to reach it from.
-          await Promise.all(pendingRunningNames.map((name) => removeAgentTerminal(name)));
+          // survives with no sidebar row left to reach it from. Addressed by
+          // each pane's OWN scope (see pendingKillScopes' doc above).
+          await Promise.all(pendingKillScopes.map((paneScope) => killAgentTerminal(machineId, paneScope)));
           // Unconditional, including the machine's last workspace. This used to
           // branch: `removeWorkspace` no-op'd on the last one, so the row was
           // emptied in place instead — which left it in the sidebar, unremovable

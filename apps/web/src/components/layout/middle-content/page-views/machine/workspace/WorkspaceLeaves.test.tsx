@@ -284,6 +284,96 @@ describe('WorkspaceLeaves', () => {
     });
   });
 
+  // Regression (Codex P2): the kill must be addressed by the PANE's own
+  // (project, branch, name) scope, not the node's. A restored server layout
+  // can hold a pane whose checkout differs from its workspace's — DELETEing
+  // that pane's name under the NODE scope would kill a different same-named
+  // terminal (or nothing) while the one being removed lives on unclaimed.
+  test('removing a workspace kills each pane\'s session at the PANE\'s own scope, not the node\'s', async () => {
+    seedMachine('m1'); // machine-scope workspace at the machine node
+    const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+    const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
+    // A pane bound at a DIFFERENT checkout than its (machine-scope) workspace.
+    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, {
+      projectName: 'app',
+      branchName: 'main',
+      name: 'wanderer',
+    });
+
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('Workspace 1')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      const killUrl = String(vi.mocked(del).mock.calls.find(([url]) => String(url).includes('name=wanderer'))?.[0] ?? '');
+      assert({
+        given: 'a machine-scope workspace holding a pane bound at app/main, remove confirmed',
+        should: 'DELETE the session under the pane\'s own project and branch — the node scope would address a different terminal',
+        actual: {
+          project: killUrl.includes('projectName=app'),
+          branch: killUrl.includes('branchName=main'),
+        },
+        expected: { project: true, branch: true },
+      });
+    });
+  });
+
+  // Same invariant as TerminalPanes' close-and-kill: a session can be shown in
+  // two panes at once (openTerminal's doc), including panes of DIFFERENT
+  // workspaces — removing one workspace must not pull the PTY out from under
+  // the other one still showing it.
+  test('removing a workspace spares a session another workspace\'s pane still shows', async () => {
+    seedMachine('m1');
+    const firstId = selectMachine('m1')(store())!.activeWorkspaceId;
+    const first = selectMachine('m1')(store())!.workspaces[firstId];
+    store().bindPaneTerminal('m1', firstId, first.activePaneId, { name: 'shared' });
+    const secondId = store().createWorkspace('m1');
+    const second = selectMachine('m1')(store())!.workspaces[secondId];
+    store().bindPaneTerminal('m1', secondId, second.activePaneId, { name: 'shared' });
+
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('Workspace 1')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(Object.keys(selectMachine('m1')(store())!.workspaces)).toEqual([secondId]));
+    assert({
+      given: 'two workspaces whose panes show the SAME session, the first removed',
+      should: 'drop the workspace but leave the PTY alone — the surviving workspace is still showing it',
+      actual: vi.mocked(del).mock.calls.filter(([url]) => String(url).includes('name=shared')).length,
+      expected: 0,
+    });
+  });
+
+  test('two panes of the removed workspace showing ONE session kill it once, and the dialog counts it once', async () => {
+    seedMachine('m1');
+    const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+    const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
+    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'twice' });
+    store().splitRight('m1', workspaceId, workspace.activePaneId);
+    const withSplit = selectMachine('m1')(store())!.workspaces[workspaceId];
+    store().bindPaneTerminal('m1', workspaceId, withSplit.columns[1].panes[0].id, { name: 'twice' });
+
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('Workspace 1')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
+    await screen.findByText(/stops its 1 running agent/);
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'one session shown in both panes of the workspace being removed',
+        should: 'DELETE it exactly once — the second call would 404 and surface a spurious failure toast',
+        actual: vi.mocked(del).mock.calls.filter(([url]) => String(url).includes('name=twice')).length,
+        expected: 1,
+      });
+    });
+  });
+
   // Regression (Codex P1): a session the server reports but that has no local
   // workspace yet (another browser, a cleared localStorage, an agent tool that
   // spawned it directly) must still be reachable and stoppable from the
