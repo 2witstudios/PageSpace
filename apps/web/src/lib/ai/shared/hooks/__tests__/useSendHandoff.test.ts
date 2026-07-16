@@ -82,10 +82,10 @@ describe('useSendHandoff', () => {
     // So: mount at 'ready', wrapSend, THEN transition to 'submitted' — which is the transition the
     // old `status === 'submitted' || 'streaming'` condition cleared on, 0.5-3s too early and
     // before any stream existed. Verified failing against that condition by mutation.
+    type Props = { status: 'ready' | 'submitted'; isStreamLive: boolean };
     const { result, rerender } = renderHook(
-      ({ status, isStreamLive }: { status: 'ready' | 'submitted'; isStreamLive: boolean }) =>
-        useSendHandoff('conv-1', status, isStreamLive),
-      { initialProps: { status: 'ready' as const, isStreamLive: false } },
+      ({ status, isStreamLive }: Props) => useSendHandoff('conv-1', status, isStreamLive),
+      { initialProps: { status: 'ready', isStreamLive: false } as Props },
     );
 
     await act(async () => {
