@@ -14,7 +14,8 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP, appendSessionCookie } from '@/lib/auth';
+import { getClientIP, appendSessionCookie, getSessionFromCookies } from '@/lib/auth';
+import { retireReplacedSession } from '@/lib/auth/session-retirement';
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -35,6 +36,21 @@ export async function POST(req: Request) {
     const { deviceToken, deviceId, userAgent, appVersion } = validation.data;
 
     const clientIP = getClientIP(req);
+
+    // The session cookie the desktop/web client is carrying is the one this
+    // refresh replaces. Capture it now so we can retire it after the new session
+    // is created — proactive refreshes fire every ~15 min and, left unretired,
+    // pile up thousands of live sessions per account (turning a single login into
+    // a "revocation storm"). Retirement is best-effort and never fails the refresh.
+    const replacedSessionToken = getSessionFromCookies(req.headers.get('cookie'));
+    const retireReplaced = (userId: string): Promise<unknown> =>
+      retireReplacedSession(replacedSessionToken, userId, {
+        getSessionOwnerId: async (token) =>
+          (await sessionService.validateSession(token))?.userId ?? null,
+        hashToken,
+        revokeByHash: (tokenHash, reason) => sessionService.revokeSessionByHash(tokenHash, reason),
+        logWarn: (message, meta) => loggers.auth.warn(message, meta),
+      });
 
     // Distributed rate limiting by IP address for device refresh attempts
     const distributedIpLimit = await checkDistributedRateLimit(
@@ -180,6 +196,11 @@ export async function POST(req: Request) {
         loggers.auth.error('Failed to validate newly created session during web device refresh');
         return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
       }
+
+      // Retire the session this refresh just replaced (best-effort; the new
+      // session already exists, so a failure here never breaks the refresh).
+      await retireReplaced(user.id);
+
       const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
       const headers = new Headers();
@@ -210,6 +231,10 @@ export async function POST(req: Request) {
       loggers.auth.error('Failed to validate newly created session during device refresh');
       return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
     }
+
+    // Retire the session this refresh just replaced (best-effort; the new
+    // session already exists, so a failure here never breaks the refresh).
+    await retireReplaced(user.id);
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 

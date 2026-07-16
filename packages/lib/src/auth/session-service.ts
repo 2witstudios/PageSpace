@@ -150,6 +150,15 @@ export class SessionService {
     await sessionRepository.revokeByHash(tokenHash, reason);
   }
 
+  /**
+   * Revoke a single session by its already-hashed token. Used when the caller
+   * has computed the hash itself (e.g. device refresh retiring the session it
+   * replaces) and must not re-hash a raw token.
+   */
+  async revokeSessionByHash(tokenHash: string, reason: string): Promise<void> {
+    await sessionRepository.revokeByHash(tokenHash, reason);
+  }
+
   async revokeAllUserSessions(userId: string, reason: string): Promise<number> {
     return sessionRepository.revokeAllForUser(userId, reason);
   }

@@ -102,7 +102,16 @@ export function PasskeyLoginButton({
       // Refresh CSRF token to avoid expiry after sitting on the page
       const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
 
-      const platformFields = await getDevicePlatformFields();
+      // Web path: send a stable per-browser device identity (mirrors the OAuth
+      // sign-in flow). This scopes the login's session revocation to THIS browser
+      // instead of nuking every device, and lets the route mint a web device
+      // token at login so silent session recovery works immediately.
+      const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
+      const platformFields = {
+        platform: 'web' as const,
+        deviceId: getOrCreateDeviceId(),
+        deviceName: getDeviceName(),
+      };
 
       // Get authentication options
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {

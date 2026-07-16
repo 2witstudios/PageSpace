@@ -90,6 +90,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -134,7 +135,7 @@ import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
@@ -323,31 +324,37 @@ describe('GET /api/auth/magic-link/verify', () => {
   });
 
   describe('session management', () => {
-    it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(2);
-
+    it('revokes prior sessions with no deviceId for a web (cross-device) magic link', async () => {
       await GET(createVerifyRequest('valid-token'));
 
-      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith(
+      // A web magic link carries no device metadata; the helper receives
+      // undefined and applies its legacy all-web-session fallback internally.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         'test-user-id',
-        'magic_link_login'
-      );
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on magic link login',
-        expect.objectContaining({ count: 2 })
+        undefined,
+        'magic_link_login',
+        'magic-link',
       );
     });
 
-    it('does not log when no sessions were revoked', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
+    it('scopes revocation to the desktop deviceId when the magic link carries desktop metadata', async () => {
+      vi.mocked(verifyMagicLinkToken).mockResolvedValue({
+        ok: true,
+        data: {
+          userId: 'test-user-id',
+          isNewUser: false,
+          metadata: JSON.stringify({ platform: 'desktop', deviceId: 'desk-device-1' }),
+        },
+      });
 
       await GET(createVerifyRequest('valid-token'));
 
-      const logCalls = vi.mocked(loggers.auth.info).mock.calls;
-      const revokedLogCall = logCalls.find(
-        (call) => call[0] === 'Revoked existing sessions on magic link login'
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
+        'test-user-id',
+        'desk-device-1',
+        'magic_link_login',
+        'magic-link',
       );
-      expect(revokedLogCall).toBeUndefined();
     });
 
     it('creates session with correct params', async () => {
