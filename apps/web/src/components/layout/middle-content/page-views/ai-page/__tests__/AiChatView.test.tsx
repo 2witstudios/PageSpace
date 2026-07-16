@@ -1651,7 +1651,7 @@ describe('AiChatView remote user-message broadcast', () => {
 describe('AiChatView stop button for reconnected own streams', () => {
   const page = makePage();
 
-  type StreamEntry = { messageId: string; pageId: string; isOwn: boolean; conversationId: string };
+  type StreamEntry = { messageId: string; pageId: string; isOwn: boolean; conversationId: string; parts?: unknown[]; triggeredBy?: unknown };
 
   type StoreState = {
     streams: Map<string, StreamEntry>;

@@ -257,6 +257,10 @@ const SidebarChatTab: React.FC = () => {
     isStreaming,
     setGlobalMessages,
     addToolResult,
+    globalStatus,
+    globalMessages,
+    agentStatus,
+    agentMessages,
   } = usePageAgentSidebarChat({
     selectedAgent,
     globalChatConfig,
@@ -381,26 +385,60 @@ const SidebarChatTab: React.FC = () => {
 
 
 
-  // TRANSITIONAL (see useOwnStreamMirror) — this surface's own live assistant reply into the
-  // store, so it is present for the same selector everything above reads from. Mounted once: the
-  // sidebar's two useChat instances are mode-exclusive at the transport level, and
-  // `messages`/`status`/`currentConversationId` are already the mode-selected pair.
-  const lastMirroredMessage = messages[messages.length - 1];
-  const ownAssistantMessage = useMemo(
-    () => (lastMirroredMessage && lastMirroredMessage.role === 'assistant'
-      ? { id: lastMirroredMessage.id, parts: lastMirroredMessage.parts }
+  // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
+  // useChat's local state into usePendingStreamsStore, so this surface's own streams are present
+  // the same way a bootstrapped or remote one is. Everything above derives from store presence, so
+  // without these an own local stream would be invisible to its own Stop button.
+  //
+  // MOUNTED PER CHAT (leaf 5.5.1 — "4 instances": GVA's two, and these two), never once for the
+  // mode-selected pair. A mirror decides what to write from ITS chat's status and messages, and it
+  // remembers which messageId it is currently mirroring. Point one mirror at whichever mode is on
+  // screen and a mode switch silently repoints it: it sees the new mode's (idle) chat, decides
+  // nothing is streaming, and emits removeStream for the id it was mirroring — deleting a live
+  // stream's entry, and with it that stream's Stop button and its rendered content.
+  //
+  // The sidebar's two chats happen to be mutually exclusive today (usePageAgentSidebarChat stops
+  // the other mode's LOCAL fetch on switch), which is exactly the kind of invariant that makes a
+  // mode-selected mirror look fine until it isn't: those stop effects are themselves scheduled to
+  // change (leaf 5.4, W6), and a local stop never stopped the SERVER stream anyway.
+  //
+  // `ownAssistantMessage` reads the raw useChat arrays: this is the ONE place that must read the
+  // SDK's live-growing content to copy it OUT. It is undefined unless the last message is an
+  // assistant's — during the submitted window the last message is the user's own, which is why no
+  // store entry exists then (and why Stop falls back to the send-time conversationId there).
+  const mirrorTriggeredBy = useMemo(
+    () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
+    [user?.id, user?.name, user?.email],
+  );
+
+  const lastGlobalMessage = globalMessages[globalMessages.length - 1];
+  const ownGlobalAssistantMessage = useMemo(
+    () => (lastGlobalMessage && lastGlobalMessage.role === 'assistant'
+      ? { id: lastGlobalMessage.id, parts: lastGlobalMessage.parts }
       : undefined),
-    [lastMirroredMessage],
+    [lastGlobalMessage],
   );
   useOwnStreamMirror({
-    status,
-    ownAssistantMessage,
-    pageId: streamChannelId ?? '',
-    conversationId: currentConversationId ?? '',
-    triggeredBy: useMemo(
-      () => ({ userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' }),
-      [user?.id, user?.name, user?.email],
-    ),
+    status: globalStatus,
+    ownAssistantMessage: ownGlobalAssistantMessage,
+    pageId: channelIdForGlobal ?? '',
+    conversationId: globalConversationId ?? '',
+    triggeredBy: mirrorTriggeredBy,
+  });
+
+  const lastAgentMessage = agentMessages[agentMessages.length - 1];
+  const ownAgentAssistantMessage = useMemo(
+    () => (lastAgentMessage && lastAgentMessage.role === 'assistant'
+      ? { id: lastAgentMessage.id, parts: lastAgentMessage.parts }
+      : undefined),
+    [lastAgentMessage],
+  );
+  useOwnStreamMirror({
+    status: agentStatus,
+    ownAssistantMessage: ownAgentAssistantMessage,
+    pageId: selectedAgent?.id ?? '',
+    conversationId: agentConversationId ?? '',
+    triggeredBy: mirrorTriggeredBy,
   });
 
   // ============================================

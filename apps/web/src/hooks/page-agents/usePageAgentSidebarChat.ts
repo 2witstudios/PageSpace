@@ -33,6 +33,18 @@ export interface UseSidebarChatReturn {
   globalMessages: UIMessage[];
   /** Set global messages */
   setGlobalMessages: (messages: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => void;
+  /**
+   * Agent mode status/messages, exposed PER CHAT rather than mode-selected.
+   *
+   * The own-stream mirror (PR 5A, leaf 5.5.1 — "4 instances") must be mounted once per useChat
+   * instance, never once for whichever mode is on screen: a mirror reads its chat's status and
+   * messages to decide what to write into usePendingStreamsStore, so a mode-selected mirror
+   * silently swaps which stream it is mirroring when the user switches mode, and emits
+   * removeStream for the one it was mirroring. Each chat's own values, for its own mirror.
+   */
+  agentStatus: 'ready' | 'submitted' | 'streaming' | 'error';
+  /** Agent mode messages (see agentStatus). */
+  agentMessages: UIMessage[];
   /** Add a client-side tool result (mode-selected) — used by ask_user answers */
   addToolResult: (args: {
     tool: string;
@@ -186,6 +198,9 @@ export function usePageAgentSidebarChat({
     globalStop,
     globalMessages,
     setGlobalMessages,
+    // Per-chat agent values — the agent mirror's inputs (see the interface docblock).
+    agentStatus,
+    agentMessages,
   }), [
     messages,
     sendMessage,
@@ -201,5 +216,7 @@ export function usePageAgentSidebarChat({
     globalStop,
     globalMessages,
     setGlobalMessages,
+    agentStatus,
+    agentMessages,
   ]);
 }
