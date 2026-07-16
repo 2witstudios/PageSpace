@@ -2,8 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const {
   mockSelectWhere,
-  mockUpdateWhere,
   mockUpdateSet,
+  mockUpdateWhere,
   mockAbortStreamByMessageId,
   mockLoggerInfo,
   mockLoggerWarn,
@@ -11,17 +11,19 @@ const {
   mockWasRecentlyFinishedHere,
   mockAwaitAbortSettled,
   mockReconcileDead,
+  mockMaterializeInterruptedStream,
 } = vi.hoisted(() => ({
   mockLoggerInfo: vi.fn(),
   mockLoggerWarn: vi.fn(),
   mockSelectWhere: vi.fn(),
-  mockUpdateWhere: vi.fn().mockResolvedValue(undefined),
   mockUpdateSet: vi.fn(),
+  mockUpdateWhere: vi.fn(),
   mockAbortStreamByMessageId: vi.fn(),
   mockMarkAsOwner: vi.fn(),
   mockWasRecentlyFinishedHere: vi.fn(),
   mockAwaitAbortSettled: vi.fn(),
   mockReconcileDead: vi.fn(),
+  mockMaterializeInterruptedStream: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -63,6 +65,14 @@ vi.mock('@/lib/ai/core/stream-abort-mark', () => ({
   reconcileDeadStreamRows: mockReconcileDead,
 }));
 
+// Materialization is its own unit with its own tests (materialize-interrupted-stream.test.ts —
+// where the #2022 never-overwrite-complete guard and the settle/broadcast steps are asserted).
+// Stubbed here so these tests exercise what the TAKEOVER decides to reconcile, not how a row is
+// turned into an interrupted message.
+vi.mock('@/lib/ai/core/materialize-interrupted-stream', () => ({
+  materializeInterruptedStream: mockMaterializeInterruptedStream,
+}));
+
 vi.mock('@/lib/ai/core/stream-abort-registry', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   abortStreamByMessageId: mockAbortStreamByMessageId,
@@ -70,7 +80,6 @@ vi.mock('@/lib/ai/core/stream-abort-registry', async (importOriginal) => ({
 }));
 
 import { takeOverConversationStreams } from '../stream-takeover';
-import { inArray } from '@pagespace/db/operators';
 
 const ARGS = { conversationId: 'conv-1', channelId: 'page-1' };
 
@@ -92,8 +101,6 @@ const settled = (
 describe('takeOverConversationStreams', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
-    mockUpdateWhere.mockResolvedValue(undefined);
     mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
     mockWasRecentlyFinishedHere.mockReturnValue(false);
     mockMarkAsOwner.mockImplementation(async ({ messageIds }: { messageIds: string[] }) => ({
@@ -101,7 +108,14 @@ describe('takeOverConversationStreams', () => {
       failed: false,
     }));
     mockAwaitAbortSettled.mockResolvedValue(settled());
-    mockReconcileDead.mockResolvedValue(undefined);
+    mockReconcileDead.mockResolvedValue([]);
+    // Defaults to "succeeded" — materializeInterruptedStream now reports success/failure via its
+    // return value, and most tests here are about ELIGIBILITY (which rows get materialized), not
+    // about materialize's own failure handling (that's materialize-interrupted-stream.test.ts's
+    // job). Tests exercising the accurate-reporting behavior override this per-case.
+    mockMaterializeInterruptedStream.mockResolvedValue(true);
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
   });
 
   it('given no in-flight stream on the conversation, should do nothing (the common case must be cheap)', async () => {
@@ -111,15 +125,16 @@ describe('takeOverConversationStreams', () => {
 
     expect(result).toEqual({ aborted: [], reconciled: [] });
     expect(mockAbortStreamByMessageId).not.toHaveBeenCalled();
-    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
   });
 
   // The bug this exists for: a second send used to simply start a SECOND generation on
   // the same conversation. Two agents editing the same pages, two assistant rows, two
   // bills. The only pre-existing limiter was the credit gate's per-USER maxInFlight.
-  it('given a live stream on the conversation, should abort it and drive its row terminal before the new generation starts', async () => {
+  it('given a live stream on the conversation, should abort it and drive its session row terminal before the new generation starts', async () => {
+    const parts = [{ type: 'text', text: 'partial' }];
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date() },
+      { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date(), parts },
     ]);
 
     const result = await takeOverConversationStreams(ARGS);
@@ -127,24 +142,79 @@ describe('takeOverConversationStreams', () => {
     expect(mockAbortStreamByMessageId).toHaveBeenCalledWith({ messageId: 'msg-live', userId: 'user-1' });
     expect(result).toEqual({ aborted: ['msg-live'], reconciled: ['msg-live'] });
     expect(mockUpdateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'aborted', parts: [], completedAt: expect.any(Date) }),
+      expect.objectContaining({ status: 'aborted', parts: [] }),
     );
+  });
+
+  // THE regression this fix guards against: a row we JUST aborted ourselves, in THIS process, is
+  // NOT provably dead — its own generation is moments from running its own onFinish, which
+  // persists the full, correct content as status='interrupted' via the normal execute-end path.
+  // Materializing here too would race that natural write with an OLDER debounced checkpoint and
+  // could silently overwrite fresher content with staler content — the exact silent-loss bug this
+  // whole feature exists to prevent, reintroduced by conflating "we stopped it" with "it is dead".
+  it('given a row we just aborted ourselves (fresh heartbeat — its own onFinish is about to persist the real content), must NOT materialize it', async () => {
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date(), parts: [{ type: 'text', text: 'stale-checkpoint' }] },
+    ]);
+
+    await takeOverConversationStreams(ARGS);
+
+    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+  });
+
+  // The other half of the same fix: a row whose heartbeat is ALREADY stale (the process died
+  // before we ever tried to abort it) has no generation left to persist anything — this is the
+  // only chance its content gets saved, so it materializes even though `abortStreamByMessageId`
+  // also reports it (the abort is a free no-op against an unknown/dead registry entry).
+  it('given a row whose heartbeat was ALREADY stale before this takeover touched it, materializes it (no generation is left to do it)', async () => {
+    const longAgo = new Date(Date.now() - 30 * 60 * 1000);
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-abandoned', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [{ type: 'text', text: 'last known content' }] },
+    ]);
+
+    await takeOverConversationStreams(ARGS);
+
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-abandoned' }),
+    );
+    // And the cheap session-row wipe must NOT ALSO run for this row — materialize already
+    // settles the session row itself; a second bulk wipe here would be redundant.
+    expect(mockUpdateSet).not.toHaveBeenCalled();
   });
 
   // A crashed process leaves status='streaming' forever (the terminal write is
   // fire-and-forget). A 409 here would lock the user out of their own conversation for
   // as long as that row survives — strictly worse than the bug being fixed.
-  it('given a STALE streaming row (crashed process), should NOT block the send and should reconcile the dead row', async () => {
+  it('given a STALE streaming row (crashed process), should NOT block the send and should materialize the dead row', async () => {
     const longAgo = new Date(Date.now() - 30 * 60 * 1000);
     mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo },
+      { messageId: 'msg-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [] },
     ]);
 
     const result = await takeOverConversationStreams(ARGS);
 
     expect(result).toEqual({ aborted: [], reconciled: ['msg-dead'] });
-    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'aborted' }));
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-dead' }),
+    );
+  });
+
+  // Codex review finding: a recovered reply timestamped at reap time (instead of the stream's
+  // actual start) can sort after a user's later follow-up message. Carrying startedAt through
+  // is what lets materializeInterruptedStream's defensive insert-if-missing path get this right.
+  it("passes the row's actual startedAt through to materializeInterruptedStream, not takeover time", async () => {
+    const longAgo = new Date(Date.now() - 30 * 60 * 1000);
+    mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [] },
+    ]);
+
+    await takeOverConversationStreams(ARGS);
+
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ startedAt: longAgo }),
+    );
   });
 
   // A liveness guess must never gate the abort. The heartbeat can lag (a slow DB write,
@@ -154,7 +224,7 @@ describe('takeOverConversationStreams', () => {
   it('given a row that looks stale, should STILL attempt the abort', async () => {
     const longAgo = new Date(Date.now() - 30 * 60 * 1000);
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-looks-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo },
+      { messageId: 'msg-looks-dead', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [] },
     ]);
 
     await takeOverConversationStreams(ARGS);
@@ -171,10 +241,10 @@ describe('takeOverConversationStreams', () => {
   // `status='aborted', parts=[]` over a stream that is still generating would hide it from every
   // subscriber and destroy its only crash-recovery snapshot — while it kept calling tools and
   // kept billing. The mark is the ONLY write allowed here.
-  it('given a LIVE row on another instance that has not stopped yet, should mark it but never terminal-write its row', async () => {
+  it('given a LIVE row on another instance that has not stopped yet, should mark it but never materialize its row', async () => {
     mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date() },
+      { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date(), parts: [] },
     ]);
     mockAwaitAbortSettled.mockResolvedValue(settled({ stillLive: ['msg-elsewhere'], code: 'unconfirmed' }));
 
@@ -182,8 +252,8 @@ describe('takeOverConversationStreams', () => {
 
     expect(mockMarkAsOwner).toHaveBeenCalledWith({ messageIds: ['msg-elsewhere'] });
     expect(result).toEqual({ aborted: [], reconciled: [] });
-    // The reconcile UPDATE — the one that would write status/parts. It must not have run.
-    expect(mockUpdateSet).not.toHaveBeenCalled();
+    // The reconcile write — the one that would materialize the row. It must not have run.
+    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
   });
 
   // The capability this whole change exists to add. Before it, this send would have started a
@@ -192,7 +262,7 @@ describe('takeOverConversationStreams', () => {
   it('given a live row on another instance that DOES stop, should report it as taken over', async () => {
     mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date() },
+      { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date(), parts: [] },
     ]);
     mockAwaitAbortSettled.mockResolvedValue(settled({ aborted: ['msg-elsewhere'], code: 'aborted' }));
 
@@ -209,7 +279,7 @@ describe('takeOverConversationStreams', () => {
   // caller's right to write to the conversation was established upstream.
   it("given a live stream owned by ANOTHER user, should abort it as its OWNER so the takeover actually stops it", async () => {
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-other-user', userId: 'user-A', lastHeartbeatAt: new Date(), startedAt: new Date() },
+      { messageId: 'msg-other-user', userId: 'user-A', lastHeartbeatAt: new Date(), startedAt: new Date(), parts: [] },
     ]);
 
     const result = await takeOverConversationStreams(ARGS);
@@ -217,18 +287,29 @@ describe('takeOverConversationStreams', () => {
     expect(mockAbortStreamByMessageId).toHaveBeenCalledWith({ messageId: 'msg-other-user', userId: 'user-A' });
     expect(result.aborted).toEqual(['msg-other-user']);
     expect(result.reconciled).toEqual(['msg-other-user']);
+    // Fresh heartbeat, just aborted by us — its own onFinish will persist the real content.
+    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
   });
 
-  it('given the reconcile UPDATE, should be conditional on status=streaming so a stream that ended on its own is not relabelled', async () => {
+  // Multiple in-flight rows reconciled in the same takeover must each get their OWN
+  // materialization call, carrying their OWN parts snapshot — a shared/blended write here
+  // would cross-contaminate two different replies.
+  it('given two dead rows in the same takeover, should materialize each independently with its own parts', async () => {
+    const longAgo = new Date(Date.now() - 30 * 60 * 1000);
+    mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'Stream not found or already completed' });
     mockSelectWhere.mockResolvedValueOnce([
-      { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date(), startedAt: new Date() },
+      { messageId: 'msg-a', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [{ type: 'text', text: 'A' }] },
+      { messageId: 'msg-b', userId: 'user-1', lastHeartbeatAt: longAgo, startedAt: longAgo, parts: [{ type: 'text', text: 'B' }] },
     ]);
 
     await takeOverConversationStreams(ARGS);
 
-    const where = mockUpdateWhere.mock.calls[0][0] as { and: unknown[] };
-    expect(where.and).toContainEqual({ eq: ['status', 'streaming'] });
-    expect(vi.mocked(inArray)).toHaveBeenCalledWith('messageId', ['msg-live']);
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-a', parts: [{ type: 'text', text: 'A' }] }),
+    );
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'msg-b', parts: [{ type: 'text', text: 'B' }] }),
+    );
   });
 
   // A failed takeover must degrade to the OLD behaviour (a concurrent generation), not
@@ -241,54 +322,17 @@ describe('takeOverConversationStreams', () => {
     expect(result).toEqual({ aborted: [], reconciled: [] });
   });
 
-  // Partial failure. The aborts land FIRST — real in-process generations are stopped — and only
-  // then does the reconcile UPDATE run. A single try/catch around the whole function reported
-  // `{aborted: [], reconciled: []}` when that UPDATE threw: "nothing happened", while streams had
-  // in fact been stopped. The caller and the logs were told the exact opposite of the truth.
-  describe('partial failure: aborts landed but the reconcile UPDATE throws', () => {
-    it('reports what it ACTUALLY aborted, rather than claiming nothing happened', async () => {
-      mockSelectWhere.mockResolvedValue([
-        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date() },
-      ]);
-      mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
-      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
+  // The SELECT failing is different: nothing was stopped, so reporting nothing is correct.
+  it('given the SELECT itself fails, reports nothing aborted — because nothing was', async () => {
+    mockSelectWhere.mockRejectedValueOnce(new Error('db down'));
 
-      const result = await takeOverConversationStreams({
-        conversationId: 'conv-1',
-        channelId: 'page-1',
-      });
-
-      // The stream IS stopped. Saying otherwise is the bug.
-      expect(result.aborted).toEqual(['msg-live']);
-      // ...but its row was NOT driven terminal, and we must not pretend it was.
-      expect(result.reconciled).toEqual([]);
+    const result = await takeOverConversationStreams({
+      conversationId: 'conv-1',
+      channelId: 'page-1',
     });
 
-    it('still does not block the send — a failed takeover must never lock the conversation', async () => {
-      mockSelectWhere.mockResolvedValue([
-        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date() },
-      ]);
-      mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
-      mockUpdateWhere.mockRejectedValueOnce(new Error('db down'));
-
-      await expect(
-        takeOverConversationStreams({ conversationId: 'conv-1', channelId: 'page-1' }),
-      ).resolves.toBeDefined();
-    });
-
-    // The SELECT failing is different: nothing was stopped, so reporting nothing is correct.
-    it('given the SELECT itself fails, reports nothing aborted — because nothing was', async () => {
-      mockSelectWhere.mockRejectedValueOnce(new Error('db down'));
-
-      const result = await takeOverConversationStreams({
-        conversationId: 'conv-1',
-        channelId: 'page-1',
-      });
-
-      expect(result).toEqual({ aborted: [], reconciled: [] });
-    });
+    expect(result).toEqual({ aborted: [], reconciled: [] });
   });
-
 
   // A log that misreports is a signal that attests to nothing — the same defect as a test that
   // cannot fail. This one used to lie at exactly the moment an operator most needed the truth.
@@ -298,7 +342,7 @@ describe('takeOverConversationStreams', () => {
       // has not confirmed, so it is still generating, and this send is about to start a second
       // generation beside it. That is the moment an operator most needs the truth.
       mockSelectWhere.mockResolvedValue([
-        { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date() },
+        { messageId: 'msg-elsewhere', userId: 'user-1', lastHeartbeatAt: new Date(), parts: [] },
       ]);
       mockAbortStreamByMessageId.mockReturnValue({ aborted: false, reason: 'not found' });
       mockAwaitAbortSettled.mockResolvedValue(settled({ stillLive: ['msg-elsewhere'], code: 'unconfirmed' }));
@@ -324,7 +368,7 @@ describe('takeOverConversationStreams', () => {
 
     it('given a stream it DID stop, says so', async () => {
       mockSelectWhere.mockResolvedValue([
-        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date() },
+        { messageId: 'msg-live', userId: 'user-1', lastHeartbeatAt: new Date(), parts: [] },
       ]);
       mockAbortStreamByMessageId.mockReturnValue({ aborted: true, reason: '' });
 

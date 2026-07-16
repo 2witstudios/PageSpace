@@ -1157,22 +1157,39 @@ MENTION PROCESSING:
         // Assistant message row at stream start (Server Stream Durability epic, PR 2): a
         // 'streaming' placeholder so history can show in-flight entries and pre-checkpoint
         // process death doesn't silently lose the reply. Same critical section as
-        // takeover+lifecycle-create (PR 4 seam note) so a second send can never observe a
-        // stream row without its placeholder, or vice versa. Skipped when pre-aborted — the
-        // user pressed Stop before streamText ever ran, so there is no generation to show and
-        // no execute-end/onFinish write will ever arrive to flip this row out of 'streaming'.
+        // takeover+lifecycle-create (PR 4 seam note) so a second send observes the stream row
+        // and its placeholder together — except on the best-effort insert failure below, where
+        // the placeholder is skipped and only the stream row exists (named honestly, not an
+        // invariant). Skipped when pre-aborted — the user pressed Stop before streamText ever
+        // ran, so there is no generation to show and no execute-end/onFinish write will ever
+        // arrive to flip this row out of 'streaming'.
+        //
+        // Own try/catch, matching every other operation in this closure (takeOverConversationStreams,
+        // createStreamLifecycle): `run` must never throw while the advisory lock is held, or
+        // start-generation-exclusive.ts's caller misclassifies it as lock-machinery failure and
+        // invokes `run` a SECOND time, unlocked — double generation, double billing. Best-effort:
+        // a failed placeholder just means history can't show this entry mid-stream; the generation
+        // itself still proceeds.
         if (!streamLifecycle.preAborted) {
-          await db.insert(messages).values({
-            id: serverAssistantMessageId,
-            conversationId,
-            userId,
-            role: 'assistant',
-            content: '',
-            toolCalls: null,
-            toolResults: null,
-            isActive: true,
-            status: 'streaming',
-          });
+          try {
+            await db.insert(messages).values({
+              id: serverAssistantMessageId,
+              conversationId,
+              userId,
+              role: 'assistant',
+              content: '',
+              toolCalls: null,
+              toolResults: null,
+              isActive: true,
+              status: 'streaming',
+            });
+          } catch (error) {
+            loggers.ai.warn('Global AI messages API: placeholder assistant row INSERT failed', {
+              messageId: serverAssistantMessageId,
+              conversationId,
+              error: error instanceof Error ? error.message : 'unknown',
+            });
+          }
         }
 
         return streamLifecycle;
@@ -1519,8 +1536,9 @@ MENTION PROCESSING:
     //
     // Requires `lifecycle` itself (not just `!lifecycle?.preAborted`) so this never fires for a
     // throw that happened INSIDE startGenerationExclusive's callback, before `lifecycle` is ever
-    // assigned — e.g. takeOverConversationStreams or the placeholder INSERT itself failing. In
-    // that window no placeholder row exists at all, so this upsert would INSERT a stray phantom
+    // assigned — e.g. takeOverConversationStreams or createStreamLifecycle failing (the
+    // placeholder INSERT itself has its own try/catch and can no longer throw here). In that
+    // window no placeholder row exists at all, so this upsert would INSERT a stray phantom
     // 'interrupted' row for a request that never started generating.
     if (!assistantMessagePersisted && cleanupContext && lifecycle && !lifecycle.preAborted) {
       try {

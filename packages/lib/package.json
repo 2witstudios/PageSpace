@@ -847,15 +847,10 @@
       "import": "./dist/email-templates/FeedbackNotificationEmail.js",
       "require": "./dist/email-templates/FeedbackNotificationEmail.js"
     },
-    "./email-templates/CreditsChangeEmail": {
-      "types": "./dist/email-templates/CreditsChangeEmail.d.ts",
-      "import": "./dist/email-templates/CreditsChangeEmail.js",
-      "require": "./dist/email-templates/CreditsChangeEmail.js"
-    },
-    "./email-templates/credits-change-content": {
-      "types": "./dist/email-templates/credits-change-content.d.ts",
-      "import": "./dist/email-templates/credits-change-content.js",
-      "require": "./dist/email-templates/credits-change-content.js"
+    "./email-templates/SdkCliLaunchEmail": {
+      "types": "./dist/email-templates/SdkCliLaunchEmail.d.ts",
+      "import": "./dist/email-templates/SdkCliLaunchEmail.js",
+      "require": "./dist/email-templates/SdkCliLaunchEmail.js"
     },
     "./email-templates/render-email": {
       "types": "./dist/email-templates/render-email.d.ts",
@@ -1967,11 +1962,8 @@
       "email-templates/FeedbackNotificationEmail": [
         "./dist/email-templates/FeedbackNotificationEmail.d.ts"
       ],
-      "email-templates/CreditsChangeEmail": [
-        "./dist/email-templates/CreditsChangeEmail.d.ts"
-      ],
-      "email-templates/credits-change-content": [
-        "./dist/email-templates/credits-change-content.d.ts"
+      "email-templates/SdkCliLaunchEmail": [
+        "./dist/email-templates/SdkCliLaunchEmail.d.ts"
       ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"

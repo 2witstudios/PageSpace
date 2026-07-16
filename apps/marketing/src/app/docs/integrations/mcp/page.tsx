@@ -28,6 +28,8 @@ npm install -g @pagespace/cli
 pagespace login
 \`\`\`
 
+(The full command reference lives in the [PageSpace CLI](/docs/features/cli) docs.)
+
 \`pagespace login\` opens a browser, completes an OAuth login, and stores a credential locally — but that credential is scoped to key management only, with **zero content access of its own**. It's for you, personally, to create/list/edit/revoke your own scoped keys; \`pagespace mcp\` won't run on it alone.
 
 Mint the drive-scoped key \`pagespace mcp\` actually needs with the guided wizard:
@@ -98,7 +100,7 @@ claude mcp add pagespace -- pagespace mcp
 
 ## Step 3: Capabilities
 
-\`pagespace mcp\` generates its tool list mechanically from the same operation registry that powers the \`pagespace\` CLI and \`@pagespace/sdk\`, so the tool surface can't drift from what the CLI itself supports.
+\`pagespace mcp\` generates its tool list mechanically from the same operation registry that powers the \`pagespace\` CLI and [\`@pagespace/sdk\`](/docs/features/sdk), so the tool surface can't drift from what the CLI itself supports.
 
 At a minimum the server covers:
 

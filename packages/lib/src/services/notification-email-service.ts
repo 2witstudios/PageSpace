@@ -22,7 +22,7 @@ import { decryptField } from '../encryption/field-crypto';
 import { randomBytes } from 'crypto';
 import type { ReactElement } from 'react';
 
-type NotificationType =
+export type NotificationType =
   | 'PERMISSION_GRANTED'
   | 'PERMISSION_REVOKED'
   | 'PERMISSION_UPDATED'
@@ -37,7 +37,8 @@ type NotificationType =
   | 'EMAIL_VERIFICATION_REQUIRED'
   | 'TOS_PRIVACY_UPDATED'
   | 'MENTION'
-  | 'TASK_ASSIGNED';
+  | 'TASK_ASSIGNED'
+  | 'PRODUCT_UPDATE';
 
 interface NotificationEmailData {
   userId: string;
@@ -48,7 +49,10 @@ interface NotificationEmailData {
 
 // Generate unsubscribe token for a specific user and notification type
 // Uses opaque tokens stored in database (replaces JWT for P5-T5 Legacy JWT Deprecation)
-async function generateUnsubscribeToken(userId: string, notificationType: NotificationType): Promise<string> {
+// Exported so one-off broadcast scripts mint their opt-out links through the
+// same token table (and therefore the same /api/notifications/unsubscribe flow)
+// as the per-event notification emails.
+export async function generateUnsubscribeToken(userId: string, notificationType: NotificationType): Promise<string> {
   // Generate opaque token with prefix for identification
   const token = `ps_unsub_${randomBytes(24).toString('base64url')}`;
   const tokenHash = hashToken(token);

@@ -3,13 +3,14 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { abortStreamByMessageId, wasRecentlyFinishedHere } from '@/lib/ai/core/stream-abort-registry';
-import { decideStreamTakeover } from '@/lib/ai/core/stream-liveness';
+import { decideStreamTakeover, isProvablyDead } from '@/lib/ai/core/stream-liveness';
 import {
   awaitAbortSettled,
   markAbortRequestedAsOwner,
   reconcileDeadStreamRows,
 } from '@/lib/ai/core/stream-abort-mark';
 import { TAKEOVER_SETTLE_TIMEOUT_MS } from '@/lib/ai/core/stream-horizons';
+import { materializeInterruptedStream } from '@/lib/ai/core/materialize-interrupted-stream';
 
 /**
  * Per-conversation in-flight guard. Used by both chat routes (POST /api/ai/chat and
@@ -75,6 +76,11 @@ export const takeOverConversationStreams = async ({
         userId: aiStreamSessions.userId,
         lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
         startedAt: aiStreamSessions.startedAt,
+        // The debounced parts snapshot — needed only if this row ends up in `reconcile` and gets
+        // materialized into an interrupted message. Selected unconditionally since it rides the
+        // same query as everything else here and there are at most a handful of in-flight rows
+        // per conversation.
+        parts: aiStreamSessions.parts,
       })
       .from(aiStreamSessions)
       .where(and(
@@ -116,44 +122,79 @@ export const takeOverConversationStreams = async ({
     // subscriber and destroy its only crash-recovery snapshot.
     const { reconcile } = decideStreamTakeover({ rows, abortedMessageIds: aborted, now });
 
+    // Populated below with only the ids ACTUALLY driven terminal — never assumed from
+    // `reconcile` itself, which is only what we attempted.
+    let locallyReconciled: string[] = [];
+
     if (reconcile.length > 0) {
-      // Its OWN catch, deliberately.
+      // `reconcile` mixes two DIFFERENT kinds of row, and they must be handled differently —
+      // conflating them is exactly the race that used to silently clobber fresher content with a
+      // staler one:
       //
-      // By this point the aborts above have already landed: real in-process generations have
-      // been STOPPED. If this UPDATE then throws and the outer catch swallows it, we return
-      // `{aborted: [], reconciled: []}` — "nothing happened" — which is a lie. Streams were
-      // stopped, and their rows are still `status='streaming'`, so every reader treats them as
-      // live: /active-streams advertises them, clients render a Stop button for a generation that
-      // is already dead. The one thing the caller must be told accurately is what was actually
-      // aborted, and the old shape guaranteed it would be told the opposite.
-      //
-      // The rows self-heal: a stopped generation stops beating, so within
-      // STREAM_HEARTBEAT_STALE_MS the liveness predicate calls them dead, /active-streams stops
-      // serving them, and the next takeover reconciles them. That is exactly the failure mode the
-      // heartbeat exists to absorb — so the right move is to report the truth and let it, not to
-      // fail the send.
-      try {
-        // Conditional on status so a stream that terminated on its own between the
-        // SELECT and here isn't retroactively relabelled 'aborted'.
-        await db
-          .update(aiStreamSessions)
-          .set({ status: 'aborted', completedAt: new Date(), parts: [], abortRequestedAt: null })
-          .where(and(
-            inArray(aiStreamSessions.messageId, reconcile),
-            eq(aiStreamSessions.status, 'streaming'),
-          ));
-      } catch (error) {
-        loggers.ai.warn('AI Chat API: takeover aborted streams but could not reconcile their rows', {
-          conversationId,
+      //   - PROVABLY DEAD (heartbeat stale): the owning process is gone. Nothing else will EVER
+      //     write this row's terminal message, so it is materialized here — this is the only
+      //     chance the content has.
+      //   - JUST ABORTED BY US, THIS REQUEST (`aborted.has(id)`, heartbeat still fresh): the
+      //     owning generation is THIS SAME PROCESS, moments from running its own onFinish, which
+      //     persists the full, correct content as `status: 'interrupted'` via the normal
+      //     execute-end/onFinish path (message-utils.ts). Materializing here too would race that
+      //     natural write with an OLDER checkpoint snapshot and could overwrite it — the exact
+      //     silent-content-loss bug this module exists to prevent, just introduced by this PR
+      //     instead of fixed by it. So these rows get ONLY the cheap, ephemeral session-row wipe
+      //     (today's pre-existing behavior); the durable message is left to its own generation.
+      const rowById = new Map(rows.map((r) => [r.messageId, r]));
+      const provablyDead = reconcile.filter((id) => {
+        const row = rowById.get(id);
+        return row !== undefined && isProvablyDead(row, now);
+      });
+      const justAbortedStillAlive = reconcile.filter((id) => !provablyDead.includes(id));
+
+      // `materializeInterruptedStream` never throws (it catches and logs its own DB failures per
+      // step) and returns whether it actually succeeded — a batch of independent rows can run
+      // concurrently without one row's failure taking out the others, but the RESULT must still
+      // be checked per-row: `Promise.all` resolving tells you nothing about which calls actually
+      // landed, and reporting every id as reconciled regardless would be exactly the misreporting
+      // bug this module's own docblock warns against.
+      const materializedIds = (await Promise.all(provablyDead.map(async (messageId) => {
+        const row = rowById.get(messageId);
+        if (!row) return null;
+        const ok = await materializeInterruptedStream({
+          messageId,
           channelId,
-          // The streams ARE stopped. These rows will read 'streaming' until their heartbeat
-          // goes stale (~2 min), then be reconciled by the next takeover.
-          aborted,
-          unreconciled: reconcile,
-          error: error instanceof Error ? error.message : 'unknown',
+          conversationId,
+          userId: row.userId,
+          parts: row.parts,
+          startedAt: row.startedAt,
         });
-        return { aborted, reconciled: [] };
+        return ok ? messageId : null;
+      }))).filter((id): id is string => id !== null);
+
+      let wipedIds: string[] = [];
+      if (justAbortedStillAlive.length > 0) {
+        try {
+          // Conditional on status so a stream that terminated on its own between the SELECT and
+          // here isn't retroactively relabelled 'aborted'.
+          await db
+            .update(aiStreamSessions)
+            .set({ status: 'aborted', completedAt: new Date(), parts: [], abortRequestedAt: null })
+            .where(and(
+              inArray(aiStreamSessions.messageId, justAbortedStillAlive),
+              eq(aiStreamSessions.status, 'streaming'),
+            ));
+          wipedIds = justAbortedStillAlive;
+        } catch (error) {
+          loggers.ai.warn('AI Chat API: takeover aborted streams but could not clear their session rows', {
+            conversationId,
+            channelId,
+            // The streams ARE stopped, and their own onFinish will still persist the durable
+            // message correctly. Only the ephemeral session-row cleanup failed here.
+            unreconciled: justAbortedStillAlive,
+            error: error instanceof Error ? error.message : 'unknown',
+          });
+        }
       }
+
+      locallyReconciled = [...materializedIds, ...wipedIds];
     }
 
     // A live row this instance does not own. This USED to be the end of the road — it was logged
@@ -205,12 +246,13 @@ export const takeOverConversationStreams = async ({
       });
 
       remotelyAborted = outcome.aborted;
-      remotelyReconciled = outcome.reconcile;
       stillLive = outcome.stillLive;
 
       // Rows whose owner is provably gone (stale heartbeat) — nothing is running, but nothing
       // wrote their terminal status either. Same licence decideStreamTakeover already grants.
-      await reconcileDeadStreamRows({ messageIds: outcome.reconcile });
+      // `outcome.reconcile` is only what's ELIGIBLE to be driven terminal — reconcileDeadStreamRows
+      // returns what it ACTUALLY materialized, which is what belongs in the caller's own report.
+      remotelyReconciled = await reconcileDeadStreamRows({ messageIds: outcome.reconcile });
 
       if (stillLive.length > 0) {
         // The honest, narrower successor to the old warn. It no longer means "we cannot stop
@@ -230,8 +272,9 @@ export const takeOverConversationStreams = async ({
     // Rows driven terminal by the cross-instance path are reconciled just as surely as the ones
     // this instance reconciled directly. Leaving them out under-reports what the takeover actually
     // did — and this module's own docblock is emphatic that a log which misreports attests to
-    // nothing, which is the same defect as a test that cannot fail.
-    const allReconciled = [...reconcile, ...remotelyReconciled];
+    // nothing, which is the same defect as a test that cannot fail. `locallyReconciled` (not
+    // `reconcile`) is what was actually driven terminal, not merely attempted.
+    const allReconciled = [...locallyReconciled, ...remotelyReconciled];
 
     // Only claim a takeover when one actually happened.
     //

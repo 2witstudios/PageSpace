@@ -44,14 +44,35 @@ export interface AdvisoryLockPool {
   connect(): Promise<AdvisoryLockClient>;
 }
 
-export type WithAdvisoryLockResult<T> = { outcome: 'lock_busy' } | { outcome: 'acquired'; result: T };
+export type WithAdvisoryLockResult<T> =
+  | { outcome: 'lock_busy' }
+  | { outcome: 'acquired'; result: T }
+  | {
+      /**
+       * The lock connection itself failed — `pool.connect()` or the try-lock query threw
+       * (pool exhaustion, connection reset) — structurally distinct from `fn` throwing.
+       * RESOLVED, never rejected, so a caller can branch on `.outcome` instead of relying on
+       * "anything I catch here must be lock machinery" (an unenforced, comment-level
+       * assumption that broke down the instant a caller's `fn` stopped being throw-free).
+       * `fn` never ran on this path. See the D-task evidence (fmfmzw4g4gh6u6q9cjt7ylne) this
+       * closes.
+       */
+      outcome: 'connection_error';
+      error: unknown;
+    };
 
 export async function withAdvisoryLock<T>(
   pool: AdvisoryLockPool,
   lockKey: string,
   fn: () => Promise<T>,
 ): Promise<WithAdvisoryLockResult<T>> {
-  const client = await pool.connect();
+  let client: AdvisoryLockClient;
+  try {
+    client = await pool.connect();
+  } catch (error) {
+    return { outcome: 'connection_error', error };
+  }
+
   let lockAcquired = false;
   // Set only when a query ON THIS CLIENT (try-lock or unlock) itself threw —
   // NOT when `fn()` throws, since `fn` runs against its own I/O and leaves
@@ -73,6 +94,14 @@ export async function withAdvisoryLock<T>(
 
     const result = await fn();
     return { outcome: 'acquired', result };
+  } catch (error) {
+    // Only the try-lock query poisons the client — `fn`'s own errors leave this lock
+    // connection's protocol state untouched, so they are NOT lock machinery and must
+    // keep propagating as a rejection (the caller's own error, unwrapped).
+    if (clientPoisoned) {
+      return { outcome: 'connection_error', error };
+    }
+    throw error;
   } finally {
     if (lockAcquired) {
       try {
