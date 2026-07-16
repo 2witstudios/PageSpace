@@ -29,18 +29,26 @@ const { createCoverageMap } = istanbulLibCoverage;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-// 3 shards (~310 files), then 6 (~155), both had exactly one shard hit the
-// heap ceiling — but always a CLEAN failure (script catches it, exits, no
-// hang, no runner-level instability). 10 shards paired with raising the
-// ceiling to 10240MB was worse: a genuine system-level OOM-kill ("runner has
-// received a shutdown signal", exit 137) after 6 shards completed — the exact
-// same instability pattern seen in the single-invocation era every time the
-// ceiling was pushed above 8192MB, regardless of concurrency structure. That
-// makes 8192MB the one ceiling value that has NEVER caused runner-level
-// instability across every configuration tried (see ci.yml's git history);
-// only shard count actually needed to move. Pushed to 20 (~46 files each)
-// rather than incrementing again, while reverting the ceiling to 8192MB.
-const SHARD_COUNT = 20;
+// 3, 6, 10, and 20 shards (respectively ~310/155/93/46 files each) all still
+// had exactly one shard hit the heap ceiling — always a CLEAN failure (script
+// catches it, exits, no hang, no runner-level instability, at the stable
+// 8192MB ceiling; see ci.yml's history for why that value specifically is
+// never raised). The failing shard's fraction through the run was suspiciously
+// consistent (2/3 and 4/6 both = 0.667; ~6/10 and 12/20 both = 0.6) — doubling
+// shard count preserved the SAME relative position of trouble, which rules out
+// "too many files accumulating" (a smaller shard at the same position should
+// have then succeeded) and points to vitest's `--shard` splitting the sorted
+// file list into plain CONTIGUOUS ranges: a genuinely dense, heavy cluster of
+// files sits together in that range regardless of how finely you slice
+// around it. `src/lib/ai/core/__tests__/` alone is 66 files (of ~930 total)
+// — each pulling in substantial shared AI-orchestration infrastructure
+// (provider SDKs, tool registries, streaming/compaction logic) — and at 20
+// shards (~46 files/shard) that cluster barely fits inside a single shard's
+// window, concentrating the heaviest files in the whole suite together
+// instead of diluting them. Pushed to 40 (~23 files/shard) to actually split
+// that cluster across multiple shards rather than incrementing the same way
+// again.
+const SHARD_COUNT = 40;
 const METRICS = ['lines', 'branches', 'functions', 'statements'];
 const coverageDir = resolve(root, 'coverage');
 
