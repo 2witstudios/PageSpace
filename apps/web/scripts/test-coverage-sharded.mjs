@@ -21,7 +21,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, globSync } from 'node:fs';
 import { resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import istanbulLibCoverage from 'istanbul-lib-coverage';
@@ -29,34 +29,44 @@ const { createCoverageMap } = istanbulLibCoverage;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-// 3, 6, 10, and 20 shards (respectively ~310/155/93/46 files each) all still
-// had exactly one shard hit the heap ceiling — always a CLEAN failure (script
+// 3, 6, 10, 20, and 40 shards (~310/155/93/46/23 files each) all still had
+// exactly one shard hit the heap ceiling — always a CLEAN failure (script
 // catches it, exits, no hang, no runner-level instability, at the stable
 // 8192MB ceiling; see ci.yml's history for why that value specifically is
-// never raised). The failing shard's fraction through the run was suspiciously
-// consistent (2/3 and 4/6 both = 0.667; ~6/10 and 12/20 both = 0.6) — doubling
-// shard count preserved the SAME relative position of trouble, which rules out
-// "too many files accumulating" (a smaller shard at the same position should
-// have then succeeded) and points to vitest's `--shard` splitting the sorted
-// file list into plain CONTIGUOUS ranges: a genuinely dense, heavy cluster of
-// files sits together in that range regardless of how finely you slice
-// around it. `src/lib/ai/core/__tests__/` alone is 66 files (of ~930 total)
-// — each pulling in substantial shared AI-orchestration infrastructure
-// (provider SDKs, tool registries, streaming/compaction logic) — and at 20
-// shards (~46 files/shard) that cluster barely fits inside a single shard's
-// window, concentrating the heaviest files in the whole suite together
-// instead of diluting them. Pushed to 40 (~23 files/shard) to actually split
-// that cluster across multiple shards rather than incrementing the same way
-// again.
-const SHARD_COUNT = 40;
+// never raised). The failing shard's fraction through the run stayed
+// suspiciously consistent across shard counts (~0.55-0.67 each time) —
+// doubling shard count preserved the SAME relative position of trouble,
+// which rules out "too many files accumulating" (a smaller shard at that
+// same position should then have succeeded) and points to vitest's
+// `--shard` flag splitting the sorted file list into plain CONTIGUOUS
+// ranges: a genuinely dense, heavy cluster of files (e.g.
+// src/lib/ai/core/__tests__/ alone is 66 of ~930 total, each pulling in
+// substantial shared AI-orchestration infrastructure) sits together in that
+// range no matter how finely you slice around it — smaller shards just
+// isolate the SAME cluster into a smaller box, they don't split it apart.
+//
+// Fixed the actual mechanism instead of keeping the shard count as another
+// guess to escalate: this script enumerates and sorts the file list itself,
+// then distributes it into shards ROUND-ROBIN (file at sorted index i goes
+// to shard i % SHARD_COUNT) instead of trusting `--shard` to do a
+// contiguous split. Any dense cluster in the sorted order is now spread
+// evenly across every shard rather than concentrated in whichever one
+// happens to cover that range.
+const SHARD_COUNT = 20;
 const METRICS = ['lines', 'branches', 'functions', 'statements'];
 const coverageDir = resolve(root, 'coverage');
 
 rmSync(coverageDir, { recursive: true, force: true });
 mkdirSync(coverageDir, { recursive: true });
 
+const allTestFiles = globSync('src/**/*.{test,spec}.{js,ts,tsx}', { cwd: root }).sort();
+const shards = Array.from({ length: SHARD_COUNT }, () => []);
+allTestFiles.forEach((file, i) => shards[i % SHARD_COUNT].push(file));
+
 for (let i = 1; i <= SHARD_COUNT; i++) {
-  console.log(`\n=== Coverage shard ${i}/${SHARD_COUNT} ===\n`);
+  const files = shards[i - 1];
+  console.log(`\n=== Coverage shard ${i}/${SHARD_COUNT} (${files.length} files) ===\n`);
+  if (files.length === 0) continue;
   try {
     execFileSync(
       'bunx',
@@ -64,9 +74,9 @@ for (let i = 1; i <= SHARD_COUNT; i++) {
         'vitest',
         'run',
         '--coverage',
-        `--shard=${i}/${SHARD_COUNT}`,
         '--coverage.reporter=json',
         `--coverage.reportsDirectory=./coverage/shard-${i}`,
+        ...files,
       ],
       {
         cwd: root,
