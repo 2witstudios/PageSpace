@@ -15,21 +15,41 @@ import { maskEmail } from '../../audit/mask-email';
  * `broadcast_recipients` instead (see `record-adapter.ts`).
  */
 
-/** True when the URL points at the local machine (unsafe for a broadcast link). */
+/**
+ * True when the URL points at the local machine (unsafe for a broadcast link).
+ *
+ * Matches on shape rather than a list of spellings, because the spellings are numerous and
+ * each one that slips through mails a dead unsubscribe link to everybody: the whole
+ * `127.0.0.0/8` block is loopback (not just `127.0.0.1`), a trailing dot is a legal
+ * fully-qualified form of the same name (`localhost.`), and an IPv4-mapped IPv6 address
+ * reaches loopback while looking nothing like it — `[::ffff:127.0.0.1]` is even normalized
+ * to `[::ffff:7f00:1]` on the way through `URL`.
+ */
 export function isLocalhostUrl(url: string): boolean {
+  let hostname: string;
   try {
-    const { hostname } = new URL(url);
-    return (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '0.0.0.0' ||
-      hostname === '::1' ||
-      hostname === '[::1]'
-    );
+    ({ hostname } = new URL(url));
   } catch {
     // Unparseable → treat as unsafe so we never email a malformed link.
     return true;
   }
+
+  // A trailing dot is the explicit root; `localhost.` and `localhost` are the same host.
+  const host = hostname.toLowerCase().replace(/\.+$/, '');
+
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '0.0.0.0' || host === '::' || host === '[::]') return true;
+  if (host === '::1' || host === '[::1]') return true;
+
+  // Any 127.x.x.x, not just 127.0.0.1.
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+
+  // IPv4-mapped IPv6, in both the dotted and the normalized hex forms.
+  const v6 = host.replace(/^\[|\]$/g, '');
+  if (/^::ffff:127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v6)) return true;
+  if (/^::ffff:7f[0-9a-f]{0,2}:[0-9a-f]{1,4}$/.test(v6)) return true;
+
+  return false;
 }
 
 /**
@@ -72,6 +92,14 @@ function canonicalizeBaseUrl(raw: string): string | null {
 
   url.search = '';
   url.hash = '';
+  // Credentials must not survive into a link we mail. `URL.toString()` keeps
+  // `user:pass@`, and an operator pointing this at a basic-auth-protected preview origin
+  // is not far-fetched — it is where you would run a canary. That password would then sit
+  // in the footer link and the List-Unsubscribe header of every copy, unretractable, and
+  // most mail clients refuse userinfo URLs outright, so the opt-out would be dead for the
+  // whole audience. (`resolveMarketingBase` avoids this only by taking `.origin`.)
+  url.username = '';
+  url.password = '';
   return stripTrailingSlashes(url.toString());
 }
 
@@ -220,12 +248,19 @@ export async function findUnreachableUrls(
       const probe = (method: 'HEAD' | 'GET') =>
         fetchImpl(url, { method, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
 
+      // Plenty of hosts and CDNs mistreat HEAD on a page that serves fine over GET. Some
+      // answer 403/405; a WAF may simply blackhole it until the probe times out. Both are
+      // "HEAD is unreliable here", so neither should decide the answer — swallow either and
+      // ask again properly. Only the GET's verdict counts.
+      let head: Response | null = null;
       try {
-        const head = await probe('HEAD');
-        if (head.ok) return null;
+        head = await probe('HEAD');
+      } catch {
+        head = null;
+      }
+      if (head?.ok) return null;
 
-        // Plenty of hosts and CDNs answer 403/405 to HEAD on a page that serves
-        // fine over GET. Don't block a launch on that — ask again properly.
+      try {
         const get = await probe('GET');
         return get.ok ? null : `${url} (HTTP ${get.status})`;
       } catch (error) {
@@ -301,6 +336,15 @@ export interface SentLedgerEntry {
  * none: the file-ledger script wants a JSONL line appended, while the durable path wants
  * a `broadcast_recipients` row. The default is the script's, which is the caller that
  * cannot supply its own (it hands `record` to `runBroadcast` and never sees this class).
+ *
+ * The message masks the address it REPORTS, but the default remediation deliberately
+ * prints `entry` verbatim — do not "fix" that. The JSONL line IS the address: an operator
+ * pastes it, and `loadSentEmails` reads `entry.email` straight into the already-sent set
+ * that `decideRecipient` checks. A masked line would never match the real address, so the
+ * next run would mail that person a SECOND time — the exact failure this class exists to
+ * prevent. It is also the one message that goes to an operator's terminal rather than a
+ * log sink, which is why the durable path (whose message does reach a log aggregator and
+ * the broadcast row) passes its own remediation with placeholders instead.
  */
 export class LedgerWriteFailed extends Error {
   constructor(
@@ -363,6 +407,8 @@ export interface BroadcastResult {
  *    the auth flows use). These strings reach a log aggregator and the broadcast row's
  *    `lastError`/`stepResults`, and an address copied there in the clear outlives the
  *    encryption that protects it in `users` and the erasure that is supposed to remove it.
+ *    The one exception is `LedgerWriteFailed`'s DEFAULT remediation, which must print the
+ *    ledger line verbatim or the operator cannot repair the ledger — see that class.
  */
 export async function runBroadcast(input: {
   live: boolean;

@@ -584,6 +584,34 @@ describe('findUnreachableUrls', () => {
     expect(fetchImpl.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it('given a page that 404s, should report it', async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith('/cli')
+        ? ({ ok: false, status: 404 } as Response)
+        : ({ ok: true, status: 200 } as Response),
+    );
+
+    const unreachable = await findUnreachableUrls(['https://x/sdk', 'https://x/cli'], fetchImpl);
+
+    expect(unreachable).toEqual(['https://x/cli (HTTP 404)']);
+  });
+
+  it('given a host that hangs on HEAD, should still ask over GET before condemning it', async () => {
+    // The fallback exists because hosts mistreat HEAD. A WAF that blackholes it until the
+    // probe times out is doing exactly that, and deserves the same second chance as one
+    // that answers 405 — otherwise the comment's own reasoning stops halfway.
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) =>
+      init?.method === 'HEAD'
+        ? new Promise<Response>((_r, reject) =>
+            init?.signal?.addEventListener('abort', () => reject(new Error('timed out'))),
+          )
+        : ok(),
+    );
+
+    expect(await findUnreachableUrls(['https://waf.test/page'], fetchImpl, 20)).toEqual([]);
+    expect(fetchImpl.mock.calls.map((c) => c[1]?.method)).toEqual(['HEAD', 'GET']);
+  });
+
   it('given a host that never answers, should report it unreachable rather than hang', async () => {
     const fetchImpl = vi.fn(
       (_url: string | URL | Request, init?: RequestInit) =>
@@ -595,6 +623,16 @@ describe('findUnreachableUrls', () => {
     const unreachable = await findUnreachableUrls(['https://silent.test'], fetchImpl, 20);
 
     expect(unreachable).toEqual(['https://silent.test (The operation was aborted)']);
+  });
+
+  it('given a network failure, should report it rather than assume the page is fine', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('DNS go boom');
+    });
+
+    const unreachable = await findUnreachableUrls(['https://x/sdk'], fetchImpl);
+
+    expect(unreachable).toEqual(['https://x/sdk (DNS go boom)']);
   });
 });
 
@@ -636,6 +674,17 @@ describe('resolveBaseUrl — canonicalization', () => {
     );
   });
 
+  it('given credentials in the URL, should strip them rather than mail them', () => {
+    // `URL.toString()` keeps `user:pass@`, and this URL becomes the unsubscribe link in
+    // the footer AND the List-Unsubscribe header of every copy. The password would be in
+    // N inboxes, unretractable — and most clients refuse userinfo URLs outright, so the
+    // opt-out would be dead for the whole audience. (This is why resolveMarketingBase
+    // takes `.origin`; this one has to strip explicitly.)
+    expect(
+      resolveBaseUrl({ WEB_APP_URL: 'https://deploy:hunter2@app.pagespace.ai/app/' } as NodeJS.ProcessEnv),
+    ).toBe('https://app.pagespace.ai/app');
+  });
+
   it('given a garbage candidate and a good one, should use the good one', () => {
     expect(
       resolveBaseUrl({
@@ -645,27 +694,6 @@ describe('resolveBaseUrl — canonicalization', () => {
     ).toBe('https://app.pagespace.ai');
   });
 
-  it('given a page that 404s, should report it', async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
-      String(url).endsWith('/cli')
-        ? ({ ok: false, status: 404 } as Response)
-        : ({ ok: true, status: 200 } as Response),
-    );
-
-    const unreachable = await findUnreachableUrls(['https://x/sdk', 'https://x/cli'], fetchImpl);
-
-    expect(unreachable).toEqual(['https://x/cli (HTTP 404)']);
-  });
-
-  it('given a network failure, should report it rather than assume the page is fine', async () => {
-    const fetchImpl = vi.fn(async () => {
-      throw new Error('DNS go boom');
-    });
-
-    const unreachable = await findUnreachableUrls(['https://x/sdk'], fetchImpl);
-
-    expect(unreachable).toEqual(['https://x/sdk (DNS go boom)']);
-  });
 });
 
 describe('listUnsubscribeHeaders', () => {
@@ -685,8 +713,27 @@ describe('isLocalhostUrl', () => {
     }
   });
 
-  it('given a public URL, should not report it as localhost', () => {
-    expect(isLocalhostUrl('https://app.pagespace.ai')).toBe(false);
+  it.each([
+    // Every spelling that slips through mails a dead unsubscribe link to everybody, so
+    // this matches on shape, not on a list of literals.
+    ['http://localhost.:3000', 'a trailing dot is the same host, fully qualified'],
+    ['http://api.localhost', 'the whole .localhost namespace is loopback'],
+    ['http://127.5.5.5', 'all of 127.0.0.0/8 is loopback, not just 127.0.0.1'],
+    ['http://127.1', 'a short form URL normalizes to 127.0.0.1'],
+    ['http://[::ffff:127.0.0.1]:3000', 'IPv4-mapped IPv6 reaches loopback'],
+    ['http://[::]', 'the unspecified address binds locally'],
+  ])('given %s, should report it as localhost (%s)', (url) => {
+    expect(isLocalhostUrl(url)).toBe(true);
+  });
+
+  it.each([
+    // The other half: a hostname that merely CONTAINS a loopback spelling is a real,
+    // routable host — refusing to mail it would be its own bug.
+    'https://app.pagespace.ai',
+    'https://localhost.evil.com',
+    'https://127.0.0.1.example.com',
+  ])('given the public URL %s, should not report it as localhost', (url) => {
+    expect(isLocalhostUrl(url)).toBe(false);
   });
 
   it('given an unparseable URL, should fail closed and call it unsafe', () => {
