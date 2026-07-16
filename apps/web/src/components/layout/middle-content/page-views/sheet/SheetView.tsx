@@ -57,38 +57,19 @@ import {
   addRow,
   addColumn,
 } from './core/cell-ops';
+import {
+  flattenTree,
+  buildParentMap,
+  resolveReferenceTarget,
+  resolveExternalReference,
+  type ExternalSheetState,
+} from './core/references';
+import { computeSelectionStats } from './core/stats';
+import { buildFindMatches } from './core/find';
 
 interface SheetViewProps {
   page: TreePage;
 }
-
-type ExternalSheetState =
-  | {
-      status: 'loading';
-      label: string;
-      identifier?: string;
-      mentionType?: string;
-      pageId: string;
-      title: string;
-    }
-  | {
-      status: 'ready';
-      label: string;
-      identifier?: string;
-      mentionType?: string;
-      pageId: string;
-      title: string;
-      sheet: SheetData;
-    }
-  | {
-      status: 'error';
-      label: string;
-      identifier?: string;
-      mentionType?: string;
-      pageId?: string;
-      title?: string;
-      error: string;
-    };
 
 // Get the DOM rectangle for a specific cell
 const getCellRect = (row: number, column: number, gridElement: HTMLElement | null): DOMRect | null => {
@@ -202,109 +183,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const [externalSheets, setExternalSheets] = useState<Record<string, ExternalSheetState>>({});
   const externalFetchesRef = useRef<Set<string>>(new Set());
   const externalReferences = useMemo(() => collectExternalReferences(sheet), [sheet]);
-  const flattenedPages = useMemo(() => {
-    const items: TreePage[] = [];
-    const walk = (nodes: TreePage[]) => {
-      for (const node of nodes) {
-        items.push(node);
-        if (node.children && node.children.length > 0) {
-          walk(node.children);
-        }
-      }
-    };
-    if (tree && tree.length > 0) {
-      walk(tree);
-    }
-    return items;
-  }, [tree]);
+  const flattenedPages = useMemo(() => (tree && tree.length > 0 ? flattenTree(tree) : []), [tree]);
 
-  const parentMap = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const node of flattenedPages) {
-      map.set(node.id, node.parentId ?? null);
-    }
-    return map;
-  }, [flattenedPages]);
+  const parentMap = useMemo(() => buildParentMap(flattenedPages), [flattenedPages]);
 
-  const resolveReferenceTarget = useCallback(
-    (reference: SheetExternalReferenceToken) => {
-      if (reference.identifier) {
-        const byId = flattenedPages.find(
-          (node) => node.id === reference.identifier && node.type === PageType.SHEET
-        );
-        if (byId) {
-          return { pageId: byId.id, title: byId.title };
-        }
-      }
-
-      const normalizedLabel = reference.label.trim().toLowerCase();
-      const labelMatches = flattenedPages.filter(
-        (node) =>
-          node.type === PageType.SHEET && node.title.trim().toLowerCase() === normalizedLabel
-      );
-
-      if (labelMatches.length === 1) {
-        return { pageId: labelMatches[0].id, title: labelMatches[0].title };
-      }
-
-      if (labelMatches.length > 1) {
-        const getAncestorChain = (id?: string | null) => {
-          const chain: string[] = [];
-          const visited = new Set<string>();
-          let current: string | null | undefined = id ?? null;
-          while (current) {
-            if (visited.has(current)) {
-              break;
-            }
-            chain.push(current);
-            visited.add(current);
-            current = parentMap.get(current) ?? null;
-          }
-          return chain;
-        };
-
-        const currentAncestors = new Set(getAncestorChain(page.id));
-
-        const ranked = labelMatches
-          .map((node) => {
-            const chain = getAncestorChain(node.id);
-            const sharedDepth = chain.reduce(
-              (depth, ancestor) => (currentAncestors.has(ancestor) ? depth + 1 : depth),
-              0
-            );
-            return {
-              node,
-              isSibling: node.parentId === page.parentId,
-              sharedDepth,
-              depth: chain.length,
-              position: typeof node.position === 'number' ? node.position : Number.MAX_SAFE_INTEGER,
-            };
-          })
-          .sort((a, b) => {
-            if (a.isSibling !== b.isSibling) {
-              return a.isSibling ? -1 : 1;
-            }
-            if (b.sharedDepth !== a.sharedDepth) {
-              return b.sharedDepth - a.sharedDepth;
-            }
-            if (a.depth !== b.depth) {
-              return a.depth - b.depth;
-            }
-            if (a.position !== b.position) {
-              return a.position - b.position;
-            }
-            return a.node.title.localeCompare(b.node.title);
-          });
-
-        if (ranked.length > 0) {
-          const { node } = ranked[0];
-          return { pageId: node.id, title: node.title };
-        }
-      }
-
-      return null;
-    },
-    [flattenedPages, page.id, page.parentId, parentMap]
+  const resolveReference = useCallback(
+    (reference: SheetExternalReferenceToken) =>
+      resolveReferenceTarget(reference, {
+        flattenedPages,
+        parentMap,
+        currentPageId: page.id,
+        currentParentId: page.parentId,
+      }),
+    [flattenedPages, parentMap, page.id, page.parentId]
   );
 
   const {
@@ -374,7 +265,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         return;
       }
 
-      const target = resolveReferenceTarget(reference);
+      const target = resolveReference(reference);
       if (!target) {
         setExternalSheets((prev) => ({
           ...prev,
@@ -481,44 +372,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           externalFetchesRef.current.delete(reference.raw);
         });
     });
-  }, [externalReferences, externalSheets, resolveReferenceTarget]);
+  }, [externalReferences, externalSheets, resolveReference]);
 
   const evaluationOptions = useMemo(
     () => ({
       pageId: page.id,
       pageTitle: page.title,
-      resolveExternalReference: (reference: SheetExternalReferenceToken) => {
-        const entry = externalSheets[reference.raw];
-        if (!entry) {
-          return {
-            pageId: reference.identifier ?? reference.raw,
-            pageTitle: reference.label,
-            error: `Referenced page "${reference.label}" is loading`,
-          };
-        }
-
-        if (entry.status === 'ready') {
-          return {
-            pageId: entry.pageId,
-            pageTitle: entry.title,
-            sheet: entry.sheet,
-          };
-        }
-
-        if (entry.status === 'loading') {
-          return {
-            pageId: entry.pageId,
-            pageTitle: entry.title,
-            error: `Referenced page "${entry.title}" is loading`,
-          };
-        }
-
-        return {
-          pageId: entry.pageId ?? reference.identifier ?? reference.raw,
-          pageTitle: entry.title ?? reference.label,
-          error: entry.error,
-        };
-      },
+      resolveExternalReference: (reference: SheetExternalReferenceToken) =>
+        resolveExternalReference(reference, externalSheets),
     }),
     [externalSheets, page.id, page.title]
   );
@@ -532,21 +393,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       reportMatches(0);
       return;
     }
-    const q = findQuery.toLowerCase();
-    const matches: string[] = [];
-    for (let r = 0; r < sheet.rowCount; r++) {
-      for (let c = 0; c < sheet.columnCount; c++) {
-        const addr = encodeCellAddress(r, c);
-        const raw = sheet.cells[addr] ?? '';
-        const display = evaluation.display[r]?.[c] ?? '';
-        if (raw.toLowerCase().includes(q) || display.toLowerCase().includes(q)) {
-          matches.push(addr);
-        }
-      }
-    }
+    const matches = buildFindMatches(findQuery, sheet, evaluation.display);
     setFindAddresses(matches);
     reportMatches(matches.length);
-  }, [isFindOpen, findQuery, sheet.cells, sheet.rowCount, sheet.columnCount, evaluation.display, reportMatches]);
+  }, [isFindOpen, findQuery, sheet, evaluation.display, reportMatches]);
 
   useEffect(() => {
     const addr = findAddresses[findIndex];
@@ -569,54 +419,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const selectionAddress = getSelectionAddress(selection);
 
   // Calculate selection statistics for the status bar
-  const selectionStats = useMemo(() => {
-    const cells: { value: number; hasValue: boolean }[] = [];
-
-    if (selection.type === 'single') {
-      const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
-      const cellData = evaluation.byAddress[cellAddress];
-      if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
-        cells.push({ value: cellData.value, hasValue: true });
-      } else if (cellData && cellData.value !== '') {
-        cells.push({ value: NaN, hasValue: true });
-      }
-    } else {
-      const { start, end } = selection.range;
-      const minRow = Math.min(start.row, end.row);
-      const maxRow = Math.max(start.row, end.row);
-      const minCol = Math.min(start.column, end.column);
-      const maxCol = Math.max(start.column, end.column);
-
-      for (let row = minRow; row <= maxRow; row++) {
-        for (let col = minCol; col <= maxCol; col++) {
-          const cellAddress = encodeCellAddress(row, col);
-          const cellData = evaluation.byAddress[cellAddress];
-          if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
-            cells.push({ value: cellData.value, hasValue: true });
-          } else if (cellData && cellData.value !== '') {
-            cells.push({ value: NaN, hasValue: true });
-          }
-        }
-      }
-    }
-
-    const numericCells = cells.filter(c => c.hasValue && Number.isFinite(c.value));
-    const nonEmptyCells = cells.filter(c => c.hasValue);
-
-    if (numericCells.length === 0) {
-      return { sum: null, average: null, count: nonEmptyCells.length, numericCount: 0 };
-    }
-
-    const sum = numericCells.reduce((acc, c) => acc + c.value, 0);
-    const average = sum / numericCells.length;
-
-    return {
-      sum,
-      average,
-      count: nonEmptyCells.length,
-      numericCount: numericCells.length,
-    };
-  }, [selection, evaluation.byAddress]);
+  const selectionStats = useMemo(
+    () => computeSelectionStats(selection, evaluation.byAddress),
+    [selection, evaluation.byAddress]
+  );
 
   const suggestionContext = useSuggestionContext();
   const handleFormulaValueChange = useCallback(

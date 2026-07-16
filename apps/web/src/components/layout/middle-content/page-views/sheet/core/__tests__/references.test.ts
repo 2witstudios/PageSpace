@@ -239,6 +239,21 @@ describe('resolveReferenceTarget', () => {
     });
   });
 
+  it('treats a non-numeric position as lowest priority among duplicates', () => {
+    const pages = [
+      node({ id: 'cur', parentId: null, title: 'Current' }),
+      node({ id: 'with-pos', parentId: 'root', title: 'Budget', position: 1 }),
+      node({ id: 'no-pos', parentId: 'root', title: 'Budget', position: undefined }),
+      node({ id: 'root', parentId: null, title: 'Folder' }),
+    ];
+    assert({
+      given: 'two duplicate matches, one with an undefined position',
+      should: 'rank the one with a numeric position first',
+      actual: resolveReferenceTarget(token(), ctx(pages, 'cur', null)),
+      expected: { pageId: 'with-pos', title: 'Budget' },
+    });
+  });
+
   it('ranks a sibling ahead of a deeper match among duplicates', () => {
     const pages = [
       node({ id: 'cur', parentId: 'p1', title: 'Current' }),
@@ -252,6 +267,21 @@ describe('resolveReferenceTarget', () => {
       should: 'prefer the sibling',
       actual: resolveReferenceTarget(token(), ctx(pages)),
       expected: { pageId: 'sib', title: 'Budget' },
+    });
+  });
+
+  it('handles a duplicate match at the tree root (null parentId)', () => {
+    const pages = [
+      node({ id: 'cur', parentId: 'p1', title: 'Current' }),
+      node({ id: 'p1', parentId: null, title: 'Parent' }),
+      node({ id: 'nested', parentId: 'p1', title: 'Budget' }),
+      node({ id: 'root-budget', parentId: null, title: 'Budget' }),
+    ];
+    assert({
+      given: 'one duplicate match nested as a sibling and one at the root',
+      should: 'prefer the sibling while still ranking the root-level match',
+      actual: resolveReferenceTarget(token(), ctx(pages)),
+      expected: { pageId: 'nested', title: 'Budget' },
     });
   });
 });
@@ -314,15 +344,27 @@ describe('resolveExternalReference', () => {
     });
   });
 
-  it('falls back to token details for an error entry missing page info', () => {
+  it('falls back to the identifier for an error entry missing page info', () => {
     const entries: Record<string, ExternalSheetState> = {
       '[[Budget]]': { status: 'error', label: 'Budget', error: 'boom' },
     };
     assert({
-      given: 'an error entry with no pageId/title',
-      should: 'fall back to the identifier/raw and label',
+      given: 'an error entry with no pageId/title but a token identifier',
+      should: 'fall back to the identifier and label',
       actual: resolveExternalReference(token({ identifier: 'id-2' }), entries),
       expected: { pageId: 'id-2', pageTitle: 'Budget', error: 'boom' },
+    });
+  });
+
+  it('falls back to the raw token for an error entry with neither pageId nor identifier', () => {
+    const entries: Record<string, ExternalSheetState> = {
+      '[[Budget]]': { status: 'error', label: 'Budget', error: 'boom' },
+    };
+    assert({
+      given: 'an error entry with no pageId and a token with no identifier',
+      should: 'fall back to the raw token as pageId',
+      actual: resolveExternalReference(token(), entries).pageId,
+      expected: '[[Budget]]',
     });
   });
 });
