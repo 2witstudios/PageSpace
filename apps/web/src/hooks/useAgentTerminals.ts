@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import useSWR from 'swr';
+import useSWR, { mutate } from 'swr';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 
@@ -29,6 +29,30 @@ function buildQuery(machineId: string, projectName?: string | null, branchName?:
   if (projectName) params.set('projectName', projectName);
   if (branchName) params.set('branchName', branchName);
   return params.toString();
+}
+
+/**
+ * Kills a session addressed by its OWN (project, branch, name) scope — the
+ * session's real identity (`machine_agent_terminals`' unique index).
+ *
+ * The hook's `removeAgentTerminal` below DELETEs under whatever scope the hook
+ * instance was mounted with — right for undoing a spawn that same instance
+ * just made, wrong for killing an arbitrary pane's session: a pane's scope can
+ * differ from its workspace's (a restored server layout can hold panes bound
+ * at other checkouts), and DELETEing that pane's `name` under the WORKSPACE's
+ * scope would kill a different terminal that happens to share the name — or
+ * nothing — while the intended one lives on as an unclaimed session.
+ *
+ * Revalidates the killed scope's list afterwards so any mounted hook on that
+ * scope (e.g. the sidebar's session rows) drops the dead row.
+ */
+export async function killAgentTerminal(
+  machineId: string,
+  scope: { projectName?: string | null; branchName?: string | null; name: string },
+): Promise<void> {
+  const query = buildQuery(machineId, scope.projectName, scope.branchName);
+  await del(`/api/machines/agent-terminals?${query}&name=${encodeURIComponent(scope.name)}`);
+  await mutate(`/api/machines/agent-terminals?${query}`);
 }
 
 /**

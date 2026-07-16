@@ -50,9 +50,16 @@ const dismissPicker = vi.fn();
 /** The spawn the picker performs — the only reason TerminalPanes touches the API. */
 const addAgentTerminal = vi.fn(async (name: string, agentType: string) => ({ name, agentType, resumed: false }));
 const removeAgentTerminal = vi.fn<(name: string) => Promise<void>>(async () => {});
+/** The close-kill path — addressed by the PANE's own scope, never through the
+ * workspace-scoped hook, whose scope can differ from the closing pane's. */
+const killAgentTerminal = vi.fn<
+  (machineId: string, scope: { projectName?: string; branchName?: string; name: string }) => Promise<void>
+>(async () => {});
 /** Records the scope the hook was asked for, so a spawn at the wrong checkout can't pass. */
 const useAgentTerminalsArgs = vi.fn<(machineId: string, projectName: string | null, branchName: string | null) => void>();
 vi.mock('@/hooks/useAgentTerminals', () => ({
+  killAgentTerminal: (machineId: string, scope: { projectName?: string; branchName?: string; name: string }) =>
+    killAgentTerminal(machineId, scope),
   useAgentTerminals: (machineId: string, projectName: string | null, branchName: string | null) => {
     useAgentTerminalsArgs(machineId, projectName, branchName);
     return {
@@ -230,7 +237,12 @@ describe('TerminalPanes (close means close)', () => {
     workspace = SPLIT_WORKSPACE;
   });
 
-  test('closing a pane kills the session it held', async () => {
+  test('closing a pane kills the session it held — addressed by the PANE\'s own scope, not the workspace\'s', async () => {
+    // The pane's session lives at MACHINE scope while its workspace is scoped
+    // to app/main — a shape a restored server layout can legitimately hold. A
+    // kill routed through the workspace-scoped hook would DELETE name "solo"
+    // under app/main: a different terminal (or nothing), leaving the one the
+    // user closed running as an unclaimed session.
     workspace = SOLO_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
     await screen.findByTestId('xterm');
@@ -238,11 +250,17 @@ describe('TerminalPanes (close means close)', () => {
     await userEvent.click(screen.getByTitle('Close pane'));
 
     assert({
-      given: 'the close control on a pane holding a session',
+      given: 'the close control on a pane holding a session whose scope differs from its workspace\'s',
       should:
-        'kill the PTY — detaching instead is what MANUFACTURES the unclaimed rows that cannot be removed from the sidebar',
-      actual: removeAgentTerminal.mock.calls.map(([name]) => name),
-      expected: ['solo'],
+        'kill the PTY at the pane\'s own (project, branch, name) — detaching instead is what MANUFACTURES the unclaimed rows that cannot be removed from the sidebar',
+      actual: {
+        kills: killAgentTerminal.mock.calls,
+        viaWorkspaceHook: removeAgentTerminal.mock.calls.length,
+      },
+      expected: {
+        kills: [['m1', { name: 'solo' }]],
+        viaWorkspaceHook: 0,
+      },
     });
   });
 
@@ -257,7 +275,7 @@ describe('TerminalPanes (close means close)', () => {
       given: 'one of two panes showing the SAME session',
       should:
         'close the pane but leave the PTY alone — the other pane is still showing it, and pulling it out from under them would kill a terminal they are looking at',
-      actual: removeAgentTerminal.mock.calls.length,
+      actual: killAgentTerminal.mock.calls.length,
       expected: 0,
     });
   });
@@ -281,9 +299,9 @@ describe('TerminalPanes (close means close)', () => {
 
     assert({
       given: 'two panes whose sessions share a name but sit in different branches',
-      should: 'still kill the closed one — comparing on name alone would silently skip it',
-      actual: removeAgentTerminal.mock.calls.map(([name]) => name),
-      expected: ['claude-x'],
+      should: 'still kill the closed one, at ITS checkout — comparing on name alone would silently skip it',
+      actual: killAgentTerminal.mock.calls,
+      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'claude-x' }]],
     });
   });
 
@@ -296,7 +314,7 @@ describe('TerminalPanes (close means close)', () => {
     assert({
       given: 'a pane holding the picker rather than a session',
       should: 'have no PTY to kill',
-      actual: removeAgentTerminal.mock.calls.length,
+      actual: killAgentTerminal.mock.calls.length,
       expected: 0,
     });
   });

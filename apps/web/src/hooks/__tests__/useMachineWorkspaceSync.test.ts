@@ -147,6 +147,47 @@ describe('useMachineWorkspaceSync', () => {
     });
   });
 
+  // Regression (Codex P2): the empty-payload non-claim hydrate above must stay
+  // PROVISIONAL. If it set `hydratedOnce`, a browser with no local history
+  // opening an unclaimed machine would ignore the `bootstrapped` broadcast
+  // fired when ANOTHER browser (with real un-migrated history) later wins the
+  // claim — the seeded workspaces arrive ONLY over that broadcast, so the
+  // first browser would sit on the unclaimed list until a remount.
+  it('given an empty non-claim hydrate, a LATER bootstrapped broadcast (another browser winning the claim) still applies', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      jsonResponse({
+        bootstrapped: false,
+        workspaces: [
+          { id: 'ws-theirs', name: 'Theirs', scope: {}, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+        ],
+      }),
+    );
+
+    renderHook(() => useMachineWorkspaceSync('m-empty-then-claimed'));
+    // The provisional hydrate has demonstrably run (the unclaimed row landed),
+    // and no claim was burned for an empty payload.
+    await waitFor(() => {
+      const machine = selectMachine('m-empty-then-claimed')(useMachineWorkspaceStore.getState());
+      expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-theirs']);
+    });
+    expect(mockPost).not.toHaveBeenCalled();
+
+    act(() => {
+      mockSocket.current!._trigger('machine-workspace:bootstrapped', {
+        machineId: 'm-empty-then-claimed',
+        // bootstrapSeed re-selects ALL rows post-seed, so the broadcast carries
+        // the full canonical list — pre-existing rows included.
+        workspaces: [
+          { id: 'ws-theirs', name: 'Theirs', scope: {}, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+          { id: 'ws-migrated', name: 'Migrated', scope: {}, columns: [{ id: 'col-2', panes: [{ id: 'pane-2', scope: null }] }] },
+        ],
+      });
+    });
+
+    const machine = selectMachine('m-empty-then-claimed')(useMachineWorkspaceStore.getState());
+    expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-theirs', 'ws-migrated']);
+  });
+
   it('given a machine-workspace:created event for a DIFFERENT machine, ignores it', async () => {
     renderHook(() => useMachineWorkspaceSync('m-filter'));
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());

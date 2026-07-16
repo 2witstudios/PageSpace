@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/select';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { useMobile } from '@/hooks/useMobile';
-import { useAgentTerminals } from '@/hooks/useAgentTerminals';
+import { useAgentTerminals, killAgentTerminal } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
 import { PICKABLE_AGENT_TYPES, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
@@ -139,6 +139,12 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
    * and closing one of those must not pull the PTY out from under the other.
    * Read from the store rather than this render's `workspace`, since only the
    * machine-wide state can see panes in the workspaces we aren't rendering.
+   *
+   * The kill is addressed by the PANE's own scope (`killAgentTerminal`), not
+   * through this component's workspace-scoped hook — a pane's checkout can
+   * differ from its workspace's, and a DELETE under the workspace scope would
+   * target a different same-named terminal (or nothing) while the one the user
+   * closed lives on.
    */
   const closePaneAndKill = useCallback(
     (paneId: string) => {
@@ -160,14 +166,14 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
 
       closePane(workspaceId, paneId);
       if (closing !== null && !boundElsewhere) {
-        void removeAgentTerminal(closing.name).catch(() => {
+        void killAgentTerminal(machineId, closing).catch(() => {
           // The pane is already gone locally; a failed kill leaves the session
           // discoverable as an unclaimed row (which now carries its own remove
           // button), so this must not throw into the click handler.
         });
       }
     },
-    [machineId, workspaceId, closePane, removeAgentTerminal],
+    [machineId, workspaceId, closePane],
   );
 
   // Briefly undefined between this component's first render and the mounting

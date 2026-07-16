@@ -83,9 +83,11 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
   const socket = useSocket();
   usePageSocketRoom(machineId ?? undefined);
 
-  // Guards against retrying the bootstrap POST on every SWR revalidation once
-  // this browser has already tried it for this machine — not against the
-  // cross-browser race, which the server's claim table (not this ref) resolves.
+  // Records that this browser has made its one bootstrap decision for this
+  // machine — either it POSTed a claim, or it had nothing local to migrate and
+  // deliberately declined to (the empty-payload branch below). Guards against
+  // re-deciding on every SWR revalidation — not against the cross-browser
+  // race, which the server's claim table (not this ref) resolves.
   const bootstrapAttempted = useRef(false);
 
   // `hydrateFromServer` is a FULL-LIST replace that deliberately drops any
@@ -141,8 +143,20 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     // Must HYDRATE, not just skip the POST: the hydrate above is gated on
     // `data.bootstrapped`, so returning without one would leave this browser
     // showing an empty machine while the server holds real rows.
+    //
+    // And the hydrate must stay PROVISIONAL — it marks the bootstrap decision
+    // (`bootstrapAttempted`: nothing to migrate, ever), NOT `hydratedOnce`.
+    // Not claiming means another browser WITH history can still win the claim
+    // later, and its seeded list arrives only as a
+    // `machine-workspace:bootstrapped` broadcast — which `onBootstrapped`
+    // ignores once `hydratedOnce` is set. Marking this hydrate final would
+    // strand this browser on the unclaimed (usually empty) list until remount.
+    // Leaving `hydratedOnce` unset here is safe: this branch only runs when the
+    // local list is empty, so the full-list replace cannot wipe anything, and a
+    // later `bootstrapped: true` revalidation (a missed broadcast) re-enters
+    // the hydrate above instead of being gated out.
     if (payload.length === 0) {
-      hydratedOnce.current = true;
+      bootstrapAttempted.current = true;
       hydrateFromServer(machineId, data.workspaces);
       return;
     }
