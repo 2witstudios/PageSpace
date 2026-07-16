@@ -38,7 +38,74 @@ import {
   validateRepoName,
   assertHttps,
 } from './sandbox-git/core/validators';
-import { csvFlag, buildApiKvArgs } from './sandbox-git/core/arg-builders';
+import {
+  buildCloneArgs,
+  buildInitArgs,
+  buildConfigArgs,
+  buildRemoteAddArgs,
+} from './sandbox-git/core/command-specs/repo';
+import {
+  buildStatusArgs,
+  buildDiffArgs,
+  buildAddArgs,
+  buildResetArgs,
+  buildStashArgs,
+} from './sandbox-git/core/command-specs/worktree';
+import {
+  buildCommitArgs,
+  buildLogArgs,
+  buildShowArgs,
+  buildBlameArgs,
+  buildMergeArgs,
+  buildRebaseArgs,
+  buildRevertArgs,
+  buildCheckoutArgs,
+  buildBranchArgs,
+} from './sandbox-git/core/command-specs/history';
+import { buildFetchArgs, buildPullArgs, buildPushArgs } from './sandbox-git/core/command-specs/remote';
+import {
+  buildPrCreateArgs,
+  buildPrListArgs,
+  buildPrViewArgs,
+  buildPrDiffArgs,
+  buildPrChecksArgs,
+  buildPrMergeArgs,
+  buildPrCheckoutArgs,
+  buildPrReviewArgs,
+  buildPrReviewCommentArgs,
+  buildPrCommentArgs,
+  buildPrEditArgs,
+  buildPrUpdateBranchArgs,
+  buildPrThreadListArgs,
+  buildPrThreadResolveArgs,
+  buildPrCloseArgs,
+  buildPrReopenArgs,
+  buildPrReadyArgs,
+} from './sandbox-git/core/command-specs/pr';
+import {
+  buildRunListArgs,
+  buildRunViewArgs,
+  buildRunRerunArgs,
+  buildWorkflowListArgs,
+  buildWorkflowRunArgs,
+} from './sandbox-git/core/command-specs/actions';
+import {
+  buildIssueCreateArgs,
+  buildIssueListArgs,
+  buildIssueViewArgs,
+  buildIssueCommentArgs,
+  buildIssueEditArgs,
+  buildIssueCloseArgs,
+  buildIssueReopenArgs,
+} from './sandbox-git/core/command-specs/issues';
+import {
+  buildRepoViewArgs,
+  buildRepoListArgs,
+  buildRepoForkArgs,
+  buildRepoCreateArgs,
+  buildSearchArgs,
+  buildLabelListArgs,
+} from './sandbox-git/core/command-specs/repos-search';
 
 // Optional per-call working directory, relative to the sandbox root (/workspace).
 // Each tool call is a fresh process, so cwd never persists between calls — pass it
@@ -82,34 +149,6 @@ const NO_CONNECTION_ERROR = {
     'No GitHub connection found. Connect your GitHub account in Settings → Integrations to use remote git operations.',
   reason: 'error' as const,
 };
-
-// GraphQL documents for review-thread tools. These MUST stay module-level
-// constants — variables are passed via separate -f/-F flags, never interpolated
-// into the document, so tool input can't alter the query shape.
-const LIST_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $number) {
-      reviewThreads(first: 100) {
-        nodes {
-          id
-          isResolved
-          isOutdated
-          path
-          line
-          comments(first: 10) {
-            nodes { databaseId author { login } body }
-          }
-        }
-      }
-    }
-  }
-}`;
-
-const RESOLVE_THREAD_MUTATION = `mutation($threadId: ID!) {
-  resolveReviewThread(input: {threadId: $threadId}) {
-    thread { id isResolved }
-  }
-}`;
 
 export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machines }: GitSandboxToolsDeps): Record<string, Tool> {
   /**
@@ -231,17 +270,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      // `--depth` implies `--single-branch`, which writes a narrow fetch refspec
-      // (`+refs/heads/<branch>:...`) into .git/config — that leaves later-created
-      // branches without an origin tracking ref, breaking `push -u` and PR creation.
-      // `--no-single-branch` keeps the wildcard `+refs/heads/*:refs/remotes/origin/*`.
-      const args = [
-        'clone',
-        ...(depth ? ['--no-single-branch', '--depth', String(depth)] : []),
-        repo_url,
-        resolved.path,
-      ];
-      return git('git', args, opened.ctx);
+      return git('git', buildCloneArgs({ repoUrl: repo_url, path: resolved.path, depth }), opened.ctx);
     },
   });
 
@@ -253,7 +282,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!resolved.ok) return resolved.error;
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['init', resolved.path], opened.ctx);
+      return git('git', buildInitArgs(resolved.path), opened.ctx);
     },
   });
 
@@ -269,7 +298,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ key, value, global: isGlobal, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['config', ...(isGlobal ? ['--global'] : []), key, value], opened.ctx, cwd);
+      return git('git', buildConfigArgs({ key, value, global: isGlobal }), opened.ctx, cwd);
     },
   });
 
@@ -289,7 +318,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!https.ok) return { success: false as const, error: https.error };
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['remote', 'add', name, url], opened.ctx, cwd);
+      return git('git', buildRemoteAddArgs({ name, url }), opened.ctx, cwd);
     },
   });
 
@@ -301,7 +330,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ path, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['status', '--porcelain', ...(path ? ['--', path] : [])], opened.ctx, cwd);
+      return git('git', buildStatusArgs(path), opened.ctx, cwd);
     },
   });
 
@@ -332,20 +361,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ staged, path, base, head, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      if (base) {
-        return git(
-          'git',
-          ['diff', `${base}...${head ?? 'HEAD'}`, ...(path ? ['--', path] : [])],
-          opened.ctx,
-          cwd,
-        );
-      }
-      return git(
-        'git',
-        ['diff', ...(staged ? ['--cached'] : []), ...(path ? ['--', path] : [])],
-        opened.ctx,
-        cwd,
-      );
+      return git('git', buildDiffArgs({ staged, path, base, head }), opened.ctx, cwd);
     },
   });
 
@@ -363,7 +379,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['add', ...(all ? ['-A'] : paths!)], opened.ctx, cwd);
+      return git('git', buildAddArgs({ paths, all }), opened.ctx, cwd);
     },
   });
 
@@ -378,7 +394,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ mode, ref, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['reset', `--${mode}`, ...(ref ? [ref] : [])], opened.ctx, cwd);
+      return git('git', buildResetArgs({ mode, ref }), opened.ctx, cwd);
     },
   });
 
@@ -393,11 +409,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ action, message, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const args: string[] =
-        action === 'push'
-          ? ['stash', 'push', ...(message ? ['-m', message] : [])]
-          : ['stash', action];
-      return git('git', args, opened.ctx, cwd);
+      return git('git', buildStashArgs({ action, message }), opened.ctx, cwd);
     },
   });
 
@@ -417,12 +429,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git(
-        'git',
-        ['commit', '-m', message, ...(amend ? ['--amend', '--no-edit'] : [])],
-        opened.ctx,
-        cwd,
-      );
+      return git('git', buildCommitArgs({ message, amend }), opened.ctx, cwd);
     },
   });
 
@@ -438,18 +445,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ n, path, oneline, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const useOneline = oneline ?? true;
-      return git(
-        'git',
-        [
-          'log',
-          ...(useOneline ? ['--oneline'] : []),
-          `-${n ?? 20}`,
-          ...(path ? ['--', path] : []),
-        ],
-        opened.ctx,
-        cwd,
-      );
+      return git('git', buildLogArgs({ n, path, oneline }), opened.ctx, cwd);
     },
   });
 
@@ -474,12 +470,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git(
-        'git',
-        ['show', ...(stat ? ['--stat'] : []), ref ?? 'HEAD', ...(path ? ['--', path] : [])],
-        opened.ctx,
-        cwd,
-      );
+      return git('git', buildShowArgs({ ref, stat, path }), opened.ctx, cwd);
     },
   });
 
@@ -502,17 +493,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git(
-        'git',
-        [
-          'blame',
-          ...(start_line !== undefined ? ['-L', `${start_line},${end_line}`] : []),
-          '--',
-          path,
-        ],
-        opened.ctx,
-        cwd,
-      );
+      return git('git', buildBlameArgs({ path, start_line, end_line }), opened.ctx, cwd);
     },
   });
 
@@ -539,18 +520,14 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ branch, strategy, action, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const mode = action ?? 'run';
-      if (mode !== 'run') {
-        return git('git', ['merge', `--${mode}`], opened.ctx, cwd);
+      if ((action ?? 'run') === 'run') {
+        if (!branch) {
+          return { success: false as const, error: 'branch is required when running a merge' };
+        }
+        const safe = validateFlagSafe(branch, 'branch');
+        if (!safe.ok) return { success: false as const, error: safe.error };
       }
-      if (!branch) {
-        return { success: false as const, error: 'branch is required when running a merge' };
-      }
-      const safe = validateFlagSafe(branch, 'branch');
-      if (!safe.ok) return { success: false as const, error: safe.error };
-      const strategyFlag =
-        strategy === 'squash' ? ['--squash'] : strategy === 'ff-only' ? ['--ff-only'] : [];
-      return git('git', ['merge', ...strategyFlag, branch], opened.ctx, cwd);
+      return git('git', buildMergeArgs({ branch, strategy, action }), opened.ctx, cwd);
     },
   });
 
@@ -580,16 +557,14 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ branch_or_ref, action, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const mode = action ?? 'run';
-      if (mode !== 'run') {
-        return git('git', ['rebase', `--${mode}`], opened.ctx, cwd);
+      if ((action ?? 'run') === 'run') {
+        if (!branch_or_ref) {
+          return { success: false as const, error: 'branch_or_ref is required when running a rebase' };
+        }
+        const safe = validateFlagSafe(branch_or_ref, 'branch_or_ref');
+        if (!safe.ok) return { success: false as const, error: safe.error };
       }
-      if (!branch_or_ref) {
-        return { success: false as const, error: 'branch_or_ref is required when running a rebase' };
-      }
-      const safe = validateFlagSafe(branch_or_ref, 'branch_or_ref');
-      if (!safe.ok) return { success: false as const, error: safe.error };
-      return git('git', ['rebase', branch_or_ref], opened.ctx, cwd);
+      return git('git', buildRebaseArgs({ branch_or_ref, action }), opened.ctx, cwd);
     },
   });
 
@@ -620,28 +595,21 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         message: 'sha is required when running a revert',
       }),
     execute: async ({ sha, action, mainline, cwd }, options) => {
-      const mode = action ?? 'run';
-      if (mode !== 'run') {
-        const opened = await open(options);
-        if (!opened.ok) return opened.error;
-        return git('git', ['revert', `--${mode}`], opened.ctx, cwd);
+      // In run mode, validate the sha BEFORE opening a sandbox (no quota spent on
+      // a bad ref). abort/continue take no positional and skip sha validation.
+      if ((action ?? 'run') === 'run') {
+        if (!sha) {
+          return {
+            success: false as const,
+            error: 'sha must be a single lowercase commit SHA (no ranges or refs)',
+          };
+        }
+        const shaOk = validateShaOnly(sha);
+        if (!shaOk.ok) return { success: false as const, error: shaOk.error };
       }
-      if (!sha) {
-        return {
-          success: false as const,
-          error: 'sha must be a single lowercase commit SHA (no ranges or refs)',
-        };
-      }
-      const shaOk = validateShaOnly(sha);
-      if (!shaOk.ok) return { success: false as const, error: shaOk.error };
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git(
-        'git',
-        ['revert', '--no-edit', ...(mainline ? ['-m', String(mainline)] : []), sha],
-        opened.ctx,
-        cwd,
-      );
+      return git('git', buildRevertArgs({ sha, action, mainline }), opened.ctx, cwd);
     },
   });
 
@@ -653,7 +621,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     execute: async ({ ref, create, cwd }, options) => {
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      return git('git', ['checkout', ...(create ? ['-b'] : []), ref], opened.ctx, cwd);
+      return git('git', buildCheckoutArgs({ ref, create }), opened.ctx, cwd);
     },
   });
 
@@ -669,9 +637,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
-      const args =
-        action === 'list' ? ['branch', '-a'] : action === 'delete' ? ['branch', '-d', name!] : ['branch', name!];
-      return git('git', args, opened.ctx, cwd);
+      return git('git', buildBranchArgs({ action, name }), opened.ctx, cwd);
     },
   });
 
@@ -684,7 +650,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ remote, branch, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('git', ['fetch', remote ?? 'origin', ...(branch ? [branch] : [])], ctx, token, cwd),
+        gitR('git', buildFetchArgs({ remote, branch }), ctx, token, cwd),
       ),
   });
 
@@ -699,13 +665,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ remote, branch, rebase, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'git',
-          ['pull', ...(rebase ? ['--rebase'] : []), remote ?? 'origin', ...(branch ? [branch] : [])],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('git', buildPullArgs({ remote, branch, rebase }), ctx, token, cwd),
       ),
   });
 
@@ -728,19 +688,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: guard.error };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'git',
-          [
-            'push',
-            ...(force ? ['--force-with-lease'] : []),
-            ...(set_upstream !== false ? ['-u'] : []),
-            remote ?? 'origin',
-            ...(branch ? [branch] : []),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('git', buildPushArgs({ remote, branch, force, set_upstream }), ctx, token, cwd),
       );
     },
   });
@@ -765,21 +713,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'title is required' };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'pr', 'create',
-            '--title', title,
-            '--body', body,
-            ...(base ? ['--base', base] : []),
-            ...(head ? ['--head', head] : []),
-            ...(draft ? ['--draft'] : []),
-            ...csvFlag('--label', labels),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrCreateArgs({ title, body, base, head, draft, labels }), ctx, token, cwd),
       );
     },
   });
@@ -794,18 +728,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ state, limit, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'pr', 'list',
-            '--state', state ?? 'open',
-            '--limit', String(limit ?? 30),
-            '--json', 'number,title,state,url,headRefName,createdAt',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrListArgs({ state, limit }), ctx, token, cwd),
       ),
   });
 
@@ -816,17 +739,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'pr', 'view',
-            ...(number ? [String(number)] : []),
-            '--json', 'number,title,body,state,url,headRefName,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,reviewDecision,isDraft',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrViewArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -838,7 +751,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('gh', ['pr', 'diff', ...(number ? [String(number)] : []), '--color', 'never'], ctx, token, cwd),
+        gitR('gh', buildPrDiffArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -850,13 +763,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          ['pr', 'checks', ...(number ? [String(number)] : []), '--json', 'name,state,startedAt,completedAt,link'],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrChecksArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -870,18 +777,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, strategy, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'pr', 'merge',
-            ...(number ? [String(number)] : []),
-            strategy === 'squash' ? '--squash' : strategy === 'rebase' ? '--rebase' : '--merge',
-            '--auto',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrMergeArgs({ number, strategy }), ctx, token, cwd),
       ),
   });
 
@@ -889,7 +785,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     description: 'Check out a pull request locally. Requires a connected GitHub account.',
     inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
     execute: async ({ number, cwd }, options) =>
-      withToken(options, (ctx, token) => gitR('gh', ['pr', 'checkout', String(number)], ctx, token, cwd)),
+      withToken(options, (ctx, token) => gitR('gh', buildPrCheckoutArgs(number), ctx, token, cwd)),
   });
 
   const ghPrReview = tool({
@@ -905,17 +801,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, action, body, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'pr', 'review', String(number),
-            ...(action === 'approve' ? ['--approve'] : action === 'request_changes' ? ['--request-changes'] : ['--comment']),
-            ...(body ? ['--body', body] : []),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrReviewArgs({ number, action, body }), ctx, token, cwd),
       ),
   });
 
@@ -946,18 +832,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       return withToken(options, (ctx, token) =>
         gitR(
           'gh',
-          [
-            'api', `repos/{owner}/{repo}/pulls/${number}/comments`,
-            ...buildApiKvArgs('-f', 'body', body),
-            ...(path !== undefined ? buildApiKvArgs('-f', 'path', path) : []),
-            ...(line !== undefined ? buildApiKvArgs('-F', 'line', line) : []),
-            ...(side ? buildApiKvArgs('-f', 'side', side) : []),
-            ...(commit_id !== undefined ? buildApiKvArgs('-f', 'commit_id', commit_id) : []),
-            ...(start_line !== undefined ? buildApiKvArgs('-F', 'start_line', start_line) : []),
-            ...(start_side ? buildApiKvArgs('-f', 'start_side', start_side) : []),
-            ...(in_reply_to !== undefined ? buildApiKvArgs('-F', 'in_reply_to', in_reply_to) : []),
-            ...(subject_type ? buildApiKvArgs('-f', 'subject_type', subject_type) : []),
-          ],
+          buildPrReviewCommentArgs({ number, body, path, line, side, commit_id, start_line, start_side, in_reply_to, subject_type }),
           ctx,
           token,
           cwd,
@@ -981,7 +856,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'body is required' };
       }
       return withToken(options, (ctx, token) =>
-        gitR('gh', ['pr', 'comment', String(number), '--body', body], ctx, token, cwd),
+        gitR('gh', buildPrCommentArgs({ number, body }), ctx, token, cwd),
       );
     },
   });
@@ -1023,21 +898,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'Provide at least one field to edit' };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'pr', 'edit', String(number),
-            ...(title !== undefined ? ['--title', title] : []),
-            ...(body !== undefined ? ['--body', body] : []),
-            ...(base !== undefined ? ['--base', base] : []),
-            ...csvFlag('--add-label', add_labels),
-            ...csvFlag('--remove-label', remove_labels),
-            ...csvFlag('--add-reviewer', add_reviewers),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrEditArgs({ number, title, body, base, add_labels, remove_labels, add_reviewers }), ctx, token, cwd),
       );
     },
   });
@@ -1050,7 +911,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('gh', ['pr', 'update-branch', String(number)], ctx, token, cwd),
+        gitR('gh', buildPrUpdateBranchArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -1067,19 +928,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ owner, repo, number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'api', 'graphql',
-            ...buildApiKvArgs('-f', 'query', LIST_THREADS_QUERY),
-            ...buildApiKvArgs('-f', 'owner', owner),
-            ...buildApiKvArgs('-f', 'repo', repo),
-            ...buildApiKvArgs('-F', 'number', number),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrThreadListArgs({ owner, repo, number }), ctx, token, cwd),
       ),
   });
 
@@ -1097,13 +946,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'thread_id is required' };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          ['api', 'graphql', ...buildApiKvArgs('-f', 'query', RESOLVE_THREAD_MUTATION), ...buildApiKvArgs('-f', 'threadId', thread_id)],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrThreadResolveArgs(thread_id), ctx, token, cwd),
       );
     },
   });
@@ -1119,13 +962,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, comment, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          ['pr', 'close', String(number), ...(comment ? ['--comment', comment] : [])],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildPrCloseArgs({ number, comment }), ctx, token, cwd),
       ),
   });
 
@@ -1136,7 +973,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('gh', ['pr', 'reopen', String(number)], ctx, token, cwd),
+        gitR('gh', buildPrReopenArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -1147,7 +984,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('gh', ['pr', 'ready', String(number)], ctx, token, cwd),
+        gitR('gh', buildPrReadyArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -1167,20 +1004,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ branch, limit, status, event, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'run', 'list',
-            '--limit', String(limit ?? 10),
-            ...(branch ? ['--branch', branch] : []),
-            ...(status ? ['--status', status] : []),
-            ...(event ? ['--event', event] : []),
-            '--json', 'databaseId,status,conclusion,name,headBranch,event,createdAt,displayTitle',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildRunListArgs({ branch, limit, status, event }), ctx, token, cwd),
       ),
   });
 
@@ -1196,17 +1020,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ runId, log, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'run', 'view', String(runId),
-            ...(log ? ['--log-failed'] : []),
-            ...(log ? [] : ['--json', 'databaseId,status,conclusion,name,headBranch,displayTitle,jobs']),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildRunViewArgs({ runId, log }), ctx, token, cwd),
       ),
   });
 
@@ -1222,7 +1036,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ runId, failed_only, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('gh', ['run', 'rerun', String(runId), ...(failed_only ? ['--failed'] : [])], ctx, token, cwd),
+        gitR('gh', buildRunRerunArgs({ runId, failed_only }), ctx, token, cwd),
       ),
   });
 
@@ -1236,13 +1050,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ limit, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          ['workflow', 'list', '--limit', String(limit ?? 50), '--json', 'id,name,path,state'],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildWorkflowListArgs(limit), ctx, token, cwd),
       ),
   });
 
@@ -1272,17 +1080,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       const inputsOk = validateWorkflowInputNames(inputs);
       if (!inputsOk.ok) return { success: false as const, error: inputsOk.error };
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'workflow', 'run', workflow,
-            '--ref', ref,
-            ...Object.entries(inputs ?? {}).flatMap(([key, value]) => buildApiKvArgs('-f', key, value)),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildWorkflowRunArgs({ workflow, ref, inputs }), ctx, token, cwd),
       );
     },
   });
@@ -1303,18 +1101,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'title is required' };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'issue', 'create',
-            '--title', title,
-            '--body', body,
-            ...csvFlag('--label', labels),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildIssueCreateArgs({ title, body, labels }), ctx, token, cwd),
       );
     },
   });
@@ -1329,18 +1116,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ state, limit, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'issue', 'list',
-            '--state', state ?? 'open',
-            '--limit', String(limit ?? 30),
-            '--json', 'number,title,state,url,createdAt,labels',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildIssueListArgs({ state, limit }), ctx, token, cwd),
       ),
   });
 
@@ -1349,17 +1125,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'issue', 'view',
-            String(number),
-            '--json', 'number,title,body,state,url,labels,comments,assignees',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildIssueViewArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -1377,7 +1143,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'body is required' };
       }
       return withToken(options, (ctx, token) =>
-        gitR('gh', ['issue', 'comment', String(number), '--body', body], ctx, token, cwd),
+        gitR('gh', buildIssueCommentArgs({ number, body }), ctx, token, cwd),
       );
     },
   });
@@ -1422,21 +1188,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'Provide at least one field to edit' };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'issue', 'edit', String(number),
-            ...(title !== undefined ? ['--title', title] : []),
-            ...(body !== undefined ? ['--body', body] : []),
-            ...csvFlag('--add-label', add_labels),
-            ...csvFlag('--remove-label', remove_labels),
-            ...csvFlag('--add-assignee', add_assignees),
-            ...csvFlag('--remove-assignee', remove_assignees),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildIssueEditArgs({ number, title, body, add_labels, remove_labels, add_assignees, remove_assignees }), ctx, token, cwd),
       );
     },
   });
@@ -1454,17 +1206,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ number, comment, reason, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'issue', 'close', String(number),
-            ...(comment ? ['--comment', comment] : []),
-            ...(reason ? ['--reason', reason === 'not_planned' ? 'not planned' : 'completed'] : []),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildIssueCloseArgs({ number, comment, reason }), ctx, token, cwd),
       ),
   });
 
@@ -1473,7 +1215,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     inputSchema: z.object({ number: z.number().int().positive(), cwd: cwdField }).strict(),
     execute: async ({ number, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR('gh', ['issue', 'reopen', String(number)], ctx, token, cwd),
+        gitR('gh', buildIssueReopenArgs(number), ctx, token, cwd),
       ),
   });
 
@@ -1494,17 +1236,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         if (!safe.ok) return { success: false as const, error: safe.error };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'repo', 'view',
-            ...(repo ? [repo] : []),
-            '--json', 'nameWithOwner,description,defaultBranchRef,visibility,url,isFork',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildRepoViewArgs(repo), ctx, token, cwd),
       );
     },
   });
@@ -1525,18 +1257,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         if (!safe.ok) return { success: false as const, error: safe.error };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'repo', 'list',
-            ...(owner ? [owner] : []),
-            '--limit', String(limit ?? 30),
-            '--json', 'nameWithOwner,description,visibility,updatedAt,url',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildRepoListArgs({ owner, limit }), ctx, token, cwd),
       );
     },
   });
@@ -1557,7 +1278,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       const safe = validateFlagSafe(repo, 'repo');
       if (!safe.ok) return { success: false as const, error: safe.error };
       return withToken(options, (ctx, token) =>
-        gitR('gh', ['repo', 'fork', repo, '--clone=false', '--remote=false'], ctx, token, cwd),
+        gitR('gh', buildRepoForkArgs(repo), ctx, token, cwd),
       );
     },
   });
@@ -1585,17 +1306,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         return { success: false as const, error: 'visibility is required (private or public)' };
       }
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'repo', 'create', name,
-            visibility === 'private' ? '--private' : '--public',
-            ...(description ? ['--description', description] : []),
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildRepoCreateArgs({ name, visibility, description }), ctx, token, cwd),
       );
     },
   });
@@ -1615,28 +1326,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!query) {
         return { success: false as const, error: 'query is required' };
       }
-      const jsonFields =
-        type === 'code'
-          ? 'repository,path,url'
-          : type === 'repos'
-            ? 'fullName,description,url'
-            : 'number,title,state,url,repository';
       return withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'search', type,
-            '--limit', String(limit ?? 20),
-            '--json', jsonFields,
-            // query is genuine free text (may legitimately start with "-", e.g. "-1"
-            // or a search qualifier) — the "--" separator, not a regex reject, is
-            // what keeps gh from reinterpreting it as a flag.
-            '--', query,
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildSearchArgs({ type, query, limit }), ctx, token, cwd),
       );
     },
   });
@@ -1653,18 +1344,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .strict(),
     execute: async ({ repo, limit, cwd }, options) =>
       withToken(options, (ctx, token) =>
-        gitR(
-          'gh',
-          [
-            'label', 'list',
-            ...(repo ? ['--repo', repo] : []),
-            '--limit', String(limit ?? 50),
-            '--json', 'name,description,color',
-          ],
-          ctx,
-          token,
-          cwd,
-        ),
+        gitR('gh', buildLabelListArgs({ repo, limit }), ctx, token, cwd),
       ),
   });
 

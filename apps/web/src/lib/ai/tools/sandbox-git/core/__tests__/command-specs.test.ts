@@ -136,15 +136,18 @@ describe('buildMergeArgs', () => {
   test('squash', () => assert({ given: 'squash', should: '--squash branch', actual: buildMergeArgs({ branch: 'f', strategy: 'squash' }), expected: ['merge', '--squash', 'f'] }));
   test('ff-only', () => assert({ given: 'ff-only', should: '--ff-only branch', actual: buildMergeArgs({ branch: 'f', strategy: 'ff-only' }), expected: ['merge', '--ff-only', 'f'] }));
   test('plain merge', () => assert({ given: 'no strategy', should: 'merge branch', actual: buildMergeArgs({ branch: 'f' }), expected: ['merge', 'f'] }));
+  test('run without a branch (defensive)', () => assert({ given: 'run mode with no branch', should: 'emit just merge — the shell rejects this first', actual: buildMergeArgs({}), expected: ['merge'] }));
 });
 describe('buildRebaseArgs', () => {
   test('abort ignores ref', () => assert({ given: 'action abort with a ref', should: 'ignore the ref', actual: buildRebaseArgs({ action: 'abort', branch_or_ref: 'x' }), expected: ['rebase', '--abort'] }));
   test('run', () => assert({ given: 'a ref', should: 'rebase ref', actual: buildRebaseArgs({ branch_or_ref: 'origin/main' }), expected: ['rebase', 'origin/main'] }));
+  test('run without a ref (defensive)', () => assert({ given: 'run mode with no ref', should: 'emit just rebase', actual: buildRebaseArgs({}), expected: ['rebase'] }));
 });
 describe('buildRevertArgs', () => {
   test('continue ignores sha', () => assert({ given: 'action continue with a sha', should: 'ignore the sha', actual: buildRevertArgs({ action: 'continue', sha: 'abc1234' }), expected: ['revert', '--continue'] }));
   test('run with sha', () => assert({ given: 'a sha', should: 'revert --no-edit sha', actual: buildRevertArgs({ sha: 'abc1234' }), expected: ['revert', '--no-edit', 'abc1234'] }));
   test('run with mainline', () => assert({ given: 'sha + mainline', should: 'add -m N', actual: buildRevertArgs({ sha: 'abc1234', mainline: 1 }), expected: ['revert', '--no-edit', '-m', '1', 'abc1234'] }));
+  test('run without a sha (defensive)', () => assert({ given: 'run mode with no sha', should: 'emit revert --no-edit only', actual: buildRevertArgs({}), expected: ['revert', '--no-edit'] }));
 });
 describe('buildCheckoutArgs', () => {
   test('create', () => assert({ given: 'create', should: '-b ref', actual: buildCheckoutArgs({ ref: 'feat', create: true }), expected: ['checkout', '-b', 'feat'] }));
@@ -154,6 +157,8 @@ describe('buildBranchArgs', () => {
   test('list', () => assert({ given: 'list', should: 'branch -a', actual: buildBranchArgs({ action: 'list' }), expected: ['branch', '-a'] }));
   test('delete', () => assert({ given: 'delete', should: 'branch -d name', actual: buildBranchArgs({ action: 'delete', name: 'f' }), expected: ['branch', '-d', 'f'] }));
   test('create', () => assert({ given: 'create', should: 'branch name', actual: buildBranchArgs({ action: 'create', name: 'f' }), expected: ['branch', 'f'] }));
+  test('delete without a name (defensive nullish)', () => assert({ given: 'delete with no name', should: 'fall back to empty — the shell rejects this first', actual: buildBranchArgs({ action: 'delete' }), expected: ['branch', '-d', ''] }));
+  test('create without a name (defensive nullish)', () => assert({ given: 'create with no name', should: 'fall back to empty', actual: buildBranchArgs({ action: 'create' }), expected: ['branch', ''] }));
 });
 
 // ── remote ───────────────────────────────────────────────────────────────
@@ -164,6 +169,7 @@ describe('buildFetchArgs', () => {
 describe('buildPullArgs', () => {
   test('rebase', () => assert({ given: 'rebase', should: '--rebase origin', actual: buildPullArgs({ rebase: true }), expected: ['pull', '--rebase', 'origin'] }));
   test('plain', () => assert({ given: 'nothing', should: 'pull origin', actual: buildPullArgs({}), expected: ['pull', 'origin'] }));
+  test('remote + branch', () => assert({ given: 'remote + branch', should: 'pull remote branch', actual: buildPullArgs({ remote: 'up', branch: 'main' }), expected: ['pull', 'up', 'main'] }));
 });
 describe('buildPushArgs', () => {
   test('force + upstream default', () => assert({ given: 'force + branch', should: '--force-with-lease -u origin branch', actual: buildPushArgs({ force: true, branch: 'feat' }), expected: ['push', '--force-with-lease', '-u', 'origin', 'feat'] }));
