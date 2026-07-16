@@ -69,20 +69,37 @@ describe('useSendHandoff', () => {
   // stream after a refresh and for every remote/cross-instance stream, so a pendingSend handing
   // off to it handed off to nothing.
   it('given the send is still in the submitted window with no stream entry yet, should KEEP pendingSend registered', async () => {
-    const { rerender } = renderHook(
-      ({ isStreamLive }) => {
-        const handoff = useSendHandoff('conv-1', 'submitted', isStreamLive);
-        return handoff;
-      },
-      { initialProps: { isStreamLive: false } },
+    // This test has to move the way a real send moves, or it cannot fail for the reason it exists.
+    //
+    // Two traps, both of which make it pass vacuously:
+    //   1. Seeding `startPendingSend` directly instead of going through `wrapSend` — every clear
+    //      path is guarded on the hook's internal pending ref, which only `wrapSend` sets, so the
+    //      handoff effect short-circuits and nothing is ever exercised.
+    //   2. Mounting at status='submitted' and never changing it — the handoff effect is keyed on
+    //      [isStreamLive, status, conversationId], so it runs once at mount (before wrapSend) and
+    //      never again. The old, WRONG end-condition would never get the chance to fire.
+    //
+    // So: mount at 'ready', wrapSend, THEN transition to 'submitted' — which is the transition the
+    // old `status === 'submitted' || 'streaming'` condition cleared on, 0.5-3s too early and
+    // before any stream existed. Verified failing against that condition by mutation.
+    const { result, rerender } = renderHook(
+      ({ status, isStreamLive }: { status: 'ready' | 'submitted'; isStreamLive: boolean }) =>
+        useSendHandoff('conv-1', status, isStreamLive),
+      { initialProps: { status: 'ready' as const, isStreamLive: false } },
     );
 
     await act(async () => {
-      useEditingStore.getState().startPendingSend('conv-1');
-      rerender({ isStreamLive: false });
+      result.current.wrapSend(() => Promise.resolve('ok'));
+      await Promise.resolve();
+    });
+
+    // useChat flips to 'submitted' BEFORE it issues the request. No stream exists yet.
+    await act(async () => {
+      rerender({ status: 'submitted', isStreamLive: false });
     });
 
     expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(true);
+    expect(result.current.pendingSendConversationId).toBe('conv-1');
   });
 
   it('given a stream entry appears for the conversation, should hand off and end pendingSend', async () => {
