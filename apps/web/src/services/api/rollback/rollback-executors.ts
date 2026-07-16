@@ -8,7 +8,6 @@
 import { eq, and } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
-import { resolveActivityContentSnapshot } from './content-snapshot';
 import { applyPageUpdateWithRevision } from './page-mutation';
 import { pickConversationTable } from './page-mutation-plan';
 import {
@@ -26,13 +25,13 @@ import type { ActivityLogForRollback } from './types';
 export async function rollbackPageChange(
   deps: RollbackDeps,
   activity: ActivityLogForRollback,
+  resolvedContentSnapshot: string | null,
   pageUpdateContext: PageUpdateContext
 ): Promise<PageChangeResult> {
   if (!activity.pageId) {
     throw new Error('Page ID not found in activity');
   }
 
-  const resolvedContentSnapshot = await resolveActivityContentSnapshot(deps, activity);
   const plan = planPageRollback(activity, resolvedContentSnapshot);
 
   if (plan.kind === 'trash-created') {

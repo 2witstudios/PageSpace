@@ -154,7 +154,7 @@ export async function executeRollback(
       case 'page': {
         const result = rollingBackRollback
           ? await redoPageChange(txDeps, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
-          : await rollbackPageChange(txDeps, activity, pageUpdateContext);
+          : await rollbackPageChange(txDeps, activity, resolvedContentSnapshot, pageUpdateContext);
         restoredValues = result.restoredValues;
         pageMutationMeta = result.pageMutationMeta;
         break;

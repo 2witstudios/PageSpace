@@ -125,6 +125,15 @@ describe('deepEqual — Date vs Date (by instant)', () => {
       expected: false,
     });
   });
+
+  it('treats two invalid Dates as equal (NaN-equals-NaN contract)', () => {
+    assert({
+      given: 'two invalid Date objects (both NaN instants)',
+      should: 'return true, consistent with the mixed Date/string branch',
+      actual: deepEqual(new Date('invalid'), new Date('also-invalid')),
+      expected: true,
+    });
+  });
 });
 
 describe('deepEqual — Date vs ISO string (chosen contract: compare by instant)', () => {

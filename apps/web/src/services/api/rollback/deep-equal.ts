@@ -28,9 +28,12 @@ export function deepEqual(a: unknown, b: unknown): boolean {
   // Null/undefined: only equal to themselves, and === already handled that.
   if (a == null || b == null) return a === b;
 
-  // Dates compared by instant.
+  // Dates compared by instant. Two unparseable instants (NaN ms) are equal under
+  // the same NaN-equals-NaN contract as the mixed Date/string branch below.
   if (a instanceof Date && b instanceof Date) {
-    return a.getTime() === b.getTime();
+    const aMs = a.getTime();
+    const bMs = b.getTime();
+    return aMs === bMs || (Number.isNaN(aMs) && Number.isNaN(bMs));
   }
   if (a instanceof Date || b instanceof Date) {
     const aMs = toInstantMs(a);
