@@ -27,6 +27,17 @@ export const notificationType = pgEnum('NotificationType', [
   'PRODUCT_UPDATE'
 ]);
 
+/**
+ * Every value the `NotificationType` enum accepts.
+ *
+ * Deliberately WIDER than `@pagespace/lib`'s `NotificationType`, which is derived from the
+ * in-app `Notification` union: `PRODUCT_UPDATE` is broadcast-only and never raised in-app,
+ * but it is a legal value for the `email_notification_preferences` / `email_notification_log`
+ * / `email_unsubscribe_tokens` columns. Code on the EMAIL side of that line (opt-out tokens,
+ * broadcasts) should type against this, not against the in-app union.
+ */
+export type NotificationTypeValue = (typeof notificationType.enumValues)[number];
+
 export const notifications = pgTable('notifications', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),

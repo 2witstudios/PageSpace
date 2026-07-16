@@ -1492,6 +1492,13 @@
       "when": 1784136456420,
       "tag": "0212_flowery_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 213,
+      "version": "7",
+      "when": 1784229979277,
+      "tag": "0213_fast_major_mapleleaf",
+      "breakpoints": true
     }
   ]
 }
