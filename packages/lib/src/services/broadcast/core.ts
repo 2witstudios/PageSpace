@@ -1,3 +1,5 @@
+import { maskEmail } from '../../audit/mask-email';
+
 /**
  * Pure core of an email broadcast: the decisions that must be right before a mass send.
  *
@@ -45,19 +47,54 @@ function stripTrailingSlashes(url: string): string {
 }
 
 /**
+ * Reduce an operator-set URL to something safe to concatenate a path onto, or null if it
+ * is not usable as a base at all.
+ *
+ * `resolveMarketingBase` has always done this; this one did not, and the asymmetry was the
+ * bug: an `NEXT_PUBLIC_APP_URL` carrying a query or fragment (`https://app.test/?ref=x`)
+ * concatenates into `https://app.test/?ref=x/api/notifications/unsubscribe/<token>` — a
+ * dead opt-out link in front of the entire audience, which `preflight`'s localhost check
+ * would happily wave through. A non-HTTP scheme (`ftp://`, `javascript:`) is likewise not
+ * localhost and would otherwise pass.
+ *
+ * Keeps origin + path, drops query and fragment: a base URL legitimately has a path
+ * (`https://app.test/app`) but nothing after it can survive having a path appended.
+ */
+function canonicalizeBaseUrl(raw: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+
+  url.search = '';
+  url.hash = '';
+  return stripTrailingSlashes(url.toString());
+}
+
+/**
  * Resolve the public app base URL (used for the unsubscribe link). Prefers the
  * first configured NON-localhost candidate, so a setup with only the server-side
  * WEB_APP_URL pointed at production (and a stale localhost NEXT_PUBLIC_APP_URL)
  * still produces working links.
+ *
+ * Unusable candidates are discarded rather than repaired — an operator who set a garbage
+ * URL gets the localhost fallback, which `preflight` then refuses loudly on a live send.
+ * That is the intended path: fail closed and say so, rather than guess at what they meant
+ * and mail everyone the guess.
  */
 export function resolveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const candidates = [env.NEXT_PUBLIC_APP_URL, env.WEB_APP_URL]
     .map((c) => c?.trim())
-    .filter((c): c is string => Boolean(c));
+    .filter((c): c is string => Boolean(c))
+    .map(canonicalizeBaseUrl)
+    .filter((c): c is string => c !== null);
 
   const live = candidates.find((c) => !isLocalhostUrl(c));
-  const chosen = live ?? candidates[0] ?? 'http://localhost:3000';
-  return stripTrailingSlashes(chosen);
+  return live ?? candidates[0] ?? 'http://localhost:3000';
 }
 
 /**
@@ -167,19 +204,29 @@ export function preflight(input: {
  *
  * @returns the URLs that did not come back OK.
  */
+export const URL_PROBE_TIMEOUT_MS = 10_000;
+
 export async function findUnreachableUrls(
   urls: string[],
   fetchImpl: typeof fetch = fetch,
+  timeoutMs: number = URL_PROBE_TIMEOUT_MS,
 ): Promise<string[]> {
   const results = await Promise.all(
     urls.map(async (url) => {
+      // `fetch` waits forever by default. A host that accepts the connection and then goes
+      // quiet would leave this Promise.all pending for the life of the process, so the
+      // broadcast would neither send nor fail — it would just stop, with no diagnostic.
+      // An unanswered probe IS an unreachable page for our purposes; time it out and say so.
+      const probe = (method: 'HEAD' | 'GET') =>
+        fetchImpl(url, { method, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+
       try {
-        const head = await fetchImpl(url, { method: 'HEAD', redirect: 'follow' });
+        const head = await probe('HEAD');
         if (head.ok) return null;
 
         // Plenty of hosts and CDNs answer 403/405 to HEAD on a page that serves
         // fine over GET. Don't block a launch on that — ask again properly.
-        const get = await fetchImpl(url, { method: 'GET', redirect: 'follow' });
+        const get = await probe('GET');
         return get.ok ? null : `${url} (HTTP ${get.status})`;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -263,7 +310,7 @@ export class LedgerWriteFailed extends Error {
   ) {
     const why = cause instanceof Error ? cause.message : String(cause);
     super(
-      `sent to ${entry.email} but failed to record it in the ledger: ${why}\n` +
+      `sent to ${maskEmail(entry.email)} but failed to record it in the ledger: ${why}\n` +
         (remediation ??
           '   Add this line to the ledger before re-running, or that user will be emailed again:\n' +
             `   ${JSON.stringify(entry)}`),
@@ -312,6 +359,10 @@ export interface BroadcastResult {
  *    accounts holding one address to begin with (`claim` keys on userId, not address).
  *  - A recipient is CLAIMED before the provider call, not after it, when a durable
  *    caller supplies `claim` — the in-memory set above cannot stop a second worker.
+ *  - Addresses are MASKED in every log line and in `errors` (`maskEmail`, the same helper
+ *    the auth flows use). These strings reach a log aggregator and the broadcast row's
+ *    `lastError`/`stepResults`, and an address copied there in the clear outlives the
+ *    encryption that protects it in `users` and the erasure that is supposed to remove it.
  */
 export async function runBroadcast(input: {
   live: boolean;
@@ -437,14 +488,14 @@ export async function runBroadcast(input: {
         // Fail CLOSED: an unreadable claim means we cannot prove nobody else is mailing
         // this person, and the irreversible mistake is sending, not skipping.
         const msg = error instanceof Error ? error.message : String(error);
-        errors.push(`${email}: could not claim recipient: ${msg}`);
-        input.logError(`  ✗ Could not claim ${email}: ${msg}`);
+        errors.push(`${maskEmail(email)}: could not claim recipient: ${msg}`);
+        input.logError(`  ✗ Could not claim ${maskEmail(email)}: ${msg}`);
         continue;
       }
 
       if (!claimed) {
         claimedElsewhere++;
-        input.log(`  ⤳ ${email} is claimed by another worker; leaving it to them.`);
+        input.log(`  ⤳ ${maskEmail(email)} is claimed by another worker; leaving it to them.`);
         continue;
       }
     }
@@ -456,12 +507,12 @@ export async function runBroadcast(input: {
     if (!input.live) {
       try {
         const html = await input.renderOne(recipient);
-        input.log(`  [dry-run] → ${email} (${html.length} bytes)`);
+        input.log(`  [dry-run] → ${maskEmail(email)} (${html.length} bytes)`);
         sent++;
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        errors.push(`${email}: ${msg}`);
-        input.logError(`  ✗ Render failed for ${email}: ${msg}`);
+        errors.push(`${maskEmail(email)}: ${msg}`);
+        input.logError(`  ✗ Render failed for ${maskEmail(email)}: ${msg}`);
       }
       continue;
     }
@@ -471,8 +522,8 @@ export async function runBroadcast(input: {
     } catch (error) {
       // Retryable: nothing was written, so a re-run will try this address again.
       const msg = error instanceof Error ? error.message : String(error);
-      errors.push(`${email}: ${msg}`);
-      input.logError(`  ✗ Send failed for ${email}: ${msg}`);
+      errors.push(`${maskEmail(email)}: ${msg}`);
+      input.logError(`  ✗ Send failed for ${maskEmail(email)}: ${msg}`);
       if (input.onFailure) {
         await input.onFailure({ userId: user.id, email, error: msg });
       }
@@ -494,7 +545,7 @@ export async function runBroadcast(input: {
 
     input.alreadySent.add(emailKey);
     sent++;
-    input.log(`  ✓ ${email}`);
+    input.log(`  ✓ ${maskEmail(email)}`);
     if (input.delayMs > 0) await input.sleep(input.delayMs);
   }
 

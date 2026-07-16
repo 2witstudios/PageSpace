@@ -21,11 +21,13 @@ import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { broadcastRecipients, emailBroadcasts } from '@pagespace/db/schema/email-broadcasts';
-import { eq } from '@pagespace/db/operators';
+import { eq, inArray } from '@pagespace/db/operators';
 import { claimRecipient, recordFailure } from '../record-adapter';
 
-const broadcastId = `bc_test_${createId()}`;
-const userId = `u_test_${createId()}`;
+// Real cuid2s: the prefixed form these used to carry is not an id this system ever
+// produces, and fixtures that cannot occur in production test a system we do not run.
+const broadcastId = createId();
+const userId = createId();
 
 beforeAll(async () => {
   await db.insert(users).values({
@@ -41,12 +43,16 @@ beforeAll(async () => {
   });
 });
 
+/** Users a single test made, torn down even if it threw before its own cleanup. */
+const temporaryUserIds: string[] = [];
+
 afterAll(async () => {
   // Recipients cascade from both parents; delete them explicitly anyway so a failure
-  // mid-suite cannot leave rows behind for the next run.
+  // mid-suite cannot leave rows behind for the next run. The database is shared, so a
+  // leaked row is the next run's mystery, not this one's.
   await db.delete(broadcastRecipients).where(eq(broadcastRecipients.broadcastId, broadcastId));
   await db.delete(emailBroadcasts).where(eq(emailBroadcasts.id, broadcastId));
-  await db.delete(users).where(eq(users.id, userId));
+  await db.delete(users).where(inArray(users.id, [userId, ...temporaryUserIds]));
 });
 
 beforeEach(async () => {
@@ -102,7 +108,7 @@ describe('claimRecipient against a real database', () => {
     // Age the claim past its lease rather than sleeping.
     await db
       .update(broadcastRecipients)
-      .set({ claimedAt: new Date(Date.now() - 10 * 60_000) })
+      .set({ claimedAt: sql`(now() at time zone 'utc') - interval '10 minutes'` })
       .where(eq(broadcastRecipients.broadcastId, broadcastId));
 
     expect(
@@ -115,7 +121,7 @@ describe('claimRecipient against a real database', () => {
     await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
     await db
       .update(broadcastRecipients)
-      .set({ status: 'sent', sentAt: new Date(), claimedAt: new Date(0) })
+      .set({ status: 'sent', sentAt: new Date(), claimedAt: sql`(now() at time zone 'utc') - interval '1 year'` })
       .where(eq(broadcastRecipients.broadcastId, broadcastId));
 
     expect(
@@ -155,7 +161,7 @@ describe('claimRecipient against a real database', () => {
     // A's lease ages out; B takes over and holds a fresh one.
     await db
       .update(broadcastRecipients)
-      .set({ claimedAt: new Date(Date.now() - 10 * 60_000) })
+      .set({ claimedAt: sql`(now() at time zone 'utc') - interval '10 minutes'` })
       .where(eq(broadcastRecipients.broadcastId, broadcastId));
     const bLease = await claimRecipient(broadcastId, { userId, email: 'ada@example.com' }, { leaseMs: 60_000 });
     expect(bLease).not.toBeNull();
@@ -182,7 +188,7 @@ describe('claimRecipient against a real database', () => {
     // proof anyone can present to release it.
     await db
       .update(broadcastRecipients)
-      .set({ claimedAt: new Date(Date.now() + 100 * 365 * 24 * 60 * 60_000), claimedBy: null })
+      .set({ claimedAt: sql`(now() at time zone 'utc') + interval '100 years'`, claimedBy: null })
       .where(eq(broadcastRecipients.broadcastId, broadcastId));
 
     await recordFailure(broadcastId, { userId, email: 'ada@example.com', error: 'socket hang up' }, staleLease);
@@ -198,7 +204,7 @@ describe('claimRecipient against a real database', () => {
 
     await db
       .update(broadcastRecipients)
-      .set({ claimedAt: new Date(Date.now() - 10 * 60_000) })
+      .set({ claimedAt: sql`(now() at time zone 'utc') - interval '10 minutes'` })
       .where(eq(broadcastRecipients.broadcastId, broadcastId));
     await claimRecipient(broadcastId, { userId, email: 'ada@example.com' }, { leaseMs: 60_000 });
 
@@ -223,7 +229,8 @@ describe('claimRecipient against a real database', () => {
   it('should erase a recipient row when the user is erased', async () => {
     // GDPR: recipientEmail is plaintext, so a row surviving its subject would leave a
     // readable copy of the address behind, unreachable by any erasure step.
-    const doomedId = `u_test_${createId()}`;
+    const doomedId = createId();
+    temporaryUserIds.push(doomedId);
     await db.insert(users).values({ id: doomedId, email: `doomed-${doomedId}@example.test`, name: 'Doomed' });
     await claimRecipient(broadcastId, { userId: doomedId, email: 'doomed@example.com' });
 

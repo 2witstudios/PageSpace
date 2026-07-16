@@ -10,11 +10,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { SendEmailOptions } from '../../email-service';
 
 const sendEmail = vi.fn<(options: SendEmailOptions) => Promise<void>>();
-const generateUnsubscribeToken = vi.fn<() => Promise<string>>();
+// Forwards its arguments on purpose: a mock that swallows them cannot catch a token minted
+// for the wrong recipient or the wrong opt-out channel — which would unsubscribe someone
+// from something they never asked about, or hand Ada a link that unsubscribes Grace.
+const generateUnsubscribeToken = vi.fn<(userId: string, type: string) => Promise<string>>();
 
 vi.mock('../../email-service', () => ({ sendEmail: (o: SendEmailOptions) => sendEmail(o) }));
 vi.mock('../../notification-email-service', () => ({
-  generateUnsubscribeToken: () => generateUnsubscribeToken(),
+  generateUnsubscribeToken: (userId: string, type: string) => generateUnsubscribeToken(userId, type),
 }));
 
 import { renderEmailToHtml } from '../../../email-templates/render-email';
@@ -33,7 +36,8 @@ const recipient = { userId: 'u1', userName: 'Ada', email: 'ada@example.com' };
 
 beforeEach(() => {
   sendEmail.mockReset().mockResolvedValue(undefined);
-  generateUnsubscribeToken.mockReset().mockResolvedValue('tok_123');
+  // A distinct token per recipient, so a reused or cross-wired token is visible.
+  generateUnsubscribeToken.mockReset().mockImplementation(async (userId: string) => `tok_${userId}`);
 });
 
 describe('broadcastIdempotencyKey', () => {
@@ -62,8 +66,9 @@ describe('transactional engine — sendOne', () => {
     // Gmail/Yahoo bulk rules require the header; a body link alone is not enough.
     await createTransactionalEngine(config).sendOne(recipient);
 
+    expect(generateUnsubscribeToken).toHaveBeenCalledWith('u1', 'PRODUCT_UPDATE');
     expect(sendEmail.mock.calls[0][0].headers).toEqual({
-      'List-Unsubscribe': '<https://app.pagespace.ai/api/notifications/unsubscribe/tok_123>',
+      'List-Unsubscribe': '<https://app.pagespace.ai/api/notifications/unsubscribe/tok_u1>',
       'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
     });
   });
@@ -75,7 +80,7 @@ describe('transactional engine — sendOne', () => {
     const html = await renderEmailToHtml(
       sendEmail.mock.calls[0][0].react as React.ReactElement,
     );
-    expect(html).toContain('https://app.pagespace.ai/api/notifications/unsubscribe/tok_123');
+    expect(html).toContain('https://app.pagespace.ai/api/notifications/unsubscribe/tok_u1');
   });
 
   it('should render the author\'s markdown into the branded shell', async () => {
@@ -100,12 +105,18 @@ describe('transactional engine — sendOne', () => {
     await expect(createTransactionalEngine(config).sendOne(recipient)).rejects.toThrow(/Too many emails/);
   });
 
-  it('should mint a fresh token per recipient rather than reuse one', async () => {
+  it('should mint a token for EACH recipient on their own channel, never a shared one', async () => {
+    // Counting calls alone would pass even if both links unsubscribed the same person.
     const engine = createTransactionalEngine(config);
     await engine.sendOne(recipient);
     await engine.sendOne({ userId: 'u2', userName: 'Grace', email: 'grace@example.com' });
 
-    expect(generateUnsubscribeToken).toHaveBeenCalledTimes(2);
+    expect(generateUnsubscribeToken.mock.calls).toEqual([
+      ['u1', 'PRODUCT_UPDATE'],
+      ['u2', 'PRODUCT_UPDATE'],
+    ]);
+    expect(sendEmail.mock.calls[0][0].headers?.['List-Unsubscribe']).toContain('tok_u1');
+    expect(sendEmail.mock.calls[1][0].headers?.['List-Unsubscribe']).toContain('tok_u2');
   });
 });
 
@@ -128,7 +139,6 @@ describe('transactional engine — renderOne', () => {
 describe('transactional engine — preflight', () => {
   const base = {
     live: true,
-    baseUrl: 'https://app.pagespace.ai',
     suppressed: new Set<string>(),
     isOnPrem: false,
     fromEmail: 'PageSpace <hello@pagespace.ai>',
@@ -148,8 +158,22 @@ describe('transactional engine — preflight', () => {
     await expect(engine.preflight({ ...base, isOnPrem: true })).resolves.toMatchObject({ ok: false });
     await expect(engine.preflight({ ...base, suppressed: null })).resolves.toMatchObject({ ok: false });
     await expect(engine.preflight({ ...base, fromEmail: undefined })).resolves.toMatchObject({ ok: false });
-    await expect(engine.preflight({ ...base, baseUrl: 'http://localhost:3000' })).resolves.toMatchObject({
-      ok: false,
-    });
+  });
+
+  it('should preflight the base URL it will actually SEND, not one handed to it', async () => {
+    // The bug this pins: preflight validating one URL while sendOne built opt-out links
+    // from another would bless a send that mails everyone a localhost link. The engine's
+    // own config is the only source of truth, which is why the input carries no baseUrl.
+    const localEngine = createTransactionalEngine({ ...config, baseUrl: 'http://localhost:3000' });
+
+    await expect(localEngine.preflight(base)).resolves.toMatchObject({ ok: false });
+  });
+
+  it('should build the unsubscribe link from the same base URL preflight approved', async () => {
+    const engine = createTransactionalEngine(config);
+    await expect(engine.preflight(base)).resolves.toEqual({ ok: true });
+    await engine.sendOne(recipient);
+
+    expect(sendEmail.mock.calls[0][0].headers?.['List-Unsubscribe']).toContain(config.baseUrl);
   });
 });

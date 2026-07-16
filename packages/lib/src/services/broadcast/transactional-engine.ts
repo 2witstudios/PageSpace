@@ -53,7 +53,10 @@ export function createTransactionalEngine(config: TransactionalEngineConfig): Br
     async preflight(input: BroadcastEnginePreflightInput): Promise<PreflightResult> {
       return preflight({
         live: input.live,
-        baseUrl: input.baseUrl,
+        // `config.baseUrl` — the one `unsubscribeUrlFor` actually builds links from. Taking
+        // a base URL from the caller here would let preflight pass on one URL while the
+        // send used another, mailing everyone an opt-out link the check never looked at.
+        baseUrl: config.baseUrl,
         suppressed: input.suppressed,
         isOnPrem: input.isOnPrem,
         fromEmail: input.fromEmail,

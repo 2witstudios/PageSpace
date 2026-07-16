@@ -20,12 +20,18 @@ export interface BroadcastRecipientInput {
 
 export interface BroadcastEnginePreflightInput {
   live: boolean;
-  baseUrl: string;
   /** null = the erasure-suppression audience could not be read (fail closed). */
   suppressed: Set<string> | null;
   isOnPrem: boolean;
   fromEmail?: string;
 }
+
+/*
+ * Deliberately NO `baseUrl` here: an engine validates the base URL it will actually send,
+ * which is its own config. Taking one from the caller let the two diverge — preflight
+ * would bless one URL while `sendOne` put a different (possibly localhost) opt-out link in
+ * front of every recipient, which is precisely the check's reason to exist.
+ */
 
 export interface BroadcastEngine {
   /** Stable identifier, matching the `email_broadcast_engine` enum value. */

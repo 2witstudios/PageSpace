@@ -307,16 +307,22 @@ export async function recordSent(
     // are no worse off than before, and the operator still has the remediation below.
     await parkClaimAgainstRetry(broadcastId, entry.userId);
 
+    // The remediation carries PLACEHOLDERS, never the recipient's data. Pasting an address
+    // into a quoted SQL literal breaks on the first apostrophe (O'Brien) and turns a
+    // hostile value into injection the operator runs by hand — and the message itself is
+    // logged, which is not somewhere an address belongs. The values live on `error.entry`,
+    // where a caller can render them deliberately.
     throw new LedgerWriteFailed(
       entry,
       error,
       `   The send is NOT recorded. A best-effort attempt was made to park this recipient so\n` +
         `   an automatic retry cannot re-send to them; if that also failed, the claim is a lease\n` +
         `   expiring in ~${Math.round(CLAIM_LEASE_MS / 60_000)}m and a retry WILL mail them again.\n` +
-        `   Insert the row yourself to be certain, then re-run:\n` +
+        `   Record it yourself to be certain (bind the values from this error's \`entry\`), then re-run:\n` +
         `     insert into broadcast_recipients (id, broadcast_id, user_id, recipient_email, status, sent_at)\n` +
-        `     values (<cuid>, '${broadcastId}', '${entry.userId}', '${entry.email}', 'sent', '${entry.sentAt}')\n` +
-        `     on conflict (broadcast_id, user_id) do update set status = 'sent', sent_at = excluded.sent_at;`,
+        `     values ($1, $2, $3, $4, 'sent', $5)\n` +
+        `     on conflict (broadcast_id, user_id) do update set status = 'sent', sent_at = excluded.sent_at;\n` +
+        `     -- $2 = broadcast ${broadcastId}; $1 = a fresh cuid; $3/$4/$5 = entry.userId / .email / .sentAt`,
     );
   }
 

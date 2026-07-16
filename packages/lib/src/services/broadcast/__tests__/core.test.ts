@@ -144,7 +144,7 @@ describe('runBroadcast — live send', () => {
 
     const out = await result;
 
-    expect(out.errors).toEqual(['ada@example.com: rate limited']);
+    expect(out.errors).toEqual(['ad***@example.com: rate limited']);
     expect(out.sent).toBe(1);
     // Nothing recorded for the failed address; the successful one is recorded.
     expect(h.recorded.map((e) => e.email)).toEqual(['grace@example.com']);
@@ -158,6 +158,64 @@ describe('runBroadcast — live send', () => {
 
     expect(h.sent).toEqual(['ada@example.com']);
     expect(out.skipped['already-sent']).toBe(1);
+  });
+});
+
+describe('runBroadcast — recipient privacy', () => {
+  it('should never put a raw address in a log line or in the returned diagnostics', async () => {
+    // These strings reach a log aggregator, and `errors` lands in the broadcast row's
+    // lastError/stepResults. An address copied there in the clear outlives both the
+    // encryption protecting it in `users` and the erasure meant to remove it.
+    const { result, h } = run(
+      [user('u1', 'ada@example.com'), user('u2', 'grace@example.com'), user('u3', 'bad@example.com')],
+      {
+        live: false,
+        renderOne: vi.fn(async ({ email }: { email: string }) => {
+          if (email === 'bad@example.com') throw new Error('boom');
+          return '<html/>';
+        }),
+      },
+    );
+
+    const out = await result;
+    const everything = [...h.logs, ...h.errorLogs, ...out.errors].join('\n');
+
+    expect(everything).not.toContain('ada@example.com');
+    expect(everything).not.toContain('grace@example.com');
+    expect(everything).not.toContain('bad@example.com');
+    // ...but still says enough to debug with: the domain and a stable prefix survive.
+    expect(everything).toContain('ad***@example.com');
+    expect(out.errors).toEqual(['ba***@example.com: boom']);
+  });
+
+  it('the fatal ledger error should mask the address it reports, and keep it on the entry', async () => {
+    // The message is logged; the machine-readable `entry` is what an operator acts on.
+    const { result } = run([user('u1', 'ada@example.com')], {
+      record: vi.fn(async () => {
+        throw new Error('disk full');
+      }),
+    });
+
+    const error = (await result.catch((e: unknown) => e)) as LedgerWriteFailed;
+
+    expect(error.message).toContain('sent to ad***@example.com');
+    expect(error.entry.email).toBe('ada@example.com');
+  });
+
+  it('given a durable caller, the fatal error should carry no raw address at all', async () => {
+    // The file-ledger script's DEFAULT remediation does embed the raw entry — that is the
+    // JSONL line the operator has to paste, and it goes to their terminal. The durable
+    // path supplies its own remediation, and that message reaches a log aggregator and the
+    // broadcast row, so nothing identifying may ride along.
+    const error = new LedgerWriteFailed(
+      { email: 'ada@example.com', userId: 'u1', sentAt: '2026-07-16T00:00:00.000Z' },
+      new Error('connection terminated'),
+      '   Record it yourself using the values on this error\'s `entry`.',
+    );
+
+    expect(error.message).not.toContain('ada@example.com');
+    expect(error.message).toContain('ad***@example.com');
+    expect(error.entry.email).toBe('ada@example.com');
   });
 });
 
@@ -255,7 +313,7 @@ describe('runBroadcast — dry run', () => {
 
     const out = await result;
 
-    expect(out.errors).toEqual(['ada@example.com: bad template']);
+    expect(out.errors).toEqual(['ad***@example.com: bad template']);
     expect(out.sent).toBe(1);
   });
 });
@@ -416,7 +474,7 @@ describe('runBroadcast — claiming recipients', () => {
     const out = await result;
 
     expect(h.sent).toEqual([]);
-    expect(out.errors).toEqual(['ada@example.com: could not claim recipient: db down']);
+    expect(out.errors).toEqual(['ad***@example.com: could not claim recipient: db down']);
   });
 
   it('given a dry run, should claim nothing — a preview must not write', async () => {
@@ -510,7 +568,81 @@ describe('findUnreachableUrls', () => {
   it('given reachable pages, should report nothing', async () => {
     const fetchImpl = vi.fn(ok);
     expect(await findUnreachableUrls(['https://x/a', 'https://x/b'], fetchImpl)).toEqual([]);
-    expect(fetchImpl).toHaveBeenCalledWith('https://x/a', { method: 'HEAD', redirect: 'follow' });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://x/a',
+      expect.objectContaining({ method: 'HEAD', redirect: 'follow' }),
+    );
+  });
+
+  it('should bound every probe, so one silent host cannot stall the send forever', async () => {
+    // `fetch` waits indefinitely by default: a host that accepts the connection and then
+    // goes quiet would leave the preflight pending for the life of the process — the
+    // broadcast would neither send nor fail, it would just stop.
+    const fetchImpl = vi.fn((_url: string | URL | Request, _init?: RequestInit) => ok());
+    await findUnreachableUrls(['https://x/a'], fetchImpl);
+
+    expect(fetchImpl.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('given a host that never answers, should report it unreachable rather than hang', async () => {
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+        }),
+    );
+
+    const unreachable = await findUnreachableUrls(['https://silent.test'], fetchImpl, 20);
+
+    expect(unreachable).toEqual(['https://silent.test (The operation was aborted)']);
+  });
+});
+
+describe('resolveBaseUrl — canonicalization', () => {
+  // `preflight` only checks for localhost, so a base URL that is merely MALFORMED sails
+  // through it and reaches every recipient as a dead unsubscribe link.
+
+  it('given a base URL with a query string, should drop it so paths concatenate cleanly', () => {
+    // Otherwise: https://app.test/?ref=x + /api/... = https://app.test/?ref=x/api/...
+    expect(resolveBaseUrl({ WEB_APP_URL: 'https://app.test/?ref=x' } as NodeJS.ProcessEnv)).toBe(
+      'https://app.test',
+    );
+  });
+
+  it('given a base URL with a fragment, should drop it', () => {
+    expect(resolveBaseUrl({ WEB_APP_URL: 'https://app.test/#top' } as NodeJS.ProcessEnv)).toBe(
+      'https://app.test',
+    );
+  });
+
+  it('should keep a legitimate base path', () => {
+    expect(resolveBaseUrl({ WEB_APP_URL: 'https://app.test/app/' } as NodeJS.ProcessEnv)).toBe(
+      'https://app.test/app',
+    );
+  });
+
+  it('given a non-HTTP scheme, should discard it rather than mail it', () => {
+    // Not localhost, so nothing downstream would have caught it.
+    expect(resolveBaseUrl({ WEB_APP_URL: 'ftp://app.test' } as NodeJS.ProcessEnv)).toBe(
+      'http://localhost:3000',
+    );
+  });
+
+  it('given an unusable candidate, should fall back to localhost so preflight refuses loudly', () => {
+    // Failing closed and saying so beats guessing at what the operator meant and mailing
+    // the guess to everyone.
+    expect(resolveBaseUrl({ WEB_APP_URL: 'not a url' } as NodeJS.ProcessEnv)).toBe(
+      'http://localhost:3000',
+    );
+  });
+
+  it('given a garbage candidate and a good one, should use the good one', () => {
+    expect(
+      resolveBaseUrl({
+        NEXT_PUBLIC_APP_URL: 'javascript:alert(1)',
+        WEB_APP_URL: 'https://app.pagespace.ai',
+      } as NodeJS.ProcessEnv),
+    ).toBe('https://app.pagespace.ai');
   });
 
   it('given a page that 404s, should report it', async () => {

@@ -117,12 +117,30 @@ export const broadcastRepository = {
     return rows.length;
   },
 
-  /** Mark a broadcast failed (e.g. enqueue threw) so it is no longer "active". */
-  markFailed: async (id: string, error: string): Promise<void> => {
-    await db
+  /**
+   * Mark a broadcast failed (e.g. enqueue threw) so it is no longer "active".
+   *
+   * Guarded exactly like `markQueued`, and for the same reason: an enqueue can succeed and
+   * still throw (or lose its response), by which time the worker may already be sending.
+   * An unconditional write would then drag a live — or finished — broadcast back to
+   * `failed`, and the admin UI would report a send that is actually in flight as dead.
+   * Only a row that never got going may be failed this way.
+   *
+   * @returns rows updated; 0 means the worker had already moved on and the enqueue did in
+   *   fact land, which is not an error the caller should surface as one.
+   */
+  markFailed: async (id: string, error: string): Promise<number> => {
+    const rows = await db
       .update(emailBroadcasts)
       .set({ status: 'failed', lastError: error, updatedAt: new Date() })
-      .where(eq(emailBroadcasts.id, id));
+      .where(
+        and(
+          eq(emailBroadcasts.id, id),
+          inArray(emailBroadcasts.status, ['draft', 'pending', 'queued']),
+        ),
+      )
+      .returning({ id: emailBroadcasts.id });
+    return rows.length;
   },
 
   incrementAttempts: async (id: string): Promise<void> => {
