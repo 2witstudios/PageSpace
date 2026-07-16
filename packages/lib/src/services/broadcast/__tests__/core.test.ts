@@ -227,6 +227,23 @@ describe('runBroadcast — recipient privacy', () => {
     expect(failures[0].error).toContain('ad***@example.com');
   });
 
+  it('should redact an address containing regex-replacement syntax, not paste it back in', async () => {
+    // `$` and `&` are legal in a local part and this repo's isValidEmail accepts them. A
+    // STRING replacement would expand the `$&` in the masked form to the matched text —
+    // reinserting the raw address, leaking exactly the users whose addresses look most
+    // unusual, in the code whose one job is to remove it.
+    const { result, h } = run([user('u1', '$&x@example.com')], {
+      sendOne: vi.fn(async () => {
+        throw new Error('Too many emails sent to $&x@example.com. Please try again later.');
+      }),
+    });
+
+    const out = await result;
+
+    expect([...out.errors, ...h.errorLogs].join('\n')).not.toContain('$&x@example.com');
+    expect(out.errors[0]).toContain('$&***@example.com');
+  });
+
   it('the fatal ledger error should mask the address it reports, and keep it on the entry', async () => {
     // The message is logged; the machine-readable `entry` is what an operator acts on.
     const { result } = run([user('u1', 'ada@example.com')], {

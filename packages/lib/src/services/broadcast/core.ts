@@ -12,10 +12,18 @@ import { maskEmail } from '../../audit/mask-email';
  * The address is escaped before it becomes a pattern (it can legitimately contain `.` and
  * `+`), and the resulting regex is a literal alternation-free string — nothing to
  * backtrack on.
+ *
+ * The replacement is a FUNCTION, not a string, and that is not style. `String.replace`
+ * expands `$&` in a string replacement to the matched text — and `$`/`&` are legal in a
+ * local part (this repo's own `isValidEmail` accepts `$&x@example.com`), so masking such
+ * an address yields `$&***@…` and a string replacement would paste the whole raw address
+ * back in. The redaction would leak the exact thing it exists to remove, only for the
+ * users whose addresses look most unusual. A function return is used verbatim.
  */
 function redactRecipient(text: string, email: string): string {
   const literal = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return text.replace(new RegExp(literal, 'gi'), maskEmail(email));
+  const masked = maskEmail(email);
+  return text.replace(new RegExp(literal, 'gi'), () => masked);
 }
 
 /**
