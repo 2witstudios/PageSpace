@@ -43,7 +43,12 @@ function SignInForm() {
   // Silent session recovery: before showing the form, try to heal the session (live cookie
   // → redirect; expired cookie + device token → refresh → redirect). This restores the
   // recovery the 2026-07-07 middleware change defeated. See ./signin-recovery.ts.
-  const { recovering } = useSigninRecovery(nextPath);
+  //
+  // Gate on `browserPath` being resolved: under a middleware rewrite the deep link lives in
+  // the browser URL (read post-mount above), so `nextPath` is undefined on the first render.
+  // Starting recovery before then would redirect a recovered user to the default dashboard
+  // instead of the page they originally opened.
+  const { recovering } = useSigninRecovery(nextPath, browserPath !== null);
 
   const {
     handleGoogleSignIn,

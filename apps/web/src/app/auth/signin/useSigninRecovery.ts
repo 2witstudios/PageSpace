@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { refreshAuthSession } from '@/lib/auth/auth-fetch';
 import { isCapacitorApp } from '@/lib/capacitor-bridge';
@@ -41,16 +41,29 @@ async function checkMeAuthenticated(): Promise<boolean> {
  * false only when recovery lands on the form (or is skipped in a native shell); on a
  * redirect it stays true through the navigation.
  *
- * Runs exactly once per mount (`startedRef`), so a failed recovery cannot retrigger itself.
+ * READINESS. Recovery must not begin until `ready` is true. The signin page resolves the
+ * post-recovery destination (`nextPath`) from the browser URL in a mount effect, so on the
+ * very first render it is not yet known — for a middleware *rewrite* (the iOS/deep-link
+ * flow, see resolve-signin-next.ts) `nextPath` is `undefined` until that effect runs.
+ * Starting earlier would capture the unresolved destination and silently redirect a
+ * recovered user to `/dashboard` instead of the page they originally opened. Gating on
+ * `ready` guarantees the destination is resolved before the one-shot recovery starts.
+ *
+ * STRICTMODE. The effect keys on `ready` (not a persisted ref), so it is safe under React
+ * StrictMode's dev mount probe: the `cancelled` cleanup aborts the discarded first run and
+ * the re-run starts fresh, rather than a ref latching `true` and stranding the page on the
+ * loading state. Recovery still runs once per real mount because `ready` flips false→true
+ * exactly once (`browserPath` is set a single time).
  */
-export function useSigninRecovery(nextPath: string | undefined): { recovering: boolean } {
+export function useSigninRecovery(
+  nextPath: string | undefined,
+  ready: boolean,
+): { recovering: boolean } {
   const router = useRouter();
   const [recovering, setRecovering] = useState(true);
-  const startedRef = useRef(false);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    if (!ready) return;
 
     let cancelled = false;
 
@@ -58,7 +71,7 @@ export function useSigninRecovery(nextPath: string | undefined): { recovering: b
       const observed: SigninRecoveryInput = {
         isNativeShell: isNativeShell(),
         // Read fresh from the store rather than subscribing: this effect runs once and must
-        // see the flag's value at mount, not restart when it later changes.
+        // see the flag's value when recovery starts, not restart when it later changes.
         authFailedPermanently: useAuthStore.getState().authFailedPermanently,
         meAuthenticated: undefined,
         hasDeviceToken: hasDeviceToken(),
@@ -101,9 +114,10 @@ export function useSigninRecovery(nextPath: string | undefined): { recovering: b
     return () => {
       cancelled = true;
     };
-    // Intentionally mount-only: nextPath is captured at mount, and recovery must not restart.
+    // Starts once, when `ready` flips true; `nextPath` is fully resolved by then and stable
+    // thereafter (browserPath is set a single time), so it is intentionally not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [ready]);
 
   return { recovering };
 }
