@@ -13,6 +13,8 @@ const BASE = {
   seq: 1,
   mirroredEntryExists: true,
   lastMirroredParts: [] as ReturnType<typeof text>[],
+  // Default: the surface has not moved. The array-moved tests set this false explicitly.
+  surfaceStillOnStreamConversation: true,
 };
 
 const text = (t: string) => ({ type: 'text' as const, text: t });
@@ -127,6 +129,7 @@ describe('planOwnStreamMirror', () => {
       status: 'streaming',
       ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old reply')] },
       mirroredMessageId: 'm1',
+      surfaceStillOnStreamConversation: false,
     })).toEqual([]);
   });
 
@@ -193,6 +196,7 @@ describe('planOwnStreamMirror', () => {
       ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old')] },
       mirroredMessageId: 'm1',
       mirroredEntryExists: false,
+      surfaceStillOnStreamConversation: false,
       lastMirroredParts: [text('what we had so far')],
     })).toEqual([
       {
@@ -219,6 +223,7 @@ describe('planOwnStreamMirror', () => {
       ownAssistantMessage: undefined,
       mirroredMessageId: 'm1',
       mirroredEntryExists: false,
+      surfaceStillOnStreamConversation: false,
       lastMirroredParts: [text('what we had so far')],
     })).toEqual([
       {
@@ -244,6 +249,7 @@ describe('planOwnStreamMirror', () => {
       ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old')] },
       mirroredMessageId: 'm1',
       mirroredEntryExists: true,
+      surfaceStillOnStreamConversation: false,
     })).toEqual([]);
   });
 
@@ -276,6 +282,44 @@ describe('planOwnStreamMirror', () => {
       mirroredEntryExists: false,
     };
     expect(planOwnStreamMirror(input)).toEqual(planOwnStreamMirror(input));
+  });
+  // THE SDK's SERVER-ID ADOPTION — a mid-send id change that is NOT the array moving, and that the
+  // mirror MUST follow. When the route writes a data part before the `start` chunk (the ungated
+  // `data-command-execution` path — any message containing a command token), useChat pushes the
+  // assistant message under a CLIENT-generated id, React renders, and the mirror latches it. The
+  // `start` chunk then swaps in the server id. This repo pins that behaviour in
+  // sdkServerIdAdoption.test.ts.
+  //
+  // Refusing to re-target froze the entry under the client id — a name the server has never heard
+  // of. Stop then took the isOwn branch (which outranks the pendingSend fallback that WOULD have
+  // worked), aborted a nonexistent stream, got 'not_found', and said nothing — while the
+  // generation kept running its write tools and kept billing.
+  //
+  // The discriminator is the surface: an external setMessages() that replaces the array is a
+  // load-on-select for ANOTHER conversation, so the surface has moved off the stream's
+  // conversation. The SDK adopting an id happens with the surface sitting exactly where it was.
+  it('given the SDK adopts the server-issued id mid-send while the surface has not moved, should re-target onto it', () => {
+    expect(planOwnStreamMirror({
+      ...BASE,
+      status: 'streaming',
+      ownAssistantMessage: { id: 'server-issued-id', parts: [text('He')] },
+      mirroredMessageId: 'client-generated-id',
+      surfaceStillOnStreamConversation: true,
+    })).toEqual([
+      { type: 'removeStream', messageId: 'client-generated-id' },
+      {
+        type: 'addStream',
+        stream: {
+          messageId: 'server-issued-id',
+          pageId: 'page-1',
+          conversationId: 'conv-1',
+          triggeredBy: { userId: 'u1', displayName: 'Me' },
+          isOwn: true,
+          startedAt: '2024-01-01T00:00:00.000Z',
+        },
+      },
+      { type: 'setStreamParts', messageId: 'server-issued-id', parts: [text('He')], seq: 1 },
+    ]);
   });
 });
 

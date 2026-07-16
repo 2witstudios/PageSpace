@@ -48,6 +48,13 @@ export interface PlanOwnStreamMirrorInput {
    * them. Empty until the first write.
    */
   lastMirroredParts: UIMessagePart[];
+  /**
+   * Is the surface still showing the conversation this stream was sent from?
+   *
+   * The discriminator between the two reasons an assistant id can change mid-send — see (2) on
+   * `planOwnStreamMirror`. It is the surface's state, so only the caller can supply it.
+   */
+  surfaceStillOnStreamConversation: boolean;
   /** Caller-tracked monotonic counter, bumped once per mirror tick — threaded into `setStreamParts`'s `seq` gate. */
   seq: number;
 }
@@ -104,12 +111,29 @@ export const isOwnStreamSending = (status: OwnStreamMirrorStatus): boolean =>
  *    moves out from under it. A send in C followed by a switch to D inside the 0.5-3s TTFB window
  *    would otherwise record C's stream under D. Hence `streamIdentity`, latched at the send.
  *
- * 2. A CHANGE OF ASSISTANT MESSAGE ID MID-SEND. Within one send the mirrored id is latched, and a
- *    DIFFERENT id means the array moved under us (a surface's load-on-select calling
- *    `setMessages(<other conversation's history>)`, whose last entry is typically an assistant
- *    message), not that a new stream started — a new stream needs a new send, which passes through
- *    'ready' and clears the latch. Re-targeting would remove OUR live stream and add a PHANTOM one
- *    on a message that finished long ago, whose Stop reports not_found and is silent by design.
+ * 2. THE SURFACE'S ARRAY, as a source of "which message is my stream". An assistant id can change
+ *    mid-send for two completely different reasons, and they need opposite handling:
+ *
+ *    (a) An external `setMessages()` replaced the array — a surface's load-on-select writing
+ *        ANOTHER conversation's history, whose last entry is typically an assistant message.
+ *        Re-targeting onto it removes OUR live stream and adds a PHANTOM on a message that
+ *        finished long ago, whose Stop reports not_found and is silent by design.
+ *
+ *    (b) The SDK adopted the SERVER-issued id over its own client-generated one, mid-send. When
+ *        the route writes a data part before the `start` chunk (the ungated
+ *        `data-command-execution` path — any message carrying a command token), useChat pushes the
+ *        assistant message under a client id, React renders, the mirror latches it, and `start`
+ *        then swaps in the server id. This repo pins that behaviour in sdkServerIdAdoption.test.ts.
+ *        REFUSING to re-target here froze the entry under a name the server has never heard of:
+ *        Stop took the isOwn branch (which outranks the pendingSend fallback that WOULD have
+ *        worked), aborted a nonexistent stream, got not_found, and said nothing — while the
+ *        generation kept running its write tools and kept billing.
+ *
+ *    `surfaceStillOnStreamConversation` separates them. (a) is a load-on-select for a DIFFERENT
+ *    conversation, so the surface has moved off the stream's conversation; (b) happens with the
+ *    surface sitting exactly where it was. (A same-conversation history write cannot coincide with
+ *    a live own stream: the surfaces' load/refresh effects are guarded on
+ *    `isOwn*StreamForCurrentConversation`, which is precisely true in that case.)
  */
 export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamMirrorOp[] => {
   // The send is over: release whatever this mirror latched. The local read is what this entry
@@ -132,7 +156,35 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
   // the content we last mirrored — losing it would mean no Stop, no SWR protection, and a
   // generation still running and billing with nothing on screen naming it.
   if (input.mirroredMessageId !== undefined && input.mirroredMessageId !== id) {
+    // (b) The SDK renamed OUR stream — same stream, new (server-issued) name. Follow it: the old
+    // entry names nothing the server knows, and the new one is what Stop must be able to abort.
+    if (input.surfaceStillOnStreamConversation && input.ownAssistantMessage) {
+      return [
+        { type: 'removeStream', messageId: input.mirroredMessageId },
+        {
+          type: 'addStream',
+          stream: {
+            messageId: input.ownAssistantMessage.id,
+            pageId: input.streamIdentity.pageId,
+            conversationId: input.streamIdentity.conversationId,
+            triggeredBy: input.streamIdentity.triggeredBy,
+            isOwn: true,
+            startedAt: input.streamIdentity.startedAt,
+          },
+        },
+        {
+          type: 'setStreamParts',
+          messageId: input.ownAssistantMessage.id,
+          parts: input.ownAssistantMessage.parts,
+          seq: input.seq,
+        },
+      ];
+    }
+    // (a) The array moved off our stream. Hold what we latched and adopt nothing.
     if (input.mirroredEntryExists) return [];
+    // ...unless our entry was ALSO wiped in that window — the one case that cannot heal itself,
+    // since no further token will ever arrive for a message that has left the array. Restore the
+    // latched stream with the content we last mirrored.
     return [
       {
         type: 'addStream',

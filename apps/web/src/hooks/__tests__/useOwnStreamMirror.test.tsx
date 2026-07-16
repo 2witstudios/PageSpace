@@ -184,18 +184,51 @@ describe('useOwnStreamMirror', () => {
       conversationId: 'conv-C',
     });
 
+    // The array moves because the user selected conversation D and its history loaded — so the
+    // surface has moved off C. That is what makes this an external write rather than the SDK
+    // renaming our own stream.
     act(() => {
       usePendingStreamsStore.getState().clearPageStreams('page-1');
       rerender({
         status: 'streaming',
         ownAssistantMessage: { id: 'old-history-message', parts: [text('old')] },
         pageId: 'page-1',
-        conversationId: 'conv-C',
+        conversationId: 'conv-D',
       });
     });
 
     expect(entry('m1')).toMatchObject({ messageId: 'm1', conversationId: 'conv-C', isOwn: true });
     expect(entry('m1')?.parts).toEqual([text('He')]);
     expect(entry('old-history-message')).toBeUndefined();
+  });
+
+  // THE SDK's server-id adoption, end to end. The route writes a data part before the `start`
+  // chunk (the ungated `data-command-execution` path — any message carrying a command token), so
+  // useChat pushes the assistant message under a CLIENT id, React renders, and the mirror latches
+  // it. `start` then swaps in the server id, with the surface sitting exactly where it was.
+  //
+  // Refusing to follow that rename froze the entry under a name the server has never heard of:
+  // Stop took the isOwn branch (outranking the pendingSend fallback that WOULD have worked),
+  // aborted a nonexistent stream, got not_found, and said nothing — while the generation kept
+  // running its write tools and kept billing.
+  it('given the SDK swaps in the server-issued id mid-send, should re-target onto it and drop the client-id entry', () => {
+    const { rerender } = render({
+      status: 'streaming',
+      ownAssistantMessage: { id: 'client-generated-id', parts: [text('running command...')] },
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    });
+    expect(entry('client-generated-id')).toBeDefined();
+
+    // The `start` chunk lands. Same conversation — this is a rename, not the array moving.
+    act(() => rerender({
+      status: 'streaming',
+      ownAssistantMessage: { id: 'server-issued-id', parts: [text('running command...')] },
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    }));
+
+    expect(entry('server-issued-id')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
+    expect(entry('client-generated-id')).toBeUndefined();
   });
 });

@@ -109,9 +109,15 @@ export const useOwnStreamMirror = ({
     const storedLastSeq = (relevantId && store.streams.get(relevantId)?.lastSeq) || 0;
     const seq = Math.max(Date.now(), storedLastSeq + 1);
 
+    // Has the surface moved off the conversation this stream was sent from? That is what tells an
+    // external setMessages() (a load-on-select for ANOTHER conversation) apart from the SDK
+    // adopting the server-issued id for THIS stream. See planOwnStreamMirror (2).
+    const surfaceStillOnStreamConversation = liveRef.current.conversationId === identity.conversationId;
+
     const ops = planOwnStreamMirror({
       status,
       ownAssistantMessage,
+      surfaceStillOnStreamConversation,
       mirroredMessageId: mirroredIdRef.current,
       mirroredEntryExists,
       streamIdentity: identity,
@@ -129,7 +135,14 @@ export const useOwnStreamMirror = ({
     // from our own addStream was evaluated against a still-undefined ref, resolved to `false`
     // (unchanged), and never re-rendered — so the subscription latched at `false` for the whole
     // send and a later wipe could not re-run this effect. Ordering IS the subscription here.
-    if (sending && mirroredIdRef.current === undefined && ownAssistantMessage !== undefined) {
+    // Latch the first assistant id of this send — and re-latch when the SDK renames OUR stream
+    // (same conversation, new server-issued id: planOwnStreamMirror (2b)). An id change while the
+    // surface has MOVED is the array shifting under us, not a rename, and must not re-latch.
+    if (
+      sending &&
+      ownAssistantMessage !== undefined &&
+      (mirroredIdRef.current === undefined || surfaceStillOnStreamConversation)
+    ) {
       mirroredIdRef.current = ownAssistantMessage.id;
     }
     // Retain the latched stream's content while the array still shows it.
