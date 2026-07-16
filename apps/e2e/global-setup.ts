@@ -5,7 +5,14 @@ import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '../../packages/lib/src/auth/session-service';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const E2E_DIR = path.join(process.cwd(), 'apps/e2e');
+// Resolved from THIS file's location, not the cwd. The cwd-based form
+// (`path.join(process.cwd(), 'apps/e2e')`) only agreed with the reader
+// (`fixtures/seed-state.ts`, which is already `__dirname`-relative) when the runner happened
+// to be invoked from the repo root — so the documented command,
+// `bun run --filter '@pagespace/e2e' test:e2e`, ran with cwd=apps/e2e, wrote to
+// apps/e2e/apps/e2e/, and died on ENOENT before a single test. Location-relative works from
+// any cwd and matches the reader by construction.
+const E2E_DIR = __dirname;
 const DEFAULT_BASE_URL = 'http://localhost:3000';
 
 function assertNotProduction(url: string): void {

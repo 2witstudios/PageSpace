@@ -30,6 +30,7 @@ import {
   type NativeInviteAcceptanceResult,
 } from '@/lib/auth/native-invite-acceptance';
 import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { revokeSessionsForLogin } from '@/lib/auth/device-auth-helpers';
 
 const verifyTokenSchema = z.object({
   token: z.string().min(1, 'Token is required'),
@@ -128,15 +129,12 @@ export async function GET(req: Request) {
     }
     const boundInviteToken = parsedMeta?.inviteToken;
 
-    // SESSION FIXATION PREVENTION: Revoke existing web sessions before creating a
-    // new one. Admin-console sessions are scoped separately and left intact.
-    const revokedCount = await sessionService.revokeWebUserSessions(userId, 'magic_link_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on magic link login', {
-        userId,
-        count: revokedCount,
-      });
-    }
+    // SESSION FIXATION PREVENTION: Revoke prior sessions before creating a new
+    // one. Scope to the desktop device when the magic link carries a deviceId; a
+    // cross-device email link cannot identify the device, so the helper falls
+    // back to the legacy all-web-session revoke. Admin-console sessions are scoped
+    // separately and left intact.
+    await revokeSessionsForLogin(userId, desktopMeta?.deviceId, 'magic_link_login', 'magic-link');
 
     // Mark email as verified (idempotent for existing users)
     try {

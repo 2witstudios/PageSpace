@@ -677,6 +677,11 @@
       "import": "./dist/services/machines/machine-access.js",
       "require": "./dist/services/machines/machine-access.js"
     },
+    "./services/machines/machine-orphan-reconcile": {
+      "types": "./dist/services/machines/machine-orphan-reconcile.d.ts",
+      "import": "./dist/services/machines/machine-orphan-reconcile.js",
+      "require": "./dist/services/machines/machine-orphan-reconcile.js"
+    },
     "./services/machines/machine-list": {
       "types": "./dist/services/machines/machine-list.d.ts",
       "import": "./dist/services/machines/machine-list.js",
@@ -822,6 +827,46 @@
       "import": "./dist/services/email-service.js",
       "require": "./dist/services/email-service.js"
     },
+    "./services/broadcast/core": {
+      "types": "./dist/services/broadcast/core.d.ts",
+      "import": "./dist/services/broadcast/core.js",
+      "require": "./dist/services/broadcast/core.js"
+    },
+    "./services/broadcast/audience": {
+      "types": "./dist/services/broadcast/audience.d.ts",
+      "import": "./dist/services/broadcast/audience.js",
+      "require": "./dist/services/broadcast/audience.js"
+    },
+    "./services/broadcast/content": {
+      "types": "./dist/services/broadcast/content.d.ts",
+      "import": "./dist/services/broadcast/content.js",
+      "require": "./dist/services/broadcast/content.js"
+    },
+    "./services/broadcast/record-adapter": {
+      "types": "./dist/services/broadcast/record-adapter.d.ts",
+      "import": "./dist/services/broadcast/record-adapter.js",
+      "require": "./dist/services/broadcast/record-adapter.js"
+    },
+    "./services/broadcast/engine": {
+      "types": "./dist/services/broadcast/engine.d.ts",
+      "import": "./dist/services/broadcast/engine.js",
+      "require": "./dist/services/broadcast/engine.js"
+    },
+    "./services/broadcast/transactional-engine": {
+      "types": "./dist/services/broadcast/transactional-engine.d.ts",
+      "import": "./dist/services/broadcast/transactional-engine.js",
+      "require": "./dist/services/broadcast/transactional-engine.js"
+    },
+    "./repositories/broadcast-repository": {
+      "types": "./dist/repositories/broadcast-repository.d.ts",
+      "import": "./dist/repositories/broadcast-repository.js",
+      "require": "./dist/repositories/broadcast-repository.js"
+    },
+    "./email-templates/BroadcastEmail": {
+      "types": "./dist/email-templates/BroadcastEmail.d.ts",
+      "import": "./dist/email-templates/BroadcastEmail.js",
+      "require": "./dist/email-templates/BroadcastEmail.js"
+    },
     "./services/notification-email-service": {
       "types": "./dist/services/notification-email-service.d.ts",
       "import": "./dist/services/notification-email-service.js",
@@ -842,15 +887,10 @@
       "import": "./dist/email-templates/FeedbackNotificationEmail.js",
       "require": "./dist/email-templates/FeedbackNotificationEmail.js"
     },
-    "./email-templates/CreditsChangeEmail": {
-      "types": "./dist/email-templates/CreditsChangeEmail.d.ts",
-      "import": "./dist/email-templates/CreditsChangeEmail.js",
-      "require": "./dist/email-templates/CreditsChangeEmail.js"
-    },
-    "./email-templates/credits-change-content": {
-      "types": "./dist/email-templates/credits-change-content.d.ts",
-      "import": "./dist/email-templates/credits-change-content.js",
-      "require": "./dist/email-templates/credits-change-content.js"
+    "./email-templates/SdkCliLaunchEmail": {
+      "types": "./dist/email-templates/SdkCliLaunchEmail.d.ts",
+      "import": "./dist/email-templates/SdkCliLaunchEmail.js",
+      "require": "./dist/email-templates/SdkCliLaunchEmail.js"
     },
     "./email-templates/render-email": {
       "types": "./dist/email-templates/render-email.d.ts",
@@ -1842,6 +1882,9 @@
       "services/machines/machine-access": [
         "./dist/services/machines/machine-access.d.ts"
       ],
+      "services/machines/machine-orphan-reconcile": [
+        "./dist/services/machines/machine-orphan-reconcile.d.ts"
+      ],
       "services/machines/machine-list": [
         "./dist/services/machines/machine-list.d.ts"
       ],
@@ -1959,11 +2002,8 @@
       "email-templates/FeedbackNotificationEmail": [
         "./dist/email-templates/FeedbackNotificationEmail.d.ts"
       ],
-      "email-templates/CreditsChangeEmail": [
-        "./dist/email-templates/CreditsChangeEmail.d.ts"
-      ],
-      "email-templates/credits-change-content": [
-        "./dist/email-templates/credits-change-content.d.ts"
+      "email-templates/SdkCliLaunchEmail": [
+        "./dist/email-templates/SdkCliLaunchEmail.d.ts"
       ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"
@@ -2336,12 +2376,14 @@
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
     "mammoth": "^1.10.0",
+    "marked": "^17.0.1",
     "pako": "^2.1.0",
     "pdf-parse-debugging-disabled": "^1.1.1",
     "react": "^19.1.2",
     "react-dom": "^19.1.2",
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
+    "sanitize-html": "^2.17.6",
     "server-only": "^0.0.1",
     "xlsx": "^0.18.5",
     "yaml": "^2.8.2",
@@ -2353,6 +2395,7 @@
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",
     "@types/react": "^19.1.13",
+    "@types/sanitize-html": "^2.16.1",
     "@types/xlsx": "^0.0.36",
     "eslint": "^9.36.0",
     "typescript-eslint": "^8.59.0"

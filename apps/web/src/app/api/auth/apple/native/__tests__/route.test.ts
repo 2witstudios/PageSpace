@@ -104,6 +104,12 @@ vi.mock('@/lib/onboarding/home-drive', () => ({
 vi.mock('@pagespace/lib/security/client-ip', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
+vi.mock('@/lib/auth/url-utils', () => ({
+  isSafeReturnUrl: vi.fn(() => true),
+}));
+vi.mock('@/lib/auth/device-auth-helpers', () => ({
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
+}));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
@@ -148,6 +154,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { revokeSessionsForLogin } from '@/lib/auth/device-auth-helpers';
 
 const createNativeRequest = (body: Record<string, unknown> = {}) =>
   new Request('http://localhost/api/auth/apple/native', {
@@ -490,28 +497,17 @@ describe('POST /api/auth/apple/native', () => {
   });
 
   describe('session management', () => {
-    it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(2);
-
+    it('revokes prior sessions scoped to the request deviceId (device-scoped, not nuclear)', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on native Apple OAuth login',
-        { userId: 'new-user-id', count: 2, platform: 'ios' }
+      // deviceId is required by the schema, so the helper always receives it and
+      // revokes only THIS device's sessions — other devices stay signed in.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
+        'new-user-id',
+        'device-123',
+        'new_login',
+        'Apple native',
       );
-    });
-
-    it('does not log when no sessions were revoked', async () => {
-      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
-
-      await POST(createNativeRequest(validPayload));
-
-      const logCalls = vi.mocked(loggers.auth.info).mock.calls;
-      const revokedLogCall = logCalls.find(
-        (call) => call[0] === 'Revoked existing sessions on native Apple OAuth login'
-      );
-      expect(revokedLogCall).toBeUndefined();
     });
 
     it('returns 500 when session validation fails', async () => {

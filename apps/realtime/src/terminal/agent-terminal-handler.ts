@@ -341,6 +341,7 @@ async function settleAccruedWindow(
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   sessionKey: string,
+  { stopClock = false }: { stopClock?: boolean } = {},
 ): Promise<boolean> {
   if (!session.payerId || session.connectedAt === undefined) return true;
   const payerId = session.payerId;
@@ -373,6 +374,33 @@ async function settleAccruedWindow(
     return true;
   }
   if (sessionMap.getByKey(sessionKey) !== session) return true;
+  // The shell quiesced: its exec socket is deliberately down and its Sprite is
+  // free to pause (the task hold was released with it — see
+  // `startTaskHoldHeartbeat`). A paused sandbox costs us nothing, so billing the
+  // payer wall-clock for it would charge them for a tab, not for a sandbox — and
+  // an ATTACHED session is never reaped, so that overbilling would be unbounded.
+  // Stop the clock instead: the window just settled is the last billable one
+  // until the socket comes back (`resumeBillingClock`).
+  //
+  // Set only AFTER a successful settle and only while this session is still the
+  // live one — a failed settle has already rolled `connectedAt` back to the
+  // window start, and clearing it here would silently discard that unbilled
+  // window instead of retrying it.
+  //
+  // No fresh hold is placed either: a hold RESERVES the payer's credits for the
+  // next window, and there is no next window until they come back.
+  //
+  // Skipping the gate does mean an insolvent payer's quiesced terminal is not
+  // torn down while it sits there — correct, since it is consuming nothing — and
+  // that they are re-gated at the first heartbeat AFTER they resume rather than
+  // at the instant of resume. That is the same bounded exposure any mid-window
+  // insolvency already carries (a payer who runs out with nine minutes left in a
+  // ten-minute window keeps those nine minutes), not a new one: the settle
+  // cadence, not this branch, is what bounds it.
+  if (stopClock) {
+    session.connectedAt = undefined;
+    return true;
+  }
   try {
     const gate = await billing.gate({ payerId });
     if (!gate.allowed) return false;
@@ -392,10 +420,31 @@ async function settleAccruedWindow(
 }
 
 /**
+ * Restart the billing clock a quiesced window stopped (`settleAccruedWindow`'s
+ * `stopClock`). Called at the very instant the shell resumes — a keystroke, or a
+ * viewer returning — NOT left to the next heartbeat: that is `SETTLE_HEARTBEAT_MS`
+ * (ten minutes) away, and a session that resumed nine minutes before its next
+ * tick would have those nine minutes billed as free.
+ *
+ * Idempotent, and inert for an unmetered session (no `payerId`) or one whose
+ * clock is already running — `connectedAt` is only ever `undefined` here because
+ * a quiesce stopped it.
+ */
+function resumeBillingClock(session: TerminalSession): void {
+  if (!session.payerId) return;
+  if (session.connectedAt !== undefined) return;
+  session.connectedAt = Date.now();
+}
+
+/**
  * Arms the heartbeat for a metered session (see SETTLE_HEARTBEAT_MS). A
  * module-level factory rather than a closure inside onConnect so the
  * long-lived interval callback captures only what it needs — not the whole
  * connect scope (auth result, Sprite handle, session-list snapshots).
+ *
+ * Each tick re-reads whether the shell is QUIESCED, so the same beat that bills
+ * a live session's window stops an idle one's clock — and starts it again when
+ * the socket comes back. Billing tracks sandbox residency, not tab-open time.
  */
 function startSettleHeartbeat(
   billing: SandboxBillingDeps,
@@ -409,7 +458,13 @@ function startSettleHeartbeat(
     if (settling) return;
     settling = true;
     try {
-      const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey);
+      const quiesced = session.command.isQuiesced();
+      // A backstop for the precise `resumeBillingClock` calls at the resume
+      // sites: if a socket came back through some path that did not restart the
+      // clock, this beat notices and restarts it rather than letting the session
+      // run on free forever.
+      if (!quiesced) resumeBillingClock(session);
+      const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: quiesced });
       if (!solvent && sessionMap.getByKey(sessionKey) === session) {
         loggers.realtime.info('Agent terminal session ended (payer out of credits at heartbeat)', {
           sessionKey,
@@ -458,14 +513,44 @@ function startTaskHoldHeartbeat(
 ): ReturnType<typeof setInterval> {
   const tick = () =>
     taskHold.tick({
-      attached: session.viewerAttached,
+      // `attached` means "a LIVE EXEC CONNECTION exists on the Sprite for a
+      // viewer", not merely "a browser tab is open". Those were the same thing
+      // until the watchdog learned to quiet an attached-but-idle shell: a
+      // quiesced socket (`isQuiesced`) is deliberately DOWN, so it gives the
+      // platform nothing to keep the sandbox resident FOR, and holding the
+      // sprite up for it is exactly the idle-cost bug this change exists to
+      // close. Without this, `planHold`'s `needHold = attached || agentRunning`
+      // would refresh the hold forever behind any open tab — the watchdog would
+      // have gone quiet while the hold went on pinning the Sprite, and the RAM
+      // bill would not move.
+      //
+      // A viewer whose shell was paused out from under them gets it back
+      // transparently: their next keystroke resumes the socket, and the shell's
+      // own reconnect either reattaches the surviving session or falls back to a
+      // fresh one (`planReconnect`) — the same recovery a returning DETACHED
+      // viewer has always had.
+      attached: session.viewerAttached && !session.command.isQuiesced(),
       lastActivityAt: latestActivityAt(session),
-      // While DETACHED the exec socket may be dead (the shell deliberately
-      // never reconnects it — leaf 3-2), so a frozen activity clock is not
-      // evidence of idleness; the controller then keeps an existing hold
-      // rather than deleting it under an agent it can no longer see. And a
-      // detached agent that FINISHES while the socket survived still releases
-      // promptly: its PTY exit reaches onExit, whose teardown ends the hold.
+      // Whether a STALE clock is trustworthy evidence of idleness.
+      //
+      // While DETACHED the exec socket may have died mid-run — the shell
+      // deliberately never reconnects it (leaf 3-2) — so the clock can freeze
+      // under an agent that is still working. That is blind, and the controller
+      // then keeps an existing hold rather than deleting it under an agent it
+      // can no longer see. And a detached agent that FINISHES while the socket
+      // survived still releases promptly: its PTY exit reaches onExit, whose
+      // teardown ends the hold.
+      //
+      // An ATTACHED shell stays observable even once the watchdog quiets it,
+      // which is why this is still just `viewerAttached`. A shell is only ever
+      // quiesced-while-attached BECAUSE its clock was already stale past the
+      // idle window while the socket was live and watching (`attach-quiet` is
+      // unreachable with fresh activity — see `planWatchdogResponse`). The
+      // freeze is a CONSEQUENCE of idleness we observed, not a blindfold that
+      // hides work. Passing `false` here instead would invert the policy and
+      // pin the hold forever: `agentRunning` is
+      // `isAgentActive(...) || (!activityObservable && holdExists)`, so an
+      // unobservable session with a live hold counts as running by definition.
       activityObservable: session.viewerAttached,
     });
   tick();
@@ -690,10 +775,25 @@ export function buildAgentTerminalHandlers({
     // connection never actually dropped, since output is already flowing.
     session.command.setViewerAttached(true);
     session.viewerAttached = true;
-    // A viewer is attached again — that alone is "work in progress", so the
-    // hold (deleted while detached-and-idle) is re-created immediately rather
-    // than waiting out a heartbeat interval.
-    session.taskHold?.tick({ attached: true, lastActivityAt: latestActivityAt(session), activityObservable: true });
+    // The line above resumes a shell that quiesced while they were gone, which
+    // wakes the Sprite — so the payer is consuming a sandbox again and the
+    // billing clock (stopped at the quiesce — see `settleAccruedWindow`'s
+    // `stopClock`) restarts HERE, not at the next ten-minute heartbeat. A no-op
+    // for a session that never quiesced: its clock never stopped.
+    resumeBillingClock(session);
+    // A viewer is back AND the `setViewerAttached(true)` above has just resumed
+    // the shell's socket, so the hold (deleted while idle) is re-created
+    // immediately rather than waiting out a heartbeat interval. Derived, not
+    // hardcoded `true`: `attached` means "a LIVE exec connection exists" (see
+    // `startTaskHoldHeartbeat`), and a viewer alone no longer earns a hold.
+    // Both terms are necessarily true right here — the resume clears quiescence
+    // synchronously — so this is the same value either way; deriving it is what
+    // keeps the two tick sites from drifting apart.
+    session.taskHold?.tick({
+      attached: session.viewerAttached && !session.command.isQuiesced(),
+      lastActivityAt: latestActivityAt(session),
+      activityObservable: true,
+    });
     sessionMap.reattach(sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
@@ -939,6 +1039,34 @@ export function buildAgentTerminalHandlers({
           command: launch.command,
           args: launch.args,
           cwd: sandbox.cwd,
+          // The watchdog's idle signal, read off the SAME clock the Tasks API
+          // hold ticks on (`startTaskHoldHeartbeat` below): once this session
+          // has been idle long enough for the platform hold to be dropped, the
+          // watchdog stops reattaching for it too, instead of reconnecting to
+          // the Sprite every ~45s for a viewer who is only watching an idle
+          // prompt. The next keystroke reattaches transparently. See
+          // `planWatchdogResponse`'s `attach-quiet`.
+          //
+          // `undefined` — "no trustworthy idleness signal, keep the socket up" —
+          // for the ONE session whose silence proves nothing: a RESUMED agent
+          // that has not yet emitted a byte to us. It was verified live at
+          // connect, so it may be mid-run and merely thinking; our clock holds
+          // nothing but the connect stamp, and letting that age into a quiet
+          // verdict would drop the hold (see the tick below) and pause the
+          // sprite under a working agent. This is the SAME trust rule
+          // `disconnectConnection` already applies to its own hold tick
+          // (`hasOutput || !resumedAtCreate`) — silence is only evidence of
+          // idleness once we have heard this session speak at least once. The
+          // moment it does, `hasOutput` flips and the normal idle window governs.
+          getLastActivityAt: () =>
+            (session.hasOutput || !session.resumedAtCreate ? latestActivityAt(session) : undefined),
+          // The window the hold is ACTUALLY judging idleness on — configurable
+          // (`SPRITE_TASK_HOLD_REFRESH_MS`), so it is read from the controller
+          // rather than assumed to be the default. Both signals must answer "may
+          // this sprite pause?" on the same window or they contradict each other.
+          // A getter because the controller is built after this shell is opened;
+          // `undefined` (no hold wired) falls back to `TASK_HOLD_AGENT_IDLE_MS`.
+          getIdleMs: () => session.taskHold?.agentIdleMs,
           onOutput: (data) => {
             // The hold's "agent output is flowing" signal — kept fresh here so
             // a DETACHED session with an agent mid-run keeps its sprite up.
@@ -1138,6 +1266,14 @@ export function buildAgentTerminalHandlers({
         // Input is activity for the task hold: a typed prompt is work in
         // progress even before the agent's first byte of output.
         session.lastInputAt = Date.now();
+        // A keystroke also RESUMES a quiesced shell (sprites-shell.ts's `write`
+        // pays back the swallowed watchdog trip), which wakes the Sprite and
+        // re-takes the platform hold — so the payer starts consuming a sandbox
+        // again, and the billing clock has to start with it. Done here, at the
+        // instant of the keystroke, rather than at the next heartbeat: that is
+        // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
+        // minutes would otherwise be billed as free.
+        resumeBillingClock(session);
         session.command.write(p.data);
       }
     },

@@ -87,8 +87,14 @@ vi.mock('@/stores/useEditingStore', () => ({
   isEditingActive: vi.fn(() => false),
 }));
 
+// A fresh `[]` literal on every call (unlike the real store's useShallow-backed
+// selectors) makes every consumer's downstream useMemo/useEffect see a "changed"
+// dependency on every render — confirmed via a local render-count diagnostic to
+// cause an unbounded AiChatView re-render loop that OOMs the process. One stable
+// empty-array reference restores the real store's shallow-stability contract.
+const EMPTY_STREAMS_MOCK: unknown[] = [];
 vi.mock('@/stores/usePendingStreamsStore', () => ({
-  usePendingStreamsStore: Object.assign(vi.fn(() => []), {
+  usePendingStreamsStore: Object.assign(vi.fn(() => EMPTY_STREAMS_MOCK), {
     getState: vi.fn(() => ({
       streams: new Map(),
       getOwnStreams: vi.fn(() => []),
@@ -107,7 +113,16 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
   useDisplayPreferences: vi.fn(() => ({ preferences: { showTokenCounts: false } })),
 }));
 
-vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+// Mirror the real barrel. It exported only `clearActiveStreamId` — a function PR 5A deletes with
+// the activeStreams map — so every other import from here (useStopStream's whole abort surface)
+// silently resolved to `undefined`. Latent only because nothing in this file clicks Stop; a
+// landmine for whoever adds that test.
+vi.mock('@/lib/ai/core/client', () => ({
+  abortActiveStreamByConversation: vi.fn(async () => ({ aborted: true, code: 'aborted', reason: '' })),
+  abortActiveStreamByMessageId: vi.fn(async () => ({ aborted: true, code: 'aborted', reason: '' })),
+  reportAbortOutcome: vi.fn(),
+  reportAbortOutcomes: vi.fn(),
+}));
 vi.mock('@/lib/ai/core/stream-abort-client', () => ({
   abortActiveStream: vi.fn(),
   abortActiveStreamByMessageId: vi.fn(),
@@ -240,6 +255,7 @@ vi.mock('@/stores/useFindStore', () => {
 import AiChatView from '../AiChatView';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { useMCPTools } from '@/lib/ai/shared';
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 
 const latestMcpConversationId = (): string | null => {
   const calls = vi.mocked(useMCPTools).mock.calls;
@@ -305,6 +321,8 @@ describe('AiChatView + real useConversations: history select', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     historyTabPropsRef.current = null;
+    // Real, unmocked global store — reset between tests, matching AiChatView.test.tsx.
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   test('given a conversation is picked from history, real useConversations.loadConversation should resolve and the picked conversation\'s messages should be applied via setMessages', async () => {

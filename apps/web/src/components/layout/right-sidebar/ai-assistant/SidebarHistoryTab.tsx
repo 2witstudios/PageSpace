@@ -16,7 +16,15 @@ import { usePageAgentSidebarState } from '@/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { setConversationId } from '@/lib/url-state';
 import { VirtualizedConversationList } from '@/components/ai/shared/chat';
+import { useSocket } from '@/hooks/useSocket';
+import {
+  parseStreamingConversationIds,
+  addStreamingConversation,
+  removeStreamingConversation,
+  applyPendingDeltas,
+} from '@/lib/ai/streams/streamingConversationIds';
 import type { AgentInfo } from '@/types/agent';
+import type { AiStreamStartPayload, AiStreamCompletePayload } from '@/lib/websocket/socket-utils';
 
 // Threshold for enabling virtualization
 const VIRTUALIZATION_THRESHOLD = 30;
@@ -85,6 +93,62 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const lastHandledGlobalConversationIdRef = useRef<string | null>(
     latestGlobalConversationAdded?.conversation.id ?? null,
   );
+
+  // Leaf 5.2: which of the LISTED conversations are currently streaming, for the badge below.
+  // Seeded from the user-scoped discovery endpoint (own rows, any channel — leaf 5.1) and kept
+  // fresh by the same chat:stream_start/chat:stream_complete events every other stream surface
+  // already listens to; no new socket wiring on the server side.
+  const [streamingConversationIds, setStreamingConversationIds] = useState<Set<string>>(new Set());
+  const socket = useSocket();
+  // Race guard (found in review): the fetch below is a snapshot taken when it was DISPATCHED,
+  // but resolves an arbitrary time later. A chat:stream_start/complete landing in that window is
+  // NEWER information than the snapshot — applying the snapshot as a blind replace would silently
+  // drop it (a stream that just started shows no badge until the next unrelated socket event or
+  // navigation re-triggers the fetch). Recorded here per fetch cycle and replayed on top of the
+  // snapshot once it resolves, then reset at the start of the next cycle — same shape as
+  // useChannelStreamSocket.ts's bootstrapGeneration guarding its own fetch-vs-live-event race.
+  const pendingDeltasRef = useRef<Map<string, 'add' | 'remove'>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    pendingDeltasRef.current = new Map();
+    fetchWithAuth('/api/ai/chat/active-streams?scope=user')
+      .then(async (response) => {
+        if (cancelled || !response.ok) return;
+        const data = await response.json();
+        if (cancelled) return;
+        const fetched = parseStreamingConversationIds(data);
+        setStreamingConversationIds(applyPendingDeltas(fetched, pendingDeltasRef.current));
+      })
+      .catch((error) => {
+        if (!cancelled) console.error('Failed to load streaming conversations:', error);
+      });
+    return () => { cancelled = true; };
+  }, [selectedAgent, pathname]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleStreamStart = (payload: AiStreamStartPayload) => {
+      pendingDeltasRef.current.set(payload.conversationId, 'add');
+      setStreamingConversationIds((prev) => addStreamingConversation(prev, payload.conversationId));
+    };
+    const handleStreamComplete = (payload: AiStreamCompletePayload) => {
+      // conversationId is optional on this payload (cross-version safety, see its docblock in
+      // socket-utils.ts) — a build old enough to omit it has nothing here to clear anyway.
+      if (!payload.conversationId) return;
+      const { conversationId } = payload;
+      pendingDeltasRef.current.set(conversationId, 'remove');
+      setStreamingConversationIds((prev) => removeStreamingConversation(prev, conversationId));
+    };
+
+    socket.on('chat:stream_start', handleStreamStart);
+    socket.on('chat:stream_complete', handleStreamComplete);
+    return () => {
+      socket.off('chat:stream_start', handleStreamStart);
+      socket.off('chat:stream_complete', handleStreamComplete);
+    };
+  }, [socket]);
 
   // Determine active conversation ID based on context
   const activeConversationId = useMemo(() => {
@@ -258,40 +322,52 @@ const SidebarHistoryTab: React.FC<SidebarHistoryTabProps> = ({
   const shouldVirtualize = filteredConversations.length >= VIRTUALIZATION_THRESHOLD;
 
   // Memoized render function for conversation items
-  const renderConversation = useCallback((conversation: Conversation) => (
-    <ContextMenu key={conversation.id}>
-      <ContextMenuTrigger asChild>
-        <div
-          onClick={() => handleConversationClick(conversation.id)}
-          className={`py-1 px-3 cursor-pointer hover:bg-accent/50 transition-colors relative ${
-            conversation.id === activeConversationId
-              ? 'bg-accent/50 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
-              : ''
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <span className="flex-grow truncate text-sm">
-              {conversation.title || 'New Conversation'}
-            </span>
-            <span className="text-xs text-muted-foreground flex-shrink-0">
-              {formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
-                addSuffix: true,
-              })}
-            </span>
+  const renderConversation = useCallback((conversation: Conversation) => {
+    const isStreaming = streamingConversationIds.has(conversation.id);
+    return (
+      <ContextMenu key={conversation.id}>
+        <ContextMenuTrigger asChild>
+          <div
+            onClick={() => handleConversationClick(conversation.id)}
+            className={`py-1 px-3 cursor-pointer hover:bg-accent/50 transition-colors relative ${
+              conversation.id === activeConversationId
+                ? 'bg-accent/50 before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary'
+                : ''
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {isStreaming && (
+                <span
+                  className="flex-shrink-0 h-1.5 w-1.5 rounded-full bg-primary animate-pulse"
+                  title="Still generating"
+                  data-testid="streaming-badge"
+                />
+              )}
+              <span className="flex-grow truncate text-sm">
+                {conversation.title || 'New Conversation'}
+              </span>
+              <span className="text-xs text-muted-foreground flex-shrink-0">
+                {isStreaming
+                  ? 'Generating…'
+                  : formatDistanceToNow(new Date(conversation.lastMessageAt || conversation.createdAt), {
+                      addSuffix: true,
+                    })}
+              </span>
+            </div>
           </div>
-        </div>
-      </ContextMenuTrigger>
-      <ContextMenuContent className="w-40">
-        <ContextMenuItem
-          onSelect={() => handleDeleteConversation(conversation.id)}
-          className="text-red-500 focus:text-red-500"
-        >
-          <Trash2 className="mr-2 h-4 w-4" />
-          <span>Delete</span>
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
-  ), [activeConversationId, handleConversationClick, handleDeleteConversation]);
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-40">
+          <ContextMenuItem
+            onSelect={() => handleDeleteConversation(conversation.id)}
+            className="text-red-500 focus:text-red-500"
+          >
+            <Trash2 className="mr-2 h-4 w-4" />
+            <span>Delete</span>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }, [activeConversationId, streamingConversationIds, handleConversationClick, handleDeleteConversation]);
 
   // Get key for virtualization
   const getConversationKey = useCallback((conversation: Conversation) => conversation.id, []);

@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { RotateCw } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { CompactToolCallRenderer, CompactToolRunGroup } from './tool-calls';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { MessageActionButtons } from './MessageActionButtons';
@@ -256,6 +258,13 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
   const groupedParts = useGroupedParts(message.parts);
   const { getToolCallOpen, setToolCallOpen } = useToolCallOpenState();
 
+  const isInterrupted = message.role === 'assistant' && message.status === 'interrupted';
+  // CompactTextBlock already renders its own retry button whenever it has non-empty content —
+  // this guards the message-level retry button below from double-rendering for that case.
+  const hasNonEmptyTextBlock = groupedParts.some(
+    (g) => isTextGroupPart(g) && g.parts.map((p) => p.text).join('').trim() !== '',
+  );
+
   const createdAt = message.createdAt;
   const editedAt = message.editedAt;
 
@@ -348,7 +357,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
 
   return (
     <>
-      <div key={message.id} className="mb-1 min-w-0 max-w-full">
+      <div key={message.id} data-testid="chat-message" data-role={message.role} data-message-id={message.id} className="mb-1 min-w-0 max-w-full">
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;
@@ -420,6 +429,32 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
           }
           return null;
         })}
+        {isInterrupted && (
+          <div className="mt-1 flex items-center gap-1.5 text-[10px]" data-testid="interrupted-affordance">
+            <span className="rounded bg-amber-100 dark:bg-amber-950/40 px-1 py-0.5 font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              Interrupted
+            </span>
+            {canRetry && (
+              <span className="text-gray-500 dark:text-gray-400">Cut short — retry to continue.</span>
+            )}
+            {/* CompactTextBlock is the only other place a retry button lives, and it only
+                renders for non-empty content — this is the sole retry control for an
+                empty/tool-only interrupted message. Gated on !hasNonEmptyTextBlock so a message
+                that DID stream real text doesn't show the button twice. */}
+            {canRetry && !hasNonEmptyTextBlock && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRetry}
+                className="h-4 px-0.5"
+                title="Retry this message"
+                aria-label="Retry this message"
+              >
+                <RotateCw className="h-2 w-2" />
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       {onDelete && (

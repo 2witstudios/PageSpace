@@ -10,10 +10,12 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { matchThresholdBlock, buildThresholdBlock, parseThresholds, assertValidSyntax } from './lib/coverage-ratchet-sentinel.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const dryRun = process.argv.includes('--dry-run');
+let hadError = false;
 
 const packages = [
   { name: 'apps/web', config: 'apps/web/vitest.config.ts', summary: 'apps/web/coverage/coverage-summary.json' },
@@ -46,20 +48,28 @@ for (const pkg of packages) {
     statements: Math.floor(t.statements.pct),
   };
 
-  // Match the thresholds block and replace values
-  const thresholdRegex = /thresholds:\s*\{[^}]+\}/s;
-  const match = config.match(thresholdRegex);
+  let found;
+  try {
+    found = matchThresholdBlock(config);
+  } catch (err) {
+    console.error(`[fail] ${pkg.name}: ${err.message}`);
+    hadError = true;
+    continue;
+  }
 
-  if (!match) {
+  if (!found) {
     console.log(`[skip] ${pkg.name}: no thresholds block found in vitest config`);
     continue;
   }
 
-  // Extract current thresholds
-  const currentLines = parseInt(match[0].match(/lines:\s*(\d+)/)?.[1] ?? '0');
-  const currentBranches = parseInt(match[0].match(/branches:\s*(\d+)/)?.[1] ?? '0');
-  const currentFunctions = parseInt(match[0].match(/functions:\s*(\d+)/)?.[1] ?? '0');
-  const currentStatements = parseInt(match[0].match(/statements:\s*(\d+)/)?.[1] ?? '0');
+  const { match, regex: thresholdRegex, isSentinel, indent } = found;
+
+  const {
+    lines: currentLines,
+    branches: currentBranches,
+    functions: currentFunctions,
+    statements: currentStatements,
+  } = parseThresholds(match[0]);
 
   // Only ratchet UP, never down
   const finalThresholds = {
@@ -80,9 +90,19 @@ for (const pkg of packages) {
     continue;
   }
 
-  const newBlock = `thresholds: {\n        lines: ${finalThresholds.lines},\n        branches: ${finalThresholds.branches},\n        functions: ${finalThresholds.functions},\n        statements: ${finalThresholds.statements},\n      }`;
+  const newBlock = buildThresholdBlock({ isSentinel, indent, thresholds: finalThresholds });
 
-  config = config.replace(thresholdRegex, newBlock);
+  const newConfig = config.replace(thresholdRegex, newBlock);
+
+  try {
+    assertValidSyntax(newConfig, pkg.name);
+  } catch (err) {
+    console.error(`[fail] ${err.message}`);
+    hadError = true;
+    continue;
+  }
+
+  config = newConfig;
 
   if (dryRun) {
     console.log(`[dry]  ${pkg.name}: would update thresholds:`);
@@ -99,3 +119,7 @@ for (const pkg of packages) {
 }
 
 console.log(`\n${dryRun ? 'Would update' : 'Updated'} ${updated} package(s).`);
+
+if (hadError) {
+  process.exit(1);
+}

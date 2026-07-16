@@ -102,7 +102,16 @@ export function PasskeyLoginButton({
       // Refresh CSRF token to avoid expiry after sitting on the page
       const freshToken = refreshToken ? (await refreshToken() ?? csrfToken) : csrfToken;
 
-      const platformFields = await getDevicePlatformFields();
+      // Web path: send a stable per-browser device identity (mirrors the OAuth
+      // sign-in flow). This scopes the login's session revocation to THIS browser
+      // instead of nuking every device, and lets the route mint a web device
+      // token at login so silent session recovery works immediately.
+      const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
+      const platformFields = {
+        platform: 'web' as const,
+        deviceId: getOrCreateDeviceId(),
+        deviceName: getDeviceName(),
+      };
 
       // Get authentication options
       const optionsRes = await fetch('/api/auth/passkey/authenticate/options', {
@@ -170,6 +179,20 @@ export function PasskeyLoginButton({
       toast.success('Signed in successfully');
 
       if (await handleDesktopAuthResponse(verifyData)) return;
+
+      // Web: now that we send a deviceId, the route mints/regenerates a web
+      // device token and returns it here. Persist it (rotating any prior token)
+      // so silent session recovery via /api/auth/device/refresh keeps working —
+      // otherwise a passkey login would leave a now-stale token in localStorage.
+      if (verifyData.deviceToken) {
+        try {
+          localStorage.setItem('deviceToken', verifyData.deviceToken);
+        } catch (storageError) {
+          // Storage may fail in private browsing or when quota is exceeded;
+          // log but never block sign-in.
+          console.warn('Failed to store device token:', storageError);
+        }
+      }
 
       // When the request carried an invite, the server already encoded the
       // correct landing path (drive on success, /dashboard?inviteError=… on

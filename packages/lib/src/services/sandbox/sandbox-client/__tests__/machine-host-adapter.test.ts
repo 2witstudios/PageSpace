@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createExecClientFromMachineHost } from '../machine-host-adapter';
+import { adaptMachineHandleToExecutableSandbox, createExecClientFromMachineHost } from '../machine-host-adapter';
 import type { MachineHandle, MachineHost } from '../../machine-host';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 
@@ -9,6 +9,7 @@ const substrate = { kind: 'sprite' as const };
 function fakeHandle(over: Partial<MachineHandle> = {}): MachineHandle {
   return {
     machineId: 'm1',
+    spriteInstanceId: null,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async () => null,
@@ -127,5 +128,25 @@ describe('createExecClientFromMachineHost', () => {
 
     await handle.createCheckpoint('pagespace-pre-agent-turn-1');
     expect(seen).toEqual(['pagespace-pre-agent-turn-1']);
+  });
+});
+
+describe('adaptMachineHandleToExecutableSandbox — the Sprite INSTANCE id must survive the round-trip', () => {
+  it('carries spriteInstanceId through, because dropping it silently disables every identity guard', () => {
+    // This adapter IS the production session client (`createProductionSpritesSandboxClient`),
+    // so anything it drops never reaches `machine_sessions`. It used to drop this
+    // one, which meant every session row stored NULL, every compare-and-swap fell
+    // back to comparing the (REUSED) sprite name, and the ABA protection was inert
+    // — while the whole codebase typechecked and every test passed. `sandboxId` is
+    // a name, not an identity; only this field says WHICH VM.
+    const sandbox = adaptMachineHandleToExecutableSandbox(fakeHandle({ spriteInstanceId: 'inst-42' }));
+
+    expect(sandbox.spriteInstanceId).toBe('inst-42');
+  });
+
+  it('reports null (never undefined) when the platform gave no instance id', () => {
+    const sandbox = adaptMachineHandleToExecutableSandbox(fakeHandle({ spriteInstanceId: null }));
+
+    expect(sandbox.spriteInstanceId).toBeNull();
   });
 });

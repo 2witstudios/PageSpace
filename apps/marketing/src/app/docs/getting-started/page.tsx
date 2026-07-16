@@ -108,7 +108,7 @@ If you use Claude Desktop, Claude Code, Cursor, or other MCP-compatible tools, y
 }
 \`\`\`
 
-Prefer the \`pagespace\` CLI end to end? \`npm install -g @pagespace/cli\`, then \`pagespace login\` and the \`pagespace keys\` wizard mint a drive-scoped key without ever copying a token. See the [MCP Integration guide](/docs/integrations/mcp) for full details.
+Prefer the \`pagespace\` CLI end to end? \`npm install -g @pagespace/cli\`, then \`pagespace login\` and the \`pagespace keys\` wizard mint a drive-scoped key without ever copying a token. See the [PageSpace CLI reference](/docs/features/cli) for every command, or the [MCP Integration guide](/docs/integrations/mcp) for full setup details. Building against PageSpace from your own code instead? Reach for the [PageSpace SDK](/docs/features/sdk).
 
 ## 7. Invite Your Team
 

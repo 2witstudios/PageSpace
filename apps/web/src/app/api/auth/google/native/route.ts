@@ -26,6 +26,7 @@ import {
 } from '@/lib/auth/native-invite-acceptance';
 import { getClientIP } from '@pagespace/lib/security/client-ip';
 import { isSafeReturnUrl } from '@/lib/auth/url-utils';
+import { revokeSessionsForLogin } from '@/lib/auth/device-auth-helpers';
 
 const client = new OAuth2Client();
 
@@ -206,16 +207,11 @@ export async function POST(req: Request) {
       });
     });
 
-    // SESSION FIXATION PREVENTION: Revoke existing web sessions before creating a
-    // new one. Admin-console sessions are scoped separately and left intact.
-    const revokedCount = await sessionService.revokeWebUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on native Google OAuth login', {
-        userId: user.id,
-        count: revokedCount,
-        platform,
-      });
-    }
+    // SESSION FIXATION PREVENTION: Revoke prior sessions before creating a new
+    // one, scoped to THIS device (deviceId is required by the schema) so a native
+    // login no longer nukes the user's other devices. Admin-console sessions are
+    // scoped separately and left intact.
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google native');
 
     // Create session
     const sessionToken = await sessionService.createSession({

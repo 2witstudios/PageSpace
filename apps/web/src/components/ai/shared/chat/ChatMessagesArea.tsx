@@ -19,6 +19,7 @@ import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
 import { VirtualizedMessageList, VirtualizedMessageListRef } from './VirtualizedMessageList';
@@ -172,6 +173,12 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       [remoteStreams]
     );
 
+    const areaMode = selectMessagesAreaMode({
+      isLoading,
+      messageCount: messages.length,
+      streamCount: visibleRemoteStreams.length,
+    });
+
     // Memoized render function for virtualized list
     const renderMessage = useCallback((message: UIMessage, _idx: number) => (
       <MessageRenderer
@@ -202,7 +209,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
     // Loading skeleton
     const LoadingSkeleton = useMemo(() => (
-      <div className="space-y-4">
+      <div data-testid="chat-loading-skeleton" className="space-y-4">
         <div className="flex items-center justify-center h-32 text-muted-foreground">
           <div className="flex items-center space-x-2">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -234,6 +241,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
     return (
       <>
         <ConversationContent
+          data-testid="chat-messages-area"
           className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34"
           onTouchStart={touchHandlers.onTouchStart}
           onTouchMove={touchHandlers.onTouchMove}
@@ -242,7 +250,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         >
           {isLoadingOlder && LoadingOlderIndicator}
 
-          {isLoading ? (
+          {areaMode === 'skeleton' ? (
             LoadingSkeleton
           ) : messages.length === 0 && visibleRemoteStreams.length === 0 ? (
             EmptyState
@@ -264,7 +272,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             messages.map((message, idx) => renderMessage(message, idx))
           )}
 
-          {!isLoading && visibleRemoteStreams.map((stream) => (
+          {areaMode !== 'skeleton' && visibleRemoteStreams.map((stream) => (
             <MessageRenderer
               key={stream.messageId}
               message={{
@@ -275,7 +283,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             />
           ))}
 
-          {(isStreaming || hasRemoteStream) && !isLoading && (
+          {(isStreaming || hasRemoteStream) && areaMode !== 'skeleton' && (
             <StreamingIndicator />
           )}
         </ConversationContent>

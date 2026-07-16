@@ -15,7 +15,7 @@ import { createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-mid
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { supportsTemperature } from '@/lib/ai/core/model-capabilities';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc } from '@pagespace/db/operators'
+import { eq, and, ne, desc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -282,6 +282,10 @@ export async function POST(request: Request) {
     // from a different user (see its doc comment) — safe to call unconditionally.
     await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
 
+    // Both branches feed the target agent's model context, so both exclude 'streaming'
+    // placeholders (empty, mid-flight rows) — see Server Stream Durability epic PR 2. The
+    // fallback branch was also missing the isActive filter the conversationId branch already
+    // had (pre-existing gap, called out in the PR 2 board's reader inventory).
     let historyMessages: Array<{ role: string; content: string | null }>;
     if (conversationId) {
       // Scoped to this conversation only, in chronological order.
@@ -291,7 +295,8 @@ export async function POST(request: Request) {
         .where(and(
           eq(chatMessages.pageId, agentId),
           eq(chatMessages.conversationId, conversationId),
-          eq(chatMessages.isActive, true)
+          eq(chatMessages.isActive, true),
+          ne(chatMessages.status, 'streaming')
         ))
         .orderBy(chatMessages.createdAt);
     } else {
@@ -302,7 +307,11 @@ export async function POST(request: Request) {
       const recentMessages = await db
         .select()
         .from(chatMessages)
-        .where(eq(chatMessages.pageId, agentId))
+        .where(and(
+          eq(chatMessages.pageId, agentId),
+          eq(chatMessages.isActive, true),
+          ne(chatMessages.status, 'streaming')
+        ))
         .orderBy(desc(chatMessages.createdAt))
         .limit(10);
       historyMessages = recentMessages.slice().reverse();

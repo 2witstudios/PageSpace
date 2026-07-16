@@ -10,7 +10,13 @@ type UIMessagePart = UIMessage['parts'][number];
  *
  * - No pending stream (pendingMessageId undefined): returns serverMessages as-is.
  * - Pending id absent from server list: appends a synthesized assistant message.
- * - Pending id already present in server list: returns serverMessages (deduped to one).
+ * - Pending id present with a non-'streaming' status (or no status — legacy/pre-PR2 rows and
+ *   every row from a client that hasn't opted into includeStreaming=1): returns serverMessages
+ *   (deduped to one) — the server row is the finished message, strictly newer than the stream.
+ * - Pending id present with status:'streaming' (Server Stream Durability epic PR 2 — a client
+ *   that opted into includeStreaming=1 can now see its own in-flight placeholder row): that row
+ *   is an empty, mid-flight DB snapshot — strictly STALER than the pending stream's own buffered
+ *   parts. The live pending message replaces it in place, at the same array position.
  */
 export const mergeServerAndPending = (
   serverMessages: UIMessage[],
@@ -19,6 +25,13 @@ export const mergeServerAndPending = (
   pendingStartedAt?: string,
 ): UIMessage[] => {
   if (pendingMessageId === undefined) return serverMessages;
-  if (serverMessages.some((m) => m.id === pendingMessageId)) return serverMessages;
-  return [...serverMessages, synthesizeAssistantMessage(pendingMessageId, pendingParts, pendingStartedAt)];
+  const index = serverMessages.findIndex((m) => m.id === pendingMessageId);
+  if (index === -1) {
+    return [...serverMessages, synthesizeAssistantMessage(pendingMessageId, pendingParts, pendingStartedAt)];
+  }
+  const matched = serverMessages[index] as UIMessage & { status?: string };
+  if (matched.status !== 'streaming') return serverMessages;
+  const next = serverMessages.slice();
+  next[index] = synthesizeAssistantMessage(pendingMessageId, pendingParts, pendingStartedAt);
+  return next;
 };

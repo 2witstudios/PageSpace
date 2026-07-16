@@ -8,18 +8,25 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
-        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+        onConflictDoUpdate: vi.fn().mockReturnValue({
+          returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]),
+        }),
       }),
     }),
   },
 }));
 
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ kind: 'eq', field, value })),
+  and: vi.fn((...conds: unknown[]) => ({ kind: 'and', conds })),
+}));
+
 vi.mock('@pagespace/db/schema/core', () => ({
-  chatMessages: { id: 'id' },
+  chatMessages: { id: 'id', conversationId: 'conversationId', role: 'role' },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
-  messages: { id: 'id' },
+  messages: { id: 'id', conversationId: 'conversationId' },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

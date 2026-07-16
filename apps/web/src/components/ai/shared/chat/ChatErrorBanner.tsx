@@ -40,6 +40,7 @@ export function ChatErrorBanner({
     <AnimatePresence>
       {visible && error && (
         <motion.div
+          data-testid="chat-error-banner"
           initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
           exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}

@@ -5,12 +5,19 @@ import userEvent from '@testing-library/user-event';
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
-const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId } = vi.hoisted(() => ({
+const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId, mockAbortByConversation, mockUseSendHandoff } = vi.hoisted(() => ({
+  // Returns a real pendingSendConversationId so the submitted window is reachable from a surface.
+  mockUseSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()), pendingSendConversationId: null as string | null })),
   mockFetchWithAuth: vi.fn(),
   mockSetMessages: vi.fn(),
   mockSendMessage: vi.fn(),
   mockLocalStop: vi.fn(),
   mockAbortByMessageId: vi.fn(async (_args: { messageId: string }) => ({
+    aborted: true,
+    code: 'aborted' as const,
+    reason: '',
+  })),
+  mockAbortByConversation: vi.fn(async (_args: { conversationId: string }) => ({
     aborted: true,
     code: 'aborted' as const,
     reason: '',
@@ -82,8 +89,14 @@ vi.mock('@/stores/useEditingStore', () => ({
   isEditingActive: vi.fn(() => false),
 }));
 
+// A fresh `[]` literal on every call (unlike the real store's useShallow-backed
+// selectors) makes every consumer's downstream useMemo/useEffect see a "changed"
+// dependency on every render — confirmed via a local render-count diagnostic to
+// cause an unbounded AiChatView re-render loop that OOMs the process. One stable
+// empty-array reference restores the real store's shallow-stability contract.
+const EMPTY_STREAMS_MOCK: unknown[] = [];
 vi.mock('@/stores/usePendingStreamsStore', () => ({
-  usePendingStreamsStore: Object.assign(vi.fn(() => []), {
+  usePendingStreamsStore: Object.assign(vi.fn(() => EMPTY_STREAMS_MOCK), {
     getState: vi.fn(() => ({
       streams: new Map(),
       getOwnStreams: vi.fn(() => []),
@@ -102,7 +115,16 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
   useDisplayPreferences: vi.fn(() => ({ preferences: { showTokenCounts: false } })),
 }));
 
-vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+// The client barrel re-exports the abort surface, and `useStopStream` (the shared Stop action)
+// imports from it — the barrel is the sanctioned entry point for React code. This mock used to
+// export ONLY `clearActiveStreamId`, a function PR 5A deleted along with the activeStreams map;
+// anything else imported from here silently resolved to `undefined`. Mirror the real barrel.
+vi.mock('@/lib/ai/core/client', () => ({
+  abortActiveStreamByConversation: mockAbortByConversation,
+  abortActiveStreamByMessageId: mockAbortByMessageId,
+  reportAbortOutcome: vi.fn(),
+  reportAbortOutcomes: vi.fn(),
+}));
 // The abort functions must RESOLVE: Stop now chains the outcome into reportAbortOutcome, so that
 // a stream which could not be confirmed stopped (still running, still billing) reaches the user.
 const NOT_FOUND = { aborted: false, code: 'not_found' as const, reason: 'nothing in flight' };
@@ -183,8 +205,7 @@ vi.mock('@/lib/ai/shared', async (importOriginal) => ({
   }),
   useChatTransport: vi.fn(() => ({})),
   useStreamingRegistration: vi.fn(),
-  useChatStop: vi.fn(() => mockLocalStop),
-  useSendHandoff: vi.fn(() => ({ wrapSend: vi.fn((cb: () => void) => cb()) })),
+  useSendHandoff: mockUseSendHandoff,
   buildChatConfig: vi.fn((params: { id: string; transport: unknown; onError?: (error: Error) => void }) => ({
     id: params.id,
     transport: params.transport,
@@ -270,6 +291,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import { ChatLayout } from '@/components/ai/chat/layouts';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
@@ -301,6 +323,14 @@ const waitForUnpersistedIdentity = (pageId: string) =>
     expect(id).not.toBe(`${pageId}-default`);
     expect(id !== null && isCuid(id)).toBe(true);
   });
+
+/** The default: no send in flight. See the beforeEach blocks for why this must be re-applied. */
+const resetSendHandoffMock = () => {
+  mockUseSendHandoff.mockReturnValue({
+    wrapSend: vi.fn((cb: () => void) => cb()),
+    pendingSendConversationId: null,
+  });
+};
 
 const PAGE_ID = 'page-123';
 const CONV_ID = 'conv-existing-abc';
@@ -376,6 +406,13 @@ describe('AiChatView — legacy `${pageId}-default` conversation (no migration)'
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears CALLS, not implementations — a `mockReturnValue` set inside one test
+    // would otherwise leak into every later test in this file (and a surface that thinks a send is
+    // permanently in flight renders a Stop-only composer forever). Restore the default.
+    resetSendHandoffMock();
+    // Real, unmocked global store — reset between tests or byConversationId
+    // only grows across this file's whole run (mirrors useConversationMessagesStore.test.ts).
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   const strandedMessages = [
@@ -456,6 +493,8 @@ describe('AiChatView — first send on a freshly minted conversation', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSendHandoffMock();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   const setupNoConversations = () => {
@@ -557,6 +596,7 @@ describe('AiChatView initializeChat', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     useConversationsOptionsRef.current = null;
     historyTabPropsRef.current = null;
   });
@@ -1048,6 +1088,7 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   const setupNoConversationsInit = () => {
@@ -1060,7 +1101,7 @@ describe('AiChatView late-joiner conversation sync', () => {
   };
 
   test('given fireComplete fires with stream.conversationId matching the persisted conversation while currentConversationId is the page-scoped default, should sync ID and append the message', async () => {
-    let capturedCallback: ((messageId: string) => void) | undefined;
+    let capturedCallback: ((messageId: string, completedConvId?: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
       return { rejoinActiveStreams: vi.fn() };
@@ -1090,13 +1131,29 @@ describe('AiChatView late-joiner conversation sync', () => {
       return makeErrorResponse();
     });
 
-    capturedCallback?.(MESSAGE_ID);
+    capturedCallback?.(MESSAGE_ID, REAL_CONV_ID);
 
+    // This surface is store-first (see file header): the late-joiner reconciliation
+    // path (AiChatView's onStreamComplete, `!isPersistedRef.current` branch) commits
+    // the synthesized message via conversationMessagesActions.applyConfirmedMessage,
+    // not the legacy useChat setMessages — so "should append the message" is verified
+    // against useConversationMessagesStore, and "should sync ID" against the id every
+    // render passes down to useMCPTools.
     await waitFor(() => {
       assert({
         given: 'stream.conversationId matches the persisted conversation while holding page-scoped default',
-        should: 'append the completed AI message',
-        actual: mockSetMessages.mock.calls.some((args) => typeof args[0] === 'function'),
+        should: 'sync currentConversationId to the persisted conversation',
+        actual: latestMcpConversationId(),
+        expected: REAL_CONV_ID,
+      });
+    });
+
+    await waitFor(() => {
+      const entry = useConversationMessagesStore.getState().byConversationId[REAL_CONV_ID];
+      assert({
+        given: 'stream.conversationId matches the persisted conversation while holding page-scoped default',
+        should: 'append the completed AI message to that conversation\'s store entry',
+        actual: entry?.messages.some((m) => m.id === MESSAGE_ID),
         expected: true,
       });
     });
@@ -1507,6 +1564,7 @@ describe('AiChatView remote user-message broadcast', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   test('given onUserMessage fires with conversationId matching the active conversation, should append the message', async () => {
@@ -1607,27 +1665,40 @@ describe('AiChatView remote user-message broadcast', () => {
 describe('AiChatView stop button for reconnected own streams', () => {
   const page = makePage();
 
+  type StreamEntry = { messageId: string; pageId: string; isOwn: boolean; conversationId: string; parts?: unknown[]; triggeredBy?: unknown };
+
   type StoreState = {
-    streams: Map<string, unknown>;
+    streams: Map<string, StreamEntry>;
     getRemotePageStreams: (pageId: string) => unknown[];
     getOwnStreams: (pageId: string) => Array<{ messageId: string; pageId: string; isOwn: true; conversationId: string }>;
   };
 
+  // `streams` is built from the SAME entries the accessors return, because that is the one thing
+  // the real store guarantees: `getOwnStreams`/`getRemotePageStreams` are derived views OVER
+  // `streams`, so they cannot disagree with it. This helper used to hand back an EMPTY `streams`
+  // Map alongside populated accessors — a state the store can never actually be in, which meant
+  // any consumer reading the Map (rather than an accessor) saw "no streams" while the test
+  // believed it had set one up. A mock that can hold an impossible state hides bugs instead of
+  // finding them.
   const setStoreSelectors = ({
     remote = [],
     own = [],
   }: {
-    remote?: unknown[];
+    remote?: StreamEntry[];
     own?: Array<{ messageId: string; pageId: string; isOwn: true; conversationId: string }>;
   }) => {
+    const all: StreamEntry[] = [...remote, ...own];
     const state: StoreState = {
-      streams: new Map(),
+      streams: new Map(all.map((entry) => [entry.messageId, entry])),
       getRemotePageStreams: () => remote,
       getOwnStreams: () => own,
     };
     (usePendingStreamsStore as unknown as Mock).mockImplementation(
       (selector: (s: StoreState) => unknown) => selector(state)
     );
+    // `getActiveStreamById` (the imperative facade used by socket callbacks) reads getState().
+    // Point it at the SAME state, or the two disagree the way the real store never can.
+    (usePendingStreamsStore.getState as unknown as Mock).mockReturnValue(state);
   };
 
   const setupHappyInit = () => {
@@ -1660,6 +1731,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     setStoreSelectors({ remote: [], own: [] });
   });
 
@@ -1808,6 +1880,149 @@ describe('AiChatView stop button for reconnected own streams', () => {
         actual: lastChatLayoutProps()?.isStreaming,
         expected: false,
       });
+    });
+  });
+
+  // `chat:stream_complete` carries NO own-stream filter (useChannelStreamSocket), so on a SHARED
+  // conversation this handler also sees a collaborator's stream completing in our conversation.
+  //
+  // Their message must reach the CACHE (it is real content in this conversation and has to render)
+  // but must never be appended into our useChat array. That array is our transport's local state:
+  // the dual-write exists only for our own regenerate() bookkeeping, and useOwnStreamMirror reads
+  // that same array to find its own live stream — a foreign message landing after ours makes the
+  // mirror re-target onto a finished message, producing an isOwn phantom whose Stop aborts nothing,
+  // silently, while our generation keeps running its write tools and billing.
+  test("given a COLLABORATOR's stream completes in our conversation, should commit it to the cache but NOT into our useChat array", async () => {
+    let onStreamComplete: ((messageId: string, completedConvId?: string) => void) | undefined;
+    vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
+      onStreamComplete = opts?.onStreamComplete;
+      return { rejoinActiveStreams: vi.fn() };
+    });
+
+    setupHappyInit();
+    setStoreSelectors({
+      remote: [{
+        messageId: 'their-msg',
+        pageId: PAGE_ID,
+        isOwn: false,
+        conversationId: CONV_ID,
+        parts: [{ type: 'text', text: 'their reply' }],
+      }],
+    });
+
+    render(<AiChatView page={page} />);
+    await waitFor(() => expect(onStreamComplete).toBeDefined());
+    mockSetMessages.mockClear();
+
+    // Sync act, not the async form: this handler's writes are synchronous, and act()'s exhaustive
+    // async flush spins this file's mocked fetch/SWR harness hard enough to exhaust a 4GB heap
+    // (see the submitted-window test below for the same note).
+    act(() => {
+      onStreamComplete?.('their-msg', CONV_ID);
+    });
+
+    assert({
+      given: "a collaborator's stream completing in our conversation",
+      should: 'not append their message into our transport-local useChat array',
+      actual: mockSetMessages.mock.calls.length,
+      expected: 0,
+    });
+    // ...and the positive half, or a mutation that skipped BOTH writes would pass: their content
+    // is real content in this conversation and must still render.
+    assert({
+      given: "a collaborator's stream completing in our conversation",
+      should: 'still commit their message to the conversation cache',
+      actual: (useConversationMessagesStore.getState().byConversationId[CONV_ID]?.messages ?? [])
+        .some((m) => m.id === 'their-msg'),
+      expected: true,
+    });
+  });
+
+  // A DB load must never clobber the useChat array while OUR OWN stream is writing into it.
+  //
+  // The cache is what renders, and it always takes the load. The useChat array is a different
+  // thing: transport-local bookkeeping, and the array useOwnStreamMirror reads to find its own
+  // live stream. On a shared conversation a collaborator's shorter reply can persist first, so
+  // anything that reloads (their undo, pull-to-refresh, the Retry button) replaces the array with
+  // history whose newest row is THEIR finished reply — same conversation, so the mirror reads it
+  // as the SDK renaming our stream, re-targets onto their id, and our live entry is gone. Stop
+  // then aborts a message the server has no stream for: user-scoped → not_found → silent, while
+  // our generation keeps running its write tools and billing.
+  //
+  // GlobalAssistantView and SidebarChatTab have carried this guard since #2061; AiChatView never
+  // had one.
+  test('given our own stream is live, a messages load should update the cache but NOT clobber the useChat array', async () => {
+    setupHappyInit();
+    setStoreSelectors({
+      own: [{ messageId: 'my-live-stream', pageId: PAGE_ID, isOwn: true, conversationId: CONV_ID }],
+    });
+
+    render(<AiChatView page={page} />);
+
+    // Wait for the messages load to have actually run.
+    await waitFor(() => expect(wasGetCalled(MESSAGES_URL)).toBe(true));
+    await waitFor(() => expect(lastChatLayoutProps()).toBeDefined());
+
+    assert({
+      given: 'a DB load landing while our own stream is live',
+      should: 'leave the transport-local useChat array alone',
+      actual: mockSetMessages.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  // THE submitted window, at a surface — this epic's headline fix, and until now covered only by
+  // unit tests on decideStopAction/useSendHandoff. A real send spends 0.5-3s here: useChat has
+  // flipped to 'submitted' but has not pushed an assistant message, so NO store entry exists and
+  // there is no messageId anywhere. This is the single most likely moment for a user to hit Stop
+  // (they just spotted a typo).
+  //
+  // Before PR 5A the abort named the activeStreams chatId map, which is EMPTY in exactly this
+  // window (it only fills once the response headers land) — so Stop cancelled the local fetch,
+  // flipped the button back to Send, and the server kept generating, kept running write tools, and
+  // kept billing. The send-time conversationId is the one name the client holds from t=0.
+  // THE submitted window, at a surface — this epic's headline fix, and until now covered only by
+  // unit tests on decideStopAction/useSendHandoff. A real send spends 0.5-3s here: useChat has
+  // flipped to 'submitted' but has not pushed an assistant message, so NO store entry exists and
+  // there is no messageId anywhere. This is the single most likely moment for a user to hit Stop —
+  // they just spotted a typo.
+  //
+  // Before PR 5A the abort named the activeStreams chatId map, which is EMPTY in exactly this
+  // window (it only fills once the response headers land) — so Stop cancelled the local fetch,
+  // flipped the button back to Send, and the server kept generating, kept running write tools, and
+  // kept billing. The conversationId captured AT SEND is the one name the client holds from t=0.
+  //
+  // `onStop` is invoked WITHOUT an async act() wrapper on purpose: it performs no state update
+  // (useStopStream is a useCallback that calls rawStop, awaits the abort, and reports), so there is
+  // nothing to flush — while act()'s exhaustive flush spins this file's mocked fetch/SWR harness
+  // hard enough to exhaust a 4GB heap. Verified: the assertions below hold, in 8 renders.
+  test('given a send is in its submitted window (no store entry yet), onStop aborts by the SEND-TIME conversationId', async () => {
+    setupHappyInit();
+    setStoreSelectors({ own: [], remote: [] });
+    mockUseSendHandoff.mockReturnValue({
+      wrapSend: vi.fn((cb: () => void) => cb()),
+      pendingSendConversationId: CONV_ID,
+    });
+
+    render(<AiChatView page={page} />);
+
+    await waitFor(() => {
+      expect(lastChatLayoutProps()?.isStreaming).toBe(true);
+    });
+
+    await lastChatLayoutProps()?.onStop();
+
+    assert({
+      given: 'Stop pressed in the submitted window, before any assistant message exists',
+      should: 'abort by the conversation captured at send — the only name the client holds from t=0',
+      actual: mockAbortByConversation.mock.calls.map((args) => args[0]),
+      expected: [{ conversationId: CONV_ID }],
+    });
+    assert({
+      given: 'no messageId exists yet',
+      should: 'not attempt an abort by messageId',
+      actual: mockAbortByMessageId.mock.calls.length,
+      expected: 0,
     });
   });
 

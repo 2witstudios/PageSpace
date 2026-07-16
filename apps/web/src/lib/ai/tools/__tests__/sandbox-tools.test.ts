@@ -33,6 +33,7 @@ function fakeRunDeps(): SandboxRunDeps {
     acquireSandbox: async () => ({ ok: true, sandboxId: 'sbx', resumed: false }),
     reconnect: async () => ({
       sandboxId: 'sbx',
+      spriteInstanceId: null,
       runCommand: async () => ({ exitCode: 0, stdout: 'hi', stderr: '' }),
       writeFiles: async () => {},
       readFileToBuffer: async () => Buffer.from('data'),
@@ -238,6 +239,7 @@ describe('createSandboxTools', () => {
     const runDeps = fakeRunDeps();
     runDeps.reconnect = async () => ({
       sandboxId: 'sbx',
+      spriteInstanceId: null,
       runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       writeFiles: async () => {
         wrote = true;
@@ -320,6 +322,7 @@ describe('createSandboxTools', () => {
     const runDeps = fakeRunDeps();
     runDeps.reconnect = async () => ({
       sandboxId: 'sbx',
+      spriteInstanceId: null,
       runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       writeFiles: async () => {
         wrote = true;

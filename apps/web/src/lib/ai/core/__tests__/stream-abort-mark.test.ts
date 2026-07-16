@@ -1,12 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { assert } from './riteway';
 
-const { mockUpdateSet, mockUpdateWhere, mockReturning, mockSelectWhere, mockLoggerWarn } = vi.hoisted(() => ({
+const {
+  mockUpdateSet,
+  mockUpdateWhere,
+  mockReturning,
+  mockSelectWhere,
+  mockLoggerWarn,
+  mockMaterializeInterruptedStream,
+} = vi.hoisted(() => ({
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockReturning: vi.fn(),
   mockSelectWhere: vi.fn(),
   mockLoggerWarn: vi.fn(),
+  mockMaterializeInterruptedStream: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -47,6 +55,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), warn: mockLoggerWarn, error: vi.fn(), debug: vi.fn() } },
 }));
 
+// Materialization is its own unit with its own tests (materialize-interrupted-stream.test.ts —
+// where the #2022 never-overwrite-complete guard and the settle/broadcast steps are asserted).
+// Stubbed here so these tests exercise what reconcileDeadStreamRows reads and hands off, not how
+// a row is turned into an interrupted message.
+vi.mock('@/lib/ai/core/materialize-interrupted-stream', () => ({
+  materializeInterruptedStream: mockMaterializeInterruptedStream,
+}));
+
 import {
   markAbortRequested,
   markAbortRequestedAsOwner,
@@ -75,6 +91,10 @@ beforeEach(() => {
   mockUpdateWhere.mockImplementation(whereResult);
   mockReturning.mockResolvedValue([]);
   mockSelectWhere.mockResolvedValue([]);
+  // Defaults to "succeeded" — most tests here are about WHICH rows get read/handed off, not
+  // about materialize's own success/failure reporting (that's covered explicitly below and in
+  // materialize-interrupted-stream.test.ts).
+  mockMaterializeInterruptedStream.mockResolvedValue(true);
 });
 
 const selectConditions = (): Predicate['conds'] =>
@@ -464,38 +484,84 @@ describe('readMarkedStreams — what the watcher is allowed to act on', () => {
   });
 });
 
-describe('reconcileDeadStreamRows — the destructive write', () => {
-  // This wipes `parts` — the stream's only crash-recovery snapshot — and hides the row from every
-  // subscriber. It may ONLY ever touch a row whose owner is provably gone. Drop the status
-  // predicate and a stream that terminated on its own between the read and here is retroactively
-  // relabelled 'aborted'; worse, widen it and you erase a live stream.
-  it('only ever touches rows still marked streaming', async () => {
+describe('reconcileDeadStreamRows — materializes each dead row as an interrupted message', () => {
+  // Only rows still 'streaming' may be reconciled. Drop this predicate and a stream that
+  // terminated on its own between the caller's read and here would be picked up and
+  // materialized a second time (materializeInterruptedStream's own guard makes that a no-op
+  // rather than data corruption, but this SELECT is the first line of defense).
+  it('reads only rows still marked streaming', async () => {
+    mockSelectWhere.mockResolvedValueOnce([]);
+
     await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
 
     assert({
-      given: 'a row whose owning process is gone',
-      should: 'refuse to overwrite a row that has already reached a terminal status',
-      actual: conditions().find((c) => c.field === 'ai_stream_sessions.status')?.value,
+      given: 'messageIds the caller proved dead',
+      should: 'only read rows still marked streaming — one that terminated on its own is left alone',
+      actual: selectConditions().find((c) => c.field === 'ai_stream_sessions.status')?.value,
       expected: 'streaming',
     });
   });
 
-  it('drives the row terminal and clears its now-meaningless abort mark', async () => {
+  it('hands each row it reads to materializeInterruptedStream with its full parts snapshot and startedAt', async () => {
+    const parts = [{ type: 'text', text: 'partial reply' }];
+    const startedAt = new Date('2026-07-15T00:00:00.000Z');
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts, startedAt },
+    ]);
+
     await reconcileDeadStreamRows({ messageIds: ['msg-dead'] });
 
-    const written = mockUpdateSet.mock.calls[0][0] as Record<string, unknown>;
     assert({
-      given: 'a dead row being reconciled',
-      should: 'mark it aborted, clear its parts snapshot, and drop the abort request',
-      actual: { status: written.status, parts: written.parts, abortRequestedAt: written.abortRequestedAt },
-      expected: { status: 'aborted', parts: [], abortRequestedAt: null },
+      given: 'a dead row read fresh from the DB',
+      should: 'materialize it as an interrupted message rather than just wiping the session row',
+      actual: mockMaterializeInterruptedStream.mock.calls[0][0],
+      expected: { messageId: 'msg-dead', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts, startedAt },
     });
   });
 
-  it('does nothing when there is nothing to reconcile', async () => {
-    await reconcileDeadStreamRows({ messageIds: [] });
+  it('materializes multiple dead rows independently', async () => {
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-a', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts: [] },
+      { messageId: 'msg-b', channelId: 'page-2', conversationId: 'conv-2', userId: 'user-2', parts: [] },
+    ]);
 
-    expect(mockUpdateSet).not.toHaveBeenCalled();
+    await reconcileDeadStreamRows({ messageIds: ['msg-a', 'msg-b'] });
+
+    expect(mockMaterializeInterruptedStream).toHaveBeenCalledTimes(2);
+  });
+
+  it('does nothing when there is nothing to reconcile', async () => {
+    await expect(reconcileDeadStreamRows({ messageIds: [] })).resolves.toEqual([]);
+
+    expect(mockSelectWhere).not.toHaveBeenCalled();
+    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+  });
+
+  it('warns and does not throw when the read itself fails, reporting nothing reconciled', async () => {
+    mockSelectWhere.mockRejectedValueOnce(new Error('db down'));
+
+    await expect(reconcileDeadStreamRows({ messageIds: ['msg-dead'] })).resolves.toEqual([]);
+    expect(mockLoggerWarn).toHaveBeenCalled();
+    expect(mockMaterializeInterruptedStream).not.toHaveBeenCalled();
+  });
+
+  it('returns only the messageIds materializeInterruptedStream actually succeeded on', async () => {
+    mockSelectWhere.mockResolvedValueOnce([
+      { messageId: 'msg-ok', channelId: 'page-1', conversationId: 'conv-1', userId: 'user-1', parts: [], startedAt: new Date() },
+      { messageId: 'msg-failed', channelId: 'page-1', conversationId: 'conv-2', userId: 'user-2', parts: [], startedAt: new Date() },
+    ]);
+    mockMaterializeInterruptedStream
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+
+    const reconciled = await reconcileDeadStreamRows({ messageIds: ['msg-ok', 'msg-failed'] });
+
+    assert({
+      given: 'one row that materializes successfully and one that does not',
+      should: 'report only the successful one as reconciled — never claim a retryable ghost row was handled',
+      actual: reconciled,
+      expected: ['msg-ok'],
+    });
   });
 });
 

@@ -633,8 +633,8 @@ describe('POST /api/v1/chat/completions', () => {
 
   test('thread mode: calls getMessagesForPage with pageId and conversationId', async () => {
     const dbMessages = [
-      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
-      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior message', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior response', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
     ];
     vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
@@ -668,8 +668,8 @@ describe('POST /api/v1/chat/completions', () => {
 
   test('thread mode: DB history messages are prepended before the new user message', async () => {
     const dbMessages = [
-      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
-      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null },
+      { id: 'db-1', pageId: 'page-123', conversationId: 'conv-abc', userId: 'user-1', role: 'user', content: 'Prior question', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
+      { id: 'db-2', pageId: 'page-123', conversationId: 'conv-abc', userId: null, role: 'assistant', content: 'Prior answer', messageType: 'standard' as const, isActive: true, createdAt: new Date(), editedAt: null, toolCalls: null, toolResults: null, status: 'complete' as const },
     ];
     vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValueOnce(dbMessages);
     await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));

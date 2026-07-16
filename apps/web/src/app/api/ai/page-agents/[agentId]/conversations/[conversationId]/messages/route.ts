@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, sql } from '@pagespace/db/operators'
+import { eq, and, ne, desc, sql } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -123,12 +123,17 @@ export async function GET(
     const direction = (directionParam === 'before' || directionParam === 'after')
       ? directionParam
       : 'before';
+    // Stale-tab rollout protection: clients deployed before this PR never send this param, so
+    // they never see 'streaming' placeholder rows — only updated clients that know how to
+    // dedup them against a live stream bubble opt in. See Server Stream Durability epic PR 2.
+    const includeStreaming = searchParams.get('includeStreaming') === '1';
 
     // Build query conditions
     const conditions = [
       eq(chatMessages.pageId, agentId),
       eq(chatMessages.conversationId, conversationId),
-      eq(chatMessages.isActive, true)
+      eq(chatMessages.isActive, true),
+      ...(includeStreaming ? [] : [ne(chatMessages.status, 'streaming')])
     ];
 
     // Add cursor condition if provided - use compound cursor (createdAt + id) for stable ordering

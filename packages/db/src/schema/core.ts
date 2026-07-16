@@ -113,6 +113,10 @@ export const chatMessages = pgTable('chat_messages', {
   userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
   sourceAgentId: text('sourceAgentId').references(() => pages.id, { onDelete: 'set null' }),
   messageType: text('messageType', { enum: ['standard', 'todo_list'] }).default('standard').notNull(),
+  // Lifecycle state of an assistant row from the moment generation starts. 'streaming' rows are
+  // placeholders (empty content, mid-flight); 'interrupted' rows are terminal with real partial
+  // content; pre-existing rows read as 'complete' via the default. See Server Stream Durability epic PR 2.
+  status: text('status', { enum: ['streaming', 'complete', 'interrupted'] }).default('complete').notNull(),
 }, (table) => {
     return {
         pageIdx: index('chat_messages_page_id_idx').on(table.pageId),

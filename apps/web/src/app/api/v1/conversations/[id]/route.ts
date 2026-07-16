@@ -37,7 +37,12 @@ export async function GET(request: Request, context: RouteContext): Promise<Resp
     }
   }
 
-  const messages = await chatMessageRepository.getMessagesByConversationId(id);
+  // Stale-tab rollout protection: SDK consumers deployed before this PR never send this
+  // param, so they never see 'streaming' placeholder rows. See Server Stream Durability
+  // epic PR 2.
+  const { searchParams } = new URL(request.url);
+  const includeStreaming = searchParams.get('includeStreaming') === '1';
+  const messages = await chatMessageRepository.getMessagesByConversationId(id, includeStreaming);
 
   auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
 

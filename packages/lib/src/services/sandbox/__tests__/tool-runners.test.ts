@@ -30,6 +30,7 @@ function makeCtx(over: Partial<SandboxActorContext> = {}): SandboxActorContext {
 function makeSandbox(over: Partial<ExecutableSandbox> = {}): ExecutableSandbox {
   return {
     sandboxId: 'sbx-1',
+    spriteInstanceId: null,
     runCommand: async (): Promise<SandboxRunResult> => ({ exitCode: 0, stdout: 'ok', stderr: '' }),
     writeFiles: async () => {},
     readFileToBuffer: async () => Buffer.from('file-contents'),

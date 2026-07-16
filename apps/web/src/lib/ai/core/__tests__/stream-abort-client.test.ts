@@ -27,208 +27,53 @@ describe('stream-abort-client', () => {
     vi.clearAllMocks();
   });
 
-  describe('setActiveStreamId / getActiveStreamId', () => {
-    it('stores and retrieves streamId for chatId', async () => {
+  // The two names Stop can actually use, now that the activeStreams chatId->streamId map is gone
+  // (PR 5A, leaf 5.5.8). Neither needs a client-side map to stay in sync: the messageId is
+  // recorded in usePendingStreamsStore at stream_start, and the conversationId is captured at
+  // send. Both are covered here because they are the ONLY server-abort paths left.
+  describe('abortActiveStreamByConversation', () => {
+    // THE submitted-window path. A real send spends 0.5-3s before the response headers land, and
+    // the conversation is the one name the client holds from t=0. Before this existed, a Stop in
+    // that window named nothing: the fetch was cancelled, the button flipped back to Send, and
+    // the server (which deliberately survives client disconnect) kept generating and billing.
+    it('given a conversation, should post it to the abort endpoint and report the outcome', async () => {
       const client = await import('../stream-abort-client');
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(
+        new Response(JSON.stringify({ aborted: true, code: 'aborted', reason: 'stopped' }), { status: 200 }),
+      );
 
-      client.setActiveStreamId({
-        chatId: 'chat-123',
-        streamId: 'stream-456',
-      });
+      const result = await client.abortActiveStreamByConversation({ conversationId: 'conv-1' });
 
-      const result = client.getActiveStreamId({ chatId: 'chat-123' });
-      expect(result).toBe('stream-456');
-    });
-
-    it('returns undefined for unknown chatId', async () => {
-      const client = await import('../stream-abort-client');
-
-      const result = client.getActiveStreamId({ chatId: 'unknown-chat' });
-      expect(result).toBeUndefined();
-    });
-
-    it('overwrites previous streamId for same chatId', async () => {
-      const client = await import('../stream-abort-client');
-
-      client.setActiveStreamId({
-        chatId: 'chat-123',
-        streamId: 'stream-old',
-      });
-
-      client.setActiveStreamId({
-        chatId: 'chat-123',
-        streamId: 'stream-new',
-      });
-
-      const result = client.getActiveStreamId({ chatId: 'chat-123' });
-      expect(result).toBe('stream-new');
-    });
-  });
-
-  describe('clearActiveStreamId', () => {
-    it('removes streamId for chatId', async () => {
-      const client = await import('../stream-abort-client');
-
-      client.setActiveStreamId({
-        chatId: 'chat-123',
-        streamId: 'stream-456',
-      });
-
-      client.clearActiveStreamId({ chatId: 'chat-123' });
-
-      const result = client.getActiveStreamId({ chatId: 'chat-123' });
-      expect(result).toBeUndefined();
-    });
-
-    it('handles clearing non-existent chatId gracefully', async () => {
-      const client = await import('../stream-abort-client');
-
-      // Should not throw
-      expect(() => {
-        client.clearActiveStreamId({ chatId: 'non-existent' });
-      }).not.toThrow();
-    });
-  });
-
-  describe('abortActiveStream', () => {
-    it('calls abort endpoint and clears state on success', async () => {
-      const client = await import('../stream-abort-client');
-
-      // Setup active stream
-      client.setActiveStreamId({
-        chatId: 'chat-123',
-        streamId: 'stream-456',
-      });
-
-      // Mock successful abort response
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValueOnce({
-          aborted: true,
-          code: 'aborted',
-          reason: 'Stream aborted by user request',
-        }),
-      } as unknown as Response);
-
-      const result = await client.abortActiveStream({ chatId: 'chat-123' });
-
-      expect(result.aborted).toBe(true);
-      expect(result.reason).toBe('Stream aborted by user request');
-
-      // Verify fetch was called correctly
-      expect(fetchWithAuth).toHaveBeenCalledWith('/api/ai/abort', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ streamId: 'stream-456' }),
-      });
-
-      // Verify streamId was cleared
-      expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBeUndefined();
-    });
-
-    // The rolling-deploy hole. A stream started by a worker running the previous image has no
-    // `stream_id` on its row, so the X-Stream-Id the client holds resolves to nothing. If the
-    // conversation is not sent alongside it, the server has no second name to fall back to, reports
-    // `not_found`, and the client stays SILENT by design — while the generation runs on and bills.
-    it('sends the conversation alongside the streamId, so a streamId that resolves to nothing can still be stopped', async () => {
-      const client = await import('../stream-abort-client');
-
-      client.setActiveStreamId({ chatId: 'chat-123', streamId: 'stream-456' });
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValueOnce({ aborted: true, code: 'aborted', reason: '' }),
-      } as unknown as Response);
-
-      await client.abortActiveStream({ chatId: 'chat-123', conversationId: 'conv-1' });
-
+      const [, init] = vi.mocked(fetchWithAuth).mock.calls[0];
       assert({
-        given: 'a Stop naming a streamId, on a conversation the client also knows',
-        should: 'send BOTH names, so the server can fall back when the precise one resolves to nothing',
-        actual: JSON.parse(vi.mocked(fetchWithAuth).mock.calls[0][1]?.body as string),
-        expected: { streamId: 'stream-456', conversationId: 'conv-1' },
+        given: 'a conversation id',
+        should: 'name that conversation in the abort request',
+        actual: JSON.parse(String(init?.body)),
+        expected: { conversationId: 'conv-1' },
       });
-    });
-
-    // The other half of the same guarantee: with no streamId in the map at all (the 0.5-3s TTFB
-    // window, where the map is EMPTY because the response headers have not landed), Stop must still
-    // reach the server by naming the conversation. Without this it was a guaranteed no-op.
-    it('falls back to the conversation when the client holds no streamId yet', async () => {
-      const client = await import('../stream-abort-client');
-
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
-        json: vi.fn().mockResolvedValueOnce({ aborted: true, code: 'aborted', reason: '' }),
-      } as unknown as Response);
-
-      const result = await client.abortActiveStream({ chatId: 'chat-none', conversationId: 'conv-1' });
-
-      expect(JSON.parse(vi.mocked(fetchWithAuth).mock.calls[0][1]?.body as string)).toEqual({ conversationId: 'conv-1' });
       assert({
-        given: 'Stop pressed before the response headers land, so no streamId exists client-side',
-        should: 'still reach the server by naming the conversation',
+        given: 'the server confirmed the abort',
+        should: 'report it aborted',
         actual: result.code,
         expected: 'aborted',
       });
     });
 
-    // The OTHER door into the same shared slot. A cross-instance Stop can take seconds (it waits
-    // for the owning instance to confirm), and the user can send turn 2 inside that window — its
-    // headers land and claim the slot. When the turn-1 abort finally resolves, it must not delete
-    // the name of a generation that is now RUNNING.
-    it('does not forget a newer stream when an older abort finally resolves', async () => {
+    // A failure to even reach the endpoint is not ambiguous: the server never heard the Stop, so
+    // the generation is definitely still running, and still billing. That is 'unconfirmed', and
+    // the user must be told — silence here would be a lie.
+    it('given the abort endpoint is unreachable, should report unconfirmed rather than claiming success', async () => {
       const client = await import('../stream-abort-client');
+      vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('network down'));
 
-      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-1' });
-
-      let resolveAbort: ((r: unknown) => void) | undefined;
-      vi.mocked(fetchWithAuth).mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveAbort = (r) => resolve({ json: async () => r } as unknown as Response);
-        }),
-      );
-
-      const abortPromise = client.abortActiveStream({ chatId: 'conv-1', conversationId: 'conv-1' });
-
-      // Turn 2 is sent while the turn-1 abort is still in flight, and claims the slot.
-      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-2' });
-
-      // Now the turn-1 abort comes back settled.
-      resolveAbort!({ aborted: true, code: 'aborted', reason: '' });
-      await abortPromise;
+      const result = await client.abortActiveStreamByConversation({ conversationId: 'conv-1' });
 
       assert({
-        given: "an older Stop resolving after a newer turn has claimed the slot",
-        should: "leave the newer stream's name alone — it names a generation that is still running",
-        actual: client.getActiveStreamId({ chatId: 'conv-1' }),
-        expected: 'stream-turn-2',
+        given: 'the abort endpoint could not be reached',
+        should: 'report the generation as still possibly running',
+        actual: { aborted: result.aborted, code: result.code },
+        expected: { aborted: false, code: 'unconfirmed' },
       });
-    });
-
-    it('returns failure when no active stream exists', async () => {
-      const client = await import('../stream-abort-client');
-
-      const result = await client.abortActiveStream({ chatId: 'chat-123' });
-
-      expect(result.aborted).toBe(false);
-      expect(result.reason).toBe('No active stream for this chat');
-      expect(fetchWithAuth).not.toHaveBeenCalled();
-    });
-
-    it('handles fetch error gracefully and preserves streamId', async () => {
-      const client = await import('../stream-abort-client');
-
-      // Setup active stream
-      client.setActiveStreamId({
-        chatId: 'chat-123',
-        streamId: 'stream-456',
-      });
-
-      // Mock fetch error
-      vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('Network error'));
-
-      const result = await client.abortActiveStream({ chatId: 'chat-123' });
-
-      expect(result.aborted).toBe(false);
-      expect(result.reason).toBe('Failed to call abort endpoint');
-      // Verify streamId is preserved after fetch error (allows retry)
-      expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBe('stream-456');
     });
   });
 
@@ -268,7 +113,7 @@ describe('stream-abort-client', () => {
         return streamingResponse();
       });
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
       const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       expect(markedAtRequestTime).toBe(true);
@@ -285,19 +130,16 @@ describe('stream-abort-client', () => {
     // socket, joined its own multicast, and rendered the reply twice).
     //
     // The keys must be resolved at CALL time. One fetch, one switch, current keys.
-    it('given the surface switched conversation, should use the CURRENT keys — not the ones it was built with', async () => {
+    it('given the surface switched agent, should mark the CURRENT channel — not the one it was built with', async () => {
       const client = await import('../stream-abort-client');
       const consuming = await import('@/lib/ai/streams/consumingChannels');
 
-      let chatId = 'conv-1';
       let channelId: string | undefined = 'agent-1';
       const trackingFetch = client.createStreamTrackingFetch({
-        getChatId: () => chatId,
         getChannelId: () => channelId,
       });
 
       // The surface moves on — exactly the switch the frozen closure could not see.
-      chatId = 'conv-2';
       channelId = 'agent-2';
 
       let markedChannel: string | null = null;
@@ -312,9 +154,6 @@ describe('stream-abort-client', () => {
 
       // The CURRENT channel is marked, not the one the transport was born with.
       expect(markedChannel).toBe('agent-2');
-      // ...and the streamId is filed under the CURRENT conversation, so Stop can find it.
-      expect(client.getActiveStreamId({ chatId: 'conv-2' })).toBe('stream-xyz');
-      expect(client.getActiveStreamId({ chatId: 'conv-1' })).toBeUndefined();
 
       await drain(response);
     });
@@ -325,7 +164,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a', 'b']));
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
       const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       // Still consuming while tokens are arriving — the headers landing is NOT the end.
@@ -342,7 +181,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a', 'b', 'c']));
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
       const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       await response.body!.cancel('user stopped');
@@ -356,7 +195,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('network down'));
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
 
       await expect(trackingFetch('/api/ai/chat', { method: 'POST' })).rejects.toThrow('network down');
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
@@ -368,7 +207,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response('{}', { status: 402 }));
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
       await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
@@ -382,114 +221,22 @@ describe('stream-abort-client', () => {
         new Response(body, { status: 200, headers: { 'X-Stream-Id': 'stream-9' } }),
       );
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-1', getChannelId: () => 'page-1' });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
       const response = await trackingFetch('/api/ai/chat', { method: 'POST' });
 
       expect(response.status).toBe(200);
+      // The header still reaches the caller intact — the body re-wrap must not eat it. (Nothing
+      // stores it client-side any more: the activeStreams map it fed is deleted, PR 5A.)
       expect(response.headers.get('X-Stream-Id')).toBe('stream-9');
-      expect(client.getActiveStreamId({ chatId: 'chat-1' })).toBe('stream-9');
     });
   });
 
   describe('createStreamTrackingFetch', () => {
-    it('extracts X-Stream-Id header and stores it for as long as the stream is running', async () => {
-      const client = await import('../stream-abort-client');
-
-      const response = new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            controller.enqueue(new TextEncoder().encode('tok'));
-            controller.close();
-          },
-        }),
-        { status: 200, headers: { 'X-Stream-Id': 'extracted-stream-id' } },
-      );
-
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(response);
-
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
-      const tracked = await trackingFetch('/api/ai/chat', { method: 'POST' });
-
-      // The headers have landed but the tokens are still arriving: this is exactly the window in
-      // which Stop must be able to name the stream.
-      expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBe('extracted-stream-id');
-
-      // Drain the body — the generation is now over.
-      const reader = tracked.body!.getReader();
-      while (!(await reader.read()).done) { /* drain */ }
-
-      // The streamId names THIS generation and dies with it. Keeping it meant that from the SECOND
-      // turn of a conversation onward, the map held the PREVIOUS turn's id until the new headers
-      // landed — so a Stop pressed in the TTFB window named a stream that had already finished.
-      assert({
-        given: 'a generation whose response body has ended',
-        should: 'forget its streamId, so no later Stop can name a stream that is already over',
-        actual: client.getActiveStreamId({ chatId: 'chat-123' }),
-        expected: undefined,
-      });
-    });
-
     // The map slot is keyed by chatId, which is CONSTANT across turns. So an unconditional delete
     // on body-end lets a stream that is ENDING wipe the name of one that is still RUNNING: send
     // turn 2 while turn 1 is still streaming (exactly what the takeover exists for), turn 2's
     // headers claim the slot, then turn 1's body finally closes — and deletes turn 2's streamId.
     // Stop would then have no precise name for a live generation.
-    it('does not let a finishing stream forget the name of a newer one', async () => {
-      const client = await import('../stream-abort-client');
-
-      // Turn 1 is streaming; we hold its body open.
-      let releaseTurn1: (() => void) | undefined;
-      const turn1 = new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            return new Promise<void>((resolve) => {
-              releaseTurn1 = () => { controller.close(); resolve(); };
-            });
-          },
-        }),
-        { status: 200, headers: { 'X-Stream-Id': 'stream-turn-1' } },
-      );
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(turn1);
-
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'conv-1', getChannelId: () => undefined });
-      const tracked1 = await trackingFetch('/api/ai/chat', { method: 'POST' });
-      const drain1 = (async () => {
-        const reader = tracked1.body!.getReader();
-        while (!(await reader.read()).done) { /* drain */ }
-      })();
-
-      // Turn 2 is sent while turn 1 is still open, and claims the slot.
-      client.setActiveStreamId({ chatId: 'conv-1', streamId: 'stream-turn-2' });
-
-      // NOW turn 1's body finally ends.
-      releaseTurn1!();
-      await drain1;
-
-      assert({
-        given: "turn 1's body closing after turn 2 has already claimed the slot",
-        should: "leave turn 2's streamId alone — it names a generation that is still running",
-        actual: client.getActiveStreamId({ chatId: 'conv-1' }),
-        expected: 'stream-turn-2',
-      });
-    });
-
-    it('does not set streamId when header is missing', async () => {
-      const client = await import('../stream-abort-client');
-
-      const mockResponse = {
-        headers: {
-          get: vi.fn().mockReturnValue(null),
-        },
-      } as unknown as Response;
-
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
-
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
-      await trackingFetch('/api/ai/chat', { method: 'POST' });
-
-      expect(client.getActiveStreamId({ chatId: 'chat-123' })).toBeUndefined();
-    });
-
     it('handles Request object as URL', async () => {
       const client = await import('../stream-abort-client');
 
@@ -501,7 +248,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => undefined });
       const request = new Request('https://example.com/api/ai/chat');
       await trackingFetch(request, {});
 
@@ -520,7 +267,7 @@ describe('stream-abort-client', () => {
 
       vi.mocked(fetchWithAuth).mockResolvedValueOnce(mockResponse);
 
-      const trackingFetch = client.createStreamTrackingFetch({ getChatId: () => 'chat-123', getChannelId: () => undefined });
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => undefined });
       await trackingFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -536,44 +283,6 @@ describe('stream-abort-client', () => {
           }),
         })
       );
-    });
-  });
-
-  describe('co-mount collision — same chatId from two surfaces', () => {
-    it('given two surfaces use the same chatId, second setActiveStreamId overwrites the first', async () => {
-      const client = await import('../stream-abort-client');
-
-      // Surface A (middle panel) registers its stream
-      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'middle-stream-A' });
-
-      // Surface B (sidebar) registers with the same chatId — this is the bug
-      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'sidebar-stream-B' });
-
-      // Middle panel's stop lookup now targets the sidebar's stream (wrong!)
-      const storedId = client.getActiveStreamId({ chatId: 'conv-xyz' });
-      expect(storedId).toBe('sidebar-stream-B');
-    });
-
-    it('given two surfaces use distinct chatIds, each surface retains its own entry', async () => {
-      const client = await import('../stream-abort-client');
-
-      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'middle-stream-A' });
-      client.setActiveStreamId({ chatId: 'sidebar:conv-xyz', streamId: 'sidebar-stream-B' });
-
-      expect(client.getActiveStreamId({ chatId: 'conv-xyz' })).toBe('middle-stream-A');
-      expect(client.getActiveStreamId({ chatId: 'sidebar:conv-xyz' })).toBe('sidebar-stream-B');
-    });
-
-    it('given distinct chatIds, clearing sidebar entry does not affect middle panel entry', async () => {
-      const client = await import('../stream-abort-client');
-
-      client.setActiveStreamId({ chatId: 'conv-xyz', streamId: 'middle-stream-A' });
-      client.setActiveStreamId({ chatId: 'sidebar:conv-xyz', streamId: 'sidebar-stream-B' });
-
-      client.clearActiveStreamId({ chatId: 'sidebar:conv-xyz' });
-
-      expect(client.getActiveStreamId({ chatId: 'conv-xyz' })).toBe('middle-stream-A');
-      expect(client.getActiveStreamId({ chatId: 'sidebar:conv-xyz' })).toBeUndefined();
     });
   });
 

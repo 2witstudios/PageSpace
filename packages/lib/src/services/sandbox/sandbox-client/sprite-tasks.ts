@@ -369,16 +369,27 @@ export interface TaskHoldState {
   /** When the PTY was last ACTIVE — launch, typed input, or produced output — if ever (see {@link isAgentActive}). */
   lastActivityAt: number | undefined;
   /**
-   * Can the caller still OBSERVE activity? While a viewer is attached the
-   * exec WebSocket is kept alive (the shell's watchdog reconnects), so "no
-   * output for N minutes" is real data. While DETACHED the shell deliberately
-   * never reconnects a dropped socket (leaf 3-2), so the activity clock can
-   * freeze under an agent that is still working. FRESH activity is always
+   * Can the caller still OBSERVE activity? FRESH activity is always
    * trustworthy evidence of work (we saw the bytes); STALE activity is only
    * trustworthy evidence of idleness when this is true. When false, an
    * existing hold is kept refreshed (until the session ends or is reaped —
    * a bounded ~30min) rather than deleted on a clock that may be blind.
    * Defaults to true.
+   *
+   * The distinction is WHY the clock froze, not whether the socket is up.
+   * While DETACHED the shell deliberately never reconnects a dropped socket
+   * (leaf 3-2), and that socket may have died mid-run — the clock can freeze
+   * under an agent that is still working, so staleness proves nothing. An
+   * ATTACHED shell whose watchdog has gone quiet is the opposite case: it is
+   * only ever quieted BECAUSE its clock was already stale past the idle window
+   * while the socket was live and watching, so the freeze is a consequence of
+   * idleness the caller observed, not a blindfold. Attached callers therefore
+   * pass true even while their socket is quiesced.
+   *
+   * CAUTION for callers: passing false does not merely "not release" the hold
+   * — combined with an existing hold it makes `agentRunning` true by
+   * definition, which forces `needHold` regardless of `attached`. Passing
+   * false to try to release a hold pins it instead.
    */
   activityObservable?: boolean;
 }
@@ -390,6 +401,20 @@ export interface TaskHoldController {
   end(): void;
   /** The heartbeat cadence the owner should tick at (== refreshMs). */
   readonly tickIntervalMs: number;
+  /**
+   * The EFFECTIVE idle window this controller judges `lastActivityAt` against
+   * (`agentIdleMs ?? 2 * refreshMs`) — NOT necessarily the
+   * {@link TASK_HOLD_AGENT_IDLE_MS} default, since `refreshMs` is configurable
+   * (`SPRITE_TASK_HOLD_REFRESH_MS`, or derived from a custom expiry).
+   *
+   * Exposed for the same reason as `tickIntervalMs`: anything that decides
+   * "may this sprite pause?" alongside this controller has to decide it on the
+   * SAME window, or the two answers diverge. The terminal watchdog's
+   * `attach-quiet` (sprites-shell.ts) reads it for exactly that — a shell that
+   * quiets on a 2-minute window while its hold is still held on a 4-minute one
+   * would be quiet, blind, AND still pinning the sprite.
+   */
+  readonly agentIdleMs: number;
 }
 
 /**
@@ -479,6 +504,7 @@ export function createTaskHoldController({
 
   return {
     tickIntervalMs: refreshMs,
+    agentIdleMs: idleMs,
 
     tick({ attached, lastActivityAt, activityObservable = true }) {
       if (ended) return;

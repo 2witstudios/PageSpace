@@ -62,6 +62,8 @@ const ConversationCard = memo(function ConversationCard({
 
   return (
     <Card
+      data-testid="history-conversation-item"
+      data-conversation-id={conversation.id}
       className={cn(
         'p-4 cursor-pointer hover:bg-accent transition-colors',
         isActive && 'bg-accent border-primary'

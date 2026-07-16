@@ -275,6 +275,10 @@
       "types": "./dist/schema/data-subject-requests.d.ts",
       "default": "./dist/schema/data-subject-requests.js"
     },
+    "./schema/email-broadcasts": {
+      "types": "./dist/schema/email-broadcasts.d.ts",
+      "default": "./dist/schema/email-broadcasts.js"
+    },
     "./schema/oauth": {
       "types": "./dist/schema/oauth.d.ts",
       "default": "./dist/schema/oauth.js"
@@ -282,6 +286,10 @@
     "./schema/form-targets": {
       "types": "./dist/schema/form-targets.d.ts",
       "default": "./dist/schema/form-targets.js"
+    },
+    "./schema/machine-sprite-reclaims": {
+      "types": "./dist/schema/machine-sprite-reclaims.d.ts",
+      "default": "./dist/schema/machine-sprite-reclaims.js"
     }
   },
   "scripts": {

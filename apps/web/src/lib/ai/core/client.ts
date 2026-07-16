@@ -6,13 +6,9 @@
  */
 
 export {
-  abortActiveStream,
   abortActiveStreamByConversation,
   abortActiveStreamByMessageId,
   createStreamTrackingFetch,
-  setActiveStreamId,
-  getActiveStreamId,
-  clearActiveStreamId,
   reportAbortOutcome,
   reportAbortOutcomes,
   type AbortResult,

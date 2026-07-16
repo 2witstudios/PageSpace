@@ -79,6 +79,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
     },
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  logPerformance: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
@@ -111,13 +112,26 @@ vi.mock('@pagespace/db/db', () => {
       };
     }),
   }));
-  const insert = vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) }));
+  const insert = vi.fn(() => ({
+    values: vi.fn(() => ({
+      onConflictDoUpdate: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([{ id: 'msg-1' }]) })),
+    })),
+  }));
   const update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) }));
-  return { db: { select, insert, update } };
+  // startGenerationExclusive's advisory lock: always free, so takeover+lifecycle-create run
+  // exactly as before. Its own retry/degrade behavior is covered by
+  // start-generation-exclusive.test.ts — this file only verifies this route wires it in.
+  const getAdvisoryLockPool = vi.fn(() => ({
+    connect: vi.fn(async () => ({
+      query: vi.fn().mockResolvedValue({ rows: [{ acquired: true }] }),
+      release: vi.fn(),
+    })),
+  }));
+  return { db: { select, insert, update }, getAdvisoryLockPool };
 });
 
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
+  eq: vi.fn(), ne: vi.fn(), and: vi.fn(), desc: vi.fn(), gt: vi.fn(), lt: vi.fn(),
   exists: vi.fn((sub) => ({ type: 'exists', sub })),
 }));
 
@@ -228,7 +242,9 @@ vi.mock('ai', () => ({
   createUIMessageStreamResponse: vi.fn().mockReturnValue(new Response('', { status: 200 })),
 }));
 
-vi.mock('@paralleldrive/cuid2', () => ({ createId: vi.fn().mockReturnValue('test-message-id') }));
+vi.mock('@paralleldrive/cuid2', () => ({
+  createId: vi.fn().mockReturnValue('test-message-id'),
+}));
 vi.mock('@/lib/logging/mask', () => ({ maskIdentifier: vi.fn((id: string) => `***${id.slice(-3)}`) }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
@@ -328,7 +344,7 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     captured.totalUsage = { inputTokens: 10, outputTokens: 5, totalTokens: 15 };
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish });
+    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
   });
 
   it('returns 402 out_of_credits and never starts the stream when the gate denies', async () => {
@@ -383,7 +399,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     captured.streamTextOptions = {};
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
-    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish });
+    mockCreateStreamLifecycle.mockResolvedValue({ pushPart: mockLifecyclePushPart, finish: mockLifecycleFinish, getBufferedParts: vi.fn().mockReturnValue([]) });
   });
 
   it('calls AIMonitoring.trackUsage even when the provider returns no usage metadata', async () => {

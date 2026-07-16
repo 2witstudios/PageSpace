@@ -25,6 +25,8 @@ import {
   Plug,
   Calendar,
   Github,
+  Package,
+  Terminal,
 } from "lucide-react";
 
 export interface NavItem {
@@ -76,6 +78,9 @@ export const docsNav: NavSection[] = [
       { title: "Sharing & Permissions", href: "/docs/features/sharing", icon: Users },
       { title: "Search", href: "/docs/features/search", icon: Search },
       { title: "Accounts & Sign In", href: "/docs/features/accounts", icon: KeyRound },
+      { title: "PageSpace SDK", href: "/docs/features/sdk", icon: Package },
+      { title: "PageSpace CLI", href: "/docs/features/cli", icon: Terminal },
+      { title: "Agent API", href: "/docs/features/agent-api", icon: Bot },
     ],
   },
   {

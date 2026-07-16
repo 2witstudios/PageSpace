@@ -31,6 +31,7 @@ function makeSandbox(over: Partial<ExecutableSandbox> = {}): {
   const runCommandCalls: Array<Parameters<ExecutableSandbox['runCommand']>[0]> = [];
   const sandbox: ExecutableSandbox = {
     sandboxId: 'sbx-1',
+    spriteInstanceId: null,
     runCommand: async (opts): Promise<SandboxRunResult> => {
       runCommandCalls.push(opts);
       return { exitCode: 0, stdout: 'ok', stderr: '' };
@@ -68,6 +69,7 @@ function makeDepsWithSpy(token: string | null = 'ghp_test_token') {
   const runCommandCalls: Array<Parameters<ExecutableSandbox['runCommand']>[0]> = [];
   const sandbox: ExecutableSandbox = {
     sandboxId: 'sbx-1',
+    spriteInstanceId: null,
     runCommand: async (opts): Promise<SandboxRunResult> => {
       runCommandCalls.push(opts);
       return { exitCode: 0, stdout: 'hello', stderr: '' };
@@ -224,6 +226,7 @@ describe('runGitInSandbox', () => {
     const { deps, slots } = makeDepsWithSpy();
     deps.reconnect = async () => ({
       sandboxId: 'sbx-1',
+      spriteInstanceId: null,
       runCommand: async () => { throw new Error('run failed'); },
       writeFiles: async () => {},
       readFileToBuffer: async () => null,

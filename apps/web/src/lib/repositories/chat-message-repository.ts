@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, lt } from '@pagespace/db/operators'
+import { eq, and, lt, ne } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
@@ -34,6 +34,7 @@ export interface ChatMessage {
   toolResults: unknown | null;
   userName?: string | null;
   userImage?: string | null;
+  status: 'streaming' | 'complete' | 'interrupted';
 }
 
 /**
@@ -60,11 +61,18 @@ export function processMessageContentUpdate(
 
 export const chatMessageRepository = {
   /**
-   * Get messages for a page, optionally filtered by conversationId
+   * Get messages for a page, optionally filtered by conversationId.
+   *
+   * Excludes 'streaming' placeholder rows by default — this is the shared seam behind both
+   * model-context loads (which must never see a mid-flight row) and client-facing read APIs
+   * (which must stay on today's behavior for stale, not-yet-updated clients during rollout).
+   * `includeStreaming: true` is the explicit client opt-in (`includeStreaming=1`); model-context
+   * callers must never pass it. See Server Stream Durability epic PR 2.
    */
   async getMessagesForPage(
     pageId: string,
-    conversationId?: string
+    conversationId?: string,
+    includeStreaming = false
   ): Promise<ChatMessage[]> {
     const messages = await db
       .select({
@@ -82,20 +90,17 @@ export const chatMessageRepository = {
         toolResults: chatMessages.toolResults,
         userName: users.name,
         userImage: users.image,
+        status: chatMessages.status,
       })
       .from(chatMessages)
       .leftJoin(users, eq(chatMessages.userId, users.id))
       .where(
-        conversationId
-          ? and(
-              eq(chatMessages.pageId, pageId),
-              eq(chatMessages.isActive, true),
-              eq(chatMessages.conversationId, conversationId)
-            )
-          : and(
-              eq(chatMessages.pageId, pageId),
-              eq(chatMessages.isActive, true)
-            )
+        and(
+          eq(chatMessages.pageId, pageId),
+          eq(chatMessages.isActive, true),
+          ...(conversationId ? [eq(chatMessages.conversationId, conversationId)] : []),
+          ...(includeStreaming ? [] : [ne(chatMessages.status, 'streaming')])
+        )
       )
       .orderBy(chatMessages.createdAt);
 
@@ -155,8 +160,10 @@ export const chatMessageRepository = {
   /**
    * Get all active messages for a conversation by conversationId alone (no pageId filter).
    * Used by the client-managed conversations API to retrieve full thread history.
+   *
+   * Excludes 'streaming' placeholder rows by default — see getMessagesForPage's doc comment.
    */
-  async getMessagesByConversationId(conversationId: string): Promise<ChatMessage[]> {
+  async getMessagesByConversationId(conversationId: string, includeStreaming = false): Promise<ChatMessage[]> {
     const result = await db
       .select({
         id: chatMessages.id,
@@ -171,9 +178,14 @@ export const chatMessageRepository = {
         editedAt: chatMessages.editedAt,
         toolCalls: chatMessages.toolCalls,
         toolResults: chatMessages.toolResults,
+        status: chatMessages.status,
       })
       .from(chatMessages)
-      .where(and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.isActive, true)))
+      .where(and(
+        eq(chatMessages.conversationId, conversationId),
+        eq(chatMessages.isActive, true),
+        ...(includeStreaming ? [] : [ne(chatMessages.status, 'streaming')])
+      ))
       .orderBy(chatMessages.createdAt);
 
     return result as ChatMessage[];

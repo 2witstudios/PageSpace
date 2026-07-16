@@ -29,7 +29,7 @@ import {
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 import { validateLoginCSRFToken } from '@/lib/auth/login-csrf-utils';
 import { getClientIP } from '@pagespace/lib/security/client-ip';
-import { createDeviceToken } from '@/lib/auth/device-auth-helpers';
+import { createDeviceToken, revokeSessionsForLogin } from '@/lib/auth/device-auth-helpers';
 
 const verifySchema = z.object({
   response: z.any(), // WebAuthn response - validated by simplewebauthn
@@ -216,12 +216,12 @@ export async function POST(req: Request) {
     // attempts / lock for this account.
     await resetFailedLoginAttempts(userId);
 
-    // Passkey is the strongest auth flow — hard-reset web sessions across devices
-    // (admin-console sessions are scoped separately and left intact).
-    const revokedCount = await sessionService.revokeWebUserSessions(userId, 'passkey_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked all sessions on passkey login', { userId, count: revokedCount });
-    }
+    // Revoke prior sessions scoped to THIS device when the client supplies a
+    // deviceId (multi-device safe — a passkey login on one device no longer logs
+    // the user out everywhere). Old clients that send no deviceId keep the legacy
+    // all-web-session revoke via the helper's fallback. Admin-console sessions are
+    // scoped separately and always left intact.
+    await revokeSessionsForLogin(userId, deviceId, 'passkey_login', 'passkey');
 
     // Create new session
     const sessionToken = await sessionService.createSession({

@@ -91,6 +91,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       type: 'user',
       scopes: ['*'],
     }),
+    revokeSessionByHash: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -103,6 +104,7 @@ vi.mock('@pagespace/lib/security/client-ip', () => ({
 }));
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
+  getSessionFromCookies: vi.fn(() => null),
 }));
 
 import { POST } from '../route';
@@ -114,8 +116,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { getClientIP } from '@pagespace/lib/security/client-ip';
-import { appendSessionCookie } from '@/lib/auth/cookie-config';
+import { appendSessionCookie, getSessionFromCookies } from '@/lib/auth/cookie-config';
 
 const mockUser = {
   id: 'user-123',
@@ -175,7 +178,12 @@ describe('POST /api/auth/device/refresh', () => {
       type: 'user',
       scopes: ['*'],
     } as never);
+    vi.mocked(sessionService.revokeSessionByHash).mockResolvedValue(undefined);
 
+    // No replaced session cookie by default (existing tests exercise the
+    // no-cookie path); retirement tests override this per-case.
+    vi.mocked(getSessionFromCookies).mockReturnValue(null);
+    vi.mocked(hashToken).mockReturnValue('hashed-old-session');
   });
 
   describe('input validation', () => {
@@ -622,6 +630,104 @@ describe('POST /api/auth/device/refresh', () => {
           platform: 'desktop',
           appVersion: '2.0.0',
         })
+      );
+    });
+  });
+
+  describe('replaced-session retirement', () => {
+    it('revokes the session the refresh replaces (same user) with replaced_by_refresh — web', async () => {
+      vi.mocked(validateDeviceToken).mockResolvedValue({
+        ...mockDeviceRecord,
+        platform: 'web',
+      } as never);
+      vi.mocked(getSessionFromCookies).mockReturnValue('old-web-session-token');
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=old-web-session-token',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // Ownership resolved via the old cookie's session (same user-123), then
+      // revoked by its hash.
+      expect(hashToken).toHaveBeenCalledWith('old-web-session-token');
+      expect(sessionService.revokeSessionByHash).toHaveBeenCalledWith(
+        'hashed-old-session',
+        'replaced_by_refresh',
+      );
+    });
+
+    it('revokes the replaced session on the desktop branch too', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue('old-desktop-session-token');
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=old-desktop-session-token',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(sessionService.revokeSessionByHash).toHaveBeenCalledWith(
+        'hashed-old-session',
+        'replaced_by_refresh',
+      );
+    });
+
+    it('does NOT revoke anything when no session cookie accompanies the refresh', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
+
+      const request = createRefreshRequest(validRefreshPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(sessionService.revokeSessionByHash).not.toHaveBeenCalled();
+    });
+
+    it('does NOT revoke when the old cookie session belongs to a different user', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue('someone-elses-token');
+      // First validateSession call is for the new session (user-123); the second
+      // (owner lookup for the old token) resolves to a different user.
+      vi.mocked(sessionService.validateSession)
+        .mockResolvedValueOnce({
+          sessionId: 'mock-session-id',
+          userId: 'user-123',
+          userRole: 'user',
+          tokenVersion: 0,
+          type: 'user',
+          scopes: ['*'],
+        } as never)
+        .mockResolvedValueOnce({
+          sessionId: 'other-session-id',
+          userId: 'other-user',
+          userRole: 'user',
+          tokenVersion: 0,
+          type: 'user',
+          scopes: ['*'],
+        } as never);
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=someone-elses-token',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(sessionService.revokeSessionByHash).not.toHaveBeenCalled();
+    });
+
+    it('never fails the refresh when the retirement revoke throws', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue('old-web-session-token');
+      vi.mocked(sessionService.revokeSessionByHash).mockRejectedValue(new Error('db down'));
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=old-web-session-token',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBe('ps_dev_valid_token');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Failed to retire replaced session on device refresh',
+        expect.objectContaining({ error: 'db down' }),
       );
     });
   });

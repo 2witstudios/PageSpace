@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
+import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
@@ -211,7 +211,11 @@ export const searchTools = {
                   .where(and(
                     inArray(chatMessages.pageId, matchingPageIds),
                     inArray(chatMessages.conversationId, matchingConversationIds),
-                    eq(chatMessages.isActive, true)
+                    eq(chatMessages.isActive, true),
+                    // A 'streaming' placeholder is hidden from every other reader — if it
+                    // participates in this ROW_NUMBER() partition, computed line numbers shift
+                    // by one relative to what the client actually displays.
+                    ne(chatMessages.status, 'streaming')
                   ))
               : [];
 

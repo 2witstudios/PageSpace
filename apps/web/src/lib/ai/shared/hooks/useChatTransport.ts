@@ -9,8 +9,8 @@ import { createStreamTrackingFetch } from '@/lib/ai/core/client';
  *
  * `channelId` is the socket room the server broadcasts this stream's lifecycle
  * on — the same id the surface passes to `useChannelStreamSocket`. It is NOT
- * interchangeable with `conversationId` (SidebarChatTab's transport key is
- * `sidebar:<convId>`; GlobalChatContext's is the conversation id itself), so it
+ * interchangeable with `conversationId`: in agent mode the channel is the AGENT's
+ * page id, while the conversation is one of several conversations on it. So it
  * has to be supplied explicitly. Every POST through this transport marks the
  * channel as "being consumed by this browser context" for as long as it is
  * reading the response body, which is what stops the originating tab from
@@ -52,9 +52,7 @@ export function useChatTransport(
   // Recreating the transport was therefore not just useless, it was actively misleading: it
   // looked like the keys were being refreshed when nothing downstream ever picked them up.
   // Build it once; let the keys follow the surface through the refs.
-  const chatIdRef = useRef<string | null>(conversationId);
   const channelIdRef = useRef<string | null>(channelId);
-  chatIdRef.current = conversationId;
   channelIdRef.current = channelId;
 
   if (!conversationId) {
@@ -68,7 +66,6 @@ export function useChatTransport(
     transportRef.current = new DefaultChatTransport({
       api,
       fetch: createStreamTrackingFetch({
-        getChatId: () => chatIdRef.current,
         getChannelId: () => channelIdRef.current ?? undefined,
       }),
     });

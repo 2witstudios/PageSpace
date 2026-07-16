@@ -211,6 +211,7 @@ const mockChatMessage = (overrides: Partial<{
   content: string;
   userId: string | null;
   messageType: 'standard' | 'todo_list';
+  status: 'streaming' | 'complete' | 'interrupted';
 }> = {}) => ({
   id: overrides.id || mockMessageId,
   pageId: overrides.pageId || mockPageId,
@@ -224,6 +225,7 @@ const mockChatMessage = (overrides: Partial<{
   editedAt: null,
   toolCalls: null,
   toolResults: null,
+  status: overrides.status || 'complete' as const,
 });
 
 const createContext = (messageId: string) => ({
@@ -327,6 +329,20 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
+
+      const request = createPatchRequest(mockMessageId, { content: 'Updated' });
+      const context = createContext(mockMessageId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(chatMessageRepository.updateMessageContent).not.toHaveBeenCalled();
     });
   });
 
@@ -602,6 +618,20 @@ describe('DELETE /api/ai/chat/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(chatMessageRepository.getMessageById).mockResolvedValue(mockChatMessage({ status: 'streaming' }));
+
+      const request = createDeleteRequest(mockMessageId);
+      const context = createContext(mockMessageId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(chatMessageRepository.softDeleteMessage).not.toHaveBeenCalled();
     });
   });
 

@@ -83,10 +83,12 @@ jobs:
 
       # Backfill scripts have their own vitest context (scripts/vitest.config.ts)
       # and are not part of any workspace package, so the turbo test pipeline
-      # never sees them. Scoped to backfill-* because the older tenant-* and
-      # changelog-* suites in that config are broken independently of CI.
+      # never sees them. Explicitly listed by file (not a glob) because the
+      # older tenant-* and changelog-* suites in that config are broken
+      # independently of CI — a new one-off scripts/__tests__ file must be
+      # added to this list by hand to actually run here.
       - name: Run backfill script tests
-        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts
+        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts
 
       - name: Coverage report
         if: always()

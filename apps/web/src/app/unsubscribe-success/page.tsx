@@ -17,6 +17,7 @@ const NOTIFICATION_TYPE_LABELS: Record<string, string> = {
   CONNECTION_ACCEPTED: 'Connection Accepted',
   CONNECTION_REJECTED: 'Connection Rejected',
   NEW_DIRECT_MESSAGE: 'Direct Messages',
+  PRODUCT_UPDATE: 'Product Updates',
 };
 
 function UnsubscribeContent() {

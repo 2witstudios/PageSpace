@@ -3,6 +3,7 @@ import { streamText, stepCountIs, hasToolCall, UIMessage, createUIMessageStream,
 import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { ASK_USER_SECTION } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
@@ -25,12 +26,14 @@ import { broadcastChatUserMessage } from '@/lib/websocket';
 import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
 import { createStreamLifecycle, type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
+import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { chunkToPart } from '@/lib/ai/streams/chunkToPart';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { extractMessageContent, extractToolCalls, extractToolResults, sanitizeMessagesForModel, convertGlobalAssistantMessageToUIMessage, saveGlobalAssistantMessageToDatabase } from '@/lib/ai/core/message-utils';
+import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
@@ -52,7 +55,7 @@ import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personali
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { createExecuteTool } from '@/lib/ai/tools/execute-tool';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, gt, lt } from '@pagespace/db/operators'
+import { eq, and, desc, gt, lt, ne } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
@@ -74,7 +77,8 @@ import {
   removeStream,
   STREAM_ID_HEADER,
 } from '@/lib/ai/core/stream-abort-registry';
-import { runAgentWithRetry, AGENT_MAX_STEPS, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { validateUserMessageFileParts, hasFileParts } from '@/lib/ai/core/validate-image-parts';
 import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
 import { guardReadPageToolForVision } from '@/lib/ai/tools/read-page-vision-output';
@@ -141,11 +145,16 @@ export async function GET(
     });
     const cursor = searchParams.get('cursor'); // Message ID for cursor-based pagination
     const direction = searchParams.get('direction') || 'before'; // 'before' or 'after'
+    // Stale-tab rollout protection: clients deployed before this PR never send this param, so
+    // they never see 'streaming' placeholder rows — only updated clients that know how to
+    // dedup them against a live stream bubble opt in. See Server Stream Durability epic PR 2.
+    const includeStreaming = searchParams.get('includeStreaming') === '1';
 
     // Build query conditions
     const conditions = [
       eq(messages.conversationId, id),
-      eq(messages.isActive, true)
+      eq(messages.isActive, true),
+      ...(includeStreaming ? [] : [ne(messages.status, 'streaming')])
     ];
 
     // Add cursor condition if provided
@@ -197,6 +206,7 @@ export async function GET(
         createdAt: msg.createdAt,
         isActive: msg.isActive,
         editedAt: msg.editedAt,
+        status: msg.status,
       })
     ));
 
@@ -238,6 +248,18 @@ export async function POST(
   const startTime = Date.now();
   let lifecycle: StreamLifecycleHandle | undefined;
   let activeStreamId: string | undefined;
+  // Set once the assistant placeholder row has received a terminal write (onFinish). The outer
+  // catch's best-effort cleanup below must not fire once this is true — it would otherwise
+  // downgrade an already-'complete'/'interrupted' row if something threw AFTER a successful
+  // persist but before the response was returned. See Server Stream Durability epic PR 2 —
+  // Codex review: a stream stopped before any content must not leave the placeholder stuck at
+  // 'streaming' forever (excluded from reads, 409s on edit/delete).
+  let assistantMessagePersisted = false;
+  // Mirrors {conversationId, serverAssistantMessageId, userId} once all three are known
+  // (inside the main try, so the originals stay block-scoped `const`s) — purely so the outer
+  // catch's best-effort cleanup can reach them without a wider hoist of variables used in
+  // dozens of places below.
+  let cleanupContext: { conversationId: string; serverAssistantMessageId: string; userId: string } | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
   // Becomes true once the stream owns the hold (its onFinish will release it via
@@ -312,7 +334,8 @@ export async function POST(
       messages: requestMessages, // Used ONLY to extract new user message, NOT for conversation history
       selectedProvider,
       selectedModel,
-      locationContext,
+      locationContext: legacyLocationContext, // Deprecated: server-resolved from contextRef when present, kept 1+ release for old clients
+      contextRef,
       isReadOnly,
       webSearchEnabled,
       imageGenEnabled,
@@ -325,8 +348,27 @@ export async function POST(
       loggers.api.debug('Global Assistant Chat API: No messages provided', {});
       return NextResponse.json({ error: 'messages are required' }, { status: 400 });
     }
-    
+
     loggers.api.debug('Global Assistant Chat API: Validation passed', { messageCount: requestMessages.length, conversationId });
+
+    // Server-resolved (and permission-checked) from contextRef when the client sent
+    // one — a contextRef pointing at a page/drive the caller cannot view resolves to
+    // null here rather than trusting whatever the client claimed. Falls back to the
+    // legacy client-computed locationContext only for old clients that never sent a
+    // contextRef at all. Deferred until after the required-field check above so an
+    // invalid request (no messages) fails fast without an extra DB round-trip.
+    const locationContext = contextRef
+      ? await resolveRequestContext(auth, contextRef, (denied) => {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId,
+            resourceType: denied.routeType === 'drive' ? 'drive' : 'page',
+            resourceId: denied.routeType === 'drive' ? denied.driveId : denied.pageId,
+            details: { reason: 'context_ref_denied', method: 'POST', conversationId },
+            riskScore: 0.3,
+          });
+        })
+      : legacyLocationContext;
 
     // Image security validation — validate file parts in the user message
     const userMessageForValidation = requestMessages[requestMessages.length - 1];
@@ -417,7 +459,11 @@ export async function POST(
     let askUserSyncPromise: Promise<unknown> | undefined;
     if (userMessage && userMessage.role === 'user') {
       try {
-        const messageId = userMessage.id || createId();
+        const messageId = resolveMessageId(userMessage.id);
+        // Reassign so every downstream use of `userMessage` (the broadcast below,
+        // any future read) agrees with what was actually persisted — see the
+        // equivalent comment in apps/web/src/app/api/ai/chat/route.ts.
+        userMessage.id = messageId;
         const messageContent = extractMessageContent(userMessage);
         
         // Process @mentions in the user message
@@ -574,13 +620,18 @@ export async function POST(
     // overlap with the independent setup between there and here.
     if (askUserSyncPromise) await askUserSyncPromise;
 
-    // Read ALL active messages from database (source of truth)
+    // Read ALL active messages from database (source of truth). Exclude 'streaming'
+    // placeholders — this load is the model-context source AND the compaction source, so a
+    // placeholder here would both poison this job's own turn and risk being silently
+    // summarized into a durable compaction. 'interrupted' rows stay included — they are
+    // terminal, real partial output. See Server Stream Durability epic PR 2.
     const dbMessages = await db
       .select()
       .from(messages)
       .where(and(
         eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true)
+        eq(messages.isActive, true),
+        ne(messages.status, 'streaming')
       ))
       .orderBy(messages.createdAt);
 
@@ -597,6 +648,7 @@ export async function POST(
         createdAt: msg.createdAt,
         isActive: msg.isActive,
         editedAt: msg.editedAt,
+        status: msg.status,
       })
     ));
 
@@ -1026,6 +1078,7 @@ MENTION PROCESSING:
     });
 
     const serverAssistantMessageId = createId();
+    cleanupContext = { conversationId, serverAssistantMessageId, userId };
 
     const { streamId, signal: abortSignal, controller: abortController } = createStreamAbortController({ userId, messageId: serverAssistantMessageId });
     activeStreamId = streamId;
@@ -1076,26 +1129,75 @@ MENTION PROCESSING:
     // assistant rows, two bills. Takeover, not 409; see stream-liveness.ts for why rejecting
     // would self-lock the conversation.
     //
-    // KNOWN RACE — this does NOT guarantee "at most one generation per conversation", and this
-    // comment used to claim that it did. See the docblock on takeOverConversationStreams: the
-    // SELECT there and the INSERT in createStreamLifecycle are not atomic together, so two
-    // near-simultaneous sends can both find nothing in flight and both proceed. It narrows the
-    // window; it does not close it.
-    await takeOverConversationStreams({
+    // BEST-EFFORT, not an invariant — named honestly. `startGenerationExclusive` closes the
+    // check-then-act race documented here previously (the SELECT inside
+    // takeOverConversationStreams and the INSERT inside createStreamLifecycle are not atomic on
+    // their own) by holding a per-conversation Postgres advisory lock across both. On lock_busy
+    // it retries briefly, then proceeds UNLOCKED rather than blocking the send — availability
+    // wins over serialization, so a rare contention/pool-exhaustion case can still double-generate.
+    // See start-generation-exclusive.ts and the PR 4 board page.
+    const generation = await startGenerationExclusive({
       conversationId,
-      channelId,
+      run: async () => {
+        await takeOverConversationStreams({
+          conversationId,
+          channelId,
+        });
+
+        const streamLifecycle = await createStreamLifecycle({
+          messageId: serverAssistantMessageId,
+          channelId,
+          conversationId,
+          userId,
+          displayName,
+          browserSessionId,
+          streamId,
+          isShared: conversation.isShared === true,
+        });
+
+        // Assistant message row at stream start (Server Stream Durability epic, PR 2): a
+        // 'streaming' placeholder so history can show in-flight entries and pre-checkpoint
+        // process death doesn't silently lose the reply. Same critical section as
+        // takeover+lifecycle-create (PR 4 seam note) so a second send observes the stream row
+        // and its placeholder together — except on the best-effort insert failure below, where
+        // the placeholder is skipped and only the stream row exists (named honestly, not an
+        // invariant). Skipped when pre-aborted — the user pressed Stop before streamText ever
+        // ran, so there is no generation to show and no execute-end/onFinish write will ever
+        // arrive to flip this row out of 'streaming'.
+        //
+        // Own try/catch, matching every other operation in this closure (takeOverConversationStreams,
+        // createStreamLifecycle): `run` must never throw while the advisory lock is held, or
+        // start-generation-exclusive.ts's caller misclassifies it as lock-machinery failure and
+        // invokes `run` a SECOND time, unlocked — double generation, double billing. Best-effort:
+        // a failed placeholder just means history can't show this entry mid-stream; the generation
+        // itself still proceeds.
+        if (!streamLifecycle.preAborted) {
+          try {
+            await db.insert(messages).values({
+              id: serverAssistantMessageId,
+              conversationId,
+              userId,
+              role: 'assistant',
+              content: '',
+              toolCalls: null,
+              toolResults: null,
+              isActive: true,
+              status: 'streaming',
+            });
+          } catch (error) {
+            loggers.ai.warn('Global AI messages API: placeholder assistant row INSERT failed', {
+              messageId: serverAssistantMessageId,
+              conversationId,
+              error: error instanceof Error ? error.message : 'unknown',
+            });
+          }
+        }
+
+        return streamLifecycle;
+      },
     });
 
-    lifecycle = await createStreamLifecycle({
-      messageId: serverAssistantMessageId,
-      channelId,
-      conversationId,
-      userId,
-      displayName,
-      browserSessionId,
-      streamId,
-      isShared: conversation.isShared === true,
-    });
+    lifecycle = generation.result;
 
     // Bind the terminal write to the abort itself. onAbort (below) already calls finish(true),
     // but it only fires while a streamText is live — and a cross-instance abort now WAITS for
@@ -1223,6 +1325,45 @@ MENTION PROCESSING:
         // Single onFinish → single consumeCredits → one hold settle: no double-charge,
         // but failed/partial attempts ARE billed (the provider charged us for them).
         agentRun = runResult;
+
+        // Durable server-side persistence — runs regardless of whether the client is still
+        // connected. onFinish is coupled to the response stream and may never fire when the
+        // mobile client backgrounds mid-stream (exactly the scenario #2065 fixed client-side
+        // for this same route — recovery only helps if the server actually settled the row).
+        // Mirrors chat/route.ts's execute-end block: unconditional, using whatever lifecycle
+        // has buffered so far. onFinish, when it runs, refines this write with the richer SDK
+        // responseMessage; when onFinish never runs, this write stands as the sole record.
+        // See Server Stream Durability epic PR 2 — CodeRabbit review.
+        {
+          const bufferedParts = lifecycle!.getBufferedParts();
+          const aborted = isRunAborted({ agentRun, abortSignal });
+          const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+          try {
+            await saveGlobalAssistantMessageToDatabase({
+              messageId: serverAssistantMessageId,
+              conversationId,
+              userId,
+              role: 'assistant',
+              ...payload,
+              status: aborted ? 'interrupted' : 'complete',
+            });
+            assistantMessagePersisted = true;
+
+            // A conversation with newly-written assistant content — even empty-content,
+            // interrupted content — must still surface as recently active in a list
+            // sorted/filtered by lastMessageAt. onFinish's own responseMessage branch below
+            // does the same bump when it gets to refine this write with richer content.
+            await db
+              .update(conversations)
+              .set({
+                lastMessageAt: new Date(),
+                updatedAt: new Date(),
+              })
+              .where(eq(conversations.id, conversationId));
+          } catch (e) {
+            loggers.api.error('Global Assistant Chat API: execute-end persist failed', e as Error);
+          }
+        }
       },
       onFinish: async ({ responseMessage }) => {
         // Clean up abort controller from registry
@@ -1232,14 +1373,27 @@ MENTION PROCESSING:
 
         const messageId = serverAssistantMessageId;
 
+        // Computed once and reused below (persist status + lifecycle.finish's aborted flag) so
+        // the two can never disagree about whether this run was stopped.
+        const aborted = isRunAborted({ agentRun, abortSignal });
+
         // Extract tool calls/results with safe defaults — responseMessage is absent on
         // exhausted/no-content runs, but usage settlement below still has to run.
         const extractedToolCalls = responseMessage ? extractToolCalls(responseMessage) : [];
         const extractedToolResults = responseMessage ? extractToolResults(responseMessage) : [];
 
         // Save the assistant message. Best-effort: persistence errors must NOT skip
-        // usage/credit settlement below — that would leak the gate's hold.
-        if (responseMessage) {
+        // usage/credit settlement below — that would leak the gate's hold. This is the
+        // "refine with the richer SDK responseMessage" step — execute-end above already
+        // terminalized the row unconditionally, so when responseMessage is absent there is
+        // nothing richer to refine with and nothing left to do here.
+        //
+        // !lifecycle?.preAborted: the AI SDK always calls onFinish with a non-null
+        // responseMessage (an empty {parts: []} shell when execute() wrote nothing), even for a
+        // pre-aborted stream where the placeholder INSERT above was deliberately skipped. Without
+        // this guard, the upsert would INSERT a brand-new phantom empty 'interrupted' row for a
+        // request that never reached the model — see Server Stream Durability epic PR 2 review.
+        if (responseMessage && !lifecycle?.preAborted) {
           try {
             const messageContent = extractMessageContent(responseMessage);
 
@@ -1259,7 +1413,9 @@ MENTION PROCESSING:
               toolCalls: extractedToolCalls.length > 0 ? extractedToolCalls : undefined,
               toolResults: extractedToolResults.length > 0 ? extractedToolResults : undefined,
               uiMessage: responseMessage,
+              status: aborted ? 'interrupted' : 'complete',
             });
+            assistantMessagePersisted = true;
 
             // Update conversation lastMessageAt
             await db
@@ -1274,6 +1430,8 @@ MENTION PROCESSING:
           } catch (error) {
             loggers.api.error('Global Assistant Chat API: Failed to save AI response message', error as Error);
           }
+        } else {
+          loggers.api.debug('Global Assistant Chat API: no responseMessage — execute-end already terminalized this row', {});
         }
 
         // Usage + credit settlement ALWAYS runs after runAgentWithRetry completes —
@@ -1347,7 +1505,7 @@ MENTION PROCESSING:
         // Reflect a user stop, including one that landed during inter-attempt backoff or
         // raced in after the loop broke (onAbort only fires while a streamText is live).
         // finish() is idempotent, so this is a no-op if onAbort already ran.
-        lifecycle!.finish(agentRun?.terminalReason === 'aborted' || abortSignal.aborted);
+        lifecycle!.finish(aborted);
       },
     });
 
@@ -1364,7 +1522,41 @@ MENTION PROCESSING:
     if (activeStreamId !== undefined) {
       removeStream({ streamId: activeStreamId });
     }
+    // Captured BEFORE finish() — finish() deletes the multicast registry entry backing
+    // getBufferedParts(), so calling it after finish() would always see an empty buffer and
+    // silently discard any real partial content the cleanup write below is meant to preserve.
+    const bufferedPartsAtError = lifecycle?.getBufferedParts() ?? [];
     lifecycle?.finish(true);
+
+    // Last-resort cleanup: something threw before onFinish ever got a chance to settle the
+    // placeholder row (e.g. createUIMessageStream itself failed to construct). Without this,
+    // the row is stuck at 'streaming' forever — excluded from every reader by default AND
+    // rejected by edit/delete's 409 guard. Guarded by assistantMessagePersisted so this can
+    // never downgrade an already-'complete'/'interrupted' row written earlier in the SAME
+    // request. Best-effort: must not itself throw or block the error response.
+    //
+    // Requires `lifecycle` itself (not just `!lifecycle?.preAborted`) so this never fires for a
+    // throw that happened INSIDE startGenerationExclusive's callback, before `lifecycle` is ever
+    // assigned — e.g. takeOverConversationStreams or createStreamLifecycle failing (the
+    // placeholder INSERT itself has its own try/catch and can no longer throw here). In that
+    // window no placeholder row exists at all, so this upsert would INSERT a stray phantom
+    // 'interrupted' row for a request that never started generating.
+    if (!assistantMessagePersisted && cleanupContext && lifecycle && !lifecycle.preAborted) {
+      try {
+        const payload = buildAssistantPersistencePayload(cleanupContext.serverAssistantMessageId, bufferedPartsAtError);
+        await saveGlobalAssistantMessageToDatabase({
+          messageId: cleanupContext.serverAssistantMessageId,
+          conversationId: cleanupContext.conversationId,
+          userId: cleanupContext.userId,
+          role: 'assistant',
+          ...payload,
+          status: 'interrupted',
+        });
+      } catch (cleanupError) {
+        loggers.api.error('Global Assistant Chat API: failed to terminalize placeholder row after error', cleanupError as Error);
+      }
+    }
+
     loggers.api.error('Global Assistant Chat API Error:', error as Error);
 
     return NextResponse.json({

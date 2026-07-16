@@ -613,4 +613,119 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       // No error thrown from double-close
     });
   });
+
+  // Leaf 5.3: this connection survives today only because tokens flow continuously (route.ts
+  // sends no heartbeat frames at all). A silent gap — a long tool call, deep research, an MCP
+  // round-trip with no output for minutes — leaves an idle HTTP connection that any
+  // intermediary (load balancer, reverse proxy, corporate network appliance) is entitled to
+  // reap. `: ping` comment frames keep it alive without touching any application state.
+  describe('SSE keepalive ping frames', () => {
+    const PING_INTERVAL_MS = 20 * 1000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('given the stream stays open past one ping interval with no other traffic, should send a `: ping` comment frame', async () => {
+      vi.useFakeTimers();
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      testRegistry.finish(mockMessageId);
+
+      const body = await readSSEBody(response);
+      expect(body).toContain(': ping\n\n');
+    });
+
+    it('given a silent multi-minute tool call, should send a ping on every tick, not just once', async () => {
+      vi.useFakeTimers();
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS * 3);
+      testRegistry.finish(mockMessageId);
+
+      const body = await readSSEBody(response);
+      const pingCount = body.split(': ping\n\n').length - 1;
+      expect(pingCount).toBe(3);
+    });
+
+    it('given real part traffic arrives after a ping tick, both should appear in order', async () => {
+      vi.useFakeTimers();
+      testRegistry.register(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      await vi.advanceTimersByTimeAsync(PING_INTERVAL_MS);
+      testRegistry.push(mockMessageId, { type: 'text', text: 'after-ping' });
+      testRegistry.finish(mockMessageId);
+
+      const body = await readSSEBody(response);
+      const pingIndex = body.indexOf(': ping\n\n');
+      const partIndex = body.indexOf('after-ping');
+      expect(pingIndex).toBeGreaterThanOrEqual(0);
+      expect(partIndex).toBeGreaterThan(pingIndex);
+    });
+
+    it('given the stream finishes naturally, should clear the ping interval (no leaked timer)', async () => {
+      vi.useFakeTimers();
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      // Route-level timers (the 5s recheck + 20s ping) are both pending at this point,
+      // alongside the registry's own unrelated per-entry cleanup timer.
+      const beforeFinish = vi.getTimerCount();
+      testRegistry.finish(mockMessageId);
+
+      // finish() clears the registry's own cleanup timer too — assert only that the route's
+      // two timers (recheck + ping) are gone, not the absolute count.
+      expect(vi.getTimerCount()).toBeLessThanOrEqual(beforeFinish - 2);
+    });
+
+    it('given the client disconnects, should clear the ping interval (no leaked timer)', async () => {
+      vi.useFakeTimers();
+      const abortController = new AbortController();
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
+      const beforeAbort = vi.getTimerCount();
+      abortController.abort();
+
+      // The registry's own per-entry cleanup timer is untouched by an abort (only the route's
+      // subscriber unsubscribes) — assert the route's own two timers (recheck + ping) are gone.
+      expect(vi.getTimerCount()).toBe(beforeAbort - 2);
+    });
+
+    it('given permission is revoked mid-stream, should clear the ping interval too, not just the recheck timer', async () => {
+      vi.useFakeTimers();
+      let allowed = true;
+      vi.mocked(canUserViewPage).mockImplementation(async () => allowed);
+      testRegistry.register(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+      const beforeRevoke = vi.getTimerCount();
+      allowed = false;
+      await vi.advanceTimersByTimeAsync(5000);
+
+      // The recheck tick that just fired consumed its own timer (already gone from the count
+      // before this assertion); revocation must additionally clear the ping interval, so the
+      // count should drop by at least one more beyond the recheck tick's own consumption.
+      expect(vi.getTimerCount()).toBeLessThan(beforeRevoke - 1);
+    });
+
+    it('given an already-aborted signal (eager close path), should never start a ping interval', async () => {
+      vi.useFakeTimers();
+      const abortController = new AbortController();
+      abortController.abort();
+      testRegistry.register(mockMessageId, mockMeta);
+      // Only the registry's own (pre-existing, unrelated) per-entry cleanup timer is pending.
+      const beforeGet = vi.getTimerCount();
+
+      await GET(makeRequest(abortController.signal), makeContext(mockMessageId));
+
+      // The route must not have scheduled either the recheck timer or the ping interval on
+      // this eager-close path — the count must not have grown at all.
+      expect(vi.getTimerCount()).toBe(beforeGet);
+    });
+  });
 });

@@ -53,9 +53,11 @@ export * from './schema/oauth';
 export * from './schema/form-targets';
 export * from './schema/machine-projects';
 export * from './schema/machine-branches';
+export * from './schema/machine-sprite-reclaims';
 export * from './schema/machine-agent-terminals';
 export * from './schema/machine-workspaces';
 export * from './schema/machine-workspace-bootstraps';
+export * from './schema/email-broadcasts';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -112,9 +114,11 @@ import * as oauth from './schema/oauth';
 import * as formTargets from './schema/form-targets';
 import * as machineProjects from './schema/machine-projects';
 import * as machineBranches from './schema/machine-branches';
+import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
 import * as machineAgentTerminals from './schema/machine-agent-terminals';
 import * as machineWorkspaces from './schema/machine-workspaces';
 import * as machineWorkspaceBootstraps from './schema/machine-workspace-bootstraps';
+import * as emailBroadcasts from './schema/email-broadcasts';
 
 export const schema = {
   ...auth,
@@ -172,7 +176,9 @@ export const schema = {
   ...formTargets,
   ...machineProjects,
   ...machineBranches,
+  ...machineSpriteReclaims,
   ...machineAgentTerminals,
   ...machineWorkspaces,
   ...machineWorkspaceBootstraps,
+  ...emailBroadcasts,
 };
