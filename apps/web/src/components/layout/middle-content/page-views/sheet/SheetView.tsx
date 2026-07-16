@@ -30,28 +30,22 @@ import { SuggestionProvider, useSuggestionContext } from '@/components/providers
 import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useFindStore } from '@/stores/useFindStore';
+import {
+  clampSelection,
+  clampRange,
+  getPrimaryCell,
+  isCellInSelection,
+  getSelectionAddress,
+  getColumnLabel,
+  nextSelectionForKey,
+  type GridSelection,
+  type GridRange,
+  type SelectionState,
+} from './core/selection';
 
 interface SheetViewProps {
   page: TreePage;
 }
-
-type GridSelection = {
-  row: number;
-  column: number;
-};
-
-type GridRange = {
-  start: GridSelection;
-  end: GridSelection;
-};
-
-type SelectionState = {
-  type: 'single';
-  cell: GridSelection;
-} | {
-  type: 'range';
-  range: GridRange;
-};
 
 type ExternalSheetState =
   | {
@@ -80,54 +74,6 @@ type ExternalSheetState =
       title?: string;
       error: string;
     };
-
-const clampSelection = (selection: GridSelection, sheet: SheetData): GridSelection => ({
-  row: Math.min(Math.max(selection.row, 0), Math.max(0, sheet.rowCount - 1)),
-  column: Math.min(Math.max(selection.column, 0), Math.max(0, sheet.columnCount - 1)),
-});
-
-const clampRange = (range: GridRange, sheet: SheetData): GridRange => ({
-  start: clampSelection(range.start, sheet),
-  end: clampSelection(range.end, sheet),
-});
-
-// Get the primary cell for a selection (for formula display and editing)
-const getPrimaryCell = (selection: SelectionState): GridSelection => {
-  return selection.type === 'single' ? selection.cell : selection.range.start;
-};
-
-// Check if a cell is within the current selection
-const isCellInSelection = (row: number, column: number, selection: SelectionState): boolean => {
-  if (selection.type === 'single') {
-    return selection.cell.row === row && selection.cell.column === column;
-  }
-
-  const { start, end } = selection.range;
-  const minRow = Math.min(start.row, end.row);
-  const maxRow = Math.max(start.row, end.row);
-  const minCol = Math.min(start.column, end.column);
-  const maxCol = Math.max(start.column, end.column);
-
-  return row >= minRow && row <= maxRow && column >= minCol && column <= maxCol;
-};
-
-// Get selection address string for display
-const getSelectionAddress = (selection: SelectionState): string => {
-  if (selection.type === 'single') {
-    return encodeCellAddress(selection.cell.row, selection.cell.column);
-  }
-
-  const { start, end } = selection.range;
-  if (start.row === end.row && start.column === end.column) {
-    return encodeCellAddress(start.row, start.column);
-  }
-
-  const startAddr = encodeCellAddress(start.row, start.column);
-  const endAddr = encodeCellAddress(end.row, end.column);
-  return `${startAddr}:${endAddr}`;
-};
-
-const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');
 
 // Utility function to check if a key should trigger direct cell editing
 const isPrintableKey = (key: string): boolean => {
@@ -1364,7 +1310,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       const { key, shiftKey, ctrlKey, metaKey } = event;
       const primaryCell = getPrimaryCell(selection);
-      let { row, column } = clampSelection(primaryCell, sheet);
+      const { row, column } = clampSelection(primaryCell, sheet);
 
       // Don't interfere if we're already editing
       if (editingCell) return;
@@ -1416,58 +1362,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         return;
       }
 
-      switch (key) {
-        case 'ArrowUp':
-          event.preventDefault();
-          row = Math.max(0, row - 1);
-          break;
-        case 'ArrowDown':
-          event.preventDefault();
-          row = Math.min(sheet.rowCount - 1, row + 1);
-          break;
-        case 'ArrowLeft':
-          event.preventDefault();
-          column = Math.max(0, column - 1);
-          break;
-        case 'ArrowRight':
-          event.preventDefault();
-          column = Math.min(sheet.columnCount - 1, column + 1);
-          break;
-        case 'Tab':
-          event.preventDefault();
-          if (shiftKey) {
-            if (column === 0) {
-              column = sheet.columnCount - 1;
-              row = Math.max(0, row - 1);
-            } else {
-              column = Math.max(0, column - 1);
-            }
-          } else {
-            column += 1;
-            if (column >= sheet.columnCount) {
-              column = 0;
-              row = Math.min(sheet.rowCount - 1, row + 1);
-            }
-          }
-          break;
-        case 'Enter':
-          event.preventDefault();
-          if (!isReadOnly) {
-            // Enter can either start editing or move to next row
-            if (shiftKey) {
-              row = Math.max(0, row - 1);
-            } else {
-              row = Math.min(sheet.rowCount - 1, row + 1);
-            }
-          }
-          break;
-        default:
-          return;
+      const next = nextSelectionForKey({ key, shiftKey, isReadOnly }, { row, column }, sheet);
+      if (!next) {
+        return;
       }
+      event.preventDefault();
 
       setSelection({
         type: 'single',
-        cell: { row, column }
+        cell: next
       });
     },
     [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, setAnnouncement]
