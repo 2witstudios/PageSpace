@@ -232,6 +232,8 @@ export async function seedConversationMessages(
   userId: string,
   msgs: { role: 'user' | 'assistant'; content: string }[],
 ): Promise<void> {
+  if (msgs.length === 0) return;
+
   const startedAt = Date.now() - msgs.length * 1000;
   for (let i = 0; i < msgs.length; i++) {
     await db.insert(messages).values({
@@ -242,9 +244,15 @@ export async function seedConversationMessages(
       createdAt: new Date(startedAt + i * 1000),
     });
   }
+  // Exactly the last message's own createdAt — matching seedChatConversation. Using
+  // `startedAt + msgs.length * 1000` would land a second PAST the last message, which is
+  // `Date.now()` however the messages were staggered: every seeded conversation's
+  // lastMessageAt would then cluster at "now" and the recency ordering that the staggered
+  // timestamps exist to create would be lost.
+  const lastMessageAt = new Date(startedAt + (msgs.length - 1) * 1000);
   await db
     .update(conversations)
-    .set({ lastMessageAt: new Date(startedAt + msgs.length * 1000) })
+    .set({ lastMessageAt })
     .where(eq(conversations.id, conversationId));
 }
 

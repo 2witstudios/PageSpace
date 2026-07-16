@@ -1,8 +1,7 @@
 import { expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
-import {
-  CONSENT_COOKIE_NAME,
-  CONSENT_VERSION,
-} from '../../../packages/lib/src/consent/consent-core';
+// Public package export, not a reach into packages/lib/src: `@pagespace/lib` exposes
+// `./consent`, and it resolves to the same built module the app under test consumes.
+import { CONSENT_COOKIE_NAME, CONSENT_VERSION } from '@pagespace/lib/consent';
 
 /**
  * Chat UI fixtures (7.0c).
