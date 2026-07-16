@@ -5,12 +5,17 @@ import userEvent from '@testing-library/user-event';
 import { assert } from './riteway';
 
 // Hoisted mock instances accessible inside vi.mock factories
-const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId } = vi.hoisted(() => ({
+const { mockFetchWithAuth, mockSetMessages, mockSendMessage, mockLocalStop, mockAbortByMessageId, mockAbortByConversation } = vi.hoisted(() => ({
   mockFetchWithAuth: vi.fn(),
   mockSetMessages: vi.fn(),
   mockSendMessage: vi.fn(),
   mockLocalStop: vi.fn(),
   mockAbortByMessageId: vi.fn(async (_args: { messageId: string }) => ({
+    aborted: true,
+    code: 'aborted' as const,
+    reason: '',
+  })),
+  mockAbortByConversation: vi.fn(async (_args: { conversationId: string }) => ({
     aborted: true,
     code: 'aborted' as const,
     reason: '',
@@ -108,7 +113,16 @@ vi.mock('@/hooks/useDisplayPreferences', () => ({
   useDisplayPreferences: vi.fn(() => ({ preferences: { showTokenCounts: false } })),
 }));
 
-vi.mock('@/lib/ai/core/client', () => ({ clearActiveStreamId: vi.fn() }));
+// The client barrel re-exports the abort surface, and `useStopStream` (the shared Stop action)
+// imports from it — the barrel is the sanctioned entry point for React code. This mock used to
+// export ONLY `clearActiveStreamId`, a function PR 5A deleted along with the activeStreams map;
+// anything else imported from here silently resolved to `undefined`. Mirror the real barrel.
+vi.mock('@/lib/ai/core/client', () => ({
+  abortActiveStreamByConversation: mockAbortByConversation,
+  abortActiveStreamByMessageId: mockAbortByMessageId,
+  reportAbortOutcome: vi.fn(),
+  reportAbortOutcomes: vi.fn(),
+}));
 // The abort functions must RESOLVE: Stop now chains the outcome into reportAbortOutcome, so that
 // a stream which could not be confirmed stopped (still running, still billing) reaches the user.
 const NOT_FOUND = { aborted: false, code: 'not_found' as const, reason: 'nothing in flight' };
@@ -1637,21 +1651,31 @@ describe('AiChatView remote user-message broadcast', () => {
 describe('AiChatView stop button for reconnected own streams', () => {
   const page = makePage();
 
+  type StreamEntry = { messageId: string; pageId: string; isOwn: boolean; conversationId: string };
+
   type StoreState = {
-    streams: Map<string, unknown>;
+    streams: Map<string, StreamEntry>;
     getRemotePageStreams: (pageId: string) => unknown[];
     getOwnStreams: (pageId: string) => Array<{ messageId: string; pageId: string; isOwn: true; conversationId: string }>;
   };
 
+  // `streams` is built from the SAME entries the accessors return, because that is the one thing
+  // the real store guarantees: `getOwnStreams`/`getRemotePageStreams` are derived views OVER
+  // `streams`, so they cannot disagree with it. This helper used to hand back an EMPTY `streams`
+  // Map alongside populated accessors — a state the store can never actually be in, which meant
+  // any consumer reading the Map (rather than an accessor) saw "no streams" while the test
+  // believed it had set one up. A mock that can hold an impossible state hides bugs instead of
+  // finding them.
   const setStoreSelectors = ({
     remote = [],
     own = [],
   }: {
-    remote?: unknown[];
+    remote?: StreamEntry[];
     own?: Array<{ messageId: string; pageId: string; isOwn: true; conversationId: string }>;
   }) => {
+    const all: StreamEntry[] = [...remote, ...own];
     const state: StoreState = {
-      streams: new Map(),
+      streams: new Map(all.map((entry) => [entry.messageId, entry])),
       getRemotePageStreams: () => remote,
       getOwnStreams: () => own,
     };

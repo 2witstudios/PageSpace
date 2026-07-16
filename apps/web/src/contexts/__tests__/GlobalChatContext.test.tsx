@@ -82,18 +82,31 @@ vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => mockUseAuth(),
 }));
 
-vi.mock('@/stores/usePendingStreamsStore', () => ({
-  usePendingStreamsStore: {
-    getState: () => ({
-      streams: mockStreams,
-      addStream: mockAddStream,
-      appendPart: mockAppendPart,
-      setStreamParts: mockSetStreamParts,
-      removeStream: mockRemoveStream,
-      clearPageStreams: mockClearPageStreams,
-    }),
-  },
-}));
+// Shaped like the REAL store: a callable hook that takes a selector, WITH a `getState` on it.
+// It used to be a bare `{ getState }` object, which was enough only while every consumer reached
+// in imperatively. `DerivedStreamingRegistrations` (rendered by the provider) subscribes to it as
+// a hook, so the stand-in has to actually be one — a mock that cannot do what the real module does
+// is a mock that hides breakage rather than catching it.
+//
+// Built inside the factory: vi.mock is hoisted above every top-level const.
+vi.mock('@/stores/usePendingStreamsStore', () => {
+  const state = () => ({
+    streams: mockStreams,
+    addStream: mockAddStream,
+    appendPart: mockAppendPart,
+    setStreamParts: mockSetStreamParts,
+    removeStream: mockRemoveStream,
+    clearPageStreams: mockClearPageStreams,
+    getRemotePageStreams: (pageId: string) =>
+      Array.from(mockStreams.values()).filter((s) => s.pageId === pageId),
+    getOwnStreams: (pageId: string) =>
+      Array.from(mockStreams.values()).filter((s) => s.pageId === pageId && s.isOwn),
+  });
+  const hook = (selector?: (s: ReturnType<typeof state>) => unknown) =>
+    selector ? selector(state()) : state();
+  hook.getState = state;
+  return { usePendingStreamsStore: hook };
+});
 
 vi.mock('@/lib/ai/core/stream-join-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ai/core/stream-join-client')>()),
@@ -1021,17 +1034,43 @@ describe('GlobalChatProvider — editing-store registration', () => {
     mockConsumeStreamJoin.mockResolvedValue(undefined);
   });
 
-  // Surfaces (GlobalAssistantView, SidebarChatTab) key their useStreamingRegistration
-  // on local useChat status, which is `idle` immediately after a refresh — so they
-  // miss bootstrap-replayed own streams. The provider must register too so SWR
-  // doesn't clobber in-flight chat work during that window.
-  it('given the provider mounts, should register a streaming session keyed `global-chat` with the editing store', () => {
+  // THE contract this must protect (repo CLAUDE.md): a streaming registration gates SWR
+  // revalidation AND auth-token refresh, and a bootstrap-replayed own stream needs it while every
+  // surface's useChat still sits at `idle` after a refresh — the window where the surfaces
+  // (which keyed their own registration on useChat status) all reported "not streaming".
+  //
+  // PR 5A keeps that contract and moves the mechanism: the provider no longer registers one
+  // 'global-chat' session flagged by a claim protocol. It renders DerivedStreamingRegistrations,
+  // which registers one session PER LIVE CONVERSATION, derived from pendingSends + live store
+  // entries. So the assertion moves from "a session named global-chat exists" to the thing that
+  // actually matters — a bootstrapped own stream IS registered, with no surface involved.
+  it('given a bootstrapped own stream in the store, should register a streaming session for its conversation', async () => {
+    mockStreams.set('msg-own', {
+      messageId: 'msg-own',
+      pageId: GLOBAL_CHANNEL_ID,
+      conversationId: CONV_ID,
+      triggeredBy: { userId: USER_ID, displayName: 'Me' },
+      parts: [],
+      isOwn: true,
+    });
+
     renderHook(() => useGlobalChatConversation(), { wrapper: Wrapper });
 
-    expect(useStreamingRegistration).toHaveBeenCalledWith(
-      'global-chat',
-      expect.any(Boolean),
-      expect.objectContaining({ componentName: 'GlobalChatProvider' }),
-    );
+    await waitFor(() => {
+      expect(useStreamingRegistration).toHaveBeenCalledWith(
+        `ai-stream-${CONV_ID}`,
+        true,
+        expect.objectContaining({ conversationId: CONV_ID, componentName: 'GlobalChatProvider' }),
+      );
+    });
+  });
+
+  // The falling edge, and the reason this is keyed by conversation rather than by surface: with
+  // nothing live there is nothing to protect, and a session left registered would suppress SWR
+  // revalidation for the rest of the app indefinitely.
+  it('given no live stream and no pending send, should register nothing', () => {
+    renderHook(() => useGlobalChatConversation(), { wrapper: Wrapper });
+
+    expect(useStreamingRegistration).not.toHaveBeenCalled();
   });
 });
