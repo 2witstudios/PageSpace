@@ -58,12 +58,16 @@ export async function mockCallCount(request: APIRequestContext): Promise<number>
 }
 
 /**
- * Pace the mock's slow-stream mode. `chunks` × `intervalMs` is the live window a spec gets
- * to assert against. Reset to defaults by `resetMock`.
+ * Choose how the mock paces its next streams, and optionally the slow-mode pacing
+ * (`chunks` × `intervalMs` is the live window a spec gets to assert against).
+ *
+ * `mode` is the ONLY pacing control that works for a send driven through the UI: the app
+ * rewrites unknown model ids to its DEFAULT_MODEL before calling the provider, so seeding a
+ * user with `e2e/slow-stream` does NOT reach the mock. Reset to `instant` by `resetMock`.
  */
 export async function setStreamConfig(
   request: APIRequestContext,
-  config: { chunks?: number; intervalMs?: number },
+  config: { chunks?: number; intervalMs?: number; mode?: 'instant' | 'slow' | 'held' },
 ): Promise<void> {
   await request.post(`${MOCK_BASE}/__stream-config`, {
     headers: { 'content-type': 'application/json' },

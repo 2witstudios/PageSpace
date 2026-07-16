@@ -45,9 +45,24 @@ export const MOCK_GENERATION_COST_DOLLARS = 0.05;
 export const MOCK_PROMPT_TOKENS = 12;
 export const MOCK_COMPLETION_TOKENS = 4;
 
-/** Model name that makes the mock pace its chunks on a timer (a ~10s live window by default). */
+/**
+ * Pacing modes. `POST /__stream-config { mode }` selects one.
+ *
+ * This — NOT the model name — is what a UI spec must use. The app rewrites any model id it
+ * does not know to its DEFAULT_MODEL before calling the provider
+ * (`resolveProviderModel` → `isValidModel`, apps/web/src/lib/ai/core/ai-providers-config.ts),
+ * so `e2e/slow-stream` never survives a real send. The mode is applied regardless of the
+ * model that arrives, which is exactly what makes it survive that substitution.
+ */
+export type StreamMode = 'instant' | 'slow' | 'held';
+
+/**
+ * Model name that paces chunks on a timer. Only reachable when a caller talks to the mock
+ * DIRECTLY (support tests) — a send through the app is model-substituted before it gets here,
+ * so UI specs must use `POST /__stream-config { mode: 'slow' }` instead.
+ */
 export const E2E_SLOW_STREAM_MODEL = 'e2e/slow-stream';
-/** Model name that makes the mock hold the stream open until POST /__release-stream. */
+/** Direct-to-mock counterpart of E2E_SLOW_STREAM_MODEL for the held mode. See above. */
 export const E2E_HELD_STREAM_MODEL = 'e2e/held-stream';
 
 /** Default slow-mode pacing: 40 × 250ms ≈ a 10s window. Overridable via POST /__stream-config. */
@@ -83,6 +98,9 @@ export function createMockOpenRouter() {
   const activeStreams = new Set<ActiveStream>();
   let streamChunks = DEFAULT_STREAM_CHUNKS;
   let streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
+  // Applied to every streaming completion whatever model it names. 'instant' keeps the
+  // original behavior, so specs that never set a mode (09-14) see no change at all.
+  let streamMode: StreamMode = 'instant';
 
   const completionUsage = {
     prompt_tokens: MOCK_PROMPT_TOKENS,
@@ -232,6 +250,7 @@ export function createMockOpenRouter() {
       finishStreams('all');
       streamChunks = DEFAULT_STREAM_CHUNKS;
       streamIntervalMs = DEFAULT_STREAM_INTERVAL_MS;
+      streamMode = 'instant';
       return writeJson(res, 200, { ok: true });
     }
     // Live-stream introspection: lets a spec expect.poll() until the app's request has
@@ -239,22 +258,34 @@ export function createMockOpenRouter() {
     if (method === 'GET' && url.startsWith('/__streams')) {
       const open = activeStreams.size;
       const held = [...activeStreams].filter((s) => s.held).length;
-      return writeJson(res, 200, { open, held });
+      // `mode` is reported so a spec (or a human debugging one) can tell "the stream already
+      // finished" apart from "the mode never took effect" — the two look identical from
+      // open:0 alone, and the difference is the whole ballgame.
+      return writeJson(res, 200, { open, held, mode: streamMode });
     }
-    // Override slow-mode pacing. Body: { chunks?, intervalMs? }. Reset by /__reset.
+    // Select the pacing mode and/or override slow-mode pacing.
+    // Body: { mode?: 'instant'|'slow'|'held', chunks?, intervalMs? }. Reset by /__reset.
     if (method === 'POST' && url.startsWith('/__stream-config')) {
       const raw = await readBody(req);
-      let body: { chunks?: number; intervalMs?: number } = {};
+      let body: { chunks?: number; intervalMs?: number; mode?: StreamMode } = {};
       try {
         body = JSON.parse(raw) as typeof body;
       } catch {
         /* ignore — keep current config */
       }
+      if (body.mode === 'instant' || body.mode === 'slow' || body.mode === 'held') {
+        streamMode = body.mode;
+      }
       if (typeof body.chunks === 'number' && body.chunks > 0) streamChunks = body.chunks;
       if (typeof body.intervalMs === 'number' && body.intervalMs >= 0) {
         streamIntervalMs = body.intervalMs;
       }
-      return writeJson(res, 200, { ok: true, chunks: streamChunks, intervalMs: streamIntervalMs });
+      return writeJson(res, 200, {
+        ok: true,
+        mode: streamMode,
+        chunks: streamChunks,
+        intervalMs: streamIntervalMs,
+      });
     }
     // Flush + terminate every held stream, ending the deterministic live window.
     if (method === 'POST' && url.startsWith('/__release-stream')) {
@@ -303,9 +334,19 @@ export function createMockOpenRouter() {
       const model = body.model ?? 'e2e/stub';
 
       if (stream) {
-        // Model-name-triggered pacing. Any other model keeps the original instant path.
-        if (model === E2E_SLOW_STREAM_MODEL) return startControlledStream(res, id, model, 'slow');
-        if (model === E2E_HELD_STREAM_MODEL) return startControlledStream(res, id, model, 'held');
+        // Pacing is chosen by the explicit mode first — the model name cannot be relied on,
+        // because the app rewrites unknown ids to its DEFAULT_MODEL before calling the
+        // provider. The model-name triggers below still serve callers that reach the mock
+        // directly. Either way, an unset mode + an ordinary model = the original instant path.
+        const mode: StreamMode =
+          streamMode !== 'instant'
+            ? streamMode
+            : model === E2E_SLOW_STREAM_MODEL
+              ? 'slow'
+              : model === E2E_HELD_STREAM_MODEL
+                ? 'held'
+                : 'instant';
+        if (mode !== 'instant') return startControlledStream(res, id, model, mode);
 
         res.writeHead(200, {
           'content-type': 'text/event-stream',

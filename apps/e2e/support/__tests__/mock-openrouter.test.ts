@@ -67,9 +67,16 @@ function completions(model: string, signal?: AbortSignal): Promise<Response> {
   });
 }
 
+/** Just the counts — `/__streams` also reports `mode`, asserted separately below. */
 async function readStreams(): Promise<{ open: number; held: number }> {
   const res = await fetch(`${base}/__streams`);
-  return (await res.json()) as { open: number; held: number };
+  const { open, held } = (await res.json()) as { open: number; held: number; mode: string };
+  return { open, held };
+}
+
+async function readMode(): Promise<string> {
+  const res = await fetch(`${base}/__streams`);
+  return ((await res.json()) as { mode: string }).mode;
 }
 
 /** Read an SSE response to completion, timestamping each content chunk as it arrives. */
@@ -187,6 +194,74 @@ describe('mock OpenRouter — held-stream mode', () => {
     expect(parseSse(bodyA).done).toBe(true);
     expect(parseSse(bodyB).done).toBe(true);
     expect(await readStreams()).toEqual({ open: 0, held: 0 });
+  });
+});
+
+describe('mock OpenRouter — explicit mode override (what the app actually needs)', () => {
+  // The app rewrites unknown model ids to DEFAULT_MODEL before calling the provider
+  // (resolveProviderModel → isValidModel), so `e2e/slow-stream` NEVER reaches the mock from a
+  // real send. The mode override is the only pacing control that survives that substitution.
+  it('given mode=held, should hold a stream opened under ANY model name', async () => {
+    await fetch(`${base}/__stream-config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'held' }),
+    });
+
+    // The substituted model the app really sends — not a pacing model name.
+    const res = await completions('openai/gpt-5.3-chat');
+    await expect.poll(readStreams).toEqual({ open: 1, held: 1 });
+
+    await fetch(`${base}/__release-stream`, { method: 'POST' });
+    expect(parseSse(await res.text()).done).toBe(true);
+  });
+
+  it('given mode=slow, should pace a stream opened under ANY model name', async () => {
+    await fetch(`${base}/__stream-config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'slow', chunks: 3, intervalMs: 50 }),
+    });
+
+    const res = await completions('openai/gpt-5.3-chat');
+    const { body } = await readWithTimings(res);
+    const { chunks, done } = parseSse(body);
+
+    expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? []).length).toBe(3);
+    expect(done).toBe(true);
+  });
+
+  it('given a mode is set, should report it via /__streams so a spec can tell "finished" from "never applied"', async () => {
+    expect(await readMode()).toBe('instant');
+    await fetch(`${base}/__stream-config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'slow' }),
+    });
+    expect(await readMode()).toBe('slow');
+    await fetch(`${base}/__reset`, { method: 'POST' });
+    expect(await readMode()).toBe('instant');
+  });
+
+  it('given no mode set, should keep the instant default so metering specs are unaffected', async () => {
+    const res = await completions('openai/gpt-5.3-chat');
+    const { chunks } = parseSse(await res.text());
+    expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? [])).toEqual(['pong']);
+  });
+
+  it('given /__reset after a mode was set, should restore the instant default', async () => {
+    await fetch(`${base}/__stream-config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'held' }),
+    });
+    await fetch(`${base}/__reset`, { method: 'POST' });
+
+    // Would hang forever if the mode leaked past reset.
+    const res = await completions('openai/gpt-5.3-chat');
+    const { chunks, done } = parseSse(await res.text());
+    expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? [])).toEqual(['pong']);
+    expect(done).toBe(true);
   });
 });
 

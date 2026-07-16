@@ -1,4 +1,8 @@
-import type { Browser, BrowserContext, Page } from '@playwright/test';
+import { expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import {
+  CONSENT_COOKIE_NAME,
+  CONSENT_VERSION,
+} from '../../../packages/lib/src/consent/consent-core';
 
 /**
  * Chat UI fixtures (7.0c).
@@ -16,6 +20,11 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * A logged-in browser context for a `seedUser()` session token.
  *
+ * `baseURL` must be passed through to `newContext`: a manually-created context does NOT
+ * inherit the project's `use.baseURL`, so without it every relative `page.goto('/dashboard/…')`
+ * in `gotoChatPage` fails on an invalid URL before the chat UI is ever reached. Same reason
+ * `07-file-uploads.spec.ts:99` passes it.
+ *
  * The cookie mirrors the exact shape global-setup writes into storageState (name `session`,
  * httpOnly, sameSite Strict, domain from baseURL, secure only on https) — that shape IS the
  * contract; drift here shows up as an unexplained redirect to /signin.
@@ -30,7 +39,7 @@ export async function authedContext(
   baseURL: string,
 ): Promise<BrowserContext> {
   const url = new URL(baseURL);
-  const context = await browser.newContext();
+  const context = await browser.newContext({ baseURL });
   await context.addCookies([
     {
       name: 'session',
@@ -42,8 +51,42 @@ export async function authedContext(
       sameSite: 'Strict',
       expires: Math.floor((Date.now() + SESSION_TTL_MS) / 1000),
     },
+    consentCookie(url),
   ]);
   return context;
+}
+
+/**
+ * Pre-record a cookie-consent decision so the banner never renders.
+ *
+ * This is REQUIRED for any spec that clicks the composer, not a cosmetic nicety: the banner
+ * is `fixed inset-x-0 bottom-0 z-[100]` (CookieBanner.tsx) and therefore sits directly on top
+ * of the chat input. Playwright refuses to click an element another node will receive the
+ * pointer event for, so `chat-send` never becomes actionable and the click waits out the
+ * entire test timeout — surfacing as an inscrutable hung click rather than "a banner is in
+ * the way".
+ *
+ * Shape must match what the app writes (`cookie-utils.ts:39` / `serializeConsentState`):
+ * URI-encoded JSON, path=/, samesite=lax. Only `necessary` is granted — the same decision a
+ * user makes by rejecting optional cookies — so no analytics/preferences behavior is enabled
+ * that a real rejecting user would not have. Importing the real constants means a
+ * CONSENT_VERSION bump fails these specs loudly instead of silently re-showing the banner.
+ */
+function consentCookie(url: URL): Parameters<BrowserContext['addCookies']>[0][number] {
+  const state = {
+    version: CONSENT_VERSION,
+    decidedAt: new Date(0).toISOString(),
+    categories: { necessary: true, analytics: false, preferences: false },
+  };
+  return {
+    name: CONSENT_COOKIE_NAME,
+    value: encodeURIComponent(JSON.stringify(state)),
+    domain: url.hostname,
+    path: '/',
+    httpOnly: false,
+    secure: url.protocol === 'https:',
+    sameSite: 'Lax',
+  };
 }
 
 /** Route for an AI_CHAT page. */
@@ -55,4 +98,29 @@ export function chatPageUrl(driveId: string, pageId: string): string {
 export async function gotoChatPage(page: Page, driveId: string, pageId: string): Promise<void> {
   await page.goto(chatPageUrl(driveId, pageId));
   await page.getByTestId('ai-chat-view').waitFor({ state: 'visible' });
+}
+
+/**
+ * Type into the composer and send.
+ *
+ * The retry is load-bearing, not defensive padding. `ai-chat-view` becomes visible from the
+ * server-rendered markup, BEFORE React has hydrated the composer — and a `fill()` that lands
+ * in that window is silently discarded when React mounts its controlled input. The value
+ * vanishes, Send never leaves its disabled state, and `click()` then waits out the whole test
+ * timeout on an element that will never become actionable. That failure looks like a hung
+ * click, which is a genuinely confusing thing to debug from a timeout alone.
+ *
+ * Retrying `fill` until Send actually enables makes hydration a settled precondition rather
+ * than a race, with no arbitrary sleep: it proceeds the instant the composer is live.
+ */
+export async function sendChatMessage(page: Page, text: string): Promise<void> {
+  const textarea = page.getByTestId('chat-textarea');
+  const send = page.getByTestId('chat-send');
+
+  await expect(async () => {
+    await textarea.fill(text);
+    await expect(send).toBeEnabled({ timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+
+  await send.click();
 }
