@@ -141,6 +141,16 @@ jobs:
           DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
           NODE_ENV: test
 
+      # The broadcast claim is the one mechanism preventing a mass double-send, and its
+      # guarantee is Postgres's (row locking under ON CONFLICT DO UPDATE ... WHERE), not
+      # ours. A mocked test can only pin the SQL we emit, so this races the real statement
+      # against itself on a live database.
+      - name: Run broadcast claim concurrency tests
+        run: bun run --filter '@pagespace/lib' test:db -- src/services/broadcast/__tests__/claim-recipient.integration.test.ts
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/pagespace_test
+          NODE_ENV: test
+
       - name: Run permission tests
         run: |
           bun run --filter '@pagespace/lib' test:db -- src/__tests__/permissions.test.ts

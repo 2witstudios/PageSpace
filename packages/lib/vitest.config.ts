@@ -19,6 +19,7 @@ export default defineConfig({
       'src/permissions/__tests__/zero-trust-boundaries.test.ts',
       'src/services/__tests__/app-shell-service.integration.test.ts',
       'src/services/__tests__/page-payload-service.integration.test.ts',
+      'src/services/broadcast/__tests__/claim-recipient.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -59,6 +60,7 @@ export default defineConfig({
         'src/permissions/__tests__/zero-trust-boundaries.test.ts',
         'src/services/__tests__/app-shell-service.integration.test.ts',
         'src/services/__tests__/page-payload-service.integration.test.ts',
+        'src/services/broadcast/__tests__/claim-recipient.integration.test.ts',
       ],
       thresholds: {
         lines: 85,
