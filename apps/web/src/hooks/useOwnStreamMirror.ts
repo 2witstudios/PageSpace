@@ -90,17 +90,32 @@ export const useOwnStreamMirror = ({
   useEffect(() => {
     const sending = isOwnStreamSending(status);
 
-    // WHICH MESSAGE IS MINE. Once an id is latched, ours is the one carrying it — wherever it sits
-    // in the array. Only before the first latch (or after our message has genuinely left the array,
-    // e.g. the SDK replacing it to adopt the server-issued id) do we fall back to "the last message
-    // if it is an assistant's", which is the only way to discover a stream we have not seen yet.
+    // WHICH MESSAGE IS MINE — and WHEN it is safe to ask.
+    //
+    // NEVER during 'submitted'. useChat sets status='submitted' BEFORE issuing the request and
+    // pushes this stream's assistant message only on the flip to 'streaming', so an assistant
+    // message seen during submitted is the PREVIOUS turn's reply — or, if a load/refresh lands
+    // inside the 0.5-3s TTFB, a DB history message. Latching one names a message that finished
+    // minutes ago: Stop then aborts an id the server no longer knows while the real generation
+    // keeps running its write tools and keeps billing. This is the caller contract the deleted
+    // `holdForStream` module carried, and it outlived that module for a reason.
+    //
+    // So the submitted window deliberately has NO entry — which is exactly what
+    // selectActiveStream's contract says ("absent in submitted window"), and Stop covers it with
+    // the send-time conversationId instead.
+    //
+    // Once we ARE streaming: if an id is latched, ours is the message carrying it, wherever it
+    // sits in the array — a foreign message appended after ours cannot displace it. The positional
+    // fallback applies only before the first latch, or once our message has genuinely left the
+    // array (the SDK replacing it to adopt the server-issued id), which is the only way to
+    // discover an id we have not seen yet.
     const latchedId = mirroredIdRef.current;
     const latchedMessage = latchedId !== undefined
       ? ownMessages.find((m) => m.id === latchedId)
       : undefined;
     const lastMessage = ownMessages[ownMessages.length - 1];
     const lastAssistant = lastMessage?.role === 'assistant' ? lastMessage : undefined;
-    const ownAssistantMessage = latchedMessage ?? lastAssistant;
+    const ownAssistantMessage = status === 'streaming' ? latchedMessage ?? lastAssistant : undefined;
 
     // Rising edge — the send. Capture what is true right now, and hold it.
     if (sending && identityRef.current === undefined) {

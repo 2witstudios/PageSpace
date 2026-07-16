@@ -276,4 +276,55 @@ describe('useOwnStreamMirror', () => {
     // ...and their finished message is never adopted as a live own stream.
     expect(entry('their-finished-message')).toBeUndefined();
   });
+
+  // THE lesson the deleted `holdForStream` module documented, which this mirror must not lose:
+  // NEVER resolve a messageId during the submitted window. useChat sets status='submitted' BEFORE
+  // issuing the request and pushes the stream's assistant message only on the flip to 'streaming',
+  // so anything that looks like an assistant message during submitted is the PREVIOUS turn's — or,
+  // if a load/refresh lands inside the 0.5-3s TTFB, a DB history message.
+  //
+  // Latching one is how the old code aborted a message that finished minutes ago while the real
+  // generation kept billing. Selecting by latched id makes it worse: the history id stays in the
+  // array, so the latch would be STICKY and the real stream would never get an entry at all.
+  //
+  // The submitted window is meant to have NO store entry — selectActiveStream's spec says exactly
+  // that, and Stop covers it with the send-time conversationId instead.
+  it('given DB history lands during the submitted window, should latch NOTHING (the submitted window has no entry by design)', () => {
+    const { rerender } = render({
+      status: 'submitted',
+      ownMessages: [{ id: 'u1', role: 'user', parts: [text('ask')] }],
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    });
+
+    // A refresh/load writes DB history while the request is still in flight. Its last message is a
+    // long-finished assistant reply.
+    act(() => rerender({
+      status: 'submitted',
+      ownMessages: [
+        { id: 'u1', role: 'user', parts: [text('ask')] },
+        { id: 'old-db-reply', role: 'assistant', parts: [text('last week')] },
+      ],
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    }));
+
+    expect(entry('old-db-reply')).toBeUndefined();
+    expect(usePendingStreamsStore.getState().streams.size).toBe(0);
+
+    // ...and the real stream, once it actually starts, still gets its entry.
+    act(() => rerender({
+      status: 'streaming',
+      ownMessages: [
+        { id: 'u1', role: 'user', parts: [text('ask')] },
+        { id: 'old-db-reply', role: 'assistant', parts: [text('last week')] },
+        { id: 'real-stream', role: 'assistant', parts: [text('He')] },
+      ],
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    }));
+
+    expect(entry('real-stream')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
+    expect(entry('old-db-reply')).toBeUndefined();
+  });
 });

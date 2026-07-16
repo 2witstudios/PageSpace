@@ -262,7 +262,11 @@ describe('planOwnStreamMirror', () => {
     })).toEqual([]);
   });
 
-  it('given a submitted status with the assistant message already present, should mirror it', () => {
+  // The planner still mirrors whatever message it is HANDED during submitted — but its caller
+  // (useOwnStreamMirror) never hands it one, because an assistant message visible during the
+  // submitted window is the previous turn's reply, not this stream's. That rule lives in the hook,
+  // where the status/array timing is observable; this stays a pure function of its inputs.
+  it('given a submitted status and a message it was handed, should mirror it (the caller decides what to hand it)', () => {
     const ops = planOwnStreamMirror({
       ...BASE,
       status: 'submitted',
