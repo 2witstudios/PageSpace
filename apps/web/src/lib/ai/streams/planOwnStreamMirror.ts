@@ -31,6 +31,15 @@ export interface PlanOwnStreamMirrorInput {
   ownAssistantMessage: { id: string; parts: UIMessagePart[] } | undefined;
   /** The messageId this mirror latched for the CURRENT send, or undefined if it hasn't yet. */
   mirroredMessageId: string | undefined;
+  /**
+   * Whether `mirroredMessageId` is still PRESENT in the store. Ignored until an id is latched.
+   *
+   * The store is not this mirror's private state — `useChannelStreamSocket`'s cleanup calls
+   * `clearPageStreams(channelId)` on every re-run of its effect, and a routine `auth:refreshed`
+   * mints a new socket, so an ordinary token refresh wipes the channel mid-stream. See the
+   * re-assert branch below.
+   */
+  mirroredEntryExists: boolean;
   /** Latched at the rising edge of this send — never read live. */
   streamIdentity: OwnStreamIdentity;
   /** Caller-tracked monotonic counter, bumped once per mirror tick — threaded into `setStreamParts`'s `seq` gate. */
@@ -110,9 +119,19 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
 
   const { id, parts } = input.ownAssistantMessage;
 
-  // First assistant message of this send: this is the stream, recorded under the identity latched
-  // when the user hit Send.
-  if (input.mirroredMessageId === undefined) {
+  // The array moved under us — see (2) above. Hold what we latched, and do NOT adopt this message
+  // even if the store has no entry: absent + different id is still not ours.
+  if (input.mirroredMessageId !== undefined && input.mirroredMessageId !== id) return [];
+
+  // Either the first assistant message of this send, or our own latched one whose entry has since
+  // been wiped from the store by someone else (clearPageStreams on a socket swap — see
+  // `mirroredEntryExists`). Both want the same thing: assert the stream, under the identity
+  // latched when the user hit Send.
+  //
+  // Re-asserting is free in the normal case — `applyAddStream` no-ops on an id that is present —
+  // and it is the only way back for a wiped entry, because `applySetStreamParts` no-ops when the
+  // entry is absent, so a parts-only write would silently do nothing for the rest of the send.
+  if (input.mirroredMessageId === undefined || !input.mirroredEntryExists) {
     return [
       {
         type: 'addStream',
@@ -128,9 +147,6 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
       { type: 'setStreamParts', messageId: id, parts, seq: input.seq },
     ];
   }
-
-  // The array moved under us — see (2) above. Hold what we latched.
-  if (input.mirroredMessageId !== id) return [];
 
   return [{ type: 'setStreamParts', messageId: id, parts, seq: input.seq }];
 };

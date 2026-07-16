@@ -11,6 +11,7 @@ const IDENTITY = {
 const BASE = {
   streamIdentity: IDENTITY,
   seq: 1,
+  mirroredEntryExists: true,
 };
 
 const text = (t: string) => ({ type: 'text' as const, text: t });
@@ -51,6 +52,7 @@ describe('planOwnStreamMirror', () => {
       status: 'streaming',
       ownAssistantMessage: { id: 'm1', parts: [text('He')] },
       mirroredMessageId: undefined,
+      mirroredEntryExists: false,
     })).toEqual([
       {
         type: 'addStream',
@@ -81,6 +83,7 @@ describe('planOwnStreamMirror', () => {
       status: 'streaming',
       ownAssistantMessage: { id: 'm1', parts: [text('hi')] },
       mirroredMessageId: undefined,
+      mirroredEntryExists: false,
     });
     expect(ops[0]).toEqual({
       type: 'addStream',
@@ -140,6 +143,54 @@ describe('planOwnStreamMirror', () => {
     })).toEqual([]);
   });
 
+  // THE external-wipe fix (PR 5A round 2). `useChannelStreamSocket`'s cleanup calls
+  // clearPageStreams(channelId) whenever its effect re-runs — and a routine `auth:refreshed` mints
+  // a brand-new socket, so this happens mid-stream on an ordinary token refresh. That wipes EVERY
+  // entry on the channel, including this tab's own live mirrored one.
+  //
+  // The mirror could not recover: its id is latched, so it emitted only setStreamParts, and
+  // applySetStreamParts no-ops on an absent entry (`if (!existing) return streams`). The stream was
+  // gone from the store for the rest of the send — content vanished from screen (store-first
+  // render), the Stop button disappeared, the editing-store registration lapsed, and the server
+  // kept generating and billing.
+  //
+  // Re-asserting addStream is idempotent (applyAddStream no-ops when the id is present), so this
+  // costs nothing in the normal case and restores the entry in the wiped one.
+  it('given the latched entry was wiped from the store externally mid-send, should re-assert addStream', () => {
+    expect(planOwnStreamMirror({
+      ...BASE,
+      status: 'streaming',
+      ownAssistantMessage: { id: 'm1', parts: [text('Hello')] },
+      mirroredMessageId: 'm1',
+      mirroredEntryExists: false,
+    })).toEqual([
+      {
+        type: 'addStream',
+        stream: {
+          messageId: 'm1',
+          pageId: 'page-1',
+          conversationId: 'conv-1',
+          triggeredBy: { userId: 'u1', displayName: 'Me' },
+          isOwn: true,
+          startedAt: '2024-01-01T00:00:00.000Z',
+        },
+      },
+      { type: 'setStreamParts', messageId: 'm1', parts: [text('Hello')], seq: 1 },
+    ]);
+  });
+
+  // The re-assert must NOT fire for a message the array moved onto — that is the phantom this
+  // module already refuses to create. Absent entry + different id is still "not ours".
+  it('given the array moved onto another message AND no entry exists, should still plan nothing', () => {
+    expect(planOwnStreamMirror({
+      ...BASE,
+      status: 'streaming',
+      ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old')] },
+      mirroredMessageId: 'm1',
+      mirroredEntryExists: false,
+    })).toEqual([]);
+  });
+
   it('given submitted status with no assistant message pushed yet and nothing mirrored, should plan no ops', () => {
     expect(planOwnStreamMirror({
       ...BASE,
@@ -155,6 +206,7 @@ describe('planOwnStreamMirror', () => {
       status: 'submitted',
       ownAssistantMessage: { id: 'm1', parts: [text('He')] },
       mirroredMessageId: undefined,
+      mirroredEntryExists: false,
     });
     expect(ops.map((o) => o.type)).toEqual(['addStream', 'setStreamParts']);
   });
@@ -165,6 +217,7 @@ describe('planOwnStreamMirror', () => {
       status: 'streaming' as const,
       ownAssistantMessage: { id: 'm1', parts: [text('Hi')] },
       mirroredMessageId: undefined,
+      mirroredEntryExists: false,
     };
     expect(planOwnStreamMirror(input)).toEqual(planOwnStreamMirror(input));
   });

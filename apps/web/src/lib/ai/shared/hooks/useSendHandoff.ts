@@ -53,22 +53,21 @@ export function useSendHandoff(
 
   // Effect-based handoff: clear pendingSend when the stream entry takes over OR on error
   useEffect(() => {
-    if (hasPendingSendRef.current && conversationId) {
-      if (isStreamLive) {
-        // Happy path: the stream exists in the store, which is what the registration now
-        // derives from. Hand off.
-        hasPendingSendRef.current = false;
-        setPendingSendConversationId(null);
-        useEditingStore.getState().endPendingSend(conversationId);
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      } else if (status === 'error') {
-        // Error path: API call failed, clear pendingSend to unblock
-        hasPendingSendRef.current = false;
-        setPendingSendConversationId(null);
-        useEditingStore.getState().endPendingSend(conversationId);
-        if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      }
+    if (!conversationId) return;
+    // The send has resolved: the stream took over (happy path — the registration now derives from
+    // the store entry), or it failed. Either way the submitted window is over.
+    //
+    // NOT guarded on `hasPendingSendRef`: the safety timeout may already have released the
+    // editing-store hold on a slow send, and the Stop name must still be cleared when that send
+    // finally resolves — otherwise it would outlive its stream.
+    if (!isStreamLive && status !== 'error') return;
+
+    if (hasPendingSendRef.current) {
+      hasPendingSendRef.current = false;
+      useEditingStore.getState().endPendingSend(conversationId);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
     }
+    setPendingSendConversationId(null);
   }, [isStreamLive, status, conversationId]);
 
   // Cleanup on unmount or conversation change
@@ -91,13 +90,23 @@ export function useSendHandoff(
     setPendingSendConversationId(conversationId);
     useEditingStore.getState().startPendingSend(conversationId);
 
-    // Safety timeout: clear pendingSend if streaming never starts
+    // Safety timeout: release the EDITING-STORE hold if the stream never starts, so an orphaned
+    // send cannot block SWR revalidation and auth refresh forever. That is all it is for.
+    //
+    // It deliberately does NOT clear `pendingSendConversationId`. That value is the only name Stop
+    // has during the submitted window — no store entry exists until useChat pushes the assistant
+    // message — so nulling it here armed a 15s self-destruct on Stop itself: on any send whose TTFB
+    // ran long (cold provider, server-side retry, big context assembly, rate-limit backoff) the
+    // button flipped back to Send and a later Stop resolved to 'none', cancelling the local fetch
+    // and issuing no server abort while the generation kept running its write tools and kept
+    // billing. The send is still in flight at t=15s; the user must still be able to stop it. It
+    // clears when the send actually resolves — a stream entry appears, an error lands, or the
+    // surface leaves the conversation.
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
       if (hasPendingSendRef.current && conversationId) {
-        console.warn('[useSendHandoff] Safety timeout: clearing orphaned pendingSend');
+        console.warn('[useSendHandoff] Safety timeout: releasing orphaned editing-store hold');
         hasPendingSendRef.current = false;
-        setPendingSendConversationId(null);
         useEditingStore.getState().endPendingSend(conversationId);
       }
     }, 15000);

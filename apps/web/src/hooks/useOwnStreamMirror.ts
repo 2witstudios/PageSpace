@@ -96,6 +96,10 @@ export const useOwnStreamMirror = ({
       status,
       ownAssistantMessage,
       mirroredMessageId: mirroredIdRef.current,
+      // The store is shared, and someone else can wipe our entry mid-send (clearPageStreams on a
+      // socket swap — an ordinary auth:refreshed does this). Tell the planner, so it can re-assert.
+      mirroredEntryExists:
+        mirroredIdRef.current !== undefined && store.streams.has(mirroredIdRef.current),
       streamIdentity: identity,
       seq,
     });

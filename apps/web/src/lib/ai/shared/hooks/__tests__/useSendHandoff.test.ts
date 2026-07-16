@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { toast } from 'sonner';
 import { useSendHandoff } from '../useSendHandoff';
@@ -12,6 +12,10 @@ describe('useSendHandoff', () => {
   beforeEach(() => {
     useEditingStore.getState().clearAllSessions();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // The bug this replaces: the old wrapSend only had a synchronous try/catch around
@@ -152,5 +156,39 @@ describe('useSendHandoff', () => {
     const returned = result.current.wrapSend(() => Promise.reject(new Error('unreachable')));
 
     expect(returned).toBeUndefined();
+  });
+
+  // THE 15s safety-timeout regression (PR 5A round 2). The timeout is an editing-store safety
+  // valve: it exists so an orphaned pendingSend cannot block SWR revalidation forever.
+  //
+  // But PR 5A made `pendingSendConversationId` the SOLE signal for the submitted window — it is
+  // both what lights the Stop button there and the only name a server abort can use, since no
+  // store entry exists until useChat pushes the assistant message. Nulling it on the timeout
+  // therefore DISARMED Stop: at t=15s on a send whose TTFB is longer (cold provider, server-side
+  // retry, big context assembly, rate-limit backoff), the button flips back to Send and any later
+  // Stop resolves to 'none' — cancelling the local fetch and issuing no server abort at all, while
+  // the generation keeps running its write tools and keeps BILLING.
+  //
+  // Master was immune: its flag ORed useChat's status, which the timeout cannot touch. Removing
+  // that term is what exposed this, so the two concerns are now separated — the timeout releases
+  // the editing-store hold, and the Stop name lives until the send genuinely resolves.
+  it('given the safety timeout fires on a slow send, should release the editing-store hold but KEEP the name Stop needs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { result } = renderHook(() => useSendHandoff('conv-1', 'submitted', false));
+
+    await act(async () => {
+      result.current.wrapSend(() => new Promise(() => {}));
+      await Promise.resolve();
+    });
+    expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(15_001);
+    });
+
+    // Released: an orphaned hold must not block SWR forever. That is what the timeout is for.
+    expect(useEditingStore.getState().hasPendingSend('conv-1')).toBe(false);
+    // ...but the send is still in flight, so Stop must still be able to name it.
+    expect(result.current.pendingSendConversationId).toBe('conv-1');
   });
 });
