@@ -5,6 +5,7 @@ import {
   buildCopyPayload,
   resolvePasteMode,
   computePasteCells,
+  pasteResultSelection,
 } from '../clipboard';
 import type { SelectionState } from '../selection';
 
@@ -121,6 +122,33 @@ describe('buildCopyPayload', () => {
       should: 'tab-join columns and newline-join rows of display values',
       actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), display, 'values').data,
       expected: '1\t2\n4\t5',
+    });
+  });
+
+  it('copies an empty string for a single empty cell in formulas mode', () => {
+    assert({
+      given: 'a single-cell formulas copy over an empty cell',
+      should: 'copy an empty string',
+      actual: buildCopyPayload(single(4, 2), sheet(cells), display, 'formulas').data,
+      expected: '',
+    });
+  });
+
+  it('copies an empty string when the display value is missing in values mode', () => {
+    assert({
+      given: 'a single-cell values copy where no display exists for the row',
+      should: 'copy an empty string',
+      actual: buildCopyPayload(single(4, 2), sheet(cells), display, 'values').data,
+      expected: '',
+    });
+  });
+
+  it('pads missing display cells with empty strings for a range values copy', () => {
+    assert({
+      given: 'a range values copy spanning rows without display data',
+      should: 'emit empty strings for the missing cells',
+      actual: buildCopyPayload(range(1, 0, 2, 0), sheet(cells), [['1'], ['4']], 'values').data,
+      expected: '4\n',
     });
   });
 
@@ -305,6 +333,32 @@ describe('computePasteCells', () => {
       should: 'bump version and leave the previous sheet unchanged',
       actual: { version: result.version, previousA1: previous.cells.A1 },
       expected: { version: 2, previousA1: 'old' },
+    });
+  });
+});
+
+describe('pasteResultSelection', () => {
+  const table = (rows: number, columns: number) => ({
+    data: Array.from({ length: rows }, () => Array.from({ length: columns }, () => 'x')),
+    rows,
+    columns,
+  });
+
+  it('returns null for a single-cell paste', () => {
+    assert({
+      given: 'a 1x1 paste',
+      should: 'return null (keep the single selection)',
+      actual: pasteResultSelection({ row: 2, column: 1 }, table(1, 1)),
+      expected: null,
+    });
+  });
+
+  it('returns the pasted rectangle for a multi-cell paste', () => {
+    assert({
+      given: 'a 2x3 paste starting at row 1 column 1',
+      should: 'return the covering range selection',
+      actual: pasteResultSelection({ row: 1, column: 1 }, table(2, 3)),
+      expected: { type: 'range', range: { start: { row: 1, column: 1 }, end: { row: 2, column: 3 } } },
     });
   });
 });

@@ -12,7 +12,6 @@ import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import {
   SheetData,
   SheetExternalReferenceToken,
-  adjustFormulaReferences,
   collectExternalReferences,
   encodeCellAddress,
   evaluateSheet,
@@ -39,9 +38,17 @@ import {
   getColumnLabel,
   nextSelectionForKey,
   type GridSelection,
-  type GridRange,
   type SelectionState,
 } from './core/selection';
+import {
+  parseClipboardData,
+  buildCopyPayload,
+  resolvePasteMode,
+  computePasteCells,
+  pasteResultSelection,
+  type CopyMode,
+  type PasteMode,
+} from './core/clipboard';
 
 interface SheetViewProps {
   page: TreePage;
@@ -159,7 +166,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   // Copy mode state
   const [copiedData, setCopiedData] = useState<{
-    mode: 'formulas' | 'values';
+    mode: CopyMode;
     data: string;
     source: SelectionState;
   } | null>(null);
@@ -998,51 +1005,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [isDragging, handleMouseUp]);
 
-  // Parse clipboard data to detect table structure
-  const parseClipboardData = useCallback((text: string) => {
-    const lines = text.split(/\r?\n/).filter(line => line.length > 0);
-    if (lines.length === 0) return null;
-
-    // Try tab-separated first, then comma-separated
-    let cells: string[][] = [];
-    let maxColumns = 0;
-
-    // Check if it's tab-separated
-    const hasTabSeparation = lines.some(line => line.includes('\t'));
-
-    if (hasTabSeparation) {
-      cells = lines.map(line => line.split('\t'));
-    } else {
-      // Check for comma separation
-      const hasCommaSeparation = lines.some(line => line.includes(','));
-      if (hasCommaSeparation) {
-        cells = lines.map(line => line.split(',').map(cell => cell.trim()));
-      } else {
-        // Single column data
-        cells = lines.map(line => [line]);
-      }
-    }
-
-    maxColumns = Math.max(...cells.map(row => row.length));
-
-    // Pad rows to have consistent column count
-    cells = cells.map(row => {
-      while (row.length < maxColumns) {
-        row.push('');
-      }
-      return row;
-    });
-
-    return {
-      data: cells,
-      rows: cells.length,
-      columns: maxColumns
-    };
-  }, []);
-
   // Handle paste operation
   const handlePaste = useCallback(
-    async (mode: 'auto' | 'values' | 'formulas' = 'auto', event?: ClipboardEvent) => {
+    async (mode: PasteMode = 'auto', event?: ClipboardEvent) => {
       if (isReadOnly || editingCell) return;
 
       event?.preventDefault();
@@ -1053,135 +1018,54 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
         if (!tableData) return;
 
-        const primaryCell = getPrimaryCell(selection);
-        const startRow = primaryCell.row;
-        const startCol = primaryCell.column;
+        const start = getPrimaryCell(selection);
 
-        // Check if we need to expand the sheet
-        const requiredRows = Math.max(sheet.rowCount, startRow + tableData.rows);
-        const requiredCols = Math.max(sheet.columnCount, startCol + tableData.columns);
+        // Determine paste behavior (internal pastes reuse the copied mode).
+        const isInternalPaste = !!copiedData && copiedData.data === clipboardText;
+        const pasteMode = resolvePasteMode(mode, isInternalPaste, copiedData?.mode);
+        const copyStart = isInternalPaste && copiedData ? getPrimaryCell(copiedData.source) : undefined;
 
-        // Determine paste behavior
-        const isInternalPaste = copiedData && copiedData.data === clipboardText;
-        const pasteMode = mode === 'auto' ?
-          (isInternalPaste ? copiedData.mode : 'values') :
-          mode;
+        applySheetUpdate((previous) =>
+          computePasteCells({
+            previous,
+            table: tableData,
+            start,
+            pasteMode,
+            isInternalPaste,
+            copyStart,
+          })
+        );
 
-        applySheetUpdate((previous) => {
-          const nextCells = { ...previous.cells };
-
-          // Apply paste data with proper handling for formulas
-          for (let row = 0; row < tableData.rows; row++) {
-            for (let col = 0; col < tableData.columns; col++) {
-              const cellAddress = encodeCellAddress(startRow + row, startCol + col);
-              let value = tableData.data[row][col].trim();
-
-              if (value === '') {
-                delete nextCells[cellAddress];
-                continue;
-              }
-
-              // Handle formula adjustment if pasting formulas and it's an internal paste
-              if (pasteMode === 'formulas' && isInternalPaste && copiedData && value.startsWith('=')) {
-                // Calculate offset from original copy position
-                const copyStart = copiedData.source.type === 'single'
-                  ? copiedData.source.cell
-                  : copiedData.source.range.start;
-
-                const rowOffset = (startRow + row) - (copyStart.row + row);
-                const colOffset = (startCol + col) - (copyStart.column + col);
-
-                // Only adjust if there's an offset
-                if (rowOffset !== 0 || colOffset !== 0) {
-                  value = adjustFormulaReferences(value, rowOffset, colOffset);
-                }
-              } else if (pasteMode === 'values' && value.startsWith('=')) {
-                // For values mode, don't paste formulas - this shouldn't happen with proper copy
-                // but handle it gracefully
-                continue;
-              }
-
-              nextCells[cellAddress] = value;
-            }
-          }
-
-          return {
-            ...previous,
-            version: previous.version + 1,
-            rowCount: requiredRows,
-            columnCount: requiredCols,
-            cells: nextCells,
-          };
-        });
-
-        // Update selection to show pasted range if multi-cell
-        if (tableData.rows > 1 || tableData.columns > 1) {
-          setSelection({
-            type: 'range',
-            range: {
-              start: { row: startRow, column: startCol },
-              end: {
-                row: startRow + tableData.rows - 1,
-                column: startCol + tableData.columns - 1
-              }
-            }
-          });
+        // Update selection to show the pasted range if multi-cell.
+        const nextSelection = pasteResultSelection(start, tableData);
+        if (nextSelection) {
+          setSelection(nextSelection);
         }
 
-        const modeText = pasteMode === 'formulas' ? ' (formulas)' :
-                         pasteMode === 'values' ? ' (values)' : '';
+        const modeText = pasteMode === 'formulas' ? ' (formulas)' : ' (values)';
         toast.success(`Pasted ${tableData.rows} row(s) and ${tableData.columns} column(s)${modeText}`);
       } catch (error) {
         console.error('Paste failed:', error);
         toast.error('Failed to paste clipboard data');
       }
     },
-    [isReadOnly, editingCell, selection, sheet, parseClipboardData, applySheetUpdate, copiedData]
+    [isReadOnly, editingCell, selection, applySheetUpdate, copiedData]
   );
 
   // Handle copy operation
   const handleCopy = useCallback(
-    async (mode: 'formulas' | 'values' = 'formulas', event?: KeyboardEvent) => {
+    async (mode: CopyMode = 'formulas', event?: KeyboardEvent) => {
       if (editingCell) return; // Don't copy while editing
 
       event?.preventDefault();
 
       try {
-        let copyData = '';
-
-        if (selection.type === 'single') {
-          // Copy single cell
-          const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
-          if (mode === 'formulas') {
-            copyData = sheet.cells[cellAddress] ?? '';
-          } else {
-            copyData = evaluation.display[selection.cell.row]?.[selection.cell.column] ?? '';
-          }
-        } else {
-          // Copy range of cells
-          const { start, end } = selection.range;
-          const minRow = Math.min(start.row, end.row);
-          const maxRow = Math.max(start.row, end.row);
-          const minCol = Math.min(start.column, end.column);
-          const maxCol = Math.max(start.column, end.column);
-
-          const rows: string[] = [];
-          for (let row = minRow; row <= maxRow; row++) {
-            const cols: string[] = [];
-            for (let col = minCol; col <= maxCol; col++) {
-              if (mode === 'formulas') {
-                const cellAddress = encodeCellAddress(row, col);
-                const cellValue = sheet.cells[cellAddress] ?? '';
-                cols.push(cellValue);
-              } else {
-                const displayValue = evaluation.display[row]?.[col] ?? '';
-                cols.push(displayValue);
-              }
-            }
-            rows.push(cols.join('\t')); // Tab-separated values
-          }
-          copyData = rows.join('\n'); // Newline-separated rows
-        }
+        const { data: copyData, cellCount } = buildCopyPayload(
+          selection,
+          sheet,
+          evaluation.display,
+          mode
+        );
 
         await navigator.clipboard.writeText(copyData);
 
@@ -1189,12 +1073,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         setCopiedData({
           mode,
           data: copyData,
-          source: selection
+          source: selection,
         });
-
-        const cellCount = selection.type === 'single' ? 1 :
-          Math.abs(selection.range.end.row - selection.range.start.row + 1) *
-          Math.abs(selection.range.end.column - selection.range.start.column + 1);
 
         const modeText = mode === 'formulas' ? 'formulas' : 'values';
         toast.success(`Copied ${cellCount} cell${cellCount > 1 ? 's' : ''} (${modeText}) to clipboard`);
@@ -1203,7 +1083,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         toast.error('Failed to copy to clipboard');
       }
     },
-    [editingCell, selection, sheet.cells, evaluation.display]
+    [editingCell, selection, sheet, evaluation.display]
   );
 
   // Add paste event listener

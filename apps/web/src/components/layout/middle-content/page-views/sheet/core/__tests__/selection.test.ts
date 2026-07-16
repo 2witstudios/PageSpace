@@ -9,7 +9,6 @@ import {
   getColumnLabel,
   nextSelectionForKey,
   type GridSelection,
-  type GridRange,
   type SelectionState,
 } from '../selection';
 
