@@ -39,6 +39,7 @@ export function InputActions({
 
   const buttonContent = isStreaming ? (
     <Button
+      data-testid="chat-stop"
       onClick={onStop}
       variant="destructive"
       size="icon"
@@ -50,6 +51,7 @@ export function InputActions({
     </Button>
   ) : (
     <button
+      data-testid="chat-send"
       onClick={onSend}
       disabled={disabled}
       className={cn(

@@ -127,7 +127,7 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   ]);
 
   return (
-    <ConversationContent className="p-3 min-w-0 gap-1.5">
+    <ConversationContent data-testid="chat-messages-area" className="p-3 min-w-0 gap-1.5">
       {isEmpty ? (
         <div className="flex items-center justify-center h-20 text-muted-foreground text-xs text-center overflow-hidden">
           <div className="max-w-full px-2">
@@ -163,7 +163,7 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
       ))}
 
       {displayIsStreaming && (
-        <div className="mb-1">
+        <div data-testid="streaming-indicator" className="mb-1">
           <div className="flex items-center space-x-2 text-gray-500 text-xs">
             <Loader2 className="h-3 w-3 animate-spin" />
             <span>Thinking...</span>
@@ -1347,7 +1347,7 @@ const SidebarChatTab: React.FC = () => {
   // between two non-empty conversations never blanks the header, input, or list.
   if (!isInitialized) {
     return (
-      <div className="flex flex-col h-full p-4">
+      <div data-testid="sidebar-chat-spinner" className="flex flex-col h-full p-4">
         <div className="flex-grow flex items-center justify-center">
           <div className="flex items-center space-x-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1360,7 +1360,7 @@ const SidebarChatTab: React.FC = () => {
 
   return (
     <AskUserAnswerProvider value={askUserAnswering}>
-    <div className="flex flex-col h-full">
+    <div data-testid="sidebar-chat-tab" className="flex flex-col h-full">
       {/* Header */}
       <div className="flex flex-col border-b border-gray-200 dark:border-[var(--separator)] bg-card">
         <div className="flex items-center justify-between p-2">
@@ -1414,7 +1414,7 @@ const SidebarChatTab: React.FC = () => {
         {/* In-place loading indicator (identity is already resolved above) — never a
             full subtree swap. */}
         {messagesAreaMode === 'skeleton' ? (
-          <div className="flex h-full items-center justify-center">
+          <div data-testid="chat-loading-skeleton" className="flex h-full items-center justify-center">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
         ) : (

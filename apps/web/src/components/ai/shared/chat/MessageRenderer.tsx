@@ -364,7 +364,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
   // ============================================
   return (
     <>
-      <div key={message.id} data-message-id={message.id} className={cn("mb-2", isHighlighted && "find-highlight", isCurrentMatch && "find-highlight-current")}>
+      <div key={message.id} data-testid="chat-message" data-role={message.role} data-message-id={message.id} className={cn("mb-2", isHighlighted && "find-highlight", isCurrentMatch && "find-highlight-current")}>
         {groupedParts.map((group, index) => {
           if (isTextGroupPart(group)) {
             const isLastTextBlock = index === groupedParts.length - 1;

@@ -264,6 +264,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           {showMessagesPanel && (
             <motion.div
               key={conversationId ?? 'new'}
+              data-testid="chat-layout-body"
               initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}

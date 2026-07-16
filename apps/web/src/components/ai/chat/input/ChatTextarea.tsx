@@ -209,6 +209,7 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
     return (
       <div className="relative flex-1 min-w-0 overflow-hidden">
         <Textarea
+          data-testid="chat-textarea"
           ref={textareaRef}
           value={displayText}
           onChange={(e) => {
