@@ -374,7 +374,6 @@ const SidebarChatTab: React.FC = () => {
   // displayIsStreaming, which also covers streams this surface merely shows a Stop button for.
   // `activeStream` is already conversation-scoped, so `isOwn === true` is exactly that question.
   const isOwnStreamForCurrentConversation = activeStream?.isOwn === true;
-  // Read after an await by handleUndoSuccess, which resolves long after its closure was built.
 
   const remoteStreamingUser = !displayIsStreaming
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
@@ -1246,7 +1245,7 @@ const SidebarChatTab: React.FC = () => {
           // would hand useOwnStreamMirror an array whose newest row is somebody else's finished
           // message (see mergeServerMessagesWithOwnStream). Merging applies the undo and keeps our
           // own live bubble last.
-          setMessages(mergeServerMessagesWithOwnStream(data.messages, currentConversationId));
+          setMessages(mergeServerMessagesWithOwnStream(data.messages, currentConversationId, currentMessagesRef.current));
         }
       } catch (error) {
         console.error('Failed to refresh messages after undo:', error);
