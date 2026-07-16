@@ -131,6 +131,18 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
   // Re-asserting is free in the normal case — `applyAddStream` no-ops on an id that is present —
   // and it is the only way back for a wiped entry, because `applySetStreamParts` no-ops when the
   // entry is absent, so a parts-only write would silently do nothing for the rest of the send.
+  //
+  // Nothing else restores it: the socket's DB bootstrap re-runs after the wipe but DECLINES its
+  // own consuming stream by design (`shouldAttachStream({isOwn, isConsuming})` — attaching would
+  // render every token twice), so the one entry that needs restoring is exactly the one bootstrap
+  // will not restore.
+  //
+  // KNOWN, ACCEPTED INTERACTION: `chat:stream_complete` removes the entry with no isOwn skip
+  // (useChannelStreamSocket), and it can land while this tab's useChat is still draining the tail
+  // of the response body — i.e. still 'streaming'. This branch then re-adds the entry for that
+  // tail, and the falling edge removes it again when the local read ends. That is bounded by the
+  // tail and is not a phantom: while the local chat is still delivering content, the stream IS
+  // live for this tab, which is exactly what the entry means.
   if (input.mirroredMessageId === undefined || !input.mirroredEntryExists) {
     return [
       {
