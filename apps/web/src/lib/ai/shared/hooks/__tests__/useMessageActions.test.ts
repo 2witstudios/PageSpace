@@ -84,3 +84,73 @@ describe('useMessageActions — handleRetry regenerate body', () => {
     });
   });
 });
+
+describe('useMessageActions — handleEdit reconcile refetch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const editArgs = { messageId: 'm-old', newContent: 'edited' };
+
+  const renderEdit = (isOwnStreamLive: boolean, setMessages: ReturnType<typeof vi.fn>) =>
+    renderHook(() =>
+      useMessageActions({
+        agentId: null,
+        conversationId: 'conv-1',
+        messages: [{ id: 'm-old', role: 'user', parts: [{ type: 'text', text: 'before' }] }] as never,
+        setMessages,
+        regenerate: vi.fn(),
+        isOwnStreamLive,
+      }),
+    );
+
+  // The refetch replaces the WHOLE array, and useOwnStreamMirror reads that array to find its own
+  // live stream. DB history whose newest row is a foreign assistant message — another TAB of this
+  // same user counts, since `isOwn` is browserSessionId-scoped — makes the mirror re-target onto a
+  // finished message: our live entry goes, and Stop then aborts an id the server has no stream for
+  // (user-scoped → not_found → silent by design) while the generation keeps running its write
+  // tools and keeps billing.
+  //
+  // Skipping it costs nothing: the edit is applied optimistically and the server already has it —
+  // this refetch is explicitly non-critical reconciliation, and the next load re-syncs the array.
+  it('given our own stream is live, should NOT replace the whole array with the refetched history', async () => {
+    const { patch } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(patch).mockResolvedValue({ ok: true, json: async () => ({}) } as never);
+    const { fetchWithAuth } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(fetchWithAuth).mockResolvedValue({
+      ok: true,
+      json: async () => ({ messages: [{ id: 'someone-elses-reply', role: 'assistant', parts: [] }] }),
+    } as never);
+
+    const setMessages = vi.fn();
+    const { result } = renderEdit(true, setMessages);
+
+    await act(async () => { await result.current.handleEdit(editArgs.messageId, editArgs.newContent); });
+
+    const wroteRefetchedHistory = setMessages.mock.calls.some(([arg]) =>
+      Array.isArray(arg) && arg.some((m: { id: string }) => m.id === 'someone-elses-reply'),
+    );
+    expect(wroteRefetchedHistory).toBe(false);
+  });
+
+  // ...and with no own stream live it still reconciles, or the refetch would be pointless.
+  it('given no own stream is live, should replace the array with the refetched history', async () => {
+    const { patch } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(patch).mockResolvedValue({ ok: true, json: async () => ({}) } as never);
+    const { fetchWithAuth } = await import('@/lib/auth/auth-fetch');
+    vi.mocked(fetchWithAuth).mockResolvedValue({
+      ok: true,
+      json: async () => ({ messages: [{ id: 'server-truth', role: 'assistant', parts: [] }] }),
+    } as never);
+
+    const setMessages = vi.fn();
+    const { result } = renderEdit(false, setMessages);
+
+    await act(async () => { await result.current.handleEdit(editArgs.messageId, editArgs.newContent); });
+
+    const wroteRefetchedHistory = setMessages.mock.calls.some(([arg]) =>
+      Array.isArray(arg) && arg.some((m: { id: string }) => m.id === 'server-truth'),
+    );
+    expect(wroteRefetchedHistory).toBe(true);
+  });
+});

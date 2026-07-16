@@ -374,6 +374,9 @@ const SidebarChatTab: React.FC = () => {
   // displayIsStreaming, which also covers streams this surface merely shows a Stop button for.
   // `activeStream` is already conversation-scoped, so `isOwn === true` is exactly that question.
   const isOwnStreamForCurrentConversation = activeStream?.isOwn === true;
+  // Read after an await by handleUndoSuccess, which resolves long after its closure was built.
+  const isOwnStreamRef = useRef(false);
+  isOwnStreamRef.current = isOwnStreamForCurrentConversation;
 
   const remoteStreamingUser = !displayIsStreaming
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
@@ -890,6 +893,8 @@ const SidebarChatTab: React.FC = () => {
 
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
     useMessageActions({
+    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
+    isOwnStreamLive: activeStream?.isOwn === true,
       agentId: selectedAgent?.id || null,
       conversationId: currentConversationId,
       messages,
@@ -1237,7 +1242,14 @@ const SidebarChatTab: React.FC = () => {
         );
         if (res.ok) {
           const data = await res.json();
-          setMessages(data.messages);
+          // Same clobber guard the load-on-select effects carry (#2061), and since PR 5A also
+          // because useOwnStreamMirror reads this array to find its own live stream: DB history
+          // whose newest row is a foreign assistant message (another TAB of this same user counts
+          // — `isOwn` is browserSessionId-scoped) makes the mirror re-target onto a finished
+          // message, and Stop then aborts an id the server has no stream for — silently, while the
+          // generation keeps billing. The undone state is already authoritative in the DB; the
+          // array re-syncs on the next load once the stream is over.
+          if (!isOwnStreamRef.current) setMessages(data.messages);
         }
       } catch (error) {
         console.error('Failed to refresh messages after undo:', error);

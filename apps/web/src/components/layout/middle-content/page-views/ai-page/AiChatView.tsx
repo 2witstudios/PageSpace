@@ -660,6 +660,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     lastAssistantMessageId,
     lastUserMessageId,
   } = useMessageActions({
+    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
+    isOwnStreamLive: activeStream?.isOwn === true,
     agentId: page.id,
     conversationId: currentConversationId,
     messages: plainMessages,
