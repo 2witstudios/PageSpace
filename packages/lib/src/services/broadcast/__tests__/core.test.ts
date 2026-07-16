@@ -337,6 +337,107 @@ describe('runBroadcast — durable observers', () => {
   });
 });
 
+describe('runBroadcast — claiming recipients', () => {
+  // The in-memory `alreadySent` set only speaks for one process. Two workers (overlapping
+  // retries, or two instances) can both pass every decision check and both mail the same
+  // person — the ledger's unique constraint would then coalesce two rows that represent
+  // two emails already sent. A durable caller decides ownership in the DB via `claim`.
+
+  it('should claim a recipient BEFORE handing them to the provider', async () => {
+    // Ordering is the entire point: a claim after the send would coalesce the record of a
+    // duplicate rather than prevent it.
+    const order: string[] = [];
+    const { result } = run([user('u1', 'ada@example.com')], {
+      claim: async () => {
+        order.push('claim');
+        return true;
+      },
+      sendOne: vi.fn(async () => {
+        order.push('send');
+      }),
+      record: vi.fn(async () => {
+        order.push('record');
+      }),
+    });
+    await result;
+
+    expect(order).toEqual(['claim', 'send', 'record']);
+  });
+
+  it('given a recipient another worker owns, should not mail them', async () => {
+    const { result, h } = run([user('u1', 'ada@example.com'), user('u2', 'grace@example.com')], {
+      claim: async ({ email }) => email !== 'ada@example.com',
+    });
+
+    const out = await result;
+
+    expect(h.sent).toEqual(['grace@example.com']);
+    expect(out.claimedElsewhere).toBe(1);
+  });
+
+  it('should not count a lost claim as a skip — the other worker is mailing them', async () => {
+    // Counting it would double-count the person across the two workers' records.
+    const { result } = run([user('u1', 'ada@example.com')], { claim: async () => false });
+
+    const out = await result;
+
+    expect(out.skipped).toEqual({
+      'already-sent': 0,
+      suppressed: 0,
+      'opted-out': 0,
+      'rights-restricted': 0,
+      'invalid-email': 0,
+    });
+    expect(out.claimedElsewhere).toBe(1);
+  });
+
+  it('should not let a lost claim consume the canary budget', async () => {
+    // A limit=1 canary must still reach a recipient we actually own.
+    const { result, h } = run(
+      [user('u1', 'taken.example.com'), user('u2', 'also-taken@example.com'), user('u3', 'ada@example.com')],
+      { limit: 1, claim: async ({ email }) => email === 'ada@example.com' },
+    );
+
+    const out = await result;
+
+    expect(h.sent).toEqual(['ada@example.com']);
+    expect(out.attempted).toBe(1);
+  });
+
+  it('given the claim itself throws, should fail CLOSED and not send', async () => {
+    // An unreadable claim means we cannot prove nobody else is mailing this person, and
+    // the irreversible mistake is sending, not skipping.
+    const { result, h } = run([user('u1', 'ada@example.com')], {
+      claim: async () => {
+        throw new Error('db down');
+      },
+    });
+
+    const out = await result;
+
+    expect(h.sent).toEqual([]);
+    expect(out.errors).toEqual(['ada@example.com: could not claim recipient: db down']);
+  });
+
+  it('given a dry run, should claim nothing — a preview must not write', async () => {
+    const claim = vi.fn(async () => true);
+    const { result } = run([user('u1', 'ada@example.com')], { live: false, claim });
+
+    await result;
+
+    expect(claim).not.toHaveBeenCalled();
+  });
+
+  it('given no claim hook, should behave exactly as before for the single-process script', async () => {
+    const { result, h } = run([user('u1', 'ada@example.com')]);
+
+    const out = await result;
+
+    expect(h.sent).toEqual(['ada@example.com']);
+    expect(out.claimedElsewhere).toBe(0);
+  });
+});
+
 describe('preflight', () => {
   const base = {
     live: true,
@@ -377,6 +478,16 @@ describe('preflight', () => {
     const result = preflight({ ...base, fromEmail: undefined });
     expect(result.ok).toBe(false);
     expect(result).toMatchObject({ reason: expect.stringMatching(/FROM_EMAIL/) });
+  });
+
+  it('given no postal address, should STILL allow the live send', () => {
+    // A DELIBERATE, owner-accepted tradeoff, not an oversight: CAN-SPAM wants a physical
+    // address on commercial mail, and the alternative on offer was publishing a home
+    // address. The launch shipped this way on purpose. Pinned so nobody "fixes" it into a
+    // hard block without that decision being revisited — set COMPANY_POSTAL_ADDRESS to
+    // include one. (`preflight` takes no postal address at all; this asserts the absence
+    // of a guard, which is the only way an absent guard can be pinned.)
+    expect(preflight({ ...base })).toEqual({ ok: true });
   });
 
   it('given a dry run, should allow every otherwise-unsafe configuration', () => {

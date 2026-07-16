@@ -29,9 +29,13 @@ interface SdkCliLaunchEmailProps {
   /**
    * The sender's physical postal address.
    *
-   * Required by CAN-SPAM for COMMERCIAL email, which this is — every other
-   * template in this directory is transactional and therefore exempt. The
-   * broadcast script refuses to send live without it rather than invent one.
+   * CAN-SPAM wants one on COMMERCIAL email, which this is — every other template in this
+   * directory is transactional and therefore exempt.
+   *
+   * The script does NOT refuse to send without it (this comment used to claim it did, but
+   * `preflight` never checked): the owner deliberately shipped this launch with no address
+   * rather than publish a home address, and accepted the tradeoff. See the pinning test,
+   * "given no postal address, should STILL allow the live send".
    */
   postalAddress?: string;
 }

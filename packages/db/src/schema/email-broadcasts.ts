@@ -191,6 +191,20 @@ export const broadcastRecipients = pgTable(
     attempts: integer('attempts').notNull().default(0),
     sentAt: timestamp('sent_at', { mode: 'date' }),
 
+    /**
+     * When a worker last took this recipient to mail them — the claim LEASE.
+     *
+     * The unique constraint alone cannot stop a double-send: it only coalesces the
+     * ledger AFTER both workers have already handed mail to the provider. So a worker
+     * claims a recipient (an atomic upsert that only succeeds if nobody else holds a
+     * fresh lease) BEFORE calling the provider, and the losing worker skips.
+     *
+     * A lease rather than a permanent flag because a worker that crashes mid-send would
+     * otherwise strand its claimed recipients as `pending` forever, and nobody would
+     * ever mail them. Once the lease expires a retry may reclaim the row.
+     */
+    claimedAt: timestamp('claimed_at', { mode: 'date' }),
+
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
   },

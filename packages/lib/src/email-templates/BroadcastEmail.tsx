@@ -30,12 +30,16 @@ interface BroadcastEmailProps {
    */
   unsubscribeUrl: string;
   /**
-   * The sender's physical postal address.
+   * The sender's physical postal address, from COMPANY_POSTAL_ADDRESS.
    *
-   * Required by CAN-SPAM for COMMERCIAL email, which a broadcast is — every other
-   * template in this directory is transactional and therefore exempt. Optional here
-   * because the guard belongs at send time (the worker refuses a live send without it)
-   * rather than in a template that also renders previews.
+   * CAN-SPAM wants one on COMMERCIAL email, which a broadcast is — every other template
+   * in this directory is transactional and therefore exempt.
+   *
+   * Optional, and NOT enforced anywhere: the owner deliberately shipped the SDK/CLI
+   * launch without an address rather than publish a home address, and accepted the
+   * tradeoff. `core.preflight` therefore does not check it (pinned by a test in
+   * `services/broadcast/__tests__/core.test.ts`). Set COMPANY_POSTAL_ADDRESS to include
+   * one; making it a hard block is a product decision, not a code cleanup.
    */
   postalAddress?: string;
 }

@@ -21,6 +21,7 @@ import {
 } from '@pagespace/db/schema/email-broadcasts';
 import type { NotificationTypeValue } from '@pagespace/db/schema/notifications';
 import {
+  claimRecipient,
   countRecipientsByStatus,
   loadAlreadySentEmails,
   loadAlreadySentUserIds,
@@ -175,6 +176,8 @@ export const broadcastRepository = {
 
   loadAlreadySentUserIds,
   loadAlreadySentEmails,
+  /** Take ownership of a recipient before mailing them — call this BEFORE the provider. */
+  claimRecipient,
   recordSent,
   recordSkip,
   recordFailure,

@@ -17,7 +17,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, isNull, lt, ne, or, sql } from '@pagespace/db/operators';
 import { broadcastRecipients } from '@pagespace/db/schema/email-broadcasts';
 import { emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { LedgerWriteFailed, type SentLedgerEntry, type SkipReason } from './core';
@@ -53,6 +53,82 @@ export async function loadAlreadySentEmails(broadcastId: string): Promise<Set<st
       and(eq(broadcastRecipients.broadcastId, broadcastId), eq(broadcastRecipients.status, 'sent')),
     );
   return new Set(rows.map((r) => r.recipientEmail.trim().toLowerCase()));
+}
+
+/**
+ * How long a claim holds a recipient before another worker may take it.
+ *
+ * Long enough that a healthy worker's send (a provider round-trip plus the inter-send
+ * delay) never expires mid-flight; short enough that a crashed worker's recipients are
+ * reachable again in minutes rather than never.
+ */
+export const CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/**
+ * Take ownership of a recipient before mailing them. Returns false when someone else has
+ * them — the caller must NOT send.
+ *
+ * This exists because the unique constraint cannot prevent a double-send on its own: it
+ * coalesces the LEDGER, and it only does so after both workers have already handed mail
+ * to the provider. The in-memory `alreadySent` set is per-process and cannot help across
+ * instances or overlapping retries. So ownership has to be decided in the database, in
+ * one atomic statement, BEFORE the provider call.
+ *
+ * The single upsert below is that statement. It succeeds only when the row is not already
+ * `sent` AND nobody holds an unexpired lease, so exactly one of two racing workers gets a
+ * row back:
+ *
+ *  - fresh recipient  → the INSERT wins → claimed.
+ *  - a rival holds it → the conflict path's WHERE fails on the fresh `claimedAt` → false.
+ *  - already sent     → the WHERE fails on the status → false (the backstop for when the
+ *                       resume set was read before the rival's send landed).
+ *  - crashed worker   → its lease has expired → the WHERE passes → reclaimed, so a
+ *                       mid-send crash costs a lease interval rather than stranding the
+ *                       recipient as `pending` forever.
+ *
+ * A claim is not a promise to send: a claimed recipient whose send then fails is recorded
+ * `failed` and retried later (its lease expires like any other).
+ */
+export async function claimRecipient(
+  broadcastId: string,
+  input: { userId: string; email: string },
+  opts: { leaseMs?: number } = {},
+): Promise<boolean> {
+  const leaseMs = opts.leaseMs ?? CLAIM_LEASE_MS;
+  const now = new Date();
+  const leaseFloor = new Date(now.getTime() - leaseMs);
+
+  const rows = await db
+    .insert(broadcastRecipients)
+    .values({
+      broadcastId,
+      userId: input.userId,
+      recipientEmail: input.email,
+      status: 'pending',
+      claimedAt: now,
+      attempts: 1,
+    })
+    .onConflictDoUpdate({
+      target: [broadcastRecipients.broadcastId, broadcastRecipients.userId],
+      set: {
+        claimedAt: now,
+        recipientEmail: input.email,
+        attempts: sql`${broadcastRecipients.attempts} + 1`,
+        updatedAt: now,
+      },
+      setWhere: and(
+        ne(broadcastRecipients.status, 'sent'),
+        or(
+          isNull(broadcastRecipients.claimedAt),
+          lt(broadcastRecipients.claimedAt, leaseFloor),
+        ),
+      ),
+    })
+    .returning({ id: broadcastRecipients.id });
+
+  // No row back means the conflict path's WHERE rejected the update: someone else owns
+  // this recipient, or already mailed them.
+  return rows.length > 0;
 }
 
 /**

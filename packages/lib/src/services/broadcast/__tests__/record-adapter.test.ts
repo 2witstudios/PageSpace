@@ -20,6 +20,8 @@ const insertCalls: InsertCall[] = [];
 /** Table name → error, so a test can fail the ledger write and the analytics write apart. */
 const insertFailures = new Map<string, Error>();
 let selectRows: unknown[] = [];
+/** What a claim's `.returning()` hands back: a row means the claim won. */
+let returningRows: unknown[] = [];
 
 function tableName(table: unknown): string {
   return table === broadcastRecipients ? 'recipients' : 'log';
@@ -38,6 +40,14 @@ function makeInsertChain(table: unknown) {
       call.conflict = conflict;
       return chain;
     },
+    returning: () => ({
+      then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
+        const failure = insertFailures.get(tableName(table));
+        return failure
+          ? Promise.reject(failure).then(resolve, reject)
+          : Promise.resolve(returningRows).then(resolve, reject);
+      },
+    }),
     then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
       const failure = insertFailures.get(tableName(table));
       return failure
@@ -70,6 +80,8 @@ import { broadcastRecipients } from '@pagespace/db/schema/email-broadcasts';
 import { emailNotificationLog } from '@pagespace/db/schema/email-notifications';
 import { LedgerWriteFailed } from '../core';
 import {
+  CLAIM_LEASE_MS,
+  claimRecipient,
   countRecipientsByStatus,
   loadAlreadySentEmails,
   loadAlreadySentUserIds,
@@ -86,6 +98,26 @@ function setWhereSql(call: InsertCall): string {
   return new PgDialect().sqlToQuery(call.conflict.setWhere).sql;
 }
 
+/** The compiled params a captured setWhere bound. */
+function setWhereParams(call: InsertCall): unknown[] {
+  if (!call.conflict?.setWhere) throw new Error('no setWhere captured');
+  return new PgDialect().sqlToQuery(call.conflict.setWhere).params;
+}
+
+/**
+ * The lease floor the claim bound into its `claimed_at <` comparison.
+ *
+ * Bound as an ISO string, not a Date: the timestamp column's driver mapper serializes it
+ * on the way in.
+ */
+function capturedLeaseFloor(): Date {
+  const stamps = setWhereParams(recipientInserts()[0]).filter(
+    (p): p is string => typeof p === 'string' && p.includes('T') && !Number.isNaN(Date.parse(p)),
+  );
+  if (stamps.length !== 1) throw new Error(`expected one bound timestamp, got ${stamps.length}`);
+  return new Date(stamps[0]);
+}
+
 const recipientInserts = () => insertCalls.filter((c) => c.table === broadcastRecipients);
 const logInserts = () => insertCalls.filter((c) => c.table === emailNotificationLog);
 
@@ -93,7 +125,96 @@ beforeEach(() => {
   insertCalls.length = 0;
   insertFailures.clear();
   selectRows = [];
+  returningRows = [];
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+describe('claimRecipient', () => {
+  // The claim is what actually prevents a double-send: the unique constraint only
+  // coalesces the ledger AFTER both workers have already handed mail to the provider.
+  // These pin the predicate that decides which of two racing workers gets the recipient.
+
+  it('given a row came back, should report the recipient claimed', async () => {
+    returningRows = [{ id: 'r1' }];
+    expect(await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' })).toBe(true);
+  });
+
+  it('given no row came back, should report the recipient NOT claimed', async () => {
+    // The conflict path's WHERE rejected the update: someone else owns them, or they were
+    // already mailed. Either way this worker must not send.
+    returningRows = [];
+    expect(await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' })).toBe(false);
+  });
+
+  it('should insert a pending row stamped with the claim time', async () => {
+    returningRows = [{ id: 'r1' }];
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    expect(recipientInserts()[0].values).toMatchObject({
+      broadcastId: 'b1',
+      userId: 'u1',
+      status: 'pending',
+    });
+    expect(recipientInserts()[0].values?.claimedAt).toBeInstanceOf(Date);
+  });
+
+  it('should upsert against the (broadcastId, userId) unique constraint', async () => {
+    returningRows = [{ id: 'r1' }];
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    expect(recipientInserts()[0].conflict?.target).toEqual([
+      broadcastRecipients.broadcastId,
+      broadcastRecipients.userId,
+    ]);
+  });
+
+  it('should refuse to reclaim a recipient already sent', async () => {
+    returningRows = [{ id: 'r1' }];
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    // The backstop for when the resume set was read before a rival's send landed.
+    expect(setWhereSql(recipientInserts()[0])).toContain('"broadcast_recipients"."status" <>');
+    expect(setWhereParams(recipientInserts()[0])).toContain('sent');
+  });
+
+  it('should refuse to steal a recipient whose lease is still fresh', async () => {
+    returningRows = [{ id: 'r1' }];
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    // `claimed_at is null or claimed_at < <lease floor>` — a rival's fresh stamp fails it,
+    // which is what makes exactly one of two racing workers win.
+    const sql = setWhereSql(recipientInserts()[0]);
+    expect(sql).toContain('"broadcast_recipients"."claimed_at" is null');
+    expect(sql).toContain('"broadcast_recipients"."claimed_at" <');
+  });
+
+  it('should reclaim a recipient whose worker crashed and let the lease expire', async () => {
+    // Without this a mid-send crash would strand the recipient as `pending` forever and
+    // nobody would ever mail them.
+    returningRows = [{ id: 'r1' }];
+    const before = Date.now();
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' }, { leaseMs: 60_000 });
+
+    const floor = capturedLeaseFloor();
+    expect(floor.getTime()).toBeGreaterThanOrEqual(before - 60_000 - 1_000);
+    expect(floor.getTime()).toBeLessThanOrEqual(Date.now() - 60_000 + 1_000);
+  });
+
+  it('should default to the shared lease when none is given', async () => {
+    returningRows = [{ id: 'r1' }];
+    const before = Date.now();
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    const floor = capturedLeaseFloor();
+    expect(floor.getTime()).toBeLessThanOrEqual(before - CLAIM_LEASE_MS + 1_000);
+  });
+
+  it('should count the attempt, so a recipient retried forever is visible', async () => {
+    returningRows = [{ id: 'r1' }];
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    expect(recipientInserts()[0].conflict?.set).toHaveProperty('attempts');
+  });
 });
 
 describe('recordSent', () => {

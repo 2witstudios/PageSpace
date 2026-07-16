@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS "broadcast_recipients" (
 	"error_message" text,
 	"attempts" integer DEFAULT 0 NOT NULL,
 	"sent_at" timestamp,
+	"claimed_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );

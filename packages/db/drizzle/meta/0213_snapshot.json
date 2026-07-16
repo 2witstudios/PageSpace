@@ -1,5 +1,5 @@
 {
-  "id": "7742c331-bbd0-4e85-9995-a4d45dfc588b",
+  "id": "0f17c9d2-de10-47aa-95bd-817795ae4971",
   "prevId": "6eec56b6-f4ef-4049-a987-343d50f9220b",
   "version": "7",
   "dialect": "postgresql",
@@ -19677,6 +19677,12 @@
         },
         "sent_at": {
           "name": "sent_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_at": {
+          "name": "claimed_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false

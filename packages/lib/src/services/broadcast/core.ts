@@ -31,6 +31,20 @@ export function isLocalhostUrl(url: string): boolean {
 }
 
 /**
+ * Drop trailing slashes so a base URL concatenates cleanly with a path.
+ *
+ * Scans backwards instead of using `/\/+$/`. That regex is quadratic on a long run of
+ * slashes (the greedy `+` re-scans the run from each start position before `$` fails),
+ * and the input here is operator-set environment config — exactly the "uncontrolled
+ * input" a polynomial-ReDoS check flags. This does the same job in one linear pass.
+ */
+function stripTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
+}
+
+/**
  * Resolve the public app base URL (used for the unsubscribe link). Prefers the
  * first configured NON-localhost candidate, so a setup with only the server-side
  * WEB_APP_URL pointed at production (and a stale localhost NEXT_PUBLIC_APP_URL)
@@ -43,7 +57,7 @@ export function resolveBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
 
   const live = candidates.find((c) => !isLocalhostUrl(c));
   const chosen = live ?? candidates[0] ?? 'http://localhost:3000';
-  return chosen.replace(/\/+$/, '');
+  return stripTrailingSlashes(chosen);
 }
 
 /**
@@ -260,6 +274,15 @@ export interface BroadcastResult {
   sent: number;
   attempted: number;
   skipped: Record<SkipReason, number>;
+  /**
+   * Recipients another worker had already claimed, so this run left them alone.
+   *
+   * Deliberately NOT a `SkipReason`: a skip is a decision about the recipient that gets
+   * persisted against them, whereas this is a fact about which worker is mailing them.
+   * The winner records the real outcome; counting it here too would double-count the
+   * person across the two runs. Always 0 without a `claim` hook.
+   */
+  claimedElsewhere: number;
   errors: string[];
 }
 
@@ -277,6 +300,8 @@ export interface BroadcastResult {
  *  - A send that fails is NOT recorded, so a re-run retries exactly it.
  *  - An address that succeeds is added to `alreadySent` in-memory too, so two
  *    accounts sharing one address don't both get mailed in a single run.
+ *  - A recipient is CLAIMED before the provider call, not after it, when a durable
+ *    caller supplies `claim` — the in-memory set above cannot stop a second worker.
  */
 export async function runBroadcast(input: {
   live: boolean;
@@ -294,6 +319,12 @@ export async function runBroadcast(input: {
   sendOne: (r: { userId: string; userName: string; email: string }) => Promise<void>;
   /** Dry-run equivalent: render only, so template errors still surface. */
   renderOne: (r: { userId: string; userName: string; email: string }) => Promise<string>;
+  /**
+   * Optional: atomically take ownership of a recipient before mailing them, returning
+   * false when another worker already has them. Supplied by durable (multi-instance)
+   * callers; the single-process script has no rival to race and omits it.
+   */
+  claim?: (r: { userId: string; email: string }) => Promise<boolean>;
   /** Append one successful send to the ledger, durably. */
   record: (entry: SentLedgerEntry) => Promise<void>;
   now: () => string;
@@ -332,6 +363,7 @@ export async function runBroadcast(input: {
   const errors: string[] = [];
   let sent = 0;
   let attempted = 0;
+  let claimedElsewhere = 0;
 
   for (const row of input.rows) {
     // One row whose PII will not decrypt (legacy or corrupt ciphertext) must not
@@ -376,6 +408,37 @@ export async function runBroadcast(input: {
       input.log(`\n⏹️  Reached limit=${input.limit}; stopping.`);
       break;
     }
+
+    // Take ownership BEFORE the provider call, not after it.
+    //
+    // `alreadySent` is an in-memory set, so it only speaks for THIS process: two workers
+    // (overlapping retries, or two instances) can both pass every check above and both
+    // mail the same person, and the ledger's unique constraint would then coalesce two
+    // rows that represent two emails already sent. A durable caller supplies `claim` to
+    // decide ownership in the database instead — see record-adapter.claimRecipient.
+    //
+    // Losing a claim is not a skip and not an attempt: the winner is mailing them, and
+    // counting it either way would double-count the recipient across the two workers.
+    if (input.live && input.claim) {
+      let claimed: boolean;
+      try {
+        claimed = await input.claim({ userId: user.id, email: emailKey });
+      } catch (error) {
+        // Fail CLOSED: an unreadable claim means we cannot prove nobody else is mailing
+        // this person, and the irreversible mistake is sending, not skipping.
+        const msg = error instanceof Error ? error.message : String(error);
+        errors.push(`${email}: could not claim recipient: ${msg}`);
+        input.logError(`  ✗ Could not claim ${email}: ${msg}`);
+        continue;
+      }
+
+      if (!claimed) {
+        claimedElsewhere++;
+        input.log(`  ⤳ ${email} is claimed by another worker; leaving it to them.`);
+        continue;
+      }
+    }
+
     attempted++;
 
     const recipient = { userId: user.id, userName: user.name?.trim() || 'there', email };
@@ -420,5 +483,5 @@ export async function runBroadcast(input: {
     if (input.delayMs > 0) await input.sleep(input.delayMs);
   }
 
-  return { sent, attempted, skipped, errors };
+  return { sent, attempted, skipped, claimedElsewhere, errors };
 }
