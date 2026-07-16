@@ -110,8 +110,9 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
   }, []); // ✅ Empty deps — uses refs for latest state
 
   // A stable force-save callback for keyboard shortcuts (reads the latest ref).
+  // forceSave is async — surface rejections like the unmount/blur savers do.
   const forceSaveNow = useCallback(() => {
-    forceSaveRef.current();
+    forceSaveRef.current().catch(console.error);
   }, []);
 
   return {

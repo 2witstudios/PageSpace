@@ -90,9 +90,15 @@ export interface GridNavInput {
 /**
  * Navigation math for arrow / Tab / Enter keys.
  *
- * Returns the next cell, or `null` when the key does not navigate. Arrows clamp
- * at grid edges; Tab wraps across rows; Shift+Tab wraps backwards but stays put
- * at the origin (0,0); Enter moves down (Shift+Enter up) unless read-only.
+ * Returns the cell the grid should select, or `null` when the key is not a
+ * grid-navigation key at all (the caller then leaves the event alone). A
+ * non-null result means the key WAS consumed by the grid, which is why
+ * read-only Enter returns the unchanged cell rather than null: the key is still
+ * handled (and preventDefault'd), it just does not move the selection.
+ *
+ * Arrows clamp at grid edges; Tab wraps across rows; Shift+Tab wraps backwards
+ * but stays put at the origin (0,0); Enter moves down (Shift+Enter up) unless
+ * read-only.
  */
 export const nextSelectionForKey = (
   input: GridNavInput,

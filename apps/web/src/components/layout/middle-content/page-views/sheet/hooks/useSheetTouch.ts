@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SheetData } from '@pagespace/lib/sheets/sheet';
 import { clampSelection, isCellInSelection, type GridSelection, type SelectionState } from '../core/selection';
 import {
@@ -58,6 +58,18 @@ export const useSheetTouch = ({
     show: false,
     cell: null,
   });
+
+  // A long press armed just before unmount would otherwise still fire, calling
+  // back into an unmounted tree (and vibrating) ~500ms later.
+  useEffect(
+    () => () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const handleCellTouchStart = useCallback(
     (row: number, column: number, event: React.TouchEvent) => {
