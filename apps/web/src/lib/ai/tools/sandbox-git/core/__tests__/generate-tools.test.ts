@@ -129,12 +129,28 @@ describe('generateSandboxGitTools — validation seam', () => {
   });
 });
 
+const denyNoReasonRow: GitToolRow = defineRow({
+  key: 'demo_deny_plain',
+  group: 'repo',
+  cmd: 'git',
+  exec: 'local',
+  description: 'demo',
+  schema: z.object({}).strict(),
+  buildArgs: () => ({ error: 'plain denial' }),
+});
+
 describe('generateSandboxGitTools — buildArgs denial', () => {
   test('a buildArgs error denies with its reason and no seam call', async () => {
     const { seams, calls } = makeSeams();
     const tools = generateSandboxGitTools([denyingRow], seams);
     const result = await tools.demo_deny.execute!({ path: '../escape' }, {} as never);
     assert({ given: 'a buildArgs path_escape', should: 'return the reason and touch no seam', actual: (result as { success: boolean; reason?: string }).reason === 'path_escape' && calls.length === 0, expected: true });
+  });
+  test('a buildArgs error WITHOUT a reason still denies without a reason field', async () => {
+    const { seams, calls } = makeSeams();
+    const tools = generateSandboxGitTools([denyNoReasonRow], seams);
+    const result = await tools.demo_deny_plain.execute!({}, {} as never);
+    assert({ given: 'a reasonless buildArgs error', should: 'return success:false with no reason and no seam call', actual: (result as { success: boolean; reason?: string }).success === false && !('reason' in (result as object)) && calls.length === 0, expected: true });
   });
 });
 
