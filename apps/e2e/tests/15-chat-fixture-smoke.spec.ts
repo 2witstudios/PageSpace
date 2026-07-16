@@ -66,10 +66,11 @@ test.describe('chat e2e harness smoke', () => {
     // The request reached the model and is live — no sleep, no race.
     await expect.poll(() => mockStreams(request).then((s) => s.open)).toBeGreaterThan(0);
 
+    // data-role is ON the chat-message element, not a descendant — so this must be an
+    // attribute selector on the element itself, never a `has:` descendant filter.
     const assistant = page
       .getByTestId('ai-chat-view')
-      .getByTestId('chat-message')
-      .filter({ has: page.locator('[data-role="assistant"]') })
+      .locator('[data-testid="chat-message"][data-role="assistant"]')
       .last();
     await expect(assistant).toBeVisible();
 

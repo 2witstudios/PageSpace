@@ -133,9 +133,16 @@ export async function createAgentPage(driveId: string, userId: string): Promise<
 }
 
 /**
- * Seed one AI_CHAT conversation: `chat_messages` rows sharing a conversationId, alternating
- * user/assistant from `contents`, each a second apart so the loader's createdAt ordering is
- * unambiguous.
+ * Seed one AI_CHAT conversation: a `conversations` row plus the `chat_messages` rows sharing
+ * its id, alternating user/assistant from `contents`, each a second apart so the loader's
+ * createdAt ordering is unambiguous.
+ *
+ * The `conversations` row is NOT optional. `conversationRepository.listConversations` (and
+ * `countConversations`) LEFT JOIN `conversations` and then filter
+ * `WHERE conv."userId" = $user OR conv."isShared" = true` — with no row the join yields NULL,
+ * both predicates are NULL, and the conversation is invisible to the history list even though
+ * its messages exist. The page would open a fresh empty conversation instead of the seeded
+ * one. Shape mirrors the app's own `createConversation` (type 'page', contextId = pageId).
  *
  * Plain-text `content` is deliberate and safe: `parseStructuredContent` returns null for
  * non-JSON and the loader falls back to a simple text part
@@ -162,6 +169,20 @@ export async function seedChatConversation(
     'second assistant reply',
   ];
   const startedAt = opts.startedAt ?? new Date(Date.now() - 60_000);
+  const lastMessageAt = new Date(startedAt.getTime() + (contents.length - 1) * 1000);
+
+  await db
+    .insert(conversations)
+    .values({
+      id: conversationId,
+      userId,
+      type: 'page',
+      contextId: pageId,
+      isShared: false,
+      lastMessageAt,
+      updatedAt: lastMessageAt,
+    })
+    .onConflictDoNothing();
 
   for (let i = 0; i < contents.length; i++) {
     await factories.createChatMessage(pageId, {
