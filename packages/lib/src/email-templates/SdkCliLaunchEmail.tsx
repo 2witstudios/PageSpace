@@ -154,18 +154,18 @@ export function SdkCliLaunchEmail({
             <Text style={emailStyles.paragraph}>
               We&apos;ve been heads-down shipping, and behind on telling you about
               it. So instead of trickling it out, here&apos;s a catch-up on what
-              you can do in PageSpace now — starting with the part developers ask
+              you can do in PageSpace now, starting with the part developers ask
               us about most.
             </Text>
             <Text style={emailStyles.paragraph}>
               You&apos;ve always worked in PageSpace through the browser. Now the
-              same workspace — pages, drives, tasks, search, files — opens two
+              same workspace (pages, drives, tasks, search, files) opens two
               more ways in: a command-line tool your agents can drive, and a
               TypeScript SDK your apps can build on. Both are live on npm.
             </Text>
 
             <Section style={calloutCard}>
-              <Text style={calloutHeading}>@pagespace/cli — for your agents</Text>
+              <Text style={calloutHeading}>@pagespace/cli, for your agents</Text>
               <Text style={calloutText}>
                 Your terminal, and the coding agents that live in it. A
                 shell-capable agent like Claude Code drives PageSpace by running
@@ -178,7 +178,7 @@ export function SdkCliLaunchEmail({
             </Section>
 
             <Section style={calloutCard}>
-              <Text style={calloutHeading}>@pagespace/sdk — for your apps</Text>
+              <Text style={calloutHeading}>@pagespace/sdk, for your apps</Text>
               <Text style={calloutText}>
                 A typed TypeScript client for the PageSpace API: read and write
                 pages, move things around a drive, create and update tasks, run a
@@ -209,7 +209,7 @@ export function SdkCliLaunchEmail({
             <Text style={emailStyles.paragraph}>
               A good first use: point a terminal agent like Claude Code at a
               drive, and let it keep your notes, tasks, and docs current while
-              you work. Nothing about your existing workspace changes — this is
+              you work. Nothing about your existing workspace changes. This is
               a new way in, not a new thing to learn.
             </Text>
 
@@ -232,8 +232,8 @@ export function SdkCliLaunchEmail({
             </Text>
 
             <Text style={emailStyles.hint}>
-              Questions, or building something with it? Just reply to this email
-              — we read every one.
+              Questions, or building something with it? Just reply to this email.
+              We read every one.
             </Text>
           </Section>
           <Section style={emailStyles.footer}>

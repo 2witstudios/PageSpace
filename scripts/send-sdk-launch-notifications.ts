@@ -204,7 +204,6 @@ async function main(): Promise<number> {
     suppressed,
     isOnPrem: isOnPrem(),
     fromEmail: process.env.FROM_EMAIL,
-    postalAddress,
   });
   if (!check.ok) {
     console.error(`❌ Refusing live send: ${check.reason}`);
