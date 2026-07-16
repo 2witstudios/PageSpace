@@ -83,6 +83,11 @@ export default defineConfig({
         'src/services/api/rollback/preview-eligibility.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/services/api/rollback/rollback-plans.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/services/api/rollback/redo-plans.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // SheetView decomposition: the extracted pure cores (selection nav,
+        // clipboard/paste, cell ops, references/stats/find, layout, touch, sync,
+        // editing, constants) are gated at 100% branch. Single-star glob excludes
+        // the __tests__ subdirectory.
+        'src/components/layout/middle-content/page-views/sheet/core/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
   },
