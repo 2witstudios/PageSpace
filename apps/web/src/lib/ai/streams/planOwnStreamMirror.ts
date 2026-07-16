@@ -131,9 +131,23 @@ export const isOwnStreamSending = (status: OwnStreamMirrorStatus): boolean =>
  *
  *    `surfaceStillOnStreamConversation` separates them. (a) is a load-on-select for a DIFFERENT
  *    conversation, so the surface has moved off the stream's conversation; (b) happens with the
- *    surface sitting exactly where it was. (A same-conversation history write cannot coincide with
- *    a live own stream: the surfaces' load/refresh effects are guarded on
- *    `isOwn*StreamForCurrentConversation`, which is precisely true in that case.)
+ *    surface sitting exactly where it was.
+ *
+ *    THAT SEPARATION IS ONLY SAFE BECAUSE NOTHING WRITES A FOREIGN ASSISTANT MESSAGE INTO A
+ *    CHAT'S ARRAY WHILE ITS OWN STREAM IS LIVE — and that is an invariant the SURFACES uphold,
+ *    not something this function can check. It is worth naming precisely, because an earlier
+ *    version of this comment asserted it without its cost and two real bugs walked through the
+ *    gap: from in here, "the SDK renamed my stream" and "someone dropped a foreign message after
+ *    mine" are indistinguishable — in both, our message is not last and a later assistant exists.
+ *
+ *    Who upholds it: GlobalAssistantView and SidebarChatTab gate their load/refresh writes on
+ *    `isOwn*StreamForCurrentConversation` (#2061). AiChatView had NO such guard until PR 5A added
+ *    two: its `chat:stream_complete` dual-write is gated on `stream.isOwn` (that socket event
+ *    carries no own-stream filter, so it also fires for a collaborator's stream), and its
+ *    `loadMessagesForConversation` skips the array write while our own stream is live.
+ *
+ *    If a new writer into a chat's `messages` appears, it needs the same guard, or this branch
+ *    will re-target onto whatever it wrote.
  */
 export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamMirrorOp[] => {
   // The send is over: release whatever this mirror latched. The local read is what this entry
