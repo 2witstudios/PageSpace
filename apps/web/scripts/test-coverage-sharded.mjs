@@ -71,18 +71,32 @@ const shards = Array.from({ length: SHARD_COUNT }, () => []);
 remainingFiles.forEach((file, i) => shards[i % SHARD_COUNT].push(file));
 // Each heavy file gets a fully solo shard, appended after the round-robin
 // ones, so it never shares a fork pool with anything else.
+const firstHeavyShardIndex = shards.length;
 heavyFilesFound.forEach((file) => shards.push([file]));
 
 // A shard that hits the heap ceiling gets retried (fresh process, identical
 // files, identical ceiling) up to 2 additional times before the whole run
-// fails — cheap insurance against any remaining marginal case, now that the
-// one confirmed deterministic cause is isolated above.
+// fails — cheap insurance against any remaining marginal case.
 const MAX_ATTEMPTS_PER_SHARD = 3;
 const TOTAL_SHARDS = shards.length;
 
+// The isolation itself (previous commit) proved this: with all contention
+// from the other ~930 files removed, AiChatView.test.tsx STILL hit the heap
+// ceiling alone, on its own dedicated shard, every one of 3 fresh-process
+// retries — this single ~1936-line file genuinely needs more than the
+// job-level 8192MB (see ci.yml) for its own v8-coverage-instrumented run.
+// Every earlier attempt at raising the ceiling destabilized the runner
+// itself — but those were all raising it for MANY forks running with real
+// aggregate concurrency (default fork count, or a whole shard's worth of
+// files). A solo-file shard only ever runs one worker; there is no
+// concurrent memory pressure to compound, so a higher ceiling here is safe
+// in a way it wasn't at the job level.
+const HEAVY_SHARD_NODE_OPTIONS = '--max-old-space-size=14336';
+
 for (let i = 1; i <= TOTAL_SHARDS; i++) {
   const files = shards[i - 1];
-  console.log(`\n=== Coverage shard ${i}/${TOTAL_SHARDS} (${files.length} files) ===\n`);
+  const isHeavyShard = i > firstHeavyShardIndex;
+  console.log(`\n=== Coverage shard ${i}/${TOTAL_SHARDS} (${files.length} files)${isHeavyShard ? ' [isolated heavy file]' : ''} ===\n`);
   if (files.length === 0) continue;
   let succeeded = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SHARD && !succeeded; attempt++) {
@@ -103,7 +117,11 @@ for (let i = 1; i <= TOTAL_SHARDS; i++) {
         {
           cwd: root,
           stdio: 'inherit',
-          env: { ...process.env, VITEST_COVERAGE_SHARD: '1' },
+          env: {
+            ...process.env,
+            VITEST_COVERAGE_SHARD: '1',
+            ...(isHeavyShard ? { NODE_OPTIONS: HEAVY_SHARD_NODE_OPTIONS } : {}),
+          },
         }
       );
       succeeded = true;
