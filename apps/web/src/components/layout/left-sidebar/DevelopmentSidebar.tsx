@@ -348,14 +348,21 @@ function MachineTreeSection({
   // `WorkspaceLeaves`/`WorkspaceNodeExtras` below render the SAME server-synced
   // workspace tree `MachineView`'s Terminal tab does (see this file's own doc
   // comment), but `MachineView` — the sync hook's OTHER mount point — is only
-  // mounted once the user actually navigates INTO a machine. Without mounting
-  // it here too, expanding a machine's row in this sidebar without ever
-  // visiting its page renders/acts on a never-hydrated local store: `ensureMachine`
-  // fabricates a phantom "Workspace 1", and any click/create/rename/remove in
-  // this sidebar pushes to the server from that unhydrated state. Mounted once
-  // per machine row (this component's own lifetime in the sidebar list, not
-  // tied to the tree node's expand/collapse) so it doesn't re-join the socket
-  // room or re-fetch on every expand.
+  // mounted once the user actually navigates INTO a machine. Without mounting it
+  // here too, expanding a machine's row in this sidebar without ever visiting
+  // its page would render, and push from, a never-hydrated local store.
+  //
+  // (`ensureMachine` no longer fabricates a phantom "Workspace 1" for a machine
+  // this browser hasn't hydrated — an un-hydrated machine now simply shows no
+  // rows. So the failure this guards against is narrower than it was: acting on
+  // stale local state, not inventing rows. Note this hook's own doc asks to be
+  // mounted once per machine and it is mounted twice for the machine currently
+  // open; that is idempotent — the bootstrap claim table makes the second POST a
+  // no-op — but it is not by design.)
+  //
+  // Mounted once per machine row (this component's own lifetime in the sidebar
+  // list, not tied to the tree node's expand/collapse) so it doesn't re-join the
+  // socket room or re-fetch on every expand.
   useMachineWorkspaceSync(machineId);
 
   const navigateToMachine = useCallback(() => {

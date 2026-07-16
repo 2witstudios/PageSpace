@@ -89,6 +89,12 @@ export interface MachineWorkspacesState {
   workspaces: Record<string, WorkspaceState>;
   /** Sidebar order — insertion order, stable across selection. */
   order: string[];
+  /** `''` when nothing is active — a machine with zero workspaces is a legal,
+   * converged state (the middle view renders its empty state), not a bug to
+   * repair by fabricating one. No workspace id can be `''` (`crypto.randomUUID`
+   * / `sessionWorkspaceId` both produce non-empty), so this sentinel can never
+   * collide with a real id: `workspaces['']` never resolves and
+   * `setActiveWorkspace(state, '')` correctly no-ops. */
   activeWorkspaceId: string;
 }
 
@@ -225,27 +231,22 @@ export function splitDown(state: WorkspaceState, fromPaneId: string, newPaneId: 
 }
 
 /**
- * A workspace never has zero panes, so closing the LAST one empties it instead
- * of removing it: the pane drops its terminal and goes back to offering the
- * picker. Refusing outright (the old behaviour) was a dead end — a lone pane
- * showing a session that no longer exists server-side could never be detached,
- * and the workspace was stuck on a terminal that would never connect again.
+ * Removes a pane from its grid. Closing the last pane in a column removes the
+ * column too; closing the active pane re-targets active to the first remaining
+ * pane.
  *
- * Closing the last pane in a column removes the column too; closing the active
- * pane re-targets active to the first remaining pane.
+ * A workspace never has zero panes, so the LAST pane is not this function's
+ * business — removing it means removing the workspace, which a `WorkspaceState`
+ * transition cannot do to its own container. {@link closePaneIn} owns that case
+ * and intercepts before calling here; this no-ops as a backstop rather than
+ * filtering the grid down to a `columns[0]` that isn't there.
  */
 export function closePane(state: WorkspaceState, id: string): WorkspaceState {
   const location = findPaneLocation(state, id);
   if (!location) return state;
 
   const totalPanes = state.columns.reduce((sum, column) => sum + column.panes.length, 0);
-  if (totalPanes <= 1) {
-    return mapPane(state, id, (pane) =>
-      pane.scope === null && pane.pendingPrompt === undefined
-        ? pane
-        : { ...pane, scope: null, pendingPrompt: undefined }
-    );
-  }
+  if (totalPanes <= 1) return state;
 
   const columns = state.columns
     .map((column, columnIndex) =>
@@ -275,14 +276,6 @@ export function panesOf(state: WorkspaceState): TerminalPaneState[] {
 // ---------------------------------------------------------------------------
 // Machine level — which workspaces exist, and which one the view shows
 // ---------------------------------------------------------------------------
-
-export function initialMachineWorkspaces(workspace: WorkspaceState): MachineWorkspacesState {
-  return {
-    workspaces: { [workspace.id]: workspace },
-    order: [workspace.id],
-    activeWorkspaceId: workspace.id,
-  };
-}
 
 /** Adds a workspace and shows it — a workspace is created because the user
  * asked for it, so it is what they want to be looking at. */
@@ -435,13 +428,18 @@ export function showSessionIn(
 }
 
 /**
- * Removes a workspace and shows a neighbour. A machine always keeps at least
- * one workspace, so removing the last one is a no-op — there would be nothing
- * left to render. (A workspace whose only pane holds a dead terminal is not a
- * dead end even then: closing that pane empties it back to the picker.)
+ * Removes a workspace and shows a neighbour — including the LAST one, which
+ * leaves the machine with zero workspaces and `activeWorkspaceId: ''`.
+ *
+ * A workspace is a VIEW of terminals, and a view you cannot destroy is not a
+ * view. The old "a machine always keeps at least one" floor made the last row
+ * permanently unremovable: the sidebar compensated by emptying its panes in
+ * place, so the row survived every removal attempt, and `createWorkspace` then
+ * added a SECOND row beside the zombie. Zero workspaces is the honest state,
+ * and the middle view renders an empty state for it.
  */
 export function removeWorkspace(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
-  if (!state.workspaces[workspaceId] || state.order.length <= 1) return state;
+  if (!state.workspaces[workspaceId]) return state;
 
   const order = state.order.filter((id) => id !== workspaceId);
   const workspaces = { ...state.workspaces };
@@ -449,11 +447,51 @@ export function removeWorkspace(state: MachineWorkspacesState, workspaceId: stri
 
   // Falling back to the neighbour it sat next to, rather than to the first
   // workspace — closing one item should not jump the view across the sidebar.
+  // The `?? ''` carries the empty case: `order[Math.min(n, -1)]` is `order[-1]`
+  // — `undefined`, which would flow into a field typed `string` unchecked
+  // (`noUncheckedIndexedAccess` is off) and read downstream as "not mounted yet"
+  // rather than "nothing active".
   const removedIndex = state.order.indexOf(workspaceId);
-  const neighbour = order[Math.min(removedIndex, order.length - 1)];
+  const neighbour = order[Math.min(removedIndex, order.length - 1)] ?? '';
   const activeWorkspaceId = state.activeWorkspaceId === workspaceId ? neighbour : state.activeWorkspaceId;
 
   return { workspaces, order, activeWorkspaceId };
+}
+
+/**
+ * Closes a pane, removing its whole workspace when it was the last one — a view
+ * with no terminals in it is not a view, it is a row that outlived its purpose.
+ *
+ * This is an ACTION rule, not an invariant over the state: a freshly created
+ * workspace legitimately holds one pane with `scope: null` showing the picker,
+ * so "a workspace with no bound panes gets removed" would delete every
+ * workspace at birth. Only an explicit close removes anything.
+ *
+ * Returns the same state object when nothing changed, so callers can tell
+ * whether to push (and {@link removedWorkspaceBy} whether to DELETE vs PATCH).
+ */
+export function closePaneIn(
+  state: MachineWorkspacesState,
+  workspaceId: string,
+  paneId: string
+): MachineWorkspacesState {
+  const workspace = state.workspaces[workspaceId];
+  if (!workspace || !findPaneLocation(workspace, paneId)) return state;
+
+  if (panesOf(workspace).length <= 1) return removeWorkspace(state, workspaceId);
+  return updateWorkspace(state, workspaceId, (current) => closePane(current, paneId));
+}
+
+/** Did {@link closePaneIn} take the whole workspace with it? The sync layer must
+ * know: pushing a layout PATCH for a workspace that no longer exists 404s, and
+ * that route's fallback RE-CREATES it server-side — resurrecting the exact row
+ * the user just closed. */
+export function removedWorkspaceBy(
+  before: MachineWorkspacesState,
+  after: MachineWorkspacesState,
+  workspaceId: string
+): boolean {
+  return Boolean(before.workspaces[workspaceId]) && !after.workspaces[workspaceId];
 }
 
 // ---------------------------------------------------------------------------
@@ -551,12 +589,13 @@ export function mergeServerWorkspaces(
     order.push(ws.id);
   }
 
-  // Should not happen in practice — the server always has at least the
-  // workspace(s) this browser's own bootstrap call just seeded — but a
-  // machine must never end up with zero workspaces to render.
-  if (order.length === 0) return local ?? { workspaces: {}, order: [], activeWorkspaceId: '' };
-
-  const activeWorkspaceId = local && workspaces[local.activeWorkspaceId] ? local.activeWorkspaceId : order[0];
+  // An empty server list is a real, converged answer — the user removed every
+  // view — so it is applied, not treated as an impossible reading to fall back
+  // from. Keeping `local` here (the old behaviour) meant "server has zero"
+  // could NEVER converge: this hydrate runs once per mount and nothing prunes
+  // afterwards, so the phantom rows outlived every reload.
+  const activeWorkspaceId =
+    local && workspaces[local.activeWorkspaceId] ? local.activeWorkspaceId : (order[0] ?? '');
   return { workspaces, order, activeWorkspaceId };
 }
 
@@ -571,9 +610,10 @@ export function applyServerWorkspaceUpsert(state: MachineWorkspacesState, ws: Se
 }
 
 /** Reconciles an incoming `machine-workspace:deleted` event — delegates to
- * {@link removeWorkspace}, so a machine reduced to its last server-known
- * workspace keeps showing it locally (the existing "always keep ≥1" floor),
- * converging once this browser's own next write reconciles it. */
+ * {@link removeWorkspace}, which now applies to the last workspace too. Under
+ * the old floor this event was silently DROPPED for the final row, so a browser
+ * whose teammate removed the last view kept a phantom of it forever (nothing
+ * re-reconciles after the once-per-mount hydrate). */
 export function applyServerWorkspaceDeleted(state: MachineWorkspacesState, workspaceId: string): MachineWorkspacesState {
   return removeWorkspace(state, workspaceId);
 }

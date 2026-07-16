@@ -93,13 +93,14 @@ describe('TerminalTab', () => {
     await waitFor(() => {
       const machine = selectMachine('machine-1')(store())!;
       assert({
-        given: 'the machine row\'s single "+" trigger used to spawn a new terminal',
-        should: 'create a second, now-active workspace at machine scope',
+        given: 'the machine row\'s single "+" trigger used to spawn a new terminal on a fresh machine',
+        should:
+          'create exactly ONE workspace at machine scope — this used to expect TWO, because mounting fabricated a "Workspace 1" the user never asked for and the spawn then added a second beside it',
         actual: {
           count: Object.keys(machine.workspaces).length,
           activeScope: machine.workspaces[machine.activeWorkspaceId].scope,
         },
-        expected: { count: 2, activeScope: {} },
+        expected: { count: 1, activeScope: {} },
       });
     });
   });

@@ -3,7 +3,6 @@ import { assert } from '@/stores/__tests__/riteway';
 import { isValidAgentTerminalName, AGENT_LAUNCH_SPECS } from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   newWorkspace,
-  initialMachineWorkspaces,
   addWorkspace,
   setActiveWorkspace,
   updateWorkspace,
@@ -16,6 +15,8 @@ import {
   splitRight,
   splitDown,
   closePane,
+  closePaneIn,
+  removedWorkspaceBy,
   selectPane,
   panesOf,
   showSessionIn,
@@ -28,6 +29,7 @@ import {
   autoSessionName,
   MACHINE_NODE_SCOPE,
   type WorkspaceState,
+  type MachineWorkspacesState,
   type ServerWorkspaceDTO,
 } from '../workspace-reducer';
 
@@ -36,6 +38,15 @@ const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
 /** A one-pane workspace — what every workspace starts as. */
 const aWorkspace = (id = 'ws-1', firstPaneId = 'pane-1'): WorkspaceState =>
   newWorkspace({ id, name: id, scope: BRANCH_SCOPE, firstPaneId });
+
+/** A machine showing exactly this one workspace. A fixture, not a production
+ * concept: the reducer used to export this to seed every machine's mandatory
+ * first workspace, but a machine now legitimately starts (and ends) with zero. */
+const initialMachineWorkspaces = (workspace: WorkspaceState): MachineWorkspacesState => ({
+  workspaces: { [workspace.id]: workspace },
+  order: [workspace.id],
+  activeWorkspaceId: workspace.id,
+});
 
 describe('newWorkspace', () => {
   it('given a workspace born empty, should open with one empty pane, ready for the picker', () => {
@@ -519,29 +530,97 @@ describe('showSessionIn — a clicked session must actually be on screen', () =>
   });
 });
 
-describe('closePane on a lone pane — detach, never dead-end', () => {
-  it('given the only pane holds a terminal, should empty it back to the picker', () => {
+describe('closePane on a lone pane — the grid level does not own this case', () => {
+  it('given the only pane of a workspace, should be a no-op at the grid level', () => {
     const workspace = assignPane(aWorkspace(), 'pane-1', { name: 'claude-a1b2c3' }, 'a prompt');
 
-    const actual = closePane(workspace, 'pane-1');
+    assert({
+      given: "a workspace's ONLY pane",
+      should:
+        'be a no-op — removing it means removing the workspace, which a WorkspaceState transition cannot do to its own container (closePaneIn owns it)',
+      actual: closePane(workspace, 'pane-1'),
+      expected: workspace,
+    });
+  });
+});
+
+describe('closePaneIn', () => {
+  it('given a pane with siblings, should close just that pane', () => {
+    const machine = initialMachineWorkspaces(splitDown(aWorkspace(), 'pane-1', 'pane-2'));
+
+    const actual = closePaneIn(machine, 'ws-1', 'pane-2');
 
     assert({
-      given: 'a workspace whose ONLY pane shows a session (one that may no longer exist server-side)',
-      should:
-        'detach the terminal and hand the pane back to the picker — refusing outright left the workspace stuck forever on a terminal that would never connect again',
-      actual: panesOf(actual)[0],
-      expected: { id: 'pane-1', scope: null, pendingPrompt: undefined },
+      given: 'one pane of a two-pane workspace',
+      should: 'close the pane and keep the workspace',
+      actual: {
+        panes: panesOf(actual.workspaces['ws-1']!).map((pane) => pane.id),
+        order: actual.order,
+      },
+      expected: { panes: ['pane-1'], order: ['ws-1'] },
     });
   });
 
-  it('given the only pane is already empty, should be a no-op', () => {
-    const workspace = aWorkspace();
+  it('given the last pane, should remove the whole workspace', () => {
+    const machine = addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1'));
+
+    const actual = closePaneIn(machine, 'ws-b', 'b1');
 
     assert({
-      given: 'a lone pane that is already the picker',
-      should: 'be a no-op — there is nothing to detach',
-      actual: closePane(workspace, 'pane-1'),
-      expected: workspace,
+      given: "the last pane of a workspace — a view with no terminals left in it",
+      should: 'remove the workspace itself, not leave an empty row behind',
+      actual: { order: actual.order, active: actual.activeWorkspaceId },
+      expected: { order: ['ws-a'], active: 'ws-a' },
+    });
+  });
+
+  it("given the last pane of the machine's last workspace, should empty the machine", () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    const actual = closePaneIn(machine, 'ws-1', 'pane-1');
+
+    assert({
+      given: 'the final pane of the final workspace',
+      should: 'leave zero workspaces and nothing active — the empty state is a legal, reachable place',
+      actual: { order: actual.order, active: actual.activeWorkspaceId },
+      expected: { order: [], active: '' },
+    });
+  });
+
+  it('given an unknown pane, should be a no-op', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'a pane id that is not in the workspace',
+      should: 'be a no-op — an unknown pane must not remove a workspace',
+      actual: closePaneIn(machine, 'ws-1', 'nope'),
+      expected: machine,
+    });
+  });
+});
+
+describe('removedWorkspaceBy', () => {
+  it('given a close that removed the workspace, should report true', () => {
+    const before = initialMachineWorkspaces(aWorkspace());
+    const after = closePaneIn(before, 'ws-1', 'pane-1');
+
+    assert({
+      given: 'a close that took the whole workspace with it',
+      should: 'report true — the sync layer must DELETE, since PATCHing a removed workspace 404s and its fallback re-creates the row',
+      actual: removedWorkspaceBy(before, after, 'ws-1'),
+      expected: true,
+    });
+  });
+
+  it('given a close that only removed a pane, should report false', () => {
+    const before = initialMachineWorkspaces(splitDown(aWorkspace(), 'pane-1', 'pane-2'));
+    const after = closePaneIn(before, 'ws-1', 'pane-2');
+
+    assert({
+      given: 'a close that left the workspace standing',
+      should: 'report false — this is an ordinary layout PATCH',
+      actual: removedWorkspaceBy(before, after, 'ws-1'),
+      expected: false,
     });
   });
 });
@@ -563,13 +642,55 @@ describe('removeWorkspace', () => {
     });
   });
 
-  it('given the last workspace, should be a no-op', () => {
+  it('given the last workspace, should remove it and leave the machine empty', () => {
     const machine = initialMachineWorkspaces(aWorkspace());
+
+    const actual = removeWorkspace(machine, 'ws-1');
 
     assert({
       given: 'the only workspace a machine has',
-      should: 'refuse — the middle view would have nothing to render (a broken pane can be emptied instead)',
-      actual: removeWorkspace(machine, 'ws-1'),
+      should:
+        'remove it — a view you cannot destroy is not a view; the floor here is what made the last sidebar row unremovable',
+      actual: { workspaces: Object.keys(actual.workspaces), order: actual.order, active: actual.activeWorkspaceId },
+      expected: { workspaces: [], order: [], active: '' },
+    });
+  });
+
+  it('given the last workspace, should set activeWorkspaceId to the empty string exactly', () => {
+    const actual = removeWorkspace(initialMachineWorkspaces(aWorkspace()), 'ws-1');
+
+    assert({
+      given: 'a removal that empties the machine',
+      should:
+        "produce '' and not undefined — the neighbour lookup is order[-1] here, and undefined in a field typed string reads downstream as 'not mounted yet' rather than 'nothing active'",
+      actual: actual.activeWorkspaceId === '',
+      expected: true,
+    });
+  });
+
+  it('given every workspace removed one at a time, should end empty without throwing', () => {
+    const machine = addWorkspace(
+      addWorkspace(initialMachineWorkspaces(aWorkspace('ws-a', 'a1')), aWorkspace('ws-b', 'b1')),
+      aWorkspace('ws-c', 'c1')
+    );
+
+    const actual = ['ws-a', 'ws-b', 'ws-c'].reduce(removeWorkspace, machine);
+
+    assert({
+      given: 'three workspaces removed in sequence',
+      should: 'end at zero with nothing active',
+      actual: { order: actual.order, active: actual.activeWorkspaceId },
+      expected: { order: [], active: '' },
+    });
+  });
+
+  it('given an unknown workspace id, should be a no-op', () => {
+    const machine = initialMachineWorkspaces(aWorkspace());
+
+    assert({
+      given: 'an id the machine does not have',
+      should: 'be a no-op',
+      actual: removeWorkspace(machine, 'nope'),
       expected: machine,
     });
   });
@@ -608,6 +729,20 @@ describe('mergeServerWorkspaces — reconciling the server\'s workspace list', (
     scope: BRANCH_SCOPE,
     columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }],
     ...overrides,
+  });
+
+  it('given an empty server list, should converge on zero rather than keep the local rows', () => {
+    const local = initialMachineWorkspaces(aWorkspace());
+
+    const merged = mergeServerWorkspaces(local, []);
+
+    assert({
+      given: 'a server that reports this machine has no workspaces (the user removed them all)',
+      should:
+        'apply it — returning `local` here (the old fallback) meant "server has zero" could NEVER converge, since this hydrate runs once per mount and nothing prunes afterwards',
+      actual: { order: merged.order, active: merged.activeWorkspaceId },
+      expected: { order: [], active: '' },
+    });
   });
 
   it('given no local state, should build a fresh machine from the server list', () => {
@@ -723,19 +858,34 @@ describe('applyServerWorkspaceDeleted', () => {
     });
   });
 
-  it('given the machine\'s only workspace, should keep it — a machine never renders zero workspaces', () => {
+  it("given the machine's only workspace, should apply the delete", () => {
     const machine = initialMachineWorkspaces(aWorkspace());
+
+    const applied = applyServerWorkspaceDeleted(machine, 'ws-1');
 
     assert({
       given: 'a delete event for the last workspace this browser has locally',
-      should: 'be a no-op, converging once this browser\'s own next write reconciles the server',
-      actual: applyServerWorkspaceDeleted(machine, 'ws-1'),
-      expected: machine,
+      should:
+        'apply it — the old floor DROPPED this event, so a browser whose teammate removed the last view kept a phantom of it forever (nothing re-reconciles after the once-per-mount hydrate)',
+      actual: { order: applied.order, active: applied.activeWorkspaceId },
+      expected: { order: [], active: '' },
     });
   });
 });
 
 describe('sanitizeMachines — what comes back from storage is untrusted', () => {
+  it('given a persisted machine with zero workspaces, should drop the entry', () => {
+    const actual = sanitizeMachines({ m1: { workspaces: {}, order: [], activeWorkspaceId: '' } });
+
+    assert({
+      given: 'an empty machine coming back out of localStorage',
+      should:
+        'drop the entry — ensureMachine re-adds it on mount, so this is equivalent to keeping it, and the UI must therefore key its empty state on "no active workspace resolves" rather than on the entry existing',
+      actual: Object.keys(actual),
+      expected: [],
+    });
+  });
+
   it('given a workspace from an older, incompatible shape, should drop it rather than crash on render', () => {
     const persisted = {
       m1: {

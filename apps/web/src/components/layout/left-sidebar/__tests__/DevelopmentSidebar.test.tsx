@@ -303,9 +303,12 @@ describe('DevelopmentSidebar', () => {
     // The machine is parked on another tab — the case where the click used to do
     // nothing at all, because only the Terminal tab mounts a workspace grid.
     useMachineTabStore.getState().setTab('machine-1', 'code');
+    // Seeded explicitly: rendering the sidebar no longer fabricates a first
+    // workspace, so a machine only has rows the user actually opened.
+    useMachineWorkspaceStore.getState().ensureMachine('machine-1');
+    useMachineWorkspaceStore.getState().createWorkspace('machine-1');
     render(<DevelopmentSidebar />);
 
-    // Expand the machine to reveal its (idempotent-repaired) first workspace.
     await user.click(await screen.findByRole('button', { name: 'Expand' }));
     await user.click(await screen.findByText('Workspace 1'));
 
@@ -331,7 +334,9 @@ describe('DevelopmentSidebar', () => {
 
     await waitFor(() => {
       const machine = selectMachine('machine-1')(useMachineWorkspaceStore.getState())!;
-      expect(Object.keys(machine.workspaces).length).toBe(2);
+      // ONE, not two. This used to expect two: rendering the sidebar fabricated a
+      // "Workspace 1" for every machine, and the spawn added a second beside it.
+      expect(Object.keys(machine.workspaces).length).toBe(1);
       expect(usePendingWorkspaceStore.getState().pending).toEqual({
         machineId: 'machine-1',
         workspaceId: machine.activeWorkspaceId,

@@ -121,7 +121,6 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     }
 
     if (bootstrapAttempted.current) return;
-    bootstrapAttempted.current = true;
 
     const local = useMachineWorkspaceStore.getState().machines[machineId];
     const payload = (local ? workspacesOf(local) : []).map((workspace) => ({
@@ -130,6 +129,25 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
       scope: workspace.scope,
       columns: toWireColumns(workspace.columns),
     }));
+
+    // Nothing local to seed — so claim nothing. Bootstrap is first-writer-wins
+    // (one row per machine, PK machineId): claiming with an empty list would
+    // burn the claim and permanently discard the un-migrated history of a
+    // browser that DOES have some. This matters now that `ensureMachine` no
+    // longer fabricates a Workspace 1: the Development sidebar mounts this hook
+    // per machine row, so merely rendering it would otherwise fire an empty
+    // claim at every machine in the drive before the user opens any of them.
+    //
+    // Must HYDRATE, not just skip the POST: the hydrate above is gated on
+    // `data.bootstrapped`, so returning without one would leave this browser
+    // showing an empty machine while the server holds real rows.
+    if (payload.length === 0) {
+      hydratedOnce.current = true;
+      hydrateFromServer(machineId, data.workspaces);
+      return;
+    }
+
+    bootstrapAttempted.current = true;
 
     post<BootstrapResponse>('/api/machines/workspaces/bootstrap', { machineId, workspaces: payload })
       .then((res) => {
@@ -367,21 +385,15 @@ export function useSyncedWorkspaceActions(machineId: string) {
       splitDownLocal(machineId, workspaceId, fromPaneId);
       void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
+    /** Closing the last pane removes the whole workspace, and that case must
+     * DELETE, not PATCH: `pushWorkspaceUpdate` falls back to POST-create on a
+     * 404, so PATCHing a workspace this very call just removed would RE-CREATE
+     * it server-side and broadcast the resurrected row back to every browser —
+     * including the one whose user just closed it. */
     closePane(workspaceId: string, paneId: string): void {
-      closePaneLocal(machineId, workspaceId, paneId);
-      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
-    },
-    /** Closes several panes of the SAME workspace as one push, not one PATCH per
-     * pane — e.g. emptying every running pane when removing the machine's only
-     * remaining workspace. `closePane` in a loop would fire N independent
-     * fire-and-forget PATCHes with no ordering guarantee: a slower EARLIER
-     * request resolving after a later one could leave the server's layout at
-     * an intermediate (still-bound-to-a-just-killed-agent) state instead of
-     * the final fully-emptied one. Applying every local close first, then
-     * pushing once, means the single PATCH always carries the final result. */
-    closePanes(workspaceId: string, paneIds: string[]): void {
-      paneIds.forEach((paneId) => closePaneLocal(machineId, workspaceId, paneId));
-      if (paneIds.length > 0) void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
+      const removedWorkspace = closePaneLocal(machineId, workspaceId, paneId);
+      if (removedWorkspace) pushRemoval(machineId, workspaceId);
+      else void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
     bindPaneTerminal(workspaceId: string, paneId: string, scope: OpenTerminalScope, pendingPrompt?: string): boolean {
       const bound = bindPaneTerminalLocal(machineId, workspaceId, paneId, scope, pendingPrompt);

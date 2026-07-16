@@ -21,7 +21,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   newWorkspace,
-  initialMachineWorkspaces,
   addWorkspace,
   updateWorkspace,
   removeWorkspace as removeWorkspaceTransition,
@@ -41,7 +40,8 @@ import {
   dismissPicker as dismissPickerTransition,
   splitRight as splitRightTransition,
   splitDown as splitDownTransition,
-  closePane as closePaneTransition,
+  closePaneIn,
+  removedWorkspaceBy,
   selectPane as selectPaneTransition,
   nodeOfTerminalScope,
   panesOf,
@@ -85,13 +85,16 @@ const PERSISTED_VERSION = 1;
 interface MachineWorkspaceStoreState {
   /** Every machine's workspaces, keyed by the Machine page's own id. */
   machines: Record<string, MachineWorkspacesState>;
-  /** Creates the machine's first workspace if it has none. Idempotent. */
+  /** Creates the machine's entry (with zero workspaces) if it has none, and
+   * re-targets an `activeWorkspaceId` that doesn't resolve. Never creates a
+   * workspace — zero is a legal state. Idempotent. */
   ensureMachine: (machineId: string) => void;
   /** A new empty workspace (auto-named), shown immediately. Returns its id. */
   createWorkspace: (machineId: string, scope?: MachineNodeScope) => string;
   /** THE FIX: switches the whole middle view to this workspace's grid. */
   setActiveWorkspace: (machineId: string, workspaceId: string) => void;
-  /** Drops a workspace and shows a neighbour. A machine keeps at least one. */
+  /** Drops a workspace and shows a neighbour — including the last one, which
+   * leaves the machine empty. */
   removeWorkspace: (machineId: string, workspaceId: string) => void;
   /** Local rename — the server-synced wrapper (`useMachineWorkspaceSync`) pushes this to the server too. */
   renameWorkspace: (machineId: string, workspaceId: string, name: string) => void;
@@ -120,7 +123,10 @@ interface MachineWorkspaceStoreState {
   dismissPicker: (machineId: string, workspaceId: string, paneId: string) => void;
   splitRight: (machineId: string, workspaceId: string, fromPaneId: string) => void;
   splitDown: (machineId: string, workspaceId: string, fromPaneId: string) => void;
-  closePane: (machineId: string, workspaceId: string, paneId: string) => void;
+  /** Closes a pane, removing its workspace if it was the last one. Returns true
+   * in that case, so the caller pushes a DELETE instead of a layout PATCH for a
+   * workspace that no longer exists. */
+  closePane: (machineId: string, workspaceId: string, paneId: string) => boolean;
   selectPane: (machineId: string, workspaceId: string, paneId: string) => void;
 }
 
@@ -158,27 +164,32 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       machines: {},
 
       ensureMachine: (machineId) => {
-        // REPAIRS, rather than merely skipping when the key exists. A machine
-        // whose active workspace doesn't resolve renders nothing at all, and if
-        // the only check were `machines[machineId]` that blank view would be
-        // permanent — there is no way for a user to clear this storage from
-        // inside the app.
+        // Creates the machine's ENTRY, never a workspace. A machine with zero
+        // workspaces is legal (the middle view renders an empty state for it),
+        // so fabricating a "Workspace 1" here would resurrect a row the user
+        // just removed — and, because this runs from every sidebar tree node,
+        // would invent workspaces for machines they never opened.
+        //
+        // The entry itself must exist even when empty: `applyToMachine` no-ops
+        // on a missing machine, so `createWorkspace`/`openTerminal` would
+        // silently do nothing without it.
         const machine = get().machines[machineId];
-        if (machine && machine.workspaces[machine.activeWorkspaceId]) return;
+        if (!machine) {
+          set((state) => ({
+            machines: { ...state.machines, [machineId]: { workspaces: {}, order: [], activeWorkspaceId: '' } },
+          }));
+          return;
+        }
 
-        set((state) => ({
-          machines: {
-            ...state.machines,
-            [machineId]: initialMachineWorkspaces(
-              newWorkspace({
-                id: crypto.randomUUID(),
-                name: 'Workspace 1',
-                scope: MACHINE_NODE_SCOPE,
-                firstPaneId: crypto.randomUUID(),
-              })
-            ),
-          },
-        }));
+        // Still REPAIRS an active id that doesn't resolve — that renders nothing
+        // at all, and there is no way for a user to clear this storage from
+        // inside the app, so a blank view would be permanent. The repair is now
+        // re-targeting to a workspace that exists (or to "none"), not minting one.
+        if (machine.workspaces[machine.activeWorkspaceId]) return;
+        set((state) => applyToMachine(state, machineId, (current) => ({
+          ...current,
+          activeWorkspaceId: current.order[0] ?? '',
+        })));
       },
 
       createWorkspace: (machineId, scope = MACHINE_NODE_SCOPE) => {
@@ -327,9 +338,17 @@ export const useMachineWorkspaceStore = create<MachineWorkspaceStoreState>()(
       },
 
       closePane: (machineId, workspaceId, paneId) => {
-        set((state) =>
-          applyToWorkspace(state, machineId, workspaceId, (workspace) => closePaneTransition(workspace, paneId))
-        );
+        const before = get().machines[machineId];
+        if (!before) return false;
+
+        const after = closePaneIn(before, workspaceId, paneId);
+        if (after === before) return false;
+
+        set((state) => ({ machines: { ...state.machines, [machineId]: after } }));
+        // Reported rather than re-derived by the caller: only the transition
+        // knows whether this pane was the workspace's last, and the sync layer
+        // must DELETE (not PATCH) when it was.
+        return removedWorkspaceBy(before, after, workspaceId);
       },
 
       selectPane: (machineId, workspaceId, paneId) => {

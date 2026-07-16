@@ -1,10 +1,16 @@
 import { describe, test, beforeEach, vi, expect } from 'vitest';
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 import type { ReactElement } from 'react';
 import { assert } from '@/stores/__tests__/riteway';
-import { useMachineWorkspaceStore, selectMachine, sessionWorkspaceId } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import {
+  useMachineWorkspaceStore,
+  selectMachine,
+  sessionWorkspaceId,
+  workspacesOf,
+  type MachineNodeScope,
+} from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import WorkspaceLeaves, { WorkspaceNodeExtras } from './WorkspaceLeaves';
 import type { MachineTreeNode } from './MachineTree';
 
@@ -37,6 +43,14 @@ const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
 
 const store = () => useMachineWorkspaceStore.getState();
 
+/** A machine with one workspace at `scope`. Rendering alone no longer produces
+ * one: `ensureMachine` creates the machine's entry and nothing else, because a
+ * machine with no terminals is a legal state rather than a blank view to repair. */
+const seedMachine = (machineId: string, scope: MachineNodeScope = {}) => {
+  store().ensureMachine(machineId);
+  return store().createWorkspace(machineId, scope);
+};
+
 // A fresh SWR cache per render — without it, useAgentTerminals' SWR key
 // (machineId+scope) is IDENTICAL across every test in this file, so a
 // later test would silently see an earlier test's cached response instead
@@ -51,19 +65,45 @@ describe('WorkspaceLeaves', () => {
     useMachineWorkspaceStore.setState({ machines: {} });
   });
 
-  test('a machine this browser has never opened still shows its (auto-created) first workspace', async () => {
+  test('a machine this browser has never opened shows no workspace rows', async () => {
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
-    const row = await screen.findByText('Workspace 1');
+    await waitFor(() => expect(store().machines['m1']).toBeDefined());
     assert({
       given: 'a machine with no prior local workspace state',
-      should: 'idempotent-repair a first workspace so the node is never permanently empty',
-      actual: row.textContent,
-      expected: 'Workspace 1',
+      should:
+        'list nothing — fabricating a first workspace here invented rows for machines the user never opened, and put a removed row straight back',
+      actual: screen.queryByText('Workspace 1'),
+      expected: null,
+    });
+  });
+
+  test('removing the only workspace, then creating a new one, leaves exactly ONE row', async () => {
+    // THE REPORTED BUG. The floor made removeWorkspace a no-op on the last
+    // workspace, so the sidebar emptied its panes instead and the row survived;
+    // `+ New terminal` then added a second row beside the zombie.
+    seedMachine('m1');
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('Workspace 1')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(workspacesOf(selectMachine('m1')(store())).length).toBe(0));
+
+    act(() => {
+      store().createWorkspace('m1');
+    });
+
+    assert({
+      given: 'the machine\'s only workspace removed, then a new terminal opened',
+      should: 'show exactly one row — not the un-removable zombie plus a new one',
+      actual: workspacesOf(selectMachine('m1')(store())).length,
+      expected: 1,
     });
   });
 
   test('clicking a workspace row reports its id, not its name', async () => {
+    seedMachine('m1');
     const onSelectWorkspace = vi.fn();
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={onSelectWorkspace} />);
 
@@ -87,7 +127,7 @@ describe('WorkspaceLeaves', () => {
   // first click's onSelectWorkspace must be deferred and cancelled by the
   // second click that starts the rename.
   test('double-clicking a workspace name to rename it does NOT also call onSelectWorkspace', async () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const onSelectWorkspace = vi.fn();
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={onSelectWorkspace} />);
 
@@ -102,7 +142,7 @@ describe('WorkspaceLeaves', () => {
   });
 
   test('the active workspace is marked aria-current; an inactive sibling is not', async () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const first = selectMachine('m1')(store())!.activeWorkspaceId;
     const second = store().createWorkspace('m1');
 
@@ -120,7 +160,7 @@ describe('WorkspaceLeaves', () => {
   });
 
   test('a session bound into an existing workspace via split-and-pick is not listed as its own row', async () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
     store().splitRight('m1', workspace.id, workspace.activePaneId);
     const withPane = selectMachine('m1')(store())!.workspaces[workspace.id];
@@ -142,7 +182,7 @@ describe('WorkspaceLeaves', () => {
   });
 
   test('workspaces are filtered to the node\'s own scope', async () => {
-    store().ensureMachine('m1'); // machine-scope "Workspace 1"
+    seedMachine('m1'); // machine-scope "Workspace 1"
     store().createWorkspace('m1', { projectName: 'app' }); // project-scope "Workspace 2"
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={PROJECT_NODE} onSelectWorkspace={vi.fn()} />);
@@ -157,7 +197,7 @@ describe('WorkspaceLeaves', () => {
   });
 
   test('removing an EMPTY workspace calls the store action after confirming', async () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     store().createWorkspace('m1');
 
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
@@ -183,7 +223,7 @@ describe('WorkspaceLeaves', () => {
   // it has to actually stop it, or the sidebar leaves no way back to a
   // running (and billing) Sprite.
   test('removing a workspace WITH a running pane stops that agent server-side before dropping the workspace', async () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
     store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
     // A SECOND (empty) workspace, so removing the first one actually exercises
@@ -216,8 +256,8 @@ describe('WorkspaceLeaves', () => {
   // ONLY workspace (the store always keeps at least one) — a naive "kill the
   // agent, then removeWorkspace" leaves that no-op'd workspace with a pane
   // still bound to the agent name just killed: a zombie row/grid.
-  test('removing the machine\'s ONLY workspace stops its agent but EMPTIES the workspace instead of leaving it bound to a dead agent', async () => {
-    store().ensureMachine('m1');
+  test('removing the machine\'s ONLY workspace stops its agent and removes the workspace outright', async () => {
+    seedMachine('m1');
     const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
     const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
     store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'claude-solo' });
@@ -230,28 +270,16 @@ describe('WorkspaceLeaves', () => {
 
     await waitFor(() => {
       const machine = selectMachine('m1')(store())!;
-      const remaining = machine.workspaces[workspaceId];
-      // `pane.scope: null` is the CORRECT, expected outcome here — `??` would
-      // wrongly swallow that legitimate null into a "missing" sentinel, so
-      // presence and value are checked separately instead.
-      const pane = remaining?.columns[0]?.panes[0];
       assert({
         given: 'a machine with exactly one workspace holding a running pane, remove confirmed',
-        should: 'stop the agent server-side, then EMPTY the workspace locally rather than no-op and leave it bound to the killed agent',
+        should:
+          'stop the agent server-side and drop the workspace — this used to EMPTY it in place instead, which left an un-removable row that New terminal then duplicated',
         actual: {
           deletedRunningAgent: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=claude-solo')),
           workspaceCount: Object.keys(machine.workspaces).length,
-          stillOneWorkspace: remaining !== undefined,
-          paneExists: pane !== undefined,
-          paneScope: pane === undefined ? 'PANE_MISSING' : pane.scope,
+          active: machine.activeWorkspaceId,
         },
-        expected: {
-          deletedRunningAgent: true,
-          workspaceCount: 1,
-          stillOneWorkspace: true,
-          paneExists: true,
-          paneScope: null,
-        },
+        expected: { deletedRunningAgent: true, workspaceCount: 0, active: '' },
       });
     });
   });
@@ -292,7 +320,7 @@ describe('WorkspaceLeaves', () => {
 
   describe('inline rename', () => {
     test('double-clicking a workspace name opens an editable input, pre-filled with its current name', async () => {
-      store().ensureMachine('m1');
+      seedMachine('m1');
       renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
       const row = await screen.findByText('Workspace 1');
@@ -308,7 +336,7 @@ describe('WorkspaceLeaves', () => {
     });
 
     test('Enter commits the new name and pushes it to the server', async () => {
-      store().ensureMachine('m1');
+      seedMachine('m1');
       const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
       renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -337,7 +365,7 @@ describe('WorkspaceLeaves', () => {
     });
 
     test('Escape cancels without saving the draft', async () => {
-      store().ensureMachine('m1');
+      seedMachine('m1');
       const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
       renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -361,7 +389,7 @@ describe('WorkspaceLeaves', () => {
     // would re-enter the commit path — resurrecting the cancelled draft after
     // Escape, or firing a redundant second commit after Enter.
     test('a blur event firing immediately after Escape does not resurrect the cancelled draft', async () => {
-      store().ensureMachine('m1');
+      seedMachine('m1');
       const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
       renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
@@ -384,7 +412,7 @@ describe('WorkspaceLeaves', () => {
     });
 
     test('a blur event firing immediately after Enter does not fire a redundant second commit', async () => {
-      store().ensureMachine('m1');
+      seedMachine('m1');
       renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
       await userEvent.dblClick(await screen.findByText('Workspace 1'));
@@ -425,9 +453,34 @@ describe('WorkspaceLeaves', () => {
       should: 'render it without an adopt affordance (clicking its name does nothing) but WITH a remove button',
       actual: {
         adoptedAnything: onSelectWorkspace.mock.calls.length,
-        hasRemoveButton: within(row).queryByRole('button', { name: /Remove unsupported session legacy-cli/ }) !== null,
+        hasRemoveButton: within(row).queryByRole('button', { name: /Remove session legacy-cli/ }) !== null,
       },
       expected: { adoptedAnything: 0, hasRemoveButton: true },
+    });
+  });
+
+  // The OTHER un-removable listing: a `shell`/`claude`/`codex` orphan rendered
+  // its remove button only when `!launchable`, so a supported unclaimed session
+  // had no remove affordance at all. The only stop path was "remove the
+  // workspace holding it" — which is precisely what an unclaimed session lacks.
+  test('a LAUNCHABLE unclaimed session is removable too, not just adoptable', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          agentTerminals: [{ name: 'claude-orphan', agentType: 'claude', createdAt: '2026-01-01' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('claude-orphan')).closest('.group') as HTMLElement;
+
+    assert({
+      given: 'an unclaimed session whose agent type IS supported',
+      should: 'still offer a remove button — it has no workspace to remove instead',
+      actual: within(row).queryByRole('button', { name: /Remove session claude-orphan/ }) !== null,
+      expected: true,
     });
   });
 
@@ -443,7 +496,7 @@ describe('WorkspaceLeaves', () => {
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
     const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
-    await userEvent.click(within(row).getByRole('button', { name: /Remove unsupported session legacy-cli/ }));
+    await userEvent.click(within(row).getByRole('button', { name: /Remove session legacy-cli/ }));
 
     await waitFor(() => {
       assert({
@@ -472,7 +525,7 @@ describe('WorkspaceLeaves', () => {
     renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
 
     const row = (await screen.findByText('legacy-cli')).closest('.group') as HTMLElement;
-    await userEvent.click(within(row).getByRole('button', { name: /Remove unsupported session legacy-cli/ }));
+    await userEvent.click(within(row).getByRole('button', { name: /Remove session legacy-cli/ }));
 
     await waitFor(() => {
       assert({
@@ -504,7 +557,7 @@ describe('WorkspaceNodeExtras', () => {
   });
 
   test('shows a running-count badge scoped to the node', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = selectMachine('m1')(store())!.workspaces[selectMachine('m1')(store())!.activeWorkspaceId];
     store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, { name: 'claude-a1b2c3' });
 

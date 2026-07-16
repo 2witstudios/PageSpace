@@ -23,8 +23,11 @@ import { PICKABLE_AGENT_TYPES, type AgentRuntimeType } from '@pagespace/lib/serv
 import {
   useMachineWorkspaceStore,
   selectActiveWorkspace,
+  selectMachine,
   autoSessionName,
   panesOf,
+  workspacesOf,
+  sessionWorkspaceId,
   MACHINE_NODE_SCOPE,
   type MachineNodeScope,
   type OpenTerminalScope,
@@ -62,10 +65,15 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // The middle view IS the active workspace's grid — selecting another workspace
   // swaps this whole component's contents for that item's combination of panes.
   const workspace = useMachineWorkspaceStore(selectActiveWorkspace(machineId));
+  // Read alongside the active workspace to tell the two "no grid to draw" cases
+  // apart: no machine entry yet (one frame, pre-`ensureMachine`) vs an entry
+  // with zero workspaces (the user removed them all — a real, legal state).
+  const machine = useMachineWorkspaceStore(selectMachine(machineId));
   // Layout-affecting actions push the resulting workspace state to the server
   // (#2048); selectPane/clearPanePrompt/dismissPicker stay local-only (focus
   // and one-shot UI intent, never synced — see useMachineWorkspaceSync's doc).
-  const { splitRight, splitDown, closePane, bindPaneTerminal } = useSyncedWorkspaceActions(machineId);
+  const { splitRight, splitDown, closePane, bindPaneTerminal, createWorkspace } =
+    useSyncedWorkspaceActions(machineId);
   const selectPane = useMachineWorkspaceStore((state) => state.selectPane);
   const clearPanePrompt = useMachineWorkspaceStore((state) => state.clearPanePrompt);
   const dismissPicker = useMachineWorkspaceStore((state) => state.dismissPicker);
@@ -119,9 +127,70 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     [addAgentTerminal, removeAgentTerminal, bindPaneTerminal, workspaceId, scope.projectName, scope.branchName],
   );
 
+  /**
+   * Close means close: the pane goes, and its PTY is killed with it — the same
+   * meaning `X` has in every terminal emulator. The alternative (detach, leaving
+   * the session running) is what MANUFACTURES orphan rows: a terminal outliving
+   * the only view of it becomes an "unclaimed" session in the sidebar, which is
+   * the unremovable-listing bug this change exists to kill.
+   *
+   * Not killed when another pane still binds the same session: `openTerminal`'s
+   * doc records that a session can legitimately be shown in two panes at once,
+   * and closing one of those must not pull the PTY out from under the other.
+   * Read from the store rather than this render's `workspace`, since only the
+   * machine-wide state can see panes in the workspaces we aren't rendering.
+   */
+  const closePaneAndKill = useCallback(
+    (paneId: string) => {
+      const current = useMachineWorkspaceStore.getState().machines[machineId];
+      const machinePanes = current ? workspacesOf(current).flatMap(panesOf) : [];
+      const closing = machinePanes.find((candidate) => candidate.id === paneId)?.scope ?? null;
+
+      // Compared by `sessionWorkspaceId` — the session's real identity is the
+      // (project, branch, name) triple (that is `machine_agent_terminals`' unique
+      // index), not the name alone, which two branches could legitimately share.
+      const boundElsewhere =
+        closing !== null &&
+        machinePanes.some(
+          (candidate) =>
+            candidate.id !== paneId &&
+            candidate.scope !== null &&
+            sessionWorkspaceId(candidate.scope) === sessionWorkspaceId(closing),
+        );
+
+      closePane(workspaceId, paneId);
+      if (closing !== null && !boundElsewhere) {
+        void removeAgentTerminal(closing.name).catch(() => {
+          // The pane is already gone locally; a failed kill leaves the session
+          // discoverable as an unclaimed row (which now carries its own remove
+          // button), so this must not throw into the click handler.
+        });
+      }
+    },
+    [machineId, workspaceId, closePane, removeAgentTerminal],
+  );
+
   // Briefly undefined between this component's first render and the mounting
-  // MachineWorkspace's ensureMachine effect committing.
-  if (!workspace) return null;
+  // MachineWorkspace's ensureMachine effect committing. Distinct from "the
+  // machine has no workspaces" below — rendering the empty state here would
+  // flash "No terminals open" for one frame on every machine open.
+  if (!machine) return null;
+
+  // Zero workspaces is a legal, converged state, not a blank view to be repaired
+  // by fabricating one. This empty state is what makes removing the LAST view
+  // possible: without something to render here, the old code kept a workspace
+  // alive purely so the grid had something to draw.
+  if (!workspace) {
+    return (
+      <PaneNotice
+        testId="machine-no-terminals"
+        title="No terminals open"
+        description="Open a terminal to start working on this machine."
+        actionLabel="New Terminal"
+        onAction={() => createWorkspace(MACHINE_NODE_SCOPE)}
+      />
+    );
+  }
 
   const { activePaneId, pendingPickerPaneId, columns } = workspace;
   const scopeLabel = scopeLabelOf(scope);
@@ -136,11 +205,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     machineId,
     pane,
     isActive: pane.id === activeId,
-    // A lone pane can still be closed when it holds a terminal — closing it
-    // detaches the terminal and hands the pane back to the picker. Without that,
-    // a workspace whose only pane shows a session that no longer exists could
-    // never be recovered.
-    canClose: panes.length > 1 || pane.scope !== null,
+    // Every pane closes, always. The old rule (`panes.length > 1 || scope !==
+    // null`) existed to stop a lone empty pane being closed, because the
+    // workspace had nowhere to go — closing the last pane now removes the
+    // workspace itself, so there is no such dead end left to guard.
+    canClose: true,
     // A split just made this pane, so its picker takes focus — the user asked
     // for a new agent, not for a blank rectangle to go find a control in.
     pickerFocused: pane.id === pendingPickerPaneId,
@@ -152,7 +221,7 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
     onSelect: () => selectPane(machineId, workspaceId, pane.id),
     onSplitRight: () => splitRight(workspaceId, pane.id),
     onSplitDown: () => splitDown(workspaceId, pane.id),
-    onClose: () => closePane(workspaceId, pane.id),
+    onClose: () => closePaneAndKill(pane.id),
     onSpawn: (agentType: AgentRuntimeType, prompt?: string) => spawnIntoPane(pane.id, agentType, prompt),
     onPickerFocused: () => dismissPicker(machineId, workspaceId, pane.id),
     onPromptSent: () => clearPanePrompt(machineId, workspaceId, pane.id),

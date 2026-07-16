@@ -19,19 +19,20 @@
  * here; route to the machine first, there).
  *
  * Removing a workspace STOPS every agent its panes hold (`removeAgentTerminal`
- * per running pane) before dropping the local grid — this is the only
- * terminal-level stop/remove path left once `SessionLeaves`'s per-session
- * remove button is gone, so it must not merely hide a still-running (and
- * still-billing) agent with no row left to reach it from.
+ * per running pane) before dropping the local grid — it must not merely hide a
+ * still-running (and still-billing) agent with no row left to reach it from.
+ * Removal applies to the machine's LAST workspace too: a workspace is a view of
+ * terminals, and a view you cannot destroy is not a view. Zero workspaces is a
+ * legal state — the middle view renders an empty state for it.
  *
  * A session the SERVER reports at this scope but that isn't yet any local
- * workspace's pane — another browser, a cleared localStorage, a session an
- * agent tool spawned directly — is rendered as an "unclaimed" row too:
- * clicking it materializes (and activates) its own workspace via the store's
- * `openTerminal`, the same reconciliation the old `SessionLeaves` did
- * implicitly by always listing the server's truth. Without this, such a
- * session is unreachable from the sidebar at all — can't be opened, and (since
- * removing a workspace is the only stop path now) can't be stopped either.
+ * workspace's pane — another browser, or a session an agent tool spawned
+ * directly — is rendered as an "unclaimed" row too: clicking it materializes
+ * (and activates) its own workspace via the store's `openTerminal`, the same
+ * reconciliation the old `SessionLeaves` did implicitly by always listing the
+ * server's truth. Without this, such a session is unreachable from the sidebar
+ * at all. Every unclaimed row carries its own remove button, since the
+ * workspace-level stop path is exactly what it lacks.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -87,7 +88,7 @@ export default function WorkspaceLeaves({
   const machine = useMachineWorkspaceStore(selectMachine(machineId));
   // Identity/layout-affecting actions push to the server (#2048); local-only
   // UI state (which row is being renamed, which is pending removal) stays here.
-  const { removeWorkspace, closePanes, openTerminal, renameWorkspace } = useSyncedWorkspaceActions(machineId);
+  const { removeWorkspace, openTerminal, renameWorkspace } = useSyncedWorkspaceActions(machineId);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
@@ -123,9 +124,6 @@ export default function WorkspaceLeaves({
 
   const workspaces = workspacesOf(machine).filter((workspace) => isSameNodeScope(workspace.scope, scope));
   const pendingWorkspace = workspaces.find((workspace) => workspace.id === pendingRemove);
-  const pendingRunningPaneIds = pendingWorkspace
-    ? panesOf(pendingWorkspace).filter((pane) => pane.scope !== null).map((pane) => pane.id)
-    : [];
   const pendingRunningNames = pendingWorkspace
     ? panesOf(pendingWorkspace)
         .map((pane) => pane.scope?.name)
@@ -195,10 +193,11 @@ export default function WorkspaceLeaves({
   };
 
   /** Unlike removing a live workspace (routed through {@link ConfirmRemoveDialog}, which
-   * surfaces a thrown error as a toast), this is a one-click cleanup of an already-dead
-   * row — no confirmation step, but a failed DELETE must still be reported rather than
-   * silently no-op'ing (the row would otherwise look un-removable with no feedback why). */
-  const removeUnlaunchableSession = async (name: string) => {
+   * surfaces a thrown error as a toast), this is a one-click cleanup of a row with no
+   * workspace behind it — no confirmation step, but a failed DELETE must still be
+   * reported rather than silently no-op'ing (the row would otherwise look un-removable
+   * with no feedback why). */
+  const removeUnclaimedSession = async (name: string) => {
     try {
       await removeAgentTerminal(name);
     } catch (err) {
@@ -285,12 +284,15 @@ export default function WorkspaceLeaves({
                 {session.name}
               </span>
             </button>
-            {!launchable && (
-              <RemoveButton
-                onClick={() => void removeUnlaunchableSession(session.name)}
-                label={`Remove unsupported session ${session.name}`}
-              />
-            )}
+            {/* EVERY unclaimed row is removable, not just the unlaunchable ones.
+                A `shell`/`claude`/`codex` orphan used to have no remove button
+                at all: the only stop path was "remove the workspace holding it",
+                which by definition is the thing an unclaimed session doesn't
+                have. It was a listing you could not get rid of. */}
+            <RemoveButton
+              onClick={() => void removeUnclaimedSession(session.name)}
+              label={`Remove session ${session.name}`}
+            />
           </div>
         );
       })}
@@ -311,15 +313,12 @@ export default function WorkspaceLeaves({
           // dropping the local entry — otherwise the agent (and its billing)
           // survives with no sidebar row left to reach it from.
           await Promise.all(pendingRunningNames.map((name) => removeAgentTerminal(name)));
-          // removeWorkspace no-ops when this is the machine's ONLY workspace
-          // (a machine always keeps at least one) — empty its panes locally
-          // instead of dropping the (unchanged) workspace, or it would linger
-          // bound to the agent names just killed above.
-          if (workspacesOf(machine).length <= 1) {
-            closePanes(pendingRemove, pendingRunningPaneIds);
-          } else {
-            removeWorkspace(pendingRemove);
-          }
+          // Unconditional, including the machine's last workspace. This used to
+          // branch: `removeWorkspace` no-op'd on the last one, so the row was
+          // emptied in place instead — which left it in the sidebar, unremovable
+          // no matter how many times the user confirmed, and `+ New terminal`
+          // then added a SECOND row beside the zombie.
+          removeWorkspace(pendingRemove);
         }}
       />
     </div>

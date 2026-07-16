@@ -38,6 +38,14 @@ function jsonResponse(body: unknown) {
   return { ok: true, json: async () => body };
 }
 
+/** A machine with one workspace open. `ensureMachine` alone no longer gets you
+ * there — it creates the entry and nothing else, since zero workspaces is a
+ * legal state rather than a blank view to repair. */
+function seedMachine(machineId: string) {
+  useMachineWorkspaceStore.getState().ensureMachine(machineId);
+  return useMachineWorkspaceStore.getState().createWorkspace(machineId);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useMachineWorkspaceStore.setState({ machines: {} });
@@ -53,10 +61,13 @@ describe('useMachineWorkspaceSync', () => {
   // and persists across renderHook calls within a file, so reusing one id
   // across tests would silently serve an earlier test's cached response.
 
-  it('ensures the machine has a local default workspace on mount', async () => {
+  it('ensures the machine has an entry, and NO default workspace, on mount', async () => {
     renderHook(() => useMachineWorkspaceSync('m-default'));
 
-    expect(workspacesOf(selectMachine('m-default')(useMachineWorkspaceStore.getState()))).toHaveLength(1);
+    // Zero workspaces is a legal state — the middle view renders an empty state
+    // for it. Fabricating a default here is what made a removed row come back.
+    expect(selectMachine('m-default')(useMachineWorkspaceStore.getState())).toBeDefined();
+    expect(workspacesOf(selectMachine('m-default')(useMachineWorkspaceStore.getState()))).toHaveLength(0);
     // Let the in-flight SWR fetch/hydrate settle before the test tears down,
     // so its state update lands inside this test's act scope, not the next one's.
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
@@ -81,12 +92,17 @@ describe('useMachineWorkspaceSync', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
-  it('given the server reports NOT bootstrapped, POSTs this browser\'s local workspace to /bootstrap', async () => {
+  it('given the server reports NOT bootstrapped and this browser HAS local history, POSTs it to /bootstrap', async () => {
     mockFetchWithAuth.mockResolvedValue(jsonResponse({ bootstrapped: false, workspaces: [] }));
     mockPost.mockResolvedValue({
       claimed: true,
       workspaces: [{ id: 'ws-seeded', name: 'Seeded', scope: {}, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] }],
     });
+    // Local history to migrate — the whole reason the bootstrap claim exists.
+    // Without this the payload is empty and the claim is deliberately skipped
+    // (see the guard test below).
+    useMachineWorkspaceStore.getState().ensureMachine('m-unbootstrapped');
+    useMachineWorkspaceStore.getState().createWorkspace('m-unbootstrapped');
 
     renderHook(() => useMachineWorkspaceSync('m-unbootstrapped'));
 
@@ -99,6 +115,35 @@ describe('useMachineWorkspaceSync', () => {
     await waitFor(() => {
       const machine = selectMachine('m-unbootstrapped')(useMachineWorkspaceStore.getState());
       expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-seeded']);
+    });
+  });
+
+  it('given NOT bootstrapped but nothing local to seed, does NOT claim — it hydrates from the server instead', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      jsonResponse({
+        bootstrapped: false,
+        workspaces: [
+          { id: 'ws-theirs', name: 'Theirs', scope: {}, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+        ],
+      }),
+    );
+
+    renderHook(() => useMachineWorkspaceSync('m-empty-bootstrap'));
+
+    // Claiming with an empty list would burn first-writer-wins for nothing and
+    // permanently discard the un-migrated history of a browser that HAS some.
+    // Now that ensureMachine no longer fabricates a workspace, the Development
+    // sidebar (which mounts this hook per machine row) would otherwise fire an
+    // empty claim at every machine in the drive on render.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+    expect(mockPost).not.toHaveBeenCalled();
+
+    // ...but it must still HYDRATE: the normal hydrate path is gated on
+    // `bootstrapped`, so skipping both would strand this browser on an empty
+    // machine while the server holds real rows.
+    await waitFor(() => {
+      const machine = selectMachine('m-empty-bootstrap')(useMachineWorkspaceStore.getState());
+      expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-theirs']);
     });
   });
 
@@ -314,7 +359,7 @@ describe('useSyncedWorkspaceActions', () => {
   });
 
   it('removeWorkspace removes locally, then DELETEs it', () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    seedMachine(MACHINE_ID);
     const machine = selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState())!;
     useMachineWorkspaceStore.getState().createWorkspace(MACHINE_ID);
     const second = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[1];
@@ -335,7 +380,7 @@ describe('useSyncedWorkspaceActions', () => {
   });
 
   it('splitRight PATCHes the resulting layout via fetchWithAuth; on a real 404 status it falls back to POST-create', async () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     mockFetchWithAuth.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) });
 
@@ -354,7 +399,7 @@ describe('useSyncedWorkspaceActions', () => {
   });
 
   it('splitRight does NOT fall back to POST when the PATCH fails for a status OTHER than 404 — a real HTTP status check, not string-matching the error text', async () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     mockFetchWithAuth.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ error: 'error' }) });
 
@@ -373,7 +418,7 @@ describe('useSyncedWorkspaceActions', () => {
   });
 
   it('splitRight does NOT fall back to POST when the PATCH succeeds', async () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
 
@@ -394,7 +439,7 @@ describe('useSyncedWorkspaceActions', () => {
   // the rename. Sending only the field this action actually changed closes
   // that hole.
   it('splitRight PATCHes columns only — the rename it never touched is not sent', async () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
 
@@ -417,17 +462,18 @@ describe('useSyncedWorkspaceActions', () => {
   // EARLIER request resolving after a later one could leave the server at an
   // intermediate state. `closePanes` applies every local close first, then
   // pushes exactly once, so only the final result ever reaches the server.
-  it('closePanes closes every pane locally, then PATCHes exactly once with the final layout', async () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+  it('closePane on a pane with siblings PATCHes the remaining layout', async () => {
+    seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     useMachineWorkspaceStore.getState().splitRight(MACHINE_ID, workspace.id, workspace.activePaneId);
     const withSplit = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     const paneIds = withSplit.columns.flatMap((column) => column.panes.map((pane) => pane.id));
     expect(paneIds).toHaveLength(2);
+    mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
 
     const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
     act(() => {
-      result.current.closePanes(workspace.id, paneIds);
+      result.current.closePane(workspace.id, paneIds[1]);
     });
 
     const final = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
@@ -436,13 +482,33 @@ describe('useSyncedWorkspaceActions', () => {
     await waitFor(() => {
       const patchCalls = mockFetchWithAuth.mock.calls.filter(([, opts]) => opts?.method === 'PATCH');
       expect(patchCalls).toHaveLength(1);
-      const body = JSON.parse(patchCalls[0][1].body);
-      expect(body.columns.flatMap((column: { panes: unknown[] }) => column.panes)).toHaveLength(1);
     });
+    expect(mockDel).not.toHaveBeenCalled();
+  });
+
+  it('closePane on the LAST pane DELETEs the workspace and never PATCHes it', async () => {
+    seedMachine(MACHINE_ID);
+    const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
+
+    const { result } = renderHook(() => useSyncedWorkspaceActions(MACHINE_ID));
+    act(() => {
+      result.current.closePane(workspace.id, workspace.activePaneId);
+    });
+
+    expect(workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))).toHaveLength(0);
+    await waitFor(() => expect(mockDel).toHaveBeenCalledWith(expect.stringContaining(`workspaceId=${workspace.id}`)));
+
+    // THE LANDMINE: pushWorkspaceUpdate PATCHes and falls back to POST-create on
+    // a 404. A layout PATCH for the workspace this very call removed would 404
+    // and RE-CREATE it server-side, broadcasting the resurrected row back to
+    // every browser — including the one whose user just closed it.
+    const patchCalls = mockFetchWithAuth.mock.calls.filter(([, opts]) => opts?.method === 'PATCH');
+    expect(patchCalls).toHaveLength(0);
+    expect(mockPost).not.toHaveBeenCalledWith('/api/machines/workspaces', expect.objectContaining({ id: workspace.id }));
   });
 
   it("renameWorkspace PATCHes name only — the layout it never touched is not sent", async () => {
-    useMachineWorkspaceStore.getState().ensureMachine(MACHINE_ID);
+    seedMachine(MACHINE_ID);
     const workspace = workspacesOf(selectMachine(MACHINE_ID)(useMachineWorkspaceStore.getState()))[0];
     mockFetchWithAuth.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ workspace: {} }) });
 

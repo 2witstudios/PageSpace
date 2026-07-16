@@ -27,9 +27,10 @@ export function useDrainPendingWorkspace(displayedMachineId: string | null) {
   const clearPending = usePendingWorkspaceStore((state) => state.clearPending);
   const setActiveWorkspace = useMachineWorkspaceStore((state) => state.setActiveWorkspace);
   // The machine's current `activeWorkspaceId` — undefined until its pane region
-  // has mounted and ensured a workspace set. A machine now holds many
-  // workspaces (each sidebar item owns one), and the intent converges when this
-  // matches the one the user clicked.
+  // has mounted, and `''` for a machine with no workspaces open (a legal state:
+  // the grid renders its empty state). A machine holds many workspaces (each
+  // sidebar item owns one), and the intent converges when this matches the one
+  // the user clicked.
   const activeWorkspaceId = useMachineWorkspaceStore((state) =>
     pending ? selectMachine(pending.machineId)(state)?.activeWorkspaceId : undefined,
   );
