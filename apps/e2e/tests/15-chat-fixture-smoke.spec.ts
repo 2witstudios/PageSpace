@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Browser, type BrowserContext } from '@playwright/test';
 import { seedUser, seedChatPage, seedChatConversation, createAgentPage } from '../support/db';
 import { setStreamConfig, mockStreams, releaseStreams, resetMock } from '../support/http';
 import { authedContext, gotoChatPage, sendChatMessage } from '../fixtures/chat.fixture';
@@ -27,8 +27,24 @@ test.use({ storageState: { cookies: [], origins: [] } });
 // test, so a passing run never approaches this.
 test.setTimeout(150_000);
 
+// Closed in teardown, not inline: a trailing `await context.close()` is skipped when an
+// assertion above it throws, so every red run would leak a browser context. 7.1-7.5 will copy
+// this file's shape — better that they copy the version that cleans up on failure.
+const openContexts: BrowserContext[] = [];
+
+async function authedPage(browser: Browser, sessionToken: string, baseURL: string) {
+  const context = await authedContext(browser, sessionToken, baseURL);
+  openContexts.push(context);
+  return context.newPage();
+}
+
 test.beforeEach(async ({ request }) => {
   await resetMock(request);
+});
+
+test.afterEach(async () => {
+  await Promise.all(openContexts.map((c) => c.close()));
+  openContexts.length = 0;
 });
 
 test.describe('chat e2e harness smoke', () => {
@@ -36,8 +52,7 @@ test.describe('chat e2e harness smoke', () => {
     const user = await seedUser();
     const { pageId } = await seedChatPage(user.userId, user.driveId);
 
-    const context = await authedContext(browser, user.sessionToken, baseURL!);
-    const page = await context.newPage();
+    const page = await authedPage(browser, user.sessionToken, baseURL!);
     await gotoChatPage(page, user.driveId, pageId);
 
     const bubbles = page.getByTestId('ai-chat-view').getByTestId('chat-message');
@@ -48,10 +63,9 @@ test.describe('chat e2e harness smoke', () => {
       'user',
     );
 
-    await context.close();
   });
 
-  test('a send on the slow-stream model grows an assistant bubble while streaming', async ({
+  test('a send in slow mode grows an assistant bubble while streaming', async ({
     browser,
     baseURL,
     request,
@@ -68,8 +82,7 @@ test.describe('chat e2e harness smoke', () => {
       contents: ['seeded history', 'seeded reply'],
     });
 
-    const context = await authedContext(browser, user.sessionToken, baseURL!);
-    const page = await context.newPage();
+    const page = await authedPage(browser, user.sessionToken, baseURL!);
     await gotoChatPage(page, user.driveId, pageId);
 
     await sendChatMessage(page.getByTestId('ai-chat-view'), 'hello');
@@ -95,7 +108,6 @@ test.describe('chat e2e harness smoke', () => {
     await expect.poll(async () => (await assistant.innerText()).length).toBeGreaterThan(first);
 
     await expect.poll(() => mockStreams(request).then((s) => s.open), { timeout: 30_000 }).toBe(0);
-    await context.close();
   });
 
   test('a held stream keeps the Stop affordance up until released', async ({
@@ -107,8 +119,7 @@ test.describe('chat e2e harness smoke', () => {
     const user = await seedUser();
     const pageId = await createAgentPage(user.driveId, user.userId);
 
-    const context = await authedContext(browser, user.sessionToken, baseURL!);
-    const page = await context.newPage();
+    const page = await authedPage(browser, user.sessionToken, baseURL!);
     await gotoChatPage(page, user.driveId, pageId);
 
     await sendChatMessage(page.getByTestId('ai-chat-view'), 'hold please');
@@ -124,6 +135,5 @@ test.describe('chat e2e harness smoke', () => {
     await expect(page.getByTestId('chat-stop')).toBeHidden();
     expect((await mockStreams(request)).open).toBe(0);
 
-    await context.close();
   });
 });

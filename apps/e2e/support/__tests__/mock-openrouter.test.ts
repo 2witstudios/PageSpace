@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
-import {
-  createMockOpenRouter,
-  E2E_SLOW_STREAM_MODEL,
-  E2E_HELD_STREAM_MODEL,
-  MOCK_COST_DOLLARS,
-} from '../mock-openrouter';
+import { createMockOpenRouter, MOCK_COST_DOLLARS } from '../mock-openrouter';
 
 /**
  * Support-level tests for the controllable stream modes (7.0a). They drive the mock over
@@ -14,9 +9,24 @@ import {
  * the hold/release handshake and the abort safety are proven without a database, a web
  * app, or a browser.
  *
+ * Every model name below is deliberately one the APP would send (`openai/gpt-5.3-chat`, the
+ * id it substitutes in): pacing is selected by mode alone, so these tests exercise the same
+ * door a real send comes through.
+ *
  * The default (instant) path is asserted here too: metering specs 09-14 depend on it and
  * this leaf must not perturb it.
  */
+
+/** The id the app actually sends, post model-substitution. Pacing must not depend on it. */
+const APP_MODEL = 'openai/gpt-5.3-chat';
+
+async function setMode(mode: 'instant' | 'slow' | 'held', pacing?: { chunks?: number; intervalMs?: number }) {
+  await fetch(`${base}/__stream-config`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mode, ...pacing }),
+  });
+}
 
 let server: Server;
 let base: string;
@@ -121,14 +131,10 @@ describe('mock OpenRouter — default (instant) path is untouched', () => {
 });
 
 describe('mock OpenRouter — slow-stream mode', () => {
-  it('given the slow-stream model, should deliver >2 content chunks separated in time, then usage + [DONE]', async () => {
-    await fetch(`${base}/__stream-config`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chunks: 4, intervalMs: 60 }),
-    });
+  it('given slow mode, should deliver >2 content chunks separated in time, then usage + [DONE]', async () => {
+    await setMode('slow', { chunks: 4, intervalMs: 60 });
 
-    const res = await completions(E2E_SLOW_STREAM_MODEL);
+    const res = await completions(APP_MODEL);
     const { body, contentAt } = await readWithTimings(res);
     const { chunks, done } = parseSse(body);
 
@@ -143,12 +149,8 @@ describe('mock OpenRouter — slow-stream mode', () => {
   });
 
   it('given a completed slow stream, should leave no open streams behind', async () => {
-    await fetch(`${base}/__stream-config`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chunks: 2, intervalMs: 10 }),
-    });
-    const res = await completions(E2E_SLOW_STREAM_MODEL);
+    await setMode('slow', { chunks: 2, intervalMs: 10 });
+    const res = await completions(APP_MODEL);
     await res.text();
 
     expect(await readStreams()).toEqual({ open: 0, held: 0 });
@@ -156,8 +158,9 @@ describe('mock OpenRouter — slow-stream mode', () => {
 });
 
 describe('mock OpenRouter — held-stream mode', () => {
-  it('given the held-stream model, should send a first chunk and stay open until released', async () => {
-    const res = await completions(E2E_HELD_STREAM_MODEL);
+  it('given held mode, should send a first chunk and stay open until released', async () => {
+    await setMode('held');
+    const res = await completions(APP_MODEL);
     const reader = res.body!.getReader();
 
     // First chunk arrives immediately — the UI has a live bubble to assert on.
@@ -182,10 +185,8 @@ describe('mock OpenRouter — held-stream mode', () => {
   });
 
   it('given two held streams, should release both on one /__release-stream', async () => {
-    const [a, b] = await Promise.all([
-      completions(E2E_HELD_STREAM_MODEL),
-      completions(E2E_HELD_STREAM_MODEL),
-    ]);
+    await setMode('held');
+    const [a, b] = await Promise.all([completions(APP_MODEL), completions(APP_MODEL)]);
     await expect.poll(readStreams).toEqual({ open: 2, held: 2 });
 
     await fetch(`${base}/__release-stream`, { method: 'POST' });
@@ -243,20 +244,6 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
     expect(await readMode()).toBe('instant');
   });
 
-  it('given an explicit mode=instant, should override the model-name triggers', async () => {
-    await fetch(`${base}/__stream-config`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: 'instant' }),
-    });
-
-    // Would hold forever if 'instant' were treated as "unset" and the model name still won.
-    const res = await completions(E2E_HELD_STREAM_MODEL);
-    const { chunks, done } = parseSse(await res.text());
-    expect(chunks.flatMap((c) => c.choices?.[0]?.delta?.content ?? [])).toEqual(['pong']);
-    expect(done).toBe(true);
-  });
-
   it('given no mode set, should keep the instant default so metering specs are unaffected', async () => {
     const res = await completions('openai/gpt-5.3-chat');
     const { chunks } = parseSse(await res.text());
@@ -281,13 +268,9 @@ describe('mock OpenRouter — explicit mode override (what the app actually need
 
 describe('mock OpenRouter — abort safety and reset', () => {
   it('given a client that aborts mid-stream, should drop the stream without crashing the server', async () => {
-    await fetch(`${base}/__stream-config`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chunks: 50, intervalMs: 30 }),
-    });
+    await setMode('slow', { chunks: 50, intervalMs: 30 });
     const controller = new AbortController();
-    const res = await completions(E2E_SLOW_STREAM_MODEL, controller.signal);
+    const res = await completions(APP_MODEL, controller.signal);
     const reader = res.body!.getReader();
     await reader.read();
     controller.abort();
@@ -299,7 +282,8 @@ describe('mock OpenRouter — abort safety and reset', () => {
   });
 
   it('given a held stream, should release it and restore default config on /__reset', async () => {
-    const res = await completions(E2E_HELD_STREAM_MODEL);
+    await setMode('held');
+    const res = await completions(APP_MODEL);
     await expect.poll(readStreams).toEqual({ open: 1, held: 1 });
 
     await fetch(`${base}/__reset`, { method: 'POST' });
@@ -312,18 +296,14 @@ describe('mock OpenRouter — abort safety and reset', () => {
     expect(((await calls.json()) as { count: number }).count).toBe(0);
   });
 
-  it('given stream modes are used, should still record calls for the metering recorder', async () => {
-    await fetch(`${base}/__stream-config`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chunks: 1, intervalMs: 5 }),
-    });
-    const res = await completions(E2E_SLOW_STREAM_MODEL);
+  it('given a paced stream, should still record the call for the metering recorder', async () => {
+    await setMode('slow', { chunks: 1, intervalMs: 5 });
+    const res = await completions(APP_MODEL);
     await res.text();
 
     const calls = await fetch(`${base}/__calls`);
     const json = (await calls.json()) as { count: number; requests: { model: string }[] };
     expect(json.count).toBe(1);
-    expect(json.requests[0].model).toBe(E2E_SLOW_STREAM_MODEL);
+    expect(json.requests[0].model).toBe(APP_MODEL);
   });
 });

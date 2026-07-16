@@ -1,5 +1,6 @@
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import type { SeededUser } from './db';
+import type { StreamMode } from './mock-openrouter';
 
 const MOCK_BASE = process.env.E2E_MOCK_OPENROUTER_URL ?? 'http://127.0.0.1:4998';
 
@@ -67,7 +68,7 @@ export async function mockCallCount(request: APIRequestContext): Promise<number>
  */
 export async function setStreamConfig(
   request: APIRequestContext,
-  config: { chunks?: number; intervalMs?: number; mode?: 'instant' | 'slow' | 'held' },
+  config: { chunks?: number; intervalMs?: number; mode?: StreamMode },
 ): Promise<void> {
   await request.post(`${MOCK_BASE}/__stream-config`, {
     headers: { 'content-type': 'application/json' },
@@ -85,9 +86,9 @@ export async function setStreamConfig(
  */
 export async function mockStreams(
   request: APIRequestContext,
-): Promise<{ open: number; held: number; mode: 'instant' | 'slow' | 'held' }> {
+): Promise<{ open: number; held: number; mode: StreamMode }> {
   const res = await request.get(`${MOCK_BASE}/__streams`);
-  return (await res.json()) as { open: number; held: number; mode: 'instant' | 'slow' | 'held' };
+  return (await res.json()) as { open: number; held: number; mode: StreamMode };
 }
 
 /**

@@ -1,7 +1,12 @@
 import { expect, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 // Public package export, not a reach into packages/lib/src: `@pagespace/lib` exposes
 // `./consent`, and it resolves to the same built module the app under test consumes.
-import { CONSENT_COOKIE_NAME, CONSENT_VERSION } from '@pagespace/lib/consent';
+import {
+  CONSENT_COOKIE_NAME,
+  defaultConsentState,
+  rejectNonEssential,
+  serializeConsentState,
+} from '@pagespace/lib/consent';
 
 /**
  * Chat UI fixtures (7.0c).
@@ -65,26 +70,24 @@ export async function authedContext(
  * entire test timeout — surfacing as an inscrutable hung click rather than "a banner is in
  * the way".
  *
- * Shape must match what the app writes (`cookie-utils.ts:39` / `serializeConsentState`):
- * URI-encoded JSON (single-encoded — `readCookieValue` decodes exactly once), path=/,
- * samesite=lax. Only `necessary` is granted, byte-identical to what `rejectNonEssential()`
- * produces, so these specs enable no analytics or third-party script a real rejecting user
- * would not have.
+ * The decision is BUILT by the app's own `rejectNonEssential` and serialized by its own
+ * `serializeConsentState`, rather than hand-rolling the state literal. That is deliberate: it
+ * makes "only necessary is granted, exactly as a rejecting user gets" and "the shape matches
+ * what the app writes" properties the code enforces, instead of claims a comment asserts and
+ * a schema change silently breaks. `serializeConsentState` also stamps `CONSENT_VERSION` and
+ * normalizes the categories, so this cookie cannot drift from the parser's gate.
  *
- * `CONSENT_VERSION` is imported rather than pinned so a version bump keeps the cookie valid
- * and the specs keep running. Note what that does NOT buy: if a bump changes what the
- * categories MEAN, the bump flows silently into this cookie and the banner stays suppressed —
- * nothing here fails to warn you. Re-check this decision against the new semantics by hand.
+ * The single `encodeURIComponent` mirrors `buildConsentCookieString` (`cookie-utils.ts:39`);
+ * `readCookieValue` decodes exactly once, so double-encoding here would fail the parse.
+ *
+ * What this does NOT buy: if a version bump changes what the categories MEAN, it flows
+ * silently through and the banner stays suppressed. Re-check by hand when the semantics move.
  */
 function consentCookie(url: URL): Parameters<BrowserContext['addCookies']>[0][number] {
-  const state = {
-    version: CONSENT_VERSION,
-    decidedAt: new Date(0).toISOString(),
-    categories: { necessary: true, analytics: false, preferences: false },
-  };
+  const decided = rejectNonEssential(defaultConsentState(), new Date(0).toISOString());
   return {
     name: CONSENT_COOKIE_NAME,
-    value: encodeURIComponent(JSON.stringify(state)),
+    value: encodeURIComponent(serializeConsentState(decided)),
     domain: url.hostname,
     path: '/',
     httpOnly: false,
@@ -107,14 +110,12 @@ export async function gotoChatPage(page: Page, driveId: string, pageId: string):
 /**
  * Type into a surface's composer and send.
  *
- * `scope` SHOULD be a surface root (`getByTestId('ai-chat-view')`, `'sidebar-chat-tab'`,
- * `'global-assistant-view'`), not the bare page. The chat surfaces mount simultaneously and
- * each renders its own composer, so with the right sidebar open an unscoped
- * `getByTestId('chat-send')` matches TWO elements and fails Playwright's strict mode.
- * (Verified live: sidebar open → unscoped `chat-textarea`/`chat-send` resolve 2 each, while
- * `sidebar-chat-tab`-scoped resolve 1.) Passing the whole `page` works only while every other
- * surface stays closed — which is true by default today, and is exactly the kind of
- * accidental precondition that breaks a later spec.
+ * `scope` is a surface root (`getByTestId('ai-chat-view')`, `'sidebar-chat-tab'`,
+ * `'global-assistant-view'`) — a Locator, never the bare Page, so the requirement is a compile
+ * error rather than a comment nobody reads. The chat surfaces mount simultaneously and each
+ * renders its own composer: with the right sidebar open, an unscoped `getByTestId('chat-send')`
+ * matches TWO elements and fails Playwright's strict mode. (Verified live: sidebar open →
+ * unscoped `chat-textarea`/`chat-send` resolve 2 each, `sidebar-chat-tab`-scoped resolve 1.)
  *
  * The retry is load-bearing, not defensive padding. `ai-chat-view` becomes visible from the
  * server-rendered markup, BEFORE React has hydrated the composer — and a `fill()` that lands
@@ -128,7 +129,7 @@ export async function gotoChatPage(page: Page, driveId: string, pageId: string):
  * also masks the underlying product bug — a real user typing pre-hydration loses their text.
  * See the epic-level D task; if that is fixed, this retry should tighten to a single fill.
  */
-export async function sendChatMessage(scope: Page | Locator, text: string): Promise<void> {
+export async function sendChatMessage(scope: Locator, text: string): Promise<void> {
   const textarea = scope.getByTestId('chat-textarea');
   const send = scope.getByTestId('chat-send');
 
