@@ -31,17 +31,18 @@ import {
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
 import { evaluatePushGuard } from './sandbox-git/core/refspec';
+import {
+  validateFlagSafe,
+  validateShaOnly,
+  validateWorkflowInputNames,
+  validateRepoName,
+  assertHttps,
+} from './sandbox-git/core/validators';
 
 // Optional per-call working directory, relative to the sandbox root (/workspace).
 // Each tool call is a fresh process, so cwd never persists between calls — pass it
 // to operate inside a cloned subdirectory. The runner validates it (path_escape).
 const cwdField = z.string().max(MAX_PATH_LENGTH).optional();
-
-// A value starting with "-" passed as a bare positional CLI arg can be
-// reinterpreted as a flag by git/gh's argument parser (e.g. a ref of
-// "--exec=whoami"). Identifier-like params (refs, repo slugs, workflow names)
-// never legitimately start with "-", so reject rather than pass through.
-const startsLikeFlag = (value: string): boolean => value.startsWith('-');
 
 // Tool names returned by createSandboxGitTools, kept next to the factory so a
 // new tool is one glance away from being added here too. Consumed by
@@ -215,7 +216,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         .string()
         .url()
         .refine(
-          (u) => u.startsWith('https://'),
+          (u) => assertHttps(u, 'git clone').ok,
           'Only HTTPS URLs are supported (e.g. https://github.com/owner/repo.git)',
         ),
       path: z.string().optional(),
@@ -223,9 +224,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     })
       .strict(),
     execute: async ({ repo_url, path, depth }, options) => {
-      if (!repo_url.startsWith('https://')) {
-        return { success: false as const, error: 'Only HTTPS URLs are supported for git clone.' };
-      }
+      const https = assertHttps(repo_url, 'git clone');
+      if (!https.ok) return { success: false as const, error: https.error };
       const resolved = resolveDestinationPath(path);
       if (!resolved.ok) return resolved.error;
       const opened = await open(options);
@@ -279,14 +279,13 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       url: z
         .string()
         .url()
-        .refine((u) => u.startsWith('https://'), 'Only HTTPS remote URLs are supported'),
+        .refine((u) => assertHttps(u, 'git remote add').ok, 'Only HTTPS remote URLs are supported'),
       cwd: cwdField,
     })
       .strict(),
     execute: async ({ name, url, cwd }, options) => {
-      if (!url.startsWith('https://')) {
-        return { success: false as const, error: 'Only HTTPS URLs are supported for git remote add.' };
-      }
+      const https = assertHttps(url, 'git remote add');
+      if (!https.ok) return { success: false as const, error: https.error };
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       return git('git', ['remote', 'add', name, url], opened.ctx, cwd);
@@ -464,12 +463,13 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         cwd: cwdField,
       })
       .strict()
-      .refine((d) => d.ref === undefined || !startsLikeFlag(d.ref), {
+      .refine((d) => d.ref === undefined || validateFlagSafe(d.ref, 'ref').ok, {
         message: 'ref must not start with "-"',
       }),
     execute: async ({ ref, stat, path, cwd }, options) => {
-      if (ref !== undefined && startsLikeFlag(ref)) {
-        return { success: false as const, error: 'ref must not start with "-"' };
+      if (ref !== undefined) {
+        const safe = validateFlagSafe(ref, 'ref');
+        if (!safe.ok) return { success: false as const, error: safe.error };
       }
       const opened = await open(options);
       if (!opened.ok) return opened.error;
@@ -532,7 +532,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .refine((d) => (d.action ?? 'run') !== 'run' || !!d.branch, {
         message: 'branch is required when running a merge',
       })
-      .refine((d) => d.branch === undefined || !startsLikeFlag(d.branch), {
+      .refine((d) => d.branch === undefined || validateFlagSafe(d.branch, 'branch').ok, {
         message: 'branch must not start with "-"',
       }),
     execute: async ({ branch, strategy, action, cwd }, options) => {
@@ -545,9 +545,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!branch) {
         return { success: false as const, error: 'branch is required when running a merge' };
       }
-      if (startsLikeFlag(branch)) {
-        return { success: false as const, error: 'branch must not start with "-"' };
-      }
+      const safe = validateFlagSafe(branch, 'branch');
+      if (!safe.ok) return { success: false as const, error: safe.error };
       const strategyFlag =
         strategy === 'squash' ? ['--squash'] : strategy === 'ff-only' ? ['--ff-only'] : [];
       return git('git', ['merge', ...strategyFlag, branch], opened.ctx, cwd);
@@ -574,7 +573,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .refine((d) => (d.action ?? 'run') !== 'run' || !!d.branch_or_ref, {
         message: 'branch_or_ref is required when running a rebase',
       })
-      .refine((d) => d.branch_or_ref === undefined || !startsLikeFlag(d.branch_or_ref), {
+      .refine((d) => d.branch_or_ref === undefined || validateFlagSafe(d.branch_or_ref, 'branch_or_ref').ok, {
         message: 'branch_or_ref must not start with "-"',
       }),
     execute: async ({ branch_or_ref, action, cwd }, options) => {
@@ -587,9 +586,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!branch_or_ref) {
         return { success: false as const, error: 'branch_or_ref is required when running a rebase' };
       }
-      if (startsLikeFlag(branch_or_ref)) {
-        return { success: false as const, error: 'branch_or_ref must not start with "-"' };
-      }
+      const safe = validateFlagSafe(branch_or_ref, 'branch_or_ref');
+      if (!safe.ok) return { success: false as const, error: safe.error };
       return git('git', ['rebase', branch_or_ref], opened.ctx, cwd);
     },
   });
@@ -601,7 +599,7 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .object({
         sha: z
           .string()
-          .regex(/^[0-9a-f]{4,40}$/, 'sha must be a single lowercase commit SHA (no ranges or refs)')
+          .refine((v) => validateShaOnly(v).ok, 'sha must be a single lowercase commit SHA (no ranges or refs)')
           .optional()
           .describe('Commit to revert (required unless aborting/continuing)'),
         action: z
@@ -627,12 +625,14 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         if (!opened.ok) return opened.error;
         return git('git', ['revert', `--${mode}`], opened.ctx, cwd);
       }
-      if (!sha || !/^[0-9a-f]{4,40}$/.test(sha)) {
+      if (!sha) {
         return {
           success: false as const,
           error: 'sha must be a single lowercase commit SHA (no ranges or refs)',
         };
       }
+      const shaOk = validateShaOnly(sha);
+      if (!shaOk.ok) return { success: false as const, error: shaOk.error };
       const opened = await open(options);
       if (!opened.ok) return opened.error;
       return git(
@@ -1253,26 +1253,23 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
         workflow: z.string().min(1).describe('Workflow file name (e.g. "ci.yml") or ID'),
         ref: z.string().min(1).describe('Branch or tag to run the workflow on'),
         inputs: z
-          .record(z.string().regex(/^[A-Za-z0-9_-]+$/, 'input names must be alphanumeric/_/-'), z.string())
+          .record(z.string(), z.string())
           .optional()
           .describe('workflow_dispatch inputs as key/value pairs'),
         cwd: cwdField,
       })
-      .strict(),
+      .strict()
+      .refine((d) => validateWorkflowInputNames(d.inputs).ok, {
+        message: 'input names must be alphanumeric/_/-',
+      }),
     execute: async ({ workflow, ref, inputs, cwd }, options) => {
       if (!workflow || !ref) {
         return { success: false as const, error: 'workflow and ref are required' };
       }
-      if (startsLikeFlag(workflow)) {
-        return { success: false as const, error: 'workflow must not start with "-"' };
-      }
-      const badInput = Object.keys(inputs ?? {}).find((k) => !/^[A-Za-z0-9_-]+$/.test(k));
-      if (badInput !== undefined) {
-        return {
-          success: false as const,
-          error: `Invalid workflow input name "${badInput}" — input names must be alphanumeric/_/-`,
-        };
-      }
+      const safe = validateFlagSafe(workflow, 'workflow');
+      if (!safe.ok) return { success: false as const, error: safe.error };
+      const inputsOk = validateWorkflowInputNames(inputs);
+      if (!inputsOk.ok) return { success: false as const, error: inputsOk.error };
       return withToken(options, (ctx, token) =>
         gitR(
           'gh',
@@ -1491,8 +1488,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       })
       .strict(),
     execute: async ({ repo, cwd }, options) => {
-      if (repo !== undefined && startsLikeFlag(repo)) {
-        return { success: false as const, error: 'repo must not start with "-"' };
+      if (repo !== undefined) {
+        const safe = validateFlagSafe(repo, 'repo');
+        if (!safe.ok) return { success: false as const, error: safe.error };
       }
       return withToken(options, (ctx, token) =>
         gitR(
@@ -1521,8 +1519,9 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       })
       .strict(),
     execute: async ({ owner, limit, cwd }, options) => {
-      if (owner !== undefined && startsLikeFlag(owner)) {
-        return { success: false as const, error: 'owner must not start with "-"' };
+      if (owner !== undefined) {
+        const safe = validateFlagSafe(owner, 'owner');
+        if (!safe.ok) return { success: false as const, error: safe.error };
       }
       return withToken(options, (ctx, token) =>
         gitR(
@@ -1554,9 +1553,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       if (!repo) {
         return { success: false as const, error: 'repo is required' };
       }
-      if (startsLikeFlag(repo)) {
-        return { success: false as const, error: 'repo must not start with "-"' };
-      }
+      const safe = validateFlagSafe(repo, 'repo');
+      if (!safe.ok) return { success: false as const, error: safe.error };
       return withToken(options, (ctx, token) =>
         gitR('gh', ['repo', 'fork', repo, '--clone=false', '--remote=false'], ctx, token, cwd),
       );
@@ -1570,8 +1568,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       .object({
         name: z
           .string()
-          .regex(
-            /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+          .refine(
+            (v) => validateRepoName(v).ok,
             'name must start with a letter or digit and may otherwise contain only letters, digits, ".", "_", and "-"',
           ),
         visibility: z.enum(['private', 'public']),
@@ -1580,13 +1578,8 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
       })
       .strict(),
     execute: async ({ name, visibility, description, cwd }, options) => {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
-        return {
-          success: false as const,
-          error:
-            'name must start with a letter or digit and may otherwise contain only letters, digits, ".", "_", and "-"',
-        };
-      }
+      const nameOk = validateRepoName(name);
+      if (!nameOk.ok) return { success: false as const, error: nameOk.error };
       if (!visibility) {
         return { success: false as const, error: 'visibility is required (private or public)' };
       }
