@@ -71,6 +71,18 @@ export default defineConfig({
         'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/pendingStreams/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Rollback Service Functional Core: the pure decision modules are gated at
+        // 100% branch per the epic. Listed per-file (not a glob) because the shell
+        // modules share the rollback/ directory and are effectful, not pure.
+        'src/services/api/rollback/operations.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/deep-equal.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/conflict.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/target-values.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/activity-mapping.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/page-mutation-plan.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/preview-eligibility.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/rollback-plans.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/services/api/rollback/redo-plans.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
   },
