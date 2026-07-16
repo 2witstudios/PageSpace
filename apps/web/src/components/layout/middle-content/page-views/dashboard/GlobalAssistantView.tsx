@@ -96,7 +96,7 @@ import { useImageAttachments } from '@/lib/ai/shared/hooks/useImageAttachments';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import { useAuth } from '@/hooks/useAuth';
-import { useConversationActiveStream } from '@/hooks/useActiveStream';
+import { useConversationActiveStream, mergeServerMessagesWithOwnStream } from '@/hooks/useActiveStream';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
@@ -421,11 +421,12 @@ const GlobalAssistantView: React.FC = () => {
   // guards themselves die in PR 5B, when merge-at-render makes them unnecessary.
   const isOwnAgentStreamForCurrentConversation = agentActiveStream?.isOwn === true;
   const isOwnGlobalStreamForCurrentConversation = globalActiveStream?.isOwn === true;
-  // Read after an await by handleUndoSuccess, which resolves long after its closure was built.
-  const isOwnAgentStreamRef = useRef(false);
-  isOwnAgentStreamRef.current = isOwnAgentStreamForCurrentConversation;
-  const isOwnGlobalStreamRef = useRef(false);
-  isOwnGlobalStreamRef.current = isOwnGlobalStreamForCurrentConversation;
+  // For guarding TRANSPORT-ARRAY writes, the store entry is not enough: it is absent for the whole
+  // submitted window (by design) and during any temporary store wipe (clearPageStreams on a socket
+  // swap). Each chat's own status covers those; the store entry still covers a bootstrapped stream,
+  // where our status is idle. Per chat — the two are independent and both can be in flight.
+  const agentSendUnsafeToClobber = agentStatus === 'submitted' || agentStatus === 'streaming' || isOwnAgentStreamForCurrentConversation;
+  const globalSendUnsafeToClobber = globalStatus === 'submitted' || globalStatus === 'streaming' || isOwnGlobalStreamForCurrentConversation;
 
   // Streaming for THE CONVERSATION ON SCREEN. `isStreaming` (useChat's status) alone is wrong in
   // both directions: it is true for the OLD conversation's still-in-flight request after a switch
@@ -545,7 +546,7 @@ const GlobalAssistantView: React.FC = () => {
   const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
     useMessageActions({
     // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
-    isOwnStreamLive: activeStream?.isOwn === true,
+    isOwnStreamLive: selectedAgent ? agentSendUnsafeToClobber : globalSendUnsafeToClobber,
       agentId: selectedAgent?.id || null,
       conversationId: currentConversationId,
       messages,
@@ -740,21 +741,18 @@ const GlobalAssistantView: React.FC = () => {
       const res = await fetchWithAuth(url);
       if (res.ok) {
         const data = await res.json();
-        // Same clobber guard the load-on-select effects carry (#2061), and for a second reason
-        // since PR 5A: useOwnStreamMirror reads these arrays to find its own live stream. DB
-        // history whose newest row is a foreign assistant message — another TAB of this same user
-        // counts, `isOwn` being browserSessionId-scoped — makes the mirror re-target onto a
-        // finished message, and Stop then aborts an id the server has no stream for: user-scoped,
-        // so not_found, on which reportAbortOutcome is silent, while the generation keeps running
-        // its write tools and keeps billing.
-        //
-        // The undone state is already authoritative in the DB; the array re-syncs on the next load
-        // once the stream is over.
+        // MERGE, don't skip. This surface renders from useChat, so skipping the write would leave
+        // a confirmed destructive undo invisible until the user navigates away and back — it would
+        // read as "the undo didn't work", on the one action where that matters most. And writing
+        // it raw would hand useOwnStreamMirror an array whose newest row is somebody else's
+        // finished message (see mergeServerMessagesWithOwnStream). Merging applies the undo AND
+        // keeps our own live bubble last, which is what the mirror needs.
+        const merged = mergeServerMessagesWithOwnStream(data.messages, currentConversationId);
         if (selectedAgent) {
-          if (!isOwnAgentStreamRef.current) setAgentMessages(data.messages);
-          setAgentStoreMessages(data.messages);
-        } else if (!isOwnGlobalStreamRef.current) {
-          setGlobalLocalMessages(data.messages);
+          setAgentMessages(merged);
+          setAgentStoreMessages(merged);
+        } else {
+          setGlobalLocalMessages(merged);
         }
       }
     } catch (error) {
@@ -798,12 +796,20 @@ const GlobalAssistantView: React.FC = () => {
       const data = await res.json();
       if (!shouldApplyLoadedMessages(conversationId, currentConversationIdRef.current)) return;
 
+      // Merged, for the same reason as handleUndoSuccess: this is a whole-array write, and its
+      // callers decide whether a stream is live BEFORE the fetch — the refreshSignal caller checks
+      // `isOwnGlobalStreamForCurrentConversation`, which is false for the whole submitted window by
+      // design (no store entry exists yet). A bump landing in that 0.5-3s TTFB therefore starts a
+      // refresh that resolves AFTER useChat has pushed its assistant message, and a raw write would
+      // then hand the mirror an array whose newest row is the PREVIOUS turn's reply. Merging asks
+      // the question at the write instead, and keeps our own live bubble last.
       const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
+      const merged = mergeServerMessagesWithOwnStream(serverMessages, conversationId);
       if (agentId) {
-        setAgentMessages(serverMessages);
-        setAgentStoreMessages(serverMessages);
+        setAgentMessages(merged);
+        setAgentStoreMessages(merged);
       } else {
-        setGlobalLocalMessages(serverMessages);
+        setGlobalLocalMessages(merged);
       }
     } catch (error) {
       console.error('Failed to refresh messages:', error);

@@ -547,7 +547,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const { streams: remoteStreams } = useActiveStream(page.id, currentConversationId);
   // The stream identity for the conversation on screen — what Stop names (PR 5A).
   const activeStream = useConversationActiveStream(page.id, currentConversationId);
-  ownStreamLiveRef.current = activeStream?.isOwn === true;
+  // The array is unsafe to replace for the WHOLE local-send lifetime, not just while a store entry
+  // happens to exist. `activeStream` alone leaves two holes: the submitted window (no entry exists
+  // yet, by design) and any moment the store is temporarily wiped (clearPageStreams on a socket
+  // swap — an ordinary auth refresh). `isStreaming` is this chat's own status and covers both;
+  // `activeStream?.isOwn` still covers a bootstrapped stream, where our status is idle.
+  ownStreamLiveRef.current = isStreaming || activeStream?.isOwn === true;
 
 
 
@@ -661,7 +666,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     lastUserMessageId,
   } = useMessageActions({
     // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
-    isOwnStreamLive: activeStream?.isOwn === true,
+    isOwnStreamLive: isStreaming || activeStream?.isOwn === true,
     agentId: page.id,
     conversationId: currentConversationId,
     messages: plainMessages,

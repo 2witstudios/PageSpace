@@ -2,6 +2,8 @@ import { useShallow } from 'zustand/react/shallow';
 import { usePendingStreamsStore, type PendingStream } from '@/stores/usePendingStreamsStore';
 import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { selectActiveStream, type ActiveStream } from '@/lib/ai/streams/selectActiveStream';
+import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
+import type { UIMessage } from 'ai';
 
 const EMPTY_STREAMS: PendingStream[] = [];
 
@@ -77,3 +79,38 @@ export const useConversationActiveStream = (
  */
 export const getActiveStreamById = (messageId: string): PendingStream | undefined =>
   usePendingStreamsStore.getState().streams.get(messageId);
+
+/**
+ * Facade — reconcile a freshly-loaded server message list with this tab's own in-flight stream,
+ * for the surfaces that still write DB history into a useChat array.
+ *
+ * Two things break when a whole-array write lands mid-stream, and merging fixes both:
+ *
+ *  - The live bubble disappears (the DB does not have a finished row for a stream still running).
+ *  - Worse, `useOwnStreamMirror` reads that array to find its own live stream. If the array's
+ *    newest row is some OTHER assistant message — the previous turn's reply, or another TAB of
+ *    this same user (`isOwn` is browserSessionId-scoped, so no collaborator is needed) — the
+ *    mirror reads it as the SDK renaming our stream, re-targets onto a finished message, and Stop
+ *    then aborts an id the server has no stream for: user-scoped, so `not_found`, on which
+ *    reportAbortOutcome is silent by design, while the generation keeps running its write tools
+ *    and keeps billing.
+ *
+ * Merging is strictly better than skipping the write: skipping keeps the live bubble but drops
+ * whatever the load was for (an undo the user just confirmed, a cross-tab edit), which on a
+ * destructive action reads as "it didn't work". This applies the server's truth AND keeps our own
+ * stream last, which is what the mirror needs.
+ *
+ * A one-off `getState()` snapshot, not a subscription: every caller runs this inside an async
+ * callback after its fetch resolves, where the current store is exactly what it wants.
+ */
+export const mergeServerMessagesWithOwnStream = (
+  serverMessages: UIMessage[],
+  conversationId: string | null,
+): UIMessage[] => {
+  if (!conversationId) return serverMessages;
+  const ownStream = Array.from(usePendingStreamsStore.getState().streams.values())
+    .find((s) => s.isOwn && s.conversationId === conversationId);
+  return ownStream
+    ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
+    : serverMessages;
+};
