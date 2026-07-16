@@ -26,10 +26,9 @@ import { logRollbackActivity, getActorInfo, type ActivityResourceType, type Acti
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { readPageContent } from '@pagespace/lib/services/page-content-store'
-import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'
-import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils'
+import { createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'
 import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
-import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
+import type { PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import {
@@ -46,6 +45,7 @@ import {
   isRollingBackRollback,
 } from './rollback/target-values';
 import { mapActivityRow, buildHistoryConditions } from './rollback/activity-mapping';
+import { computePageMutation, restoreFields, pickConversationTable } from './rollback/page-mutation-plan';
 
 // Re-export the shared activity shape so existing consumers keep importing it here.
 export type { ActivityLogForRollback };
@@ -184,73 +184,15 @@ async function applyPageUpdateWithRevision(
     throw new Error('Page not found');
   }
 
-  const currentRevision = typeof currentPage.revision === 'number' ? currentPage.revision : 0;
-  const nextRevision = currentRevision + 1;
-
-  const previousContent = currentPage.content ?? '';
-  const nextContent = updateData.content !== undefined
-    ? String(updateData.content)
-    : previousContent;
-  const contentFormatBefore = detectPageContentFormat(previousContent);
-  const contentFormatAfter = detectPageContentFormat(nextContent);
-  const contentRefBefore = hashWithPrefix(contentFormatBefore, previousContent);
-  const contentRefAfter = hashWithPrefix(contentFormatAfter, nextContent);
-
-  const stateHashBefore = computePageStateHash({
-    title: currentPage.title,
-    contentRef: contentRefBefore,
-    parentId: currentPage.parentId,
-    position: currentPage.position,
-    isTrashed: currentPage.isTrashed,
-    type: currentPage.type,
-    driveId: currentPage.driveId,
-    aiProvider: currentPage.aiProvider,
-    aiModel: currentPage.aiModel,
-    systemPrompt: currentPage.systemPrompt,
-    enabledTools: currentPage.enabledTools,
-    isPaginated: currentPage.isPaginated,
-    includeDrivePrompt: currentPage.includeDrivePrompt,
-    agentDefinition: currentPage.agentDefinition,
-    visibleToGlobalAssistant: currentPage.visibleToGlobalAssistant,
-    includePageTree: currentPage.includePageTree,
-    pageTreeScope: currentPage.pageTreeScope,
-    userScopedAccess: currentPage.userScopedAccess,
-  });
-
-  const nextState = {
-    title: updateData.title !== undefined ? String(updateData.title) : currentPage.title,
-    contentRef: contentRefAfter,
-    parentId: updateData.parentId !== undefined ? (updateData.parentId as string | null) : currentPage.parentId,
-    position: updateData.position !== undefined ? Number(updateData.position) : currentPage.position,
-    isTrashed: updateData.isTrashed !== undefined ? Boolean(updateData.isTrashed) : currentPage.isTrashed,
-    type: updateData.type !== undefined ? String(updateData.type) : currentPage.type,
-    driveId: currentPage.driveId,
-    aiProvider: updateData.aiProvider !== undefined
-      ? (updateData.aiProvider === null ? null : String(updateData.aiProvider))
-      : currentPage.aiProvider,
-    aiModel: updateData.aiModel !== undefined
-      ? (updateData.aiModel === null ? null : String(updateData.aiModel))
-      : currentPage.aiModel,
-    systemPrompt: updateData.systemPrompt !== undefined
-      ? (updateData.systemPrompt === null ? null : String(updateData.systemPrompt))
-      : currentPage.systemPrompt,
-    enabledTools: updateData.enabledTools !== undefined ? updateData.enabledTools : currentPage.enabledTools,
-    isPaginated: updateData.isPaginated !== undefined ? Boolean(updateData.isPaginated) : currentPage.isPaginated,
-    includeDrivePrompt: updateData.includeDrivePrompt !== undefined ? Boolean(updateData.includeDrivePrompt) : currentPage.includeDrivePrompt,
-    agentDefinition: updateData.agentDefinition !== undefined
-      ? (updateData.agentDefinition === null ? null : String(updateData.agentDefinition))
-      : currentPage.agentDefinition,
-    visibleToGlobalAssistant: updateData.visibleToGlobalAssistant !== undefined ? Boolean(updateData.visibleToGlobalAssistant) : currentPage.visibleToGlobalAssistant,
-    includePageTree: updateData.includePageTree !== undefined ? Boolean(updateData.includePageTree) : currentPage.includePageTree,
-    pageTreeScope: updateData.pageTreeScope !== undefined
-      ? (updateData.pageTreeScope === null ? null : String(updateData.pageTreeScope))
-      : currentPage.pageTreeScope,
-    userScopedAccess: updateData.userScopedAccess !== undefined
-      ? Boolean(updateData.userScopedAccess)
-      : currentPage.userScopedAccess,
-  };
-
-  const stateHashAfter = computePageStateHash(nextState);
+  const {
+    currentRevision,
+    nextRevision,
+    nextContent,
+    contentFormatAfter,
+    contentRefAfter,
+    stateHashBefore,
+    stateHashAfter,
+  } = computePageMutation(currentPage, updateData);
 
   const [updated] = await database
     .update(pages)
@@ -1052,9 +994,7 @@ async function previewActivityAction(
   } else if (activity.resourceType === 'message') {
     const metadata = activity.metadata as Record<string, unknown> | null;
     const conversationType = metadata?.conversationType as string | undefined;
-    const isChannel = conversationType === 'channel';
-    const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
-    const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
+    const { table } = pickConversationTable({ conversationType, hasPageId: !!activity.pageId });
 
     const currentMessage = await db
       .select()
@@ -1485,11 +1425,7 @@ async function rollbackPageChange(
 
   // Restore fields that were changed
   if (activity.updatedFields) {
-    for (const field of activity.updatedFields) {
-      if (field in previousValues) {
-        updateData[field] = previousValues[field];
-      }
-    }
+    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
   } else if (Object.keys(previousValues).length > 0) {
     // If no updatedFields, restore all previousValues
     Object.assign(updateData, previousValues);
@@ -1591,11 +1527,7 @@ async function rollbackDriveChange(
 
   // Restore fields that were changed
   if (activity.updatedFields) {
-    for (const field of activity.updatedFields) {
-      if (field in previousValues) {
-        updateData[field] = previousValues[field];
-      }
-    }
+    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
   } else if (Object.keys(previousValues).length > 0) {
     Object.assign(updateData, previousValues);
   }
@@ -1680,14 +1612,10 @@ async function rollbackPermissionChange(
 
     case 'permission_update': {
       // A permission was updated - rollback by restoring previous values
-      const updateData: Record<string, unknown> = {};
-
-      const permissionFields = ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt'];
-      for (const field of permissionFields) {
-        if (field in previousValues) {
-          updateData[field] = previousValues[field];
-        }
-      }
+      const updateData = restoreFields(
+        ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt'],
+        previousValues
+      );
 
       if (Object.keys(updateData).length === 0) {
         throw new Error('No permission values to restore');
@@ -1732,13 +1660,7 @@ async function rollbackAgentConfigChange(
   }
 
   const previousValues = activity.previousValues || {};
-  const updateData: Record<string, unknown> = {};
-
-  for (const field of AGENT_CONFIG_ROLLBACK_FIELDS) {
-    if (field in previousValues) {
-      updateData[field] = previousValues[field];
-    }
-  }
+  const updateData = restoreFields(AGENT_CONFIG_ROLLBACK_FIELDS, previousValues);
 
   if (Object.keys(updateData).length === 0) {
     throw new Error('No agent config values to restore');
@@ -1816,14 +1738,7 @@ async function rollbackMemberChange(
   }
 
   // Role/customRole was changed - restore previous values
-  const updateData: Record<string, unknown> = {};
-
-  if ('role' in previousValues) {
-    updateData.role = previousValues.role;
-  }
-  if ('customRoleId' in previousValues) {
-    updateData.customRoleId = previousValues.customRoleId;
-  }
+  const updateData = restoreFields(['role', 'customRoleId'], previousValues);
 
   if (Object.keys(updateData).length === 0) {
     throw new Error('No member values to restore');
@@ -1944,14 +1859,10 @@ async function rollbackRoleChange(
   }
 
   // Role was updated - restore previous values
-  const updateData: Record<string, unknown> = {};
-
-  const roleFields = ['name', 'description', 'color', 'isDefault', 'permissions', 'position'];
-  for (const field of roleFields) {
-    if (field in previousValues) {
-      updateData[field] = previousValues[field];
-    }
-  }
+  const updateData = restoreFields(
+    ['name', 'description', 'color', 'isDefault', 'permissions', 'position'],
+    previousValues
+  );
 
   if (Object.keys(updateData).length === 0) {
     throw new Error('No role values to restore');
@@ -1988,10 +1899,10 @@ async function rollbackMessageChange(
 
   // Determine which table to update based on conversationType
   // Channel messages use the channelMessages table; global uses messages; page uses chatMessages
-  const isChannel = conversationType === 'channel';
-  const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
-  const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
-  const tableLabel = isChannel ? 'channel' : isGlobal ? 'global' : 'page';
+  const { table, isChannel, isGlobal, label: tableLabel } = pickConversationTable({
+    conversationType,
+    hasPageId: !!activity.pageId,
+  });
 
   switch (activity.operation) {
     case 'create': {
@@ -2262,13 +2173,10 @@ async function redoPermissionChange(
         throw new Error('No permission values to apply');
       }
 
-      const updateData: Record<string, unknown> = {};
-      const fields = ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt', 'grantedBy'];
-      for (const field of fields) {
-        if (field in targetValues) {
-          updateData[field] = targetValues[field];
-        }
-      }
+      const updateData = restoreFields(
+        ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt', 'grantedBy'],
+        targetValues
+      );
 
       if (Object.keys(updateData).length === 0) {
         throw new Error('No permission values to apply');
@@ -2369,14 +2277,7 @@ async function redoMemberChange(
         throw new Error('No member values to apply');
       }
 
-      const updateData: Record<string, unknown> = {};
-
-      if ('role' in targetValues) {
-        updateData.role = targetValues.role;
-      }
-      if ('customRoleId' in targetValues) {
-        updateData.customRoleId = targetValues.customRoleId;
-      }
+      const updateData = restoreFields(['role', 'customRoleId'], targetValues);
 
       if (Object.keys(updateData).length === 0) {
         throw new Error('No member values to apply');
@@ -2479,13 +2380,10 @@ async function redoRoleChange(
         throw new Error('No role values to apply');
       }
 
-      const updateData: Record<string, unknown> = {};
-      const fields = ['name', 'description', 'color', 'isDefault', 'permissions', 'position'];
-      for (const field of fields) {
-        if (field in targetValues) {
-          updateData[field] = targetValues[field];
-        }
-      }
+      const updateData = restoreFields(
+        ['name', 'description', 'color', 'isDefault', 'permissions', 'position'],
+        targetValues
+      );
 
       if (Object.keys(updateData).length === 0) {
         throw new Error('No role values to apply');
@@ -2523,13 +2421,7 @@ async function redoAgentConfigChange(
     throw new Error('No agent values to apply');
   }
 
-  const updateData: Record<string, unknown> = {};
-
-  for (const field of AGENT_CONFIG_ROLLBACK_FIELDS) {
-    if (field in targetValues) {
-      updateData[field] = targetValues[field];
-    }
-  }
+  const updateData = restoreFields(AGENT_CONFIG_ROLLBACK_FIELDS, targetValues);
 
   if (Object.keys(updateData).length === 0) {
     throw new Error('No agent values to apply');
@@ -2551,9 +2443,7 @@ async function redoMessageChange(
 ): Promise<Record<string, unknown>> {
   const metadata = activity.metadata as Record<string, unknown> | null;
   const conversationType = metadata?.conversationType as string | undefined;
-  const isChannel = conversationType === 'channel';
-  const isGlobal = !isChannel && (!activity.pageId || conversationType === 'global');
-  const table = isChannel ? channelMessages : isGlobal ? messages : chatMessages;
+  const { table, isChannel } = pickConversationTable({ conversationType, hasPageId: !!activity.pageId });
 
   const updateData: Record<string, unknown> = {};
 
