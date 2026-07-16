@@ -83,20 +83,28 @@ const TOTAL_SHARDS = shards.length;
 // The isolation itself (previous commit) proved this: with all contention
 // from the other ~930 files removed, AiChatView.test.tsx STILL hit the heap
 // ceiling alone, on its own dedicated shard, every one of 3 fresh-process
-// retries — this single ~1936-line file genuinely needs more than the
-// job-level 8192MB (see ci.yml) for its own v8-coverage-instrumented run.
-// Every earlier attempt at raising the ceiling destabilized the runner
-// itself — but those were all raising it for MANY forks running with real
-// aggregate concurrency (default fork count, or a whole shard's worth of
-// files). A solo-file shard only ever runs one worker; there is no
-// concurrent memory pressure to compound, so a higher ceiling here is safe
-// in a way it wasn't at the job level.
-const HEAVY_SHARD_NODE_OPTIONS = '--max-old-space-size=14336';
-
+// retries. Raising that solo shard's own ceiling to 14336MB (double the
+// job-level 8192MB) was tried next and STILL failed on all 3 attempts — this
+// file's v8-coverage-instrumented run needs more than 14GB, alone, with zero
+// contention. That's a v8 coverage-collection cost specific to this file
+// (very large, jsdom+React-heavy, exercising a component this PR rewrote to
+// pull in substantially more shared module graph), not something more
+// ceiling headroom was ever going to fix cheaply.
+//
+// These two files were already outside this PR's coverage guarantees — they
+// aren't among the 5 gated 100%-threshold globs, and are already documented
+// (PR body, D.1) as an unverified, tracked gap asserting against the
+// pre-cutover architecture. So: heavy-file shards run WITHOUT `--coverage`
+// at all. Their tests still execute and must still pass — correctness is
+// fully enforced — but v8 never instruments them, which is what actually
+// costs the memory (jsdom+React rendering alone, uninstrumented, is not
+// what was blowing the ceiling). They contribute no coverage data to the
+// merge below, which is honest: coverage for AiChatView.tsx was never
+// reliably measurable in this CI environment in the first place.
 for (let i = 1; i <= TOTAL_SHARDS; i++) {
   const files = shards[i - 1];
   const isHeavyShard = i > firstHeavyShardIndex;
-  console.log(`\n=== Coverage shard ${i}/${TOTAL_SHARDS} (${files.length} files)${isHeavyShard ? ' [isolated heavy file]' : ''} ===\n`);
+  console.log(`\n=== Coverage shard ${i}/${TOTAL_SHARDS} (${files.length} files)${isHeavyShard ? ' [isolated heavy file, no coverage]' : ''} ===\n`);
   if (files.length === 0) continue;
   let succeeded = false;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS_PER_SHARD && !succeeded; attempt++) {
@@ -109,19 +117,15 @@ for (let i = 1; i <= TOTAL_SHARDS; i++) {
         [
           'vitest',
           'run',
-          '--coverage',
-          '--coverage.reporter=json',
-          `--coverage.reportsDirectory=./coverage/shard-${i}`,
+          ...(isHeavyShard
+            ? []
+            : ['--coverage', '--coverage.reporter=json', `--coverage.reportsDirectory=./coverage/shard-${i}`]),
           ...files,
         ],
         {
           cwd: root,
           stdio: 'inherit',
-          env: {
-            ...process.env,
-            VITEST_COVERAGE_SHARD: '1',
-            ...(isHeavyShard ? { NODE_OPTIONS: HEAVY_SHARD_NODE_OPTIONS } : {}),
-          },
+          env: { ...process.env, VITEST_COVERAGE_SHARD: '1' },
         }
       );
       succeeded = true;
@@ -141,8 +145,11 @@ for (let i = 1; i <= TOTAL_SHARDS; i++) {
 // Source files covered by tests in more than one shard get their hit data
 // properly unioned by istanbul-lib-coverage's merge — summing each shard's
 // own precomputed summary numbers would double- or under-count those files.
+// Heavy shards (see above) ran without --coverage by design and produce no
+// coverage-final.json at all — skipped here, not an error.
 const map = createCoverageMap({});
 for (let i = 1; i <= TOTAL_SHARDS; i++) {
+  if (i > firstHeavyShardIndex) continue;
   const shardFinalPath = resolve(coverageDir, `shard-${i}/coverage-final.json`);
   if (!existsSync(shardFinalPath)) {
     console.error(`Missing coverage-final.json for shard ${i}: ${shardFinalPath}`);
