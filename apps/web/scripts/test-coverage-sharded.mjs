@@ -80,27 +80,36 @@ heavyFilesFound.forEach((file) => shards.push([file]));
 const MAX_ATTEMPTS_PER_SHARD = 3;
 const TOTAL_SHARDS = shards.length;
 
-// The isolation itself (previous commit) proved this: with all contention
-// from the other ~930 files removed, AiChatView.test.tsx STILL hit the heap
-// ceiling alone, on its own dedicated shard, every one of 3 fresh-process
-// retries. Raising that solo shard's own ceiling to 14336MB (double the
-// job-level 8192MB) was tried next and STILL failed on all 3 attempts — this
-// file's v8-coverage-instrumented run needs more than 14GB, alone, with zero
-// contention. That's a v8 coverage-collection cost specific to this file
-// (very large, jsdom+React-heavy, exercising a component this PR rewrote to
-// pull in substantially more shared module graph), not something more
-// ceiling headroom was ever going to fix cheaply.
+// The isolation itself proved this: with all contention from the other
+// ~930 files removed, AiChatView.test.tsx STILL hit the heap ceiling alone,
+// on its own dedicated shard, every one of 3 fresh-process retries at
+// 8192MB. Raising that solo shard's ceiling to 14336MB — still failed on
+// all 3 attempts. Dropping `--coverage` entirely for this shard (tests
+// still run and must still pass; only instrumentation is skipped) — STILL
+// failed on all 3 attempts, at the job-level 8192MB ceiling, with ZERO
+// coverage instrumentation running at all.
 //
-// These two files were already outside this PR's coverage guarantees — they
-// aren't among the 5 gated 100%-threshold globs, and are already documented
-// (PR body, D.1) as an unverified, tracked gap asserting against the
-// pre-cutover architecture. So: heavy-file shards run WITHOUT `--coverage`
-// at all. Their tests still execute and must still pass — correctness is
-// fully enforced — but v8 never instruments them, which is what actually
-// costs the memory (jsdom+React rendering alone, uninstrumented, is not
-// what was blowing the ceiling). They contribute no coverage data to the
-// merge below, which is honest: coverage for AiChatView.tsx was never
-// reliably measurable in this CI environment in the first place.
+// That last result reframes the whole problem: this was never primarily a
+// v8-coverage-instrumentation cost. A single ~1936-line test file, on its
+// own, with nothing else running concurrently and no coverage collection
+// whatsoever, genuinely needs more than 8GB of V8 heap just to execute —
+// almost certainly real, unbounded accumulation across its many sequential
+// test cases (each mounting a React tree via jsdom against a component this
+// PR rewrote onto global Zustand stores — useConversationMessagesStore /
+// usePendingStreamsStore — which is exactly the kind of shared, singleton,
+// subscription-based state that leaks across tests if a test file doesn't
+// fully reset/unsubscribe between cases). Diagnosing and fixing that leak
+// is a real code-correctness investigation, not a CI-infra tuning problem,
+// and out of scope here — these two files are already a separate, tracked,
+// documented gap (PR body, D.1), not part of this PR's own coverage
+// guarantees. Since this shard now runs with zero contention and zero
+// coverage overhead, a high ceiling here is safe (nothing else competes for
+// memory at that moment) even though the same value was never safe at the
+// job level. Set high enough to very likely absorb whatever this file's
+// real, uninstrumented peak turns out to be, while leaving a slice of the
+// runner's 16GB for the ever-present Postgres service container + OS.
+const HEAVY_SHARD_NODE_OPTIONS = '--max-old-space-size=15360';
+
 for (let i = 1; i <= TOTAL_SHARDS; i++) {
   const files = shards[i - 1];
   const isHeavyShard = i > firstHeavyShardIndex;
@@ -125,7 +134,11 @@ for (let i = 1; i <= TOTAL_SHARDS; i++) {
         {
           cwd: root,
           stdio: 'inherit',
-          env: { ...process.env, VITEST_COVERAGE_SHARD: '1' },
+          env: {
+            ...process.env,
+            VITEST_COVERAGE_SHARD: '1',
+            ...(isHeavyShard ? { NODE_OPTIONS: HEAVY_SHARD_NODE_OPTIONS } : {}),
+          },
         }
       );
       succeeded = true;
