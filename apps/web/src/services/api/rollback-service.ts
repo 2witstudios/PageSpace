@@ -46,6 +46,7 @@ import {
 } from './rollback/target-values';
 import { mapActivityRow, buildHistoryConditions } from './rollback/activity-mapping';
 import { computePageMutation, restoreFields, pickConversationTable } from './rollback/page-mutation-plan';
+import { buildPreview, evaluateEligibility, evaluateCreateNoOp } from './rollback/preview-eligibility';
 
 // Re-export the shared activity shape so existing consumers keep importing it here.
 export type { ActivityLogForRollback };
@@ -347,21 +348,8 @@ async function previewActivityAction(
       ]
     : [];
 
-  const basePreview = (overrides: Partial<ActivityActionPreview>): ActivityActionPreview => ({
-    action,
-    canExecute: false,
-    reason: undefined,
-    warnings: [],
-    hasConflict: false,
-    conflictFields: [],
-    requiresForce: false,
-    isNoOp: false,
-    currentValues: null,
-    targetValues,
-    changes,
-    affectedResources,
-    ...overrides,
-  });
+  const basePreview = (overrides: Partial<ActivityActionPreview>): ActivityActionPreview =>
+    buildPreview({ action, targetValues, changes, affectedResources }, overrides);
 
   if (!activity) {
     loggers.api.debug('[Rollback:Preview] Activity not found', { activityId });
@@ -372,37 +360,18 @@ async function previewActivityAction(
   const rollingBackRollback = isRollingBackRollback(activity);
 
   const effectiveOperation = getEffectiveOperation(activity);
-  if (!effectiveOperation) {
-    return basePreview({
-      reason: rollingBackRollback
-        ? 'Rollback source operation not available'
-        : 'Operation not available',
-    });
-  }
-
-  // Check if operation is rollbackable
-  const isRollbackable = isRollbackableOperation(effectiveOperation);
-  loggers.api.debug('[Rollback:Preview] Checking operation eligibility', {
-    action,
-    operation: effectiveOperation,
-    isRollbackable,
-  });
-
-  if (!isRollbackable) {
-    return basePreview({
-      reason: `Cannot ${action} '${effectiveOperation}' operations`,
-    });
-  }
-
+  const isRollbackable = effectiveOperation ? isRollbackableOperation(effectiveOperation) : false;
   const hasTargetValues = !!targetValues && Object.keys(targetValues).length > 0;
   // Content snapshots are only relevant for regular rollbacks, not rollback of rollbacks
   const hasContentSnapshot = !rollingBackRollback && !!resolvedContentSnapshot;
   // When rolling back a rollback, use the redo allow list since we're restoring forward
-  const allowMissingTarget = rollingBackRollback
+  const allowMissingTarget = !!effectiveOperation && (rollingBackRollback
     ? REDO_ALLOW_MISSING_TARGET.has(effectiveOperation)
-    : ROLLBACK_ALLOW_MISSING_TARGET.has(effectiveOperation);
-  loggers.api.debug('[Rollback:Preview] Checking previous state availability', {
+    : ROLLBACK_ALLOW_MISSING_TARGET.has(effectiveOperation));
+  loggers.api.debug('[Rollback:Preview] Checking eligibility', {
     action,
+    operation: effectiveOperation,
+    isRollbackable,
     rollingBackRollback,
     hasTargetValues,
     hasContentSnapshot,
@@ -410,13 +379,17 @@ async function previewActivityAction(
     previousValuesFields: targetValues ? Object.keys(targetValues) : [],
   });
 
-  // For 'create' operations, rollback means trashing - no previous state needed
-  if (effectiveOperation !== 'create' && !hasTargetValues && !hasContentSnapshot && !allowMissingTarget) {
-    return basePreview({
-      reason: rollingBackRollback
-        ? 'No rollback state available to reapply'
-        : 'No values to restore',
-    });
+  const eligibility = evaluateEligibility({
+    action,
+    rollingBackRollback,
+    effectiveOperation,
+    isRollbackable,
+    hasTargetValues,
+    hasContentSnapshot,
+    allowMissingTarget,
+  });
+  if (eligibility.kind === 'reject') {
+    return basePreview({ reason: eligibility.reason });
   }
 
   // Check permissions
@@ -495,25 +468,23 @@ async function previewActivityAction(
 
     // Check if create operation is a no-op (page already in desired state)
     if (effectiveOperation === 'create') {
-      const isTrashed = currentPage[0].isTrashed;
       // When rolling back a rollback of create, we should RESTORE (not trash)
       const shouldBeTrashed = action === 'rollback' && !rollingBackRollback;
-      if (isTrashed === shouldBeTrashed) {
-        // For AI undo, mark as no-op but "can execute" - will be silently skipped
-        // This allows filtering out stale activities from previous sessions
-        if (undoGroupActivityIds.length > 0) {
-          return basePreview({
-            canExecute: true,
-            isNoOp: true,
-            currentValues,
-          });
-        }
-        // For non-AI undo, return error as before
-        return basePreview({
-          reason: shouldBeTrashed ? 'Page is already in trash' : 'Page is already restored',
-          currentValues,
-          isNoOp: true,
-        });
+      const createNoOp = evaluateCreateNoOp({
+        isCreateNoOp: currentPage[0].isTrashed === shouldBeTrashed,
+        shouldBeTrashed,
+        // For AI undo, a no-op is silently skippable so stale activities from
+        // previous sessions can be filtered out; outside an undo group it errors.
+        hasUndoGroup: undoGroupActivityIds.length > 0,
+        allowUndoGroupSkip: true,
+        trashedReason: 'Page is already in trash',
+        restoredReason: 'Page is already restored',
+      });
+      if (createNoOp.kind === 'skippable') {
+        return basePreview({ canExecute: true, isNoOp: true, currentValues });
+      }
+      if (createNoOp.kind === 'error') {
+        return basePreview({ reason: createNoOp.reason, currentValues, isNoOp: true });
       }
     }
 
@@ -564,12 +535,20 @@ async function previewActivityAction(
     };
 
     if (effectiveOperation === 'create') {
-      const isTrashed = currentDrive[0].isTrashed;
       // When rolling back a rollback of create, we should RESTORE (not trash)
       const shouldBeTrashed = action === 'rollback' && !rollingBackRollback;
-      if (isTrashed === shouldBeTrashed) {
+      const createNoOp = evaluateCreateNoOp({
+        isCreateNoOp: currentDrive[0].isTrashed === shouldBeTrashed,
+        shouldBeTrashed,
+        // Drive create no-ops always error (no silent undo-group skip).
+        hasUndoGroup: undoGroupActivityIds.length > 0,
+        allowUndoGroupSkip: false,
+        trashedReason: 'Drive is already in trash',
+        restoredReason: 'Drive is already restored',
+      });
+      if (createNoOp.kind === 'error') {
         return basePreview({
-          reason: shouldBeTrashed ? 'Drive is already in trash' : 'Drive is already restored',
+          reason: createNoOp.reason,
           currentValues,
           isNoOp: true,
         });
