@@ -430,8 +430,14 @@ const GlobalAssistantView: React.FC = () => {
   // `pendingSendConversationId` covers the submitted window, where no store entry exists yet.
   // (`pendingSendConversationId !== null` first: both ids are null before identity resolves, and
   // `null === null` would light the Stop button on an empty surface.)
+  // OWN streams only — same rule as the merged AiChatView (`isStreaming || ownStreamMessageId`).
+  // A REMOTE stream on a shared conversation is live content worth SHOWING, but it is not
+  // something this tab can stop: the server's abort is user-scoped, so a Stop wired to it reports
+  // 'not_found' and stays silent. Folding remote streams in here would light a Stop button that
+  // cannot work, and would suppress the `remoteStreamingUser` chip (gated on !effectiveIsStreaming)
+  // that exists to say who IS generating.
   const effectiveIsStreaming =
-    activeStream !== undefined ||
+    activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
   const streamingAssistantText = useMemo(() => {

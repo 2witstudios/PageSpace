@@ -14,15 +14,38 @@ describe('decideStopAction', () => {
     })).toEqual({ type: 'abortByMessageId', messageId: 'm1' });
   });
 
-  // A bootstrapped own stream (refresh mid-stream) or another surface's stream: same answer.
-  // The old code needed a claim protocol to decide who was allowed to answer this; a read of
-  // the store needs no claim, which is why the "declined co-mounted surface never re-claims a
+  // A bootstrapped own stream (refresh mid-stream) or one this tab's own POST is producing: same
+  // answer. The old code needed a claim protocol to decide who was allowed to answer this; a read
+  // of the store needs no claim, which is why the "declined co-mounted surface never re-claims a
   // freed slot" gap (useAgentChannelMultiplayer:110-116) cannot exist here.
-  it('given a live stream this tab does not own, should still abort by its messageId', () => {
+  it('given an own stream this tab did not start locally (bootstrapped after a refresh), should abort by its messageId', () => {
     expect(decideStopAction({
-      activeStream: { messageId: 'm1', conversationId: 'conv-1', isOwn: false },
+      activeStream: { messageId: 'm1', conversationId: 'conv-1', isOwn: true },
       pendingSendConversationId: null,
     })).toEqual({ type: 'abortByMessageId', messageId: 'm1' });
+  });
+
+  // A REMOTE stream is not ours to stop, and naming it would be worse than doing nothing: the
+  // server's abort-by-messageId is scoped to the calling user, so someone else's stream resolves
+  // to zero rows and reports 'not_found' — on which reportAbortOutcome is deliberately silent.
+  // The Stop would look like it worked and stop nothing.
+  it('given only a REMOTE stream and no pending send, should do nothing rather than name a stream it cannot stop', () => {
+    expect(decideStopAction({
+      activeStream: { messageId: 'their-m1', conversationId: 'conv-1', isOwn: false },
+      pendingSendConversationId: null,
+    })).toEqual({ type: 'none' });
+  });
+
+  // THE regression this ordering exists to prevent. On a shared conversation a remote stream can
+  // be live while OUR send is still in its submitted window (useSendHandoff is passed
+  // `isOwn === true` for exactly this reason). Naming the remote messageId here would abort
+  // nothing, silently, while our generation kept running its write tools and kept billing —
+  // and it would throw away the one name that would have worked.
+  it('given a remote stream is live while our own send is still in the submitted window, should abort OUR conversation, not their messageId', () => {
+    expect(decideStopAction({
+      activeStream: { messageId: 'their-m1', conversationId: 'conv-1', isOwn: false },
+      pendingSendConversationId: 'conv-1',
+    })).toEqual({ type: 'abortByConversation', conversationId: 'conv-1' });
   });
 
   // THE submitted-window case. useChat sets status='submitted' BEFORE it issues the request and

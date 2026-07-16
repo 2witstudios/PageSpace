@@ -359,8 +359,14 @@ const SidebarChatTab: React.FC = () => {
   // no store entry covers yet. Replaces `isStreaming || dashboardIsStreaming` /
   // `isStreaming || contextIsStreaming`: those ORed a local flag (true for the OLD conversation
   // after a mid-stream switch) with a shared slot somebody had to claim correctly.
+  // OWN streams only — same rule as the merged AiChatView (`isStreaming || ownStreamMessageId`).
+  // A REMOTE stream on a shared conversation is live content worth SHOWING, but it is not
+  // something this tab can stop: the server's abort is user-scoped, so a Stop wired to it reports
+  // 'not_found' and stays silent. Folding remote streams in here would light a Stop button that
+  // cannot work, and would suppress the `remoteStreamingUser` chip (gated on !displayIsStreaming)
+  // that exists to say who IS generating.
   const displayIsStreaming =
-    activeStream !== undefined ||
+    activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
   // INTERIM (PR 5A → deleted in PR 5B): the three #2061 clobber guards below still ask "is MY OWN
