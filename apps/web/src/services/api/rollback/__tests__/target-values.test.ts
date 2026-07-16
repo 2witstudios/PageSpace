@@ -281,4 +281,13 @@ describe('buildChangeSummary', () => {
       expected: { type: 'page', id: 'page_1', title: 'Title' },
     });
   });
+
+  it('falls back to the resource type for an untitled resource', () => {
+    assert({
+      given: 'an activity with no resource title',
+      should: 'use the resource type as the summary title',
+      actual: buildChangeSummary(makeActivity({ resourceTitle: null }), null)[0].resource,
+      expected: { type: 'page', id: 'page_1', title: 'page' },
+    });
+  });
 });

@@ -40,37 +40,18 @@ import {
   AGENT_CONFIG_ROLLBACK_FIELDS,
 } from './rollback/operations';
 import { getConflictFields, classifyUndoGroupConflict, isNoOpChange } from './rollback/conflict';
+import type { ActivityLogForRollback } from './rollback/types';
+import {
+  getChangeDescription,
+  buildChangeSummary,
+  buildRollbackTargetValues,
+  buildActionTargetValues,
+  getEffectiveOperation,
+  isRollingBackRollback,
+} from './rollback/target-values';
 
-function getChangeDescription(activity: ActivityLogForRollback): string {
-  const metadata = activity.metadata as { targetUserEmail?: string } | null;
-  return activity.resourceTitle || metadata?.targetUserEmail || activity.resourceType;
-}
-
-function buildChangeSummary(
-  activity: ActivityLogForRollback,
-  targetValues: Record<string, unknown> | null
-): ActivityChangeSummary[] {
-  const operation = activity.operation;
-  const label = `Undo ${getOperationSummaryLabel(operation)}`;
-  const fields = activity.updatedFields?.length
-    ? activity.updatedFields
-    : targetValues
-      ? Object.keys(targetValues)
-      : [];
-  return [
-    {
-      id: activity.id,
-      label,
-      description: getChangeDescription(activity),
-      fields: fields.length > 0 ? fields : undefined,
-      resource: {
-        type: activity.resourceType,
-        id: activity.resourceId,
-        title: activity.resourceTitle || activity.resourceType,
-      },
-    },
-  ];
-}
+// Re-export the shared activity shape so existing consumers keep importing it here.
+export type { ActivityLogForRollback };
 
 async function resolveActivityContentSnapshot(activity: ActivityLogForRollback): Promise<string | null> {
   if (activity.contentSnapshot) {
@@ -91,54 +72,6 @@ async function resolveActivityContentSnapshot(activity: ActivityLogForRollback):
   }
 
   return null;
-}
-
-function buildRollbackTargetValues(
-  activity: ActivityLogForRollback,
-  contentSnapshot?: string | null
-): Record<string, unknown> | null {
-  const baseValues = activity.previousValues ? { ...activity.previousValues } : null;
-  if (activity.operation === 'create') {
-    return baseValues;
-  }
-  const resolvedContent = contentSnapshot ?? activity.contentSnapshot;
-  if (resolvedContent && (!baseValues || !Object.prototype.hasOwnProperty.call(baseValues, 'content'))) {
-    return {
-      ...(baseValues ?? {}),
-      content: resolvedContent,
-    };
-  }
-  return baseValues;
-}
-
-function buildActionTargetValues(
-  activity: ActivityLogForRollback,
-  contentSnapshot?: string | null
-): Record<string, unknown> | null {
-  // When rolling back a rollback activity, use previousValues (same as the old redo logic)
-  // This restores the state to what it was before the rollback happened
-  if (activity.operation === 'rollback') {
-    return activity.previousValues ? { ...activity.previousValues } : null;
-  }
-  return buildRollbackTargetValues(activity, contentSnapshot);
-}
-
-function getEffectiveOperation(
-  activity: ActivityLogForRollback
-): ActivityOperation | null {
-  // When the target is a rollback activity, use the original operation type
-  // so the correct handler is called (e.g., page handler for page updates)
-  if (activity.operation === 'rollback') {
-    return (activity.rollbackSourceOperation as ActivityOperation | null) ?? null;
-  }
-  return activity.operation as ActivityOperation;
-}
-
-/**
- * Check if this activity represents rolling back a previous rollback (effectively redo)
- */
-function isRollingBackRollback(activity: ActivityLogForRollback): boolean {
-  return activity.operation === 'rollback';
 }
 
 /**
@@ -374,44 +307,6 @@ async function applyPageUpdateWithRevision(
     contentFormatAfter,
     mentionsResult,
   };
-}
-
-/**
- * Activity log with full details for rollback
- */
-export interface ActivityLogForRollback {
-  id: string;
-  timestamp: Date;
-  userId: string | null;
-  actorEmail: string;
-  actorDisplayName: string | null;
-  operation: string;
-  resourceType: ActivityResourceType;
-  resourceId: string;
-  resourceTitle: string | null;
-  driveId: string | null;
-  pageId: string | null;
-  isAiGenerated: boolean;
-  aiProvider: string | null;
-  aiModel: string | null;
-  contentSnapshot: string | null;
-  contentRef: string | null;
-  contentFormat: PageContentFormat | null;
-  contentSize: number | null;
-  updatedFields: string[] | null;
-  previousValues: Record<string, unknown> | null;
-  newValues: Record<string, unknown> | null;
-  metadata: Record<string, unknown> | null;
-  streamId: string | null;
-  streamSeq: number | null;
-  changeGroupId: string | null;
-  changeGroupType: ChangeGroupType | null;
-  stateHashBefore: string | null;
-  stateHashAfter: string | null;
-  rollbackFromActivityId: string | null;
-  rollbackSourceOperation: ActivityOperation | null;
-  rollbackSourceTimestamp: Date | null;
-  rollbackSourceTitle: string | null;
 }
 
 /**
