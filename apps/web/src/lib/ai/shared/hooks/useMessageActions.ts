@@ -8,6 +8,7 @@ import { fetchWithAuth, patch, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { UIMessage } from 'ai';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
+import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
 
 const browserSessionHeaders = (): Record<string, string> => ({
   'X-Browser-Session-Id': getBrowserSessionId(),
@@ -212,14 +213,9 @@ export function useMessageActions({
     const currentMessages = messagesRef.current;
 
     // Before regenerating, clean up old assistant responses after the last user message
-    const lastUserMsgIndex = currentMessages.map((m) => m.role).lastIndexOf('user');
+    const assistantMessagesToDelete = getAssistantMessagesAfterLastUser(currentMessages);
 
-    if (lastUserMsgIndex !== -1) {
-      // Get all assistant messages after the last user message
-      const assistantMessagesToDelete = currentMessages
-        .slice(lastUserMsgIndex + 1)
-        .filter((m) => m.role === 'assistant');
-
+    if (assistantMessagesToDelete.length > 0) {
       // Delete them from the database in parallel — calls are independent
       await Promise.allSettled(
         assistantMessagesToDelete.map((msg) => {

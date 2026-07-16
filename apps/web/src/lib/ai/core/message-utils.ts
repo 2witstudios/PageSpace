@@ -6,6 +6,7 @@ import {
   type ToolUIPart,
 } from 'ai';
 import { db } from '@pagespace/db/db'
+import { eq, and } from '@pagespace/db/operators'
 import { chatMessages } from '@pagespace/db/schema/core'
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -490,6 +491,24 @@ export async function extractStructuredContentFromParts(uiParts: UIMessage['part
 }
 
 /**
+ * Thrown by `saveMessageToDatabase`/`saveGlobalAssistantMessageToDatabase` when a
+ * client-supplied message id collides with a row that belongs to a DIFFERENT
+ * conversation — the scoped upsert's `where` clause makes Postgres skip the
+ * conflicting write entirely (never overwrite/re-parent it), and this is what
+ * turns that silent no-op into a caller-visible failure instead of a save that
+ * looks successful but never happened.
+ */
+export class MessageConversationConflictError extends Error {
+  constructor(
+    public readonly messageId: string,
+    public readonly conversationId: string,
+  ) {
+    super(`Message id ${messageId} already belongs to a different conversation than ${conversationId}`);
+    this.name = 'MessageConversationConflictError';
+  }
+}
+
+/**
  * Save a message with tool calls and results to the database
  * Supports both legacy format and new structured format with chronological ordering
  */
@@ -542,7 +561,28 @@ export async function saveMessageToDatabase({
       });
     }
 
-    await db.insert(chatMessages)
+    // Scoped upsert: `where` gates the ON CONFLICT DO UPDATE to a row already in the
+    // CALLER's own conversation AND under the same role. A client-supplied messageId
+    // (accepted unvalidated by both chat routes) can collide with a row that belongs to
+    // a DIFFERENT conversation — the id space is a single global primary key, not
+    // conversation-scoped. Without this, Postgres would run the update unconditionally:
+    // overwriting that row's content and re-parenting it into the caller's conversation
+    // via the `conversationId` write below. With the `where`, a cross-conversation
+    // collision makes Postgres skip the conflict action entirely for that row (no
+    // insert, no update — DO NOTHING in effect), which is why `conversationId` is no
+    // longer in `set`: it can only ever run when the row is already in this same
+    // conversation, where it would be a no-op anyway. `.returning()` reports which rows
+    // were actually touched, letting the caller detect (and log) a rejected collision
+    // instead of silently doing nothing.
+    //
+    // The `role` half of the gate (PR review finding) closes a narrower, same-conversation
+    // variant: `role` is never in `set` (a message's role is immutable), so without also
+    // requiring the EXISTING row's role to match, a 'user'-role save whose client id
+    // happens to equal an existing 'assistant' row's id in the SAME conversation would
+    // still pass the conversationId check and overwrite that assistant reply's content —
+    // content-spoofing an AI response within a conversation the client already has access
+    // to write to (ids aren't secret; they're visible in the conversation's own history).
+    const result = await db.insert(chatMessages)
       .values({
         id: messageId,
         pageId,
@@ -563,14 +603,29 @@ export async function saveMessageToDatabase({
           content: structuredContent,
           toolCalls: toolCalls ? JSON.stringify(toolCalls) : null,
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
-          conversationId, // Update conversationId if message is reprocessed
           sourceAgentId: sourceAgentId ?? null,
           // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'
           // (never back to 'streaming' — this function is only ever called with a terminal
           // status, per the param doc above).
           status,
-        }
-      });
+        },
+        where: and(eq(chatMessages.conversationId, conversationId), eq(chatMessages.role, role)),
+      })
+      .returning({ id: chatMessages.id });
+
+    if (result.length === 0) {
+      loggers.ai.warn(
+        'saveMessageToDatabase: client-supplied id collided with a message in a different conversation — rejected',
+        { messageId, conversationId, pageId },
+      );
+      // MUST throw, not just log: a silent return here left every caller (both
+      // chat routes) falling through to bump conversations.lastMessageAt, audit-log
+      // the write, and fire mention notifications as though the message had been
+      // persisted — while the model still answers a "message" that was never saved.
+      // Caught by this function's own catch below, which both routes already turn
+      // into a user-visible failure response (never a silent 200).
+      throw new MessageConversationConflictError(messageId, conversationId);
+    }
 
     // Fire-and-forget mention notifications for assistant messages only
     if (mentionNotify && role === 'assistant' && content.trim()) {
@@ -672,7 +727,12 @@ export async function saveGlobalAssistantMessageToDatabase({
       });
     }
 
-    await db.insert(messages)
+    // Scoped upsert — see the comment on the equivalent chatMessages upsert above.
+    // This table never wrote conversationId in `set` (so it never re-parented), but it
+    // DID silently overwrite another conversation's content on a colliding id — the
+    // `where` closes that too, plus the same same-conversation role-spoofing gap
+    // (a 'user'-role save whose id collides with an existing 'assistant' row).
+    const result = await db.insert(messages)
       .values({
         id: messageId,
         conversationId,
@@ -693,8 +753,20 @@ export async function saveGlobalAssistantMessageToDatabase({
           toolResults: toolResults ? JSON.stringify(toolResults) : null,
           // Terminal write: flips a 'streaming' placeholder row to 'complete' or 'interrupted'.
           status,
-        }
-      });
+        },
+        where: and(eq(messages.conversationId, conversationId), eq(messages.role, role)),
+      })
+      .returning({ id: messages.id });
+
+    if (result.length === 0) {
+      loggers.ai.warn(
+        'saveGlobalAssistantMessageToDatabase: client-supplied id collided with a message in a different conversation — rejected',
+        { messageId, conversationId },
+      );
+      // See saveMessageToDatabase's identical guard for the full rationale: must throw,
+      // not just log, or the caller proceeds as though an unpersisted message was saved.
+      throw new MessageConversationConflictError(messageId, conversationId);
+    }
 
     debugLogAI('Global Assistant: Message saved to database with tools');
   } catch (error) {

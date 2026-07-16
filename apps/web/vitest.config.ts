@@ -5,6 +5,13 @@ import path from 'path'
 export default defineConfig({
   plugins: [react()],
   test: {
+    // The default 'threads' pool runs workers as node:worker_threads, which do
+    // NOT inherit --max-old-space-size from NODE_OPTIONS the way a separate
+    // process does — each worker's V8 isolate keeps its own (unraised) heap
+    // ceiling regardless of the parent's flags. 'forks' spawns real child
+    // processes instead, so any future NODE_OPTIONS heap bump actually takes
+    // effect, and it costs nothing when no bump is needed (see ci.yml).
+    pool: 'forks',
     moduleDirectories: ['node_modules', path.resolve(__dirname, '../../node_modules')],
     globals: true,
     environment: 'jsdom',
@@ -13,7 +20,21 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'json', 'html', 'json-summary'],
+      // Defaults to true, which instruments every source file matching
+      // include/exclude below — including hundreds of files (1569 non-test
+      // source files vs 932 test files, apps/web/src) that no test ever
+      // imports or executes. Each one still costs v8 coverage bookkeeping
+      // despite contributing nothing but a hardcoded 0% row to the report.
+      // Disabling this can only raise or hold steady the computed
+      // percentages for thresholds (never lower them — it strictly removes
+      // always-0% files from the denominator), so it doesn't risk the
+      // ratchet or the 100% per-glob checks below.
+      all: false,
+      // Only coverage-summary.json is ever consumed (coverage-report.mjs,
+      // coverage-ratchet.mjs, the CI artifact upload) — 'json' (full raw
+      // per-statement maps) and 'html' (syntax-highlighted per-file pages)
+      // for this ~930-file suite are dead weight nothing reads.
+      reporter: ['text', 'json-summary'],
       reportsDirectory: './coverage',
       reportOnFailure: true,
       exclude: [
