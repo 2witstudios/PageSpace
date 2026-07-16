@@ -42,6 +42,12 @@ export interface PlanOwnStreamMirrorInput {
   mirroredEntryExists: boolean;
   /** Latched at the rising edge of this send — never read live. */
   streamIdentity: OwnStreamIdentity;
+  /**
+   * The parts last mirrored for `mirroredMessageId`. Used ONLY to restore a wiped entry when the
+   * message has gone from the surface's array, where `ownAssistantMessage` can no longer supply
+   * them. Empty until the first write.
+   */
+  lastMirroredParts: UIMessagePart[];
   /** Caller-tracked monotonic counter, bumped once per mirror tick — threaded into `setStreamParts`'s `seq` gate. */
   seq: number;
 }
@@ -56,6 +62,8 @@ export type OwnStreamMirrorOp =
         triggeredBy: { userId: string; displayName: string };
         isOwn: true;
         startedAt: string;
+        /** Only set when restoring a wiped entry whose message has left the surface's array. */
+        parts?: UIMessagePart[];
       };
     }
   | { type: 'setStreamParts'; messageId: string; parts: UIMessagePart[]; seq: number }
@@ -112,16 +120,40 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
       : [];
   }
 
-  // Sending, but the SDK has not pushed the assistant message yet (the whole submitted window), or
-  // something cleared the array under us. Either way there is nothing new to write — and nothing
-  // to remove, because the send is still in flight.
+  const id = input.ownAssistantMessage?.id;
+
+  // The surface's array no longer shows our latched stream — it was emptied (agent deselect) or
+  // moved onto another conversation's history. Neither means the stream ended, and we must not
+  // adopt whatever the array now holds (see (2) above).
+  //
+  // But if our entry has ALSO been wiped in that window, this is the one case that cannot heal
+  // itself: no further token will ever arrive for a message that has left the array, so the
+  // subscription that noticed the wipe is the last chance to act. Restore the LATCHED stream, with
+  // the content we last mirrored — losing it would mean no Stop, no SWR protection, and a
+  // generation still running and billing with nothing on screen naming it.
+  if (input.mirroredMessageId !== undefined && input.mirroredMessageId !== id) {
+    if (input.mirroredEntryExists) return [];
+    return [
+      {
+        type: 'addStream',
+        stream: {
+          messageId: input.mirroredMessageId,
+          pageId: input.streamIdentity.pageId,
+          conversationId: input.streamIdentity.conversationId,
+          triggeredBy: input.streamIdentity.triggeredBy,
+          isOwn: true,
+          startedAt: input.streamIdentity.startedAt,
+          parts: input.lastMirroredParts,
+        },
+      },
+    ];
+  }
+
+  // Sending, but the SDK has not pushed the assistant message yet (the whole submitted window).
+  // Nothing to write, and nothing to remove — the send is still in flight.
   if (!input.ownAssistantMessage) return [];
 
-  const { id, parts } = input.ownAssistantMessage;
-
-  // The array moved under us — see (2) above. Hold what we latched, and do NOT adopt this message
-  // even if the store has no entry: absent + different id is still not ours.
-  if (input.mirroredMessageId !== undefined && input.mirroredMessageId !== id) return [];
+  const { parts } = input.ownAssistantMessage;
 
   // Either the first assistant message of this send, or our own latched one whose entry has since
   // been wiped from the store by someone else (clearPageStreams on a socket swap — see
@@ -148,7 +180,7 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
       {
         type: 'addStream',
         stream: {
-          messageId: id,
+          messageId: id as string,
           pageId: input.streamIdentity.pageId,
           conversationId: input.streamIdentity.conversationId,
           triggeredBy: input.streamIdentity.triggeredBy,
@@ -156,9 +188,9 @@ export const planOwnStreamMirror = (input: PlanOwnStreamMirrorInput): OwnStreamM
           startedAt: input.streamIdentity.startedAt,
         },
       },
-      { type: 'setStreamParts', messageId: id, parts, seq: input.seq },
+      { type: 'setStreamParts', messageId: id as string, parts, seq: input.seq },
     ];
   }
 
-  return [{ type: 'setStreamParts', messageId: id, parts, seq: input.seq }];
+  return [{ type: 'setStreamParts', messageId: id as string, parts, seq: input.seq }];
 };

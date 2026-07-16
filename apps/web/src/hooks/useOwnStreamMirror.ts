@@ -55,6 +55,9 @@ export const useOwnStreamMirror = ({
 }: UseOwnStreamMirrorInput): void => {
   const mirroredIdRef = useRef<string | undefined>(undefined);
   const identityRef = useRef<OwnStreamIdentity | undefined>(undefined);
+  // The content we last mirrored for the latched id. Needed only to restore a wiped entry after the
+  // message has left the surface's array, where `ownAssistantMessage` can no longer supply it.
+  const lastPartsRef = useRef<UIMessage['parts']>([]);
 
   // Read inside the effect without making the effect depend on them: they are captured only on the
   // rising edge, so a later change must NOT re-run anything — that is the point of latching.
@@ -112,6 +115,7 @@ export const useOwnStreamMirror = ({
       mirroredMessageId: mirroredIdRef.current,
       mirroredEntryExists,
       streamIdentity: identity,
+      lastMirroredParts: lastPartsRef.current,
       seq,
     });
 
@@ -128,6 +132,10 @@ export const useOwnStreamMirror = ({
     if (sending && mirroredIdRef.current === undefined && ownAssistantMessage !== undefined) {
       mirroredIdRef.current = ownAssistantMessage.id;
     }
+    // Retain the latched stream's content while the array still shows it.
+    if (sending && ownAssistantMessage !== undefined && ownAssistantMessage.id === mirroredIdRef.current) {
+      lastPartsRef.current = ownAssistantMessage.parts;
+    }
 
     for (const op of ops) {
       if (op.type === 'addStream') store.addStream(op.stream);
@@ -142,6 +150,7 @@ export const useOwnStreamMirror = ({
       // against an entry that has just been removed.
       mirroredIdRef.current = undefined;
       identityRef.current = undefined;
+      lastPartsRef.current = [];
       return;
     }
 

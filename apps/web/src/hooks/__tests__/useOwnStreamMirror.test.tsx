@@ -171,9 +171,12 @@ describe('useOwnStreamMirror', () => {
     expect(entry('m1')).toMatchObject({ messageId: 'm1', conversationId: 'conv-C', isOwn: true });
   });
 
-  // The re-assert must not resurrect a stream under the wrong identity: absent entry + a message
-  // the array moved onto is still not ours to adopt.
-  it('given the array moved onto another message AND the entry was wiped, should adopt nothing', () => {
+  // The worst case, and the one that cannot heal itself: a load-on-select moves the array off our
+  // stream while an auth refresh wipes the channel. No further token will ever arrive for a message
+  // that has left the array, so if this moment is missed the entry is gone for the rest of the
+  // send — no Stop, no SWR protection, generation still running and billing. Restore the LATCHED
+  // stream (with the content we last mirrored) and still refuse to adopt the history message.
+  it('given the array moved onto another message AND the entry was wiped, should restore the latched stream and adopt nothing', () => {
     const { rerender } = render({
       status: 'streaming',
       ownAssistantMessage: { id: 'm1', parts: [text('He')] },
@@ -191,6 +194,8 @@ describe('useOwnStreamMirror', () => {
       });
     });
 
+    expect(entry('m1')).toMatchObject({ messageId: 'm1', conversationId: 'conv-C', isOwn: true });
+    expect(entry('m1')?.parts).toEqual([text('He')]);
     expect(entry('old-history-message')).toBeUndefined();
   });
 });

@@ -12,6 +12,7 @@ const BASE = {
   streamIdentity: IDENTITY,
   seq: 1,
   mirroredEntryExists: true,
+  lastMirroredParts: [] as ReturnType<typeof text>[],
 };
 
 const text = (t: string) => ({ type: 'text' as const, text: t });
@@ -78,7 +79,7 @@ describe('planOwnStreamMirror', () => {
   // real generation keeps running its write tools and keeps billing.
   it('given the caller latched the send-time identity, should record the stream under THAT identity', () => {
     const ops = planOwnStreamMirror({
-      seq: 1,
+      ...BASE,
       streamIdentity: { ...IDENTITY, conversationId: 'conv-sent-from', pageId: 'page-sent-from' },
       status: 'streaming',
       ownAssistantMessage: { id: 'm1', parts: [text('hi')] },
@@ -179,15 +180,70 @@ describe('planOwnStreamMirror', () => {
     ]);
   });
 
-  // The re-assert must NOT fire for a message the array moved onto — that is the phantom this
-  // module already refuses to create. Absent entry + different id is still "not ours".
-  it('given the array moved onto another message AND no entry exists, should still plan nothing', () => {
+  // The two failures can COINCIDE — a load-on-select moves the array while an auth refresh wipes
+  // the channel — and that combination is the worst case, because once the array has moved off our
+  // latched id NO further token will ever arrive for it. Returning nothing here lost the stream's
+  // entry PERMANENTLY for that send: no Stop, no SWR protection, server still generating and
+  // billing. Restore the LATCHED stream (with the content we last mirrored), and still refuse to
+  // adopt the history message.
+  it('given the array moved onto another message AND the entry was wiped, should restore the latched stream and adopt nothing', () => {
     expect(planOwnStreamMirror({
       ...BASE,
       status: 'streaming',
       ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old')] },
       mirroredMessageId: 'm1',
       mirroredEntryExists: false,
+      lastMirroredParts: [text('what we had so far')],
+    })).toEqual([
+      {
+        type: 'addStream',
+        stream: {
+          messageId: 'm1',
+          pageId: 'page-1',
+          conversationId: 'conv-1',
+          triggeredBy: { userId: 'u1', displayName: 'Me' },
+          isOwn: true,
+          startedAt: '2024-01-01T00:00:00.000Z',
+          parts: [text('what we had so far')],
+        },
+      },
+    ]);
+  });
+
+  // Same, when the array was EMPTIED rather than moved (agent deselect) and the entry was wiped in
+  // the same window. No message on screen is not a reason to lose a running generation.
+  it('given the array was emptied AND the entry was wiped, should restore the latched stream', () => {
+    expect(planOwnStreamMirror({
+      ...BASE,
+      status: 'streaming',
+      ownAssistantMessage: undefined,
+      mirroredMessageId: 'm1',
+      mirroredEntryExists: false,
+      lastMirroredParts: [text('what we had so far')],
+    })).toEqual([
+      {
+        type: 'addStream',
+        stream: {
+          messageId: 'm1',
+          pageId: 'page-1',
+          conversationId: 'conv-1',
+          triggeredBy: { userId: 'u1', displayName: 'Me' },
+          isOwn: true,
+          startedAt: '2024-01-01T00:00:00.000Z',
+          parts: [text('what we had so far')],
+        },
+      },
+    ]);
+  });
+
+  // ...but with the entry intact, a moved array is still just noise: hold, and adopt nothing.
+  it('given the array moved onto another message while our entry is intact, should plan nothing', () => {
+    expect(planOwnStreamMirror({
+      ...BASE,
+      status: 'streaming',
+      ownAssistantMessage: { id: 'someone-elses-old-message', parts: [text('old')] },
+      mirroredMessageId: 'm1',
+      mirroredEntryExists: true,
     })).toEqual([]);
   });
 
