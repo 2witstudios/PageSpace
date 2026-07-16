@@ -66,6 +66,7 @@ import {
 } from './core/references';
 import { computeSelectionStats } from './core/stats';
 import { buildFindMatches } from './core/find';
+import { clampContextMenuPosition, type Bounds, type Viewport } from './core/layout';
 
 interface SheetViewProps {
   page: TreePage;
@@ -79,19 +80,6 @@ const getCellRect = (row: number, column: number, gridElement: HTMLElement | nul
   if (!cellElement) return null;
 
   return cellElement.getBoundingClientRect();
-};
-
-const clampContextMenuPosition = (x: number, y: number, bounds?: DOMRect) => {
-  const menuW = 180; // min-w-[160px] + padding buffer
-  const menuH = 200; // approximate rendered height
-  const minLeft = bounds?.left ?? 0;
-  const minTop = bounds?.top ?? 0;
-  const maxLeft = (bounds?.right ?? window.innerWidth) - menuW;
-  const maxTop = (bounds?.bottom ?? window.innerHeight) - menuH;
-  return {
-    left: `${Math.max(minLeft, Math.min(x, Math.max(minLeft, maxLeft)))}px`,
-    top: `${Math.max(minTop, Math.min(y, Math.max(minTop, maxTop)))}px`,
-  };
 };
 
 const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
@@ -121,18 +109,27 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Context menu state (desktop right-click menu)
+  // Context menu state (desktop right-click menu). Bounds/viewport are snapshotted
+  // when the menu opens so positioning never reads the DOM during render.
   const [contextMenu, setContextMenu] = useState<{
     show: boolean;
     x: number;
     y: number;
     cell: GridSelection | null;
+    bounds?: Bounds;
+    viewport: Viewport;
   }>({
     show: false,
     x: 0,
     y: 0,
-    cell: null
+    cell: null,
+    viewport: { width: 0, height: 0 },
   });
+
+  // Measured grid width (undefined until first measurement) and clipboard
+  // availability — both read once outside render, never per-render from the DOM.
+  const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
+  const [canUseClipboard, setCanUseClipboard] = useState(false);
 
   // Mobile action sheet state (long-press menu)
   const [mobileActionSheet, setMobileActionSheet] = useState<{
@@ -655,12 +652,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         });
       }
 
-      // Show context menu at cursor position
+      // Show context menu at cursor position. Snapshot the grid bounds and
+      // viewport now (event handler, not render) so the pure clamp can position
+      // the menu without touching the DOM during render.
+      const rect = gridRef.current?.getBoundingClientRect();
       setContextMenu({
         show: true,
         x: event.clientX,
         y: event.clientY,
-        cell
+        cell,
+        bounds: rect
+          ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+          : undefined,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
       });
     },
     [sheet, selection]
@@ -858,6 +862,24 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       };
     }
   }, [handlePaste]);
+
+  // Clipboard availability is a one-time capability check, not a per-render
+  // `navigator` read.
+  useEffect(() => {
+    setCanUseClipboard(typeof navigator !== 'undefined' && !!navigator.clipboard);
+  }, []);
+
+  // Measure the grid width into state so the floating editor's responsive sizing
+  // never reads getBoundingClientRect() during render.
+  useEffect(() => {
+    const gridElement = gridRef.current;
+    if (!gridElement) return;
+    const measure = () => setContainerWidth(gridElement.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(gridElement);
+    return () => observer.disconnect();
+  }, []);
 
   // Close context menu on clicks outside
   useEffect(() => {
@@ -1538,14 +1560,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         isReadOnly={isReadOnly}
         initialKey={initialKey}
         driveId={page.driveId}
-        containerWidth={gridRef.current?.getBoundingClientRect().width}
+        containerWidth={containerWidth}
       />
 
       {/* Context Menu */}
       {contextMenu.show && (
         <div
           className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
-          style={clampContextMenuPosition(contextMenu.x, contextMenu.y, gridRef.current?.getBoundingClientRect())}
+          style={clampContextMenuPosition(contextMenu.x, contextMenu.y, contextMenu.bounds, contextMenu.viewport)}
           onClick={(e) => e.stopPropagation()}
         >
           <div
@@ -1570,10 +1592,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           <div
             className={cn(
               "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
-              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
+              (!copiedData && !canUseClipboard) && "opacity-50 cursor-not-allowed"
             )}
             onClick={() => {
-              if (copiedData || navigator.clipboard) {
+              if (copiedData || canUseClipboard) {
                 handlePaste('auto');
                 setContextMenu(prev => ({ ...prev, show: false }));
               }
@@ -1584,10 +1606,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           <div
             className={cn(
               "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
-              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
+              (!copiedData && !canUseClipboard) && "opacity-50 cursor-not-allowed"
             )}
             onClick={() => {
-              if (copiedData || navigator.clipboard) {
+              if (copiedData || canUseClipboard) {
                 handlePaste('values');
                 setContextMenu(prev => ({ ...prev, show: false }));
               }
@@ -1659,15 +1681,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               <button
                 className={cn(
                   "flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted",
-                  (!copiedData && !navigator.clipboard) && "opacity-50"
+                  (!copiedData && !canUseClipboard) && "opacity-50"
                 )}
                 onClick={() => {
-                  if (copiedData || navigator.clipboard) {
+                  if (copiedData || canUseClipboard) {
                     handlePaste('auto');
                   }
                   closeMobileActionSheet();
                 }}
-                disabled={!copiedData && !navigator.clipboard}
+                disabled={!copiedData && !canUseClipboard}
               >
                 Paste
               </button>

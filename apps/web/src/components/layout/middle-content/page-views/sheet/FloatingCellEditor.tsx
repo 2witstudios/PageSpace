@@ -6,6 +6,7 @@ import { useSuggestion } from '@/hooks/useSuggestion';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
 import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
+import { computeEditorPosition, isMobileWidth } from './core/layout';
 
 interface FloatingCellEditorProps {
   value: string;
@@ -38,6 +39,24 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
   const { height: keyboardHeight } = useMobileKeyboard();
   // Track IME composition state to prevent accidental commits during predictive text
   const [isComposing, setIsComposing] = useState(false);
+
+  // Measure the viewport into state so positioning never reads `window` during render.
+  const [viewport, setViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const measure = () =>
+      setViewport({
+        width: window.innerWidth,
+        height: window.visualViewport?.height ?? window.innerHeight,
+      });
+    measure();
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+    };
+  }, []);
 
   // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
   // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
@@ -154,33 +173,17 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
     return null;
   }
 
-  // Responsive sizing for mobile — use container width when available, fall back to viewport
-  const isMobile = containerWidth != null ? containerWidth < 640 : (typeof window !== 'undefined' && window.innerWidth < 640);
-  const minWidth = isMobile ? 100 : 120;
-  const minHeight = isMobile ? 36 : cellRect.height;
-
-  // Calculate position, accounting for keyboard on iOS
-  const viewportHeight = typeof window !== 'undefined'
-    ? (window.visualViewport?.height ?? window.innerHeight)
-    : 0;
-  const availableHeight = viewportHeight - keyboardHeight;
-  const cellBottom = cellRect.top + Math.max(cellRect.height, minHeight);
-
-  // If cell would be hidden behind keyboard, move it up
-  let adjustedTop = cellRect.top;
-  if (keyboardHeight > 0 && cellBottom > availableHeight - 20) {
-    // Move editor to be visible above keyboard with some padding
-    adjustedTop = availableHeight - Math.max(cellRect.height, minHeight) - 20;
-    // Don't go above the viewport
-    adjustedTop = Math.max(20, adjustedTop);
-  }
+  // Responsive sizing for mobile — use container width when available, fall back
+  // to the measured viewport width (both injected into the pure layout core).
+  const isMobile = isMobileWidth(containerWidth, viewport.width);
+  const position = computeEditorPosition(cellRect, keyboardHeight, viewport, isMobile);
 
   const style: React.CSSProperties = {
     position: 'fixed',
-    left: cellRect.left,
-    top: adjustedTop,
-    width: Math.max(cellRect.width, minWidth),
-    height: Math.max(cellRect.height, minHeight),
+    left: position.left,
+    top: position.top,
+    width: position.width,
+    height: position.height,
     zIndex: 1000,
     pointerEvents: 'auto',
   };
