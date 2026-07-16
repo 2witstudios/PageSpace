@@ -69,10 +69,35 @@ function makeSelectChain() {
   return chain;
 }
 
+interface UpdateCall {
+  table: unknown;
+  set?: Record<string, unknown>;
+}
+const updateCalls: UpdateCall[] = [];
+let updateShouldThrow: Error | null = null;
+
+function makeUpdateChain(table: unknown) {
+  const call: UpdateCall = { table };
+  updateCalls.push(call);
+  const chain = {
+    set: (set: Record<string, unknown>) => {
+      call.set = set;
+      return chain;
+    },
+    where: () => chain,
+    then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      updateShouldThrow
+        ? Promise.reject(updateShouldThrow).then(resolve, reject)
+        : Promise.resolve(undefined).then(resolve, reject),
+  };
+  return chain;
+}
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn((table: unknown) => makeInsertChain(table)),
     select: vi.fn(() => makeSelectChain()),
+    update: vi.fn((table: unknown) => makeUpdateChain(table)),
   },
 }));
 
@@ -104,18 +129,9 @@ function setWhereParams(call: InsertCall): unknown[] {
   return new PgDialect().sqlToQuery(call.conflict.setWhere).params;
 }
 
-/**
- * The lease floor the claim bound into its `claimed_at <` comparison.
- *
- * Bound as an ISO string, not a Date: the timestamp column's driver mapper serializes it
- * on the way in.
- */
-function capturedLeaseFloor(): Date {
-  const stamps = setWhereParams(recipientInserts()[0]).filter(
-    (p): p is string => typeof p === 'string' && p.includes('T') && !Number.isNaN(Date.parse(p)),
-  );
-  if (stamps.length !== 1) throw new Error(`expected one bound timestamp, got ${stamps.length}`);
-  return new Date(stamps[0]);
+/** Compile an arbitrary SQL fragment (e.g. a value the insert bound). */
+function compile(fragment: unknown): { sql: string; params: unknown[] } {
+  return new PgDialect().sqlToQuery(fragment as SQL);
 }
 
 const recipientInserts = () => insertCalls.filter((c) => c.table === broadcastRecipients);
@@ -124,9 +140,12 @@ const logInserts = () => insertCalls.filter((c) => c.table === emailNotification
 beforeEach(() => {
   insertCalls.length = 0;
   insertFailures.clear();
+  updateCalls.length = 0;
+  updateShouldThrow = null;
   selectRows = [];
   returningRows = [];
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 describe('claimRecipient', () => {
@@ -146,7 +165,7 @@ describe('claimRecipient', () => {
     expect(await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' })).toBe(false);
   });
 
-  it('should insert a pending row stamped with the claim time', async () => {
+  it("should insert a pending row stamped with the DATABASE's clock", async () => {
     returningRows = [{ id: 'r1' }];
     await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
 
@@ -155,7 +174,12 @@ describe('claimRecipient', () => {
       userId: 'u1',
       status: 'pending',
     });
-    expect(recipientInserts()[0].values?.claimedAt).toBeInstanceOf(Date);
+    // Not `new Date()`. A lease stamped by one process and judged by another is only as
+    // good as the agreement between their clocks; six minutes of skew is enough for two
+    // workers to both mail the same person. Postgres's clock is the only one here.
+    const { sql } = compile(recipientInserts()[0].values?.claimedAt);
+    expect(sql).toContain('now()');
+    expect(sql).toContain("at time zone 'utc'");
   });
 
   it('should upsert against the (broadcastId, userId) unique constraint', async () => {
@@ -188,25 +212,47 @@ describe('claimRecipient', () => {
     expect(sql).toContain('"broadcast_recipients"."claimed_at" <');
   });
 
+  it('should RELEASE the lease when a send fails, so a prompt retry is not a no-op', async () => {
+    // A terminal outcome must not keep holding the recipient: after a provider blip, every
+    // failed row refusing to be reclaimed for ~5m would make the retry mail nobody while
+    // logging "claimed by another worker" about a worker that does not exist.
+    await recordFailure('b1', { userId: 'u1', email: 'ada@example.com', error: 'rate limited' });
+
+    expect(recipientInserts()[0].conflict?.set).toMatchObject({ claimedAt: null });
+  });
+
   it('should reclaim a recipient whose worker crashed and let the lease expire', async () => {
     // Without this a mid-send crash would strand the recipient as `pending` forever and
-    // nobody would ever mail them.
+    // nobody would ever mail them. The expiry is measured against the database's clock —
+    // `now() - make_interval(...)` — so the lease arrives as seconds, not as an instant
+    // computed here.
     returningRows = [{ id: 'r1' }];
-    const before = Date.now();
     await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' }, { leaseMs: 60_000 });
 
-    const floor = capturedLeaseFloor();
-    expect(floor.getTime()).toBeGreaterThanOrEqual(before - 60_000 - 1_000);
-    expect(floor.getTime()).toBeLessThanOrEqual(Date.now() - 60_000 + 1_000);
+    const call = recipientInserts()[0];
+    expect(setWhereSql(call)).toContain('make_interval');
+    expect(setWhereParams(call)).toContain(60);
   });
 
   it('should default to the shared lease when none is given', async () => {
     returningRows = [{ id: 'r1' }];
-    const before = Date.now();
     await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
 
-    const floor = capturedLeaseFloor();
-    expect(floor.getTime()).toBeLessThanOrEqual(before - CLAIM_LEASE_MS + 1_000);
+    expect(setWhereParams(recipientInserts()[0])).toContain(CLAIM_LEASE_MS / 1000);
+  });
+
+  it("should judge the lease on the database's clock, never the caller's", async () => {
+    // No timestamp computed in this process may appear in the comparison, or two workers
+    // with skewed clocks disagree about who owns a recipient — and both mail them.
+    returningRows = [{ id: 'r1' }];
+    await claimRecipient('b1', { userId: 'u1', email: 'ada@example.com' });
+
+    const call = recipientInserts()[0];
+    expect(setWhereSql(call)).toContain('now()');
+    const boundTimestamps = setWhereParams(call).filter(
+      (p) => p instanceof Date || (typeof p === 'string' && p.includes('T') && !Number.isNaN(Date.parse(p))),
+    );
+    expect(boundTimestamps).toEqual([]);
   });
 
   it('should count the attempt, so a recipient retried forever is visible', async () => {
@@ -254,6 +300,37 @@ describe('recordSent', () => {
   it('the fatal error should carry the entry an operator would have to reconstruct', async () => {
     insertFailures.set('recipients', new Error('deadlock detected'));
     await expect(recordSent('b1', entry, 'PRODUCT_UPDATE')).rejects.toMatchObject({ entry });
+  });
+
+  it('given the send could not be recorded, should PARK the claim so no retry re-sends', async () => {
+    // The file ledger was safe by default here — nothing re-sent until a human re-ran. A
+    // lease is not: left alone it expires and an automatic retry mails a second copy. So
+    // the row is parked under a lease nobody can steal, restoring "nothing happens until
+    // someone looks at it".
+    insertFailures.set('recipients', new Error('connection terminated'));
+
+    await expect(recordSent('b1', entry, 'PRODUCT_UPDATE')).rejects.toBeInstanceOf(LedgerWriteFailed);
+
+    expect(updateCalls).toHaveLength(1);
+    const { sql } = compile(updateCalls[0].set?.claimedAt);
+    expect(sql).toContain('now()');
+    expect(sql).toContain('100 years');
+  });
+
+  it('given the park ALSO fails, should still raise the original ledger failure', async () => {
+    // The park is best-effort: the write that just failed may be the same write failing
+    // again. What the operator must not lose is the error naming the unrecorded send.
+    insertFailures.set('recipients', new Error('connection terminated'));
+    updateShouldThrow = new Error('still down');
+
+    await expect(recordSent('b1', entry, 'PRODUCT_UPDATE')).rejects.toBeInstanceOf(LedgerWriteFailed);
+  });
+
+  it('the remediation should name broadcast_recipients, not the script\'s JSONL ledger', async () => {
+    // An instruction pointing at storage the operator is not using is worse than none.
+    insertFailures.set('recipients', new Error('connection terminated'));
+
+    await expect(recordSent('b1', entry, 'PRODUCT_UPDATE')).rejects.toThrow(/insert into broadcast_recipients/);
   });
 
   it('should also write a secondary analytics row', async () => {

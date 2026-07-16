@@ -394,7 +394,7 @@ describe('runBroadcast — claiming recipients', () => {
   it('should not let a lost claim consume the canary budget', async () => {
     // A limit=1 canary must still reach a recipient we actually own.
     const { result, h } = run(
-      [user('u1', 'taken.example.com'), user('u2', 'also-taken@example.com'), user('u3', 'ada@example.com')],
+      [user('u1', 'taken@example.com'), user('u2', 'also-taken@example.com'), user('u3', 'ada@example.com')],
       { limit: 1, claim: async ({ email }) => email === 'ada@example.com' },
     );
 

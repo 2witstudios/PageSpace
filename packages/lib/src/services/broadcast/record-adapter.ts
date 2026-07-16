@@ -73,6 +73,33 @@ export async function loadAlreadySentEmails(broadcastId: string): Promise<Set<st
 export const CLAIM_LEASE_MS = 5 * 60 * 1000;
 
 /**
+ * The lease's clock is POSTGRES'S, never a worker's.
+ *
+ * A lease stamped by one process and judged by another is only as good as the agreement
+ * between their clocks, and this is the one mechanism preventing a double-send. Six
+ * minutes of skew on a single host is enough to break it: worker A claims a recipient and
+ * stamps its own slow clock, worker B computes a lease floor from its own correct clock,
+ * decides A's fresh lease already expired, steals it, and both mail the same person.
+ * (Skew the other way fails safe — a lease merely becomes unstealable for a while.)
+ *
+ * Reading and writing the instant in the database removes the disagreement rather than
+ * bounding it: there is only ever one clock.
+ *
+ * `at time zone 'utc'` because the column is `timestamp without time zone` while `now()`
+ * is `timestamptz` — the cast would otherwise resolve through the session's TimeZone,
+ * whereas Drizzle writes its own Dates as UTC (`toISOString()`) and reads them back as
+ * UTC. Pinning to UTC here keeps every writer on the one convention.
+ */
+function dbNow() {
+  return sql`(now() at time zone 'utc')`;
+}
+
+/** The instant a lease older than this has expired, on the database's clock. */
+function leaseFloorSql(leaseMs: number) {
+  return sql`(now() at time zone 'utc') - make_interval(secs => ${leaseMs / 1000})`;
+}
+
+/**
  * Take ownership of a recipient before mailing them. Returns false when someone else has
  * them — the caller must NOT send.
  *
@@ -110,8 +137,6 @@ export async function claimRecipient(
   opts: { leaseMs?: number } = {},
 ): Promise<boolean> {
   const leaseMs = opts.leaseMs ?? CLAIM_LEASE_MS;
-  const now = new Date();
-  const leaseFloor = new Date(now.getTime() - leaseMs);
 
   const rows = await db
     .insert(broadcastRecipients)
@@ -120,22 +145,22 @@ export async function claimRecipient(
       userId: input.userId,
       recipientEmail: input.email,
       status: 'pending',
-      claimedAt: now,
+      claimedAt: dbNow(),
       attempts: 1,
     })
     .onConflictDoUpdate({
       target: [broadcastRecipients.broadcastId, broadcastRecipients.userId],
       set: {
-        claimedAt: now,
+        claimedAt: dbNow(),
         recipientEmail: input.email,
         attempts: sql`${broadcastRecipients.attempts} + 1`,
-        updatedAt: now,
+        updatedAt: dbNow(),
       },
       setWhere: and(
         ne(broadcastRecipients.status, 'sent'),
         or(
           isNull(broadcastRecipients.claimedAt),
-          lt(broadcastRecipients.claimedAt, leaseFloor),
+          lt(broadcastRecipients.claimedAt, leaseFloorSql(leaseMs)),
         ),
       ),
     })
@@ -144,6 +169,44 @@ export async function claimRecipient(
   // No row back means the conflict path's WHERE rejected the update: someone else owns
   // this recipient, or already mailed them.
   return rows.length > 0;
+}
+
+/**
+ * Hold a claim open indefinitely so no retry can reclaim the recipient.
+ *
+ * Used only when a send succeeded but could not be recorded: the person HAS the email, so
+ * the safe reading of that row is "nobody touch this", and a lease nobody can steal says
+ * exactly that in the vocabulary the claim already speaks. Deliberately not a status
+ * change — `sent` is the write that just failed, and inventing a different status to mean
+ * "probably sent" would put a lie in the ledger the admin UI reads.
+ *
+ * Swallows its own failure: this runs on a path that is already fatal, and the caller's
+ * error is the thing the operator needs to see.
+ */
+async function parkClaimAgainstRetry(broadcastId: string, userId: string): Promise<void> {
+  try {
+    await db
+      .update(broadcastRecipients)
+      .set({
+        claimedAt: sql`(now() at time zone 'utc') + interval '100 years'`,
+        errorMessage: 'sent but not recorded — parked so no retry re-sends; see LedgerWriteFailed',
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(broadcastRecipients.broadcastId, broadcastId),
+          eq(broadcastRecipients.userId, userId),
+          // Never touch a row that did record a send.
+          ne(broadcastRecipients.status, 'sent'),
+        ),
+      );
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[broadcast] could not park ${userId} after an unrecorded send: ${why}. ` +
+        'A retry may re-send to them once the claim lease expires.',
+    );
+  }
 }
 
 /**
@@ -188,23 +251,35 @@ export async function recordSent(
         },
       });
   } catch (error) {
-    // The recipient has the email and nothing remembers it. Stop the run.
+    // The recipient has the email and nothing remembers it. Stop the run — but first, try
+    // to make sure the clock cannot finish the job for us.
     //
-    // The remediation names THIS ledger, not the script's JSONL file — an instruction
-    // that points at storage the operator isn't using is worse than none. It also has to
-    // be honest about the clock: the claim we hold is a lease, so unlike the file ledger
-    // (where nothing re-sends until a human re-runs), doing nothing here is not safe. Once
-    // the lease expires the row looks reclaimable and a retry will mail them again. The
-    // Resend idempotency key (`broadcast:<id>:<userId>`) collapses that within its ~24h
-    // window, which is a backstop, not a fix — after it, the second copy is real.
+    // The file ledger was safe by default here: nothing re-sends until a human re-runs.
+    // A lease is not. Left alone, this row stays `pending` with a claim that expires in
+    // ~5 minutes, after which ANY retry — a queue with backoff, no human involved — sees
+    // a reclaimable row and mails them a second time. The Resend idempotency key
+    // (`broadcast:<id>:<userId>`) collapses that within ~24h, but that is a backstop, not
+    // a fix: after the window, the second copy is real. Documenting that hazard is not
+    // the same as defending against it.
+    //
+    // So park the row: a lease far in the future is one nobody can steal, which restores
+    // "nothing re-sends until someone looks at it". Best-effort by construction — the
+    // write that just failed may be the same write failing again — but when the failure
+    // was transient (a serialization error, a dropped connection) rather than a full
+    // outage, this is the difference between a duplicate and none. If it fails too, we
+    // are no worse off than before, and the operator still has the remediation below.
+    await parkClaimAgainstRetry(broadcastId, entry.userId);
+
     throw new LedgerWriteFailed(
       entry,
       error,
-      `   The send is NOT recorded, and the claim on this recipient is a lease that expires\n` +
-        `   in ~${Math.round(CLAIM_LEASE_MS / 60_000)}m — after which a retry WILL mail them again.\n` +
-        `   Insert the row yourself to stop that, then re-run:\n` +
+      `   The send is NOT recorded. A best-effort attempt was made to park this recipient so\n` +
+        `   an automatic retry cannot re-send to them; if that also failed, the claim is a lease\n` +
+        `   expiring in ~${Math.round(CLAIM_LEASE_MS / 60_000)}m and a retry WILL mail them again.\n` +
+        `   Insert the row yourself to be certain, then re-run:\n` +
         `     insert into broadcast_recipients (id, broadcast_id, user_id, recipient_email, status, sent_at)\n` +
-        `     values (<cuid>, '${broadcastId}', '${entry.userId}', '${entry.email}', 'sent', '${entry.sentAt}');`,
+        `     values (<cuid>, '${broadcastId}', '${entry.userId}', '${entry.email}', 'sent', '${entry.sentAt}')\n` +
+        `     on conflict (broadcast_id, user_id) do update set status = 'sent', sent_at = excluded.sent_at;`,
     );
   }
 
@@ -292,6 +367,12 @@ export async function recordFailure(
           status: 'failed',
           errorMessage: input.error,
           // Not incremented here either — see recordSent. The claim counted this try.
+          //
+          // RELEASE the lease: this send is over, so holding the recipient for the rest of
+          // the lease would make a prompt retry a no-op. After a provider blip, every
+          // failed row would refuse to be reclaimed for ~5 minutes and the run would log
+          // "claimed by another worker" about a worker that does not exist.
+          claimedAt: null,
           updatedAt: new Date(),
         },
         // Same guard as recordSkip: a late failure must never unmark a real send.

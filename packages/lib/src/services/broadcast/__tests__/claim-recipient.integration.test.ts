@@ -22,7 +22,7 @@ import { sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { broadcastRecipients, emailBroadcasts } from '@pagespace/db/schema/email-broadcasts';
 import { eq } from '@pagespace/db/operators';
-import { claimRecipient } from '../record-adapter';
+import { claimRecipient, recordFailure } from '../record-adapter';
 
 const broadcastId = `bc_test_${createId()}`;
 const userId = `u_test_${createId()}`;
@@ -124,6 +124,23 @@ describe('claimRecipient against a real database', () => {
     expect((await currentRow()).status).toBe('sent');
   });
 
+  it('given a failed send, should release the lease so a prompt retry can re-try them', async () => {
+    // The provider-blip path: without the release, every failed row would refuse to be
+    // reclaimed for the rest of its lease, and a retry 30s later would mail NOBODY while
+    // reporting each one as "claimed by another worker".
+    await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
+    await recordFailure(broadcastId, { userId, email: 'ada@example.com', error: 'rate limited' });
+
+    expect((await currentRow()).claimedAt).toBeNull();
+    // Immediately — no waiting for a lease to drain.
+    expect(await claimRecipient(broadcastId, { userId, email: 'ada@example.com' })).toBe(true);
+  });
+
+  // The "parked after an unrecorded send" path is pinned in record-adapter.test.ts
+  // instead: triggering a genuine ledger-write failure here would mean contriving a DB
+  // fault (the upsert cannot fail on well-formed input), and a test that fakes the very
+  // failure it is testing proves nothing the mocked one doesn't prove more directly.
+
   it('should count one attempt per worker that takes the recipient', async () => {
     await claimRecipient(broadcastId, { userId, email: 'ada@example.com' });
     expect((await currentRow()).attempts).toBe(1);
@@ -159,12 +176,21 @@ describe('claimRecipient against a real database', () => {
     await db.insert(users).values({ id: doomedId, email: `doomed-${doomedId}@example.test`, name: 'Doomed' });
     await claimRecipient(broadcastId, { userId: doomedId, email: 'doomed@example.com' });
 
-    await db.delete(users).where(eq(users.id, doomedId));
-
-    const [{ count }] = await db
-      .select({ count: sql<number>`count(*)::int` })
+    // Find the row by its OWN id, because that is the only way this test can fail. Asking
+    // "are there rows with user_id = doomed?" is answered `no` by the very thing we are
+    // guarding against: `onDelete: 'set null'` would blank user_id and leave the row —
+    // plaintext address and all — sitting there passing the assertion.
+    const [{ id: rowId }] = await db
+      .select({ id: broadcastRecipients.id })
       .from(broadcastRecipients)
       .where(eq(broadcastRecipients.userId, doomedId));
-    expect(count).toBe(0);
+
+    await db.delete(users).where(eq(users.id, doomedId));
+
+    const survivors = await db
+      .select({ id: broadcastRecipients.id, email: broadcastRecipients.recipientEmail })
+      .from(broadcastRecipients)
+      .where(eq(broadcastRecipients.id, rowId));
+    expect(survivors).toEqual([]);
   });
 });
