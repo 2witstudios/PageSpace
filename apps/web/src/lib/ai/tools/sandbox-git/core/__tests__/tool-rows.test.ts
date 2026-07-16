@@ -29,7 +29,7 @@ const VALIDATED: Array<{ key: string; pass: unknown; fail: unknown }> = [
   { key: 'git_checkout', pass: { ref: 'main' }, fail: { ref: '--detach' } },
   { key: 'git_push', pass: { branch: 'feature' }, fail: { force: true, branch: 'main' } },
   { key: 'gh_pr_create', pass: { title: 't', body: 'b' }, fail: { title: '', body: 'b' } },
-  { key: 'gh_pr_review_comment', pass: { number: 1, body: 'b' }, fail: { number: 1, body: '' } },
+  { key: 'gh_pr_review_comment', pass: { number: 1, body: 'b', path: 'a.ts', commit_id: 'abc' }, fail: { number: 1, body: '' } },
   { key: 'gh_pr_comment', pass: { number: 1, body: 'b' }, fail: { number: 1, body: '' } },
   { key: 'gh_pr_edit', pass: { number: 1, title: 't' }, fail: { number: 1 } },
   { key: 'gh_pr_thread_resolve', pass: { thread_id: 'x' }, fail: { thread_id: '' } },
@@ -111,6 +111,18 @@ describe('row validators — extra branches', () => {
   });
   test('git_branch list ignores name entirely', () => {
     assert({ given: 'git_branch list with a flag-like name', should: 'pass validate (name unused in list)', actual: rowFor('git_branch').validate!({ action: 'list', name: '--x' }).ok, expected: true });
+  });
+  test('gh_pr_review_comment reply (in_reply_to) needs no path/commit_id', () => {
+    assert({ given: 'a reply with only in_reply_to + body', should: 'pass validate', actual: rowFor('gh_pr_review_comment').validate!({ number: 1, body: 'b', in_reply_to: 9 }).ok, expected: true });
+  });
+  test('gh_pr_review_comment non-reply without path fails', () => {
+    assert({ given: 'a non-reply comment with no path', should: 'fail validate — not a valid shape', actual: rowFor('gh_pr_review_comment').validate!({ number: 1, body: 'b' }).ok, expected: false });
+  });
+  test('gh_pr_review_comment non-reply with path but no commit_id fails', () => {
+    assert({ given: 'a file-attached comment missing commit_id', should: 'fail validate', actual: rowFor('gh_pr_review_comment').validate!({ number: 1, body: 'b', path: 'a.ts' }).ok, expected: false });
+  });
+  test('gh_pr_review_comment empty body fails before the shape checks', () => {
+    assert({ given: 'an empty body', should: 'fail on the body check', actual: rowFor('gh_pr_review_comment').validate!({ number: 1, body: '', path: 'a.ts', commit_id: 'c' }).ok, expected: false });
   });
 });
 

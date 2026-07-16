@@ -161,7 +161,22 @@ export const PR_TOOL_ROWS: GitToolRow[] = [
         cwd: cwdField,
       })
       .strict(),
-    validate: ({ body }) => (body ? { ok: true } : { ok: false, error: 'body is required' }),
+    validate: ({ body, path, commit_id, in_reply_to }) => {
+      if (!body) return { ok: false, error: 'body is required' };
+      // A reply needs only in_reply_to + body. Any other review comment attaches
+      // to a file, which the GitHub API requires BOTH path and commit_id for —
+      // reject an incomplete shape early with a clear message rather than letting
+      // the API 422. (line vs subject_type is left to the API to arbitrate.)
+      if (in_reply_to === undefined) {
+        if (path === undefined) {
+          return { ok: false, error: 'Provide path (for an inline or file-level comment) or in_reply_to (to reply)' };
+        }
+        if (commit_id === undefined) {
+          return { ok: false, error: 'commit_id is required for an inline or file-level comment (use the head sha from gh_pr_view)' };
+        }
+      }
+      return { ok: true };
+    },
     buildArgs: ({ number, body, path, line, side, commit_id, start_line, start_side, in_reply_to, subject_type }) => ({
       args: buildPrReviewCommentArgs({ number, body, path, line, side, commit_id, start_line, start_side, in_reply_to, subject_type }),
     }),
