@@ -32,54 +32,13 @@ import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
-
-/**
- * Valid activity operations for filtering
- */
-const VALID_OPERATIONS = [
-  'create', 'update', 'delete', 'restore', 'reorder',
-  'permission_grant', 'permission_update', 'permission_revoke',
-  'trash', 'move', 'agent_config_update',
-  'member_add', 'member_remove', 'member_role_change',
-  'login', 'logout', 'signup', 'email_change',
-  'token_create', 'token_revoke', 'upload', 'convert',
-  'account_delete', 'profile_update', 'avatar_update',
-  'message_update', 'message_delete', 'role_reorder', 'ownership_transfer',
-  'rollback', 'conversation_undo', 'conversation_undo_with_changes',
-] as const;
-
-/**
- * Check if a string is a valid activity operation
- */
-function isValidOperation(operation: string): boolean {
-  return VALID_OPERATIONS.includes(operation as typeof VALID_OPERATIONS[number]);
-}
-
-const OPERATION_SUMMARY_LABELS: Record<string, string> = {
-  create: 'Create',
-  update: 'Update',
-  delete: 'Delete',
-  restore: 'Restore',
-  reorder: 'Reorder',
-  trash: 'Trash',
-  move: 'Move',
-  permission_grant: 'Grant permission',
-  permission_update: 'Update permission',
-  permission_revoke: 'Revoke permission',
-  agent_config_update: 'Update agent',
-  member_add: 'Add member',
-  member_remove: 'Remove member',
-  member_role_change: 'Change member role',
-  role_reorder: 'Reorder roles',
-  ownership_transfer: 'Transfer ownership',
-  message_update: 'Edit message',
-  message_delete: 'Delete message',
-  rollback: 'Rollback',
-};
-
-function getOperationSummaryLabel(operation: string): string {
-  return OPERATION_SUMMARY_LABELS[operation] ?? operation;
-}
+import {
+  isValidOperation,
+  getOperationSummaryLabel,
+  REDO_ALLOW_MISSING_TARGET,
+  ROLLBACK_ALLOW_MISSING_TARGET,
+  AGENT_CONFIG_ROLLBACK_FIELDS,
+} from './rollback/operations';
 
 function getChangeDescription(activity: ActivityLogForRollback): string {
   const metadata = activity.metadata as { targetUserEmail?: string } | null;
@@ -173,19 +132,6 @@ function getEffectiveOperation(
   }
   return activity.operation as ActivityOperation;
 }
-
-const REDO_ALLOW_MISSING_TARGET = new Set<ActivityOperation>([
-  'member_remove',
-  'permission_revoke',
-  'delete',
-  'trash',
-]);
-
-const ROLLBACK_ALLOW_MISSING_TARGET = new Set<ActivityOperation>([
-  'permission_grant',
-  'member_add',
-  'message_delete',
-]);
 
 /**
  * Check if this activity represents rolling back a previous rollback (effectively redo)
@@ -2153,23 +2099,6 @@ async function rollbackPermissionChange(
       throw new Error(`Unsupported permission operation: ${activity.operation}`);
   }
 }
-
-// Every field update_agent_config (apps/web/src/lib/ai/tools/agent-tools.ts) can
-// write to the pages table for an AI_CHAT agent — kept in sync with that tool's
-// AgentUpdateData so a config change is always undo/redo-able via rollback.
-const AGENT_CONFIG_ROLLBACK_FIELDS = [
-  'systemPrompt',
-  'enabledTools',
-  'aiProvider',
-  'aiModel',
-  'includeDrivePrompt',
-  'agentDefinition',
-  'visibleToGlobalAssistant',
-  'includePageTree',
-  'pageTreeScope',
-  'toolExposureMode',
-  'userScopedAccess',
-] as const;
 
 /**
  * Rollback an agent config change
