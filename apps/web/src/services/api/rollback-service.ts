@@ -8,11 +8,9 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, gt, count, asc, not, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { pages, drives, chatMessages } from '@pagespace/db/schema/core'
+import { pages, drives } from '@pagespace/db/schema/core'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members'
-import { channelMessages } from '@pagespace/db/schema/chat'
-import { messages } from '@pagespace/db/schema/conversations';
 import type { ActivityAction, ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 import {
   canUserRollback,
@@ -45,8 +43,26 @@ import {
   isRollingBackRollback,
 } from './rollback/target-values';
 import { mapActivityRow, buildHistoryConditions } from './rollback/activity-mapping';
-import { computePageMutation, restoreFields, pickConversationTable } from './rollback/page-mutation-plan';
+import { computePageMutation, pickConversationTable } from './rollback/page-mutation-plan';
 import { buildPreview, evaluateEligibility, evaluateCreateNoOp } from './rollback/preview-eligibility';
+import {
+  planPageRollback,
+  planDriveRollback,
+  planPermissionRollback,
+  planAgentRollback,
+  planMemberRollback,
+  planRoleRollback,
+  planMessageRollback,
+} from './rollback/rollback-plans';
+import {
+  planPageRedo,
+  planDriveRedo,
+  planPermissionRedo,
+  planAgentRedo,
+  planMemberRedo,
+  planRoleRedo,
+  planMessageRedo,
+} from './rollback/redo-plans';
 
 // Re-export the shared activity shape so existing consumers keep importing it here.
 export type { ActivityLogForRollback };
@@ -1354,9 +1370,10 @@ async function rollbackPageChange(
   }
 
   const resolvedContentSnapshot = await resolveActivityContentSnapshot(activity);
+  const plan = planPageRollback(activity, resolvedContentSnapshot);
 
-  // Handle create operation by trashing the page
-  if (activity.operation === 'create') {
+  // Handle create operation by trashing the page and orphaning its children.
+  if (plan.kind === 'trash-created') {
     // Get the page's current state
     const [page] = await database
       .select({ parentId: pages.parentId, isTrashed: pages.isTrashed })
@@ -1399,25 +1416,7 @@ async function rollbackPageChange(
     return { restoredValues: { isTrashed: true }, pageMutationMeta };
   }
 
-  const previousValues = activity.previousValues || {};
-  const updateData: Record<string, unknown> = {};
-
-  // Restore fields that were changed
-  if (activity.updatedFields) {
-    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
-  } else if (Object.keys(previousValues).length > 0) {
-    // If no updatedFields, restore all previousValues
-    Object.assign(updateData, previousValues);
-  }
-
-  // If we have a content snapshot and content was changed, use it
-  if (resolvedContentSnapshot && (activity.operation === 'update' || activity.operation === 'create')) {
-    updateData.content = resolvedContentSnapshot;
-  }
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No values to restore');
-  }
+  const { updateData, restoreOrphanedChildren } = plan;
 
   loggers.api.debug('[Rollback:Execute:Page] Applying page update', {
     pageId: activity.pageId,
@@ -1430,7 +1429,7 @@ async function rollbackPageChange(
   // If we're restoring a trashed page (isTrashed: false), also restore orphaned children
   // When pages are trashed, children are orphaned to grandparent with originalParentId set
   // Now that the parent is restored, re-parent those children back to their original parent
-  if (updateData.isTrashed === false && activity.pageId) {
+  if (restoreOrphanedChildren) {
     const restoredChildren = await database
       .select({ id: pages.id })
       .from(pages)
@@ -1468,8 +1467,10 @@ async function rollbackDriveChange(
     throw new Error('Drive ID not found in activity');
   }
 
+  const plan = planDriveRollback(activity);
+
   // Handle create operation by trashing the drive and all its pages
-  if (activity.operation === 'create') {
+  if (plan.kind === 'trash-created') {
     loggers.api.debug('[Rollback:Execute:Drive] Trashing created drive and pages', {
       driveId: activity.driveId,
     });
@@ -1501,30 +1502,16 @@ async function rollbackDriveChange(
     return { trashed: true, driveId: activity.driveId, pagesTrashed: true };
   }
 
-  const previousValues = activity.previousValues || {};
-  const updateData: Record<string, unknown> = {};
-
-  // Restore fields that were changed
-  if (activity.updatedFields) {
-    Object.assign(updateData, restoreFields(activity.updatedFields, previousValues));
-  } else if (Object.keys(previousValues).length > 0) {
-    Object.assign(updateData, previousValues);
-  }
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No values to restore');
-  }
-
   // Update the drive
   await database
     .update(drives)
     .set({
-      ...updateData,
+      ...plan.updateData,
       updatedAt: new Date(),
     })
-    .where(eq(drives.id, activity.driveId!));
+    .where(eq(drives.id, activity.driveId));
 
-  return updateData;
+  return plan.updateData;
 }
 
 /**
@@ -1534,93 +1521,50 @@ async function rollbackPermissionChange(
   activity: ActivityLogForRollback,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata as { permissionId?: string; targetUserId?: string } | null;
-  const previousValues = activity.previousValues || {};
+  const plan = planPermissionRollback(activity);
 
-  if (!activity.pageId) {
-    throw new Error('Page ID not found in activity');
-  }
-
-  const targetUserId = metadata?.targetUserId || (previousValues.userId as string);
-  if (!targetUserId) {
-    throw new Error('Target user ID not found in activity');
-  }
-
-  switch (activity.operation) {
-    case 'permission_grant': {
+  switch (plan.op) {
+    case 'delete': {
       // A permission was granted - rollback by deleting it
       await database
         .delete(pagePermissions)
-        .where(
-          and(
-            eq(pagePermissions.pageId, activity.pageId),
-            eq(pagePermissions.userId, targetUserId)
-          )
-        );
+        .where(and(eq(pagePermissions.pageId, plan.pageId), eq(pagePermissions.userId, plan.userId)));
 
       loggers.api.info('[RollbackService] Deleted permission that was granted', {
-        pageId: activity.pageId,
-        userId: targetUserId,
+        pageId: plan.pageId,
+        userId: plan.userId,
       });
 
-      return { deleted: true, pageId: activity.pageId, userId: targetUserId };
+      return { deleted: true, pageId: plan.pageId, userId: plan.userId };
     }
 
-    case 'permission_revoke': {
+    case 'insert': {
       // A permission was revoked - rollback by re-creating it with previous values
-      const permissionData = {
-        pageId: activity.pageId,
-        userId: targetUserId,
-        canView: (previousValues.canView as boolean) ?? false,
-        canEdit: (previousValues.canEdit as boolean) ?? false,
-        canShare: (previousValues.canShare as boolean) ?? false,
-        canDelete: (previousValues.canDelete as boolean) ?? false,
-        grantedBy: previousValues.grantedBy as string | null,
-        note: previousValues.note as string | null,
-      };
-
-      await database.insert(pagePermissions).values(permissionData);
+      await database.insert(pagePermissions).values(plan.values);
 
       loggers.api.info('[RollbackService] Re-created revoked permission', {
-        pageId: activity.pageId,
-        userId: targetUserId,
+        pageId: plan.values.pageId,
+        userId: plan.values.userId,
       });
 
-      return permissionData;
+      return { ...plan.values };
     }
 
-    case 'permission_update': {
+    case 'update': {
       // A permission was updated - rollback by restoring previous values
-      const updateData = restoreFields(
-        ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt'],
-        previousValues
-      );
-
-      if (Object.keys(updateData).length === 0) {
-        throw new Error('No permission values to restore');
-      }
-
       await database
         .update(pagePermissions)
-        .set(updateData)
-        .where(
-          and(
-            eq(pagePermissions.pageId, activity.pageId),
-            eq(pagePermissions.userId, targetUserId)
-          )
-        );
+        .set(plan.set)
+        .where(and(eq(pagePermissions.pageId, plan.pageId), eq(pagePermissions.userId, plan.userId)));
 
       loggers.api.info('[RollbackService] Restored previous permission values', {
-        pageId: activity.pageId,
-        userId: targetUserId,
-        restoredFields: Object.keys(updateData),
+        pageId: plan.pageId,
+        userId: plan.userId,
+        restoredFields: Object.keys(plan.set),
       });
 
-      return updateData;
+      return plan.set;
     }
-
-    default:
-      throw new Error(`Unsupported permission operation: ${activity.operation}`);
   }
 }
 
@@ -1634,18 +1578,8 @@ async function rollbackAgentConfigChange(
   pageUpdateContext: PageUpdateContext
 ): Promise<PageChangeResult> {
   // Agent configs are stored in pages table
-  if (!activity.pageId) {
-    throw new Error('Page ID not found in activity');
-  }
-
-  const previousValues = activity.previousValues || {};
-  const updateData = restoreFields(AGENT_CONFIG_ROLLBACK_FIELDS, previousValues);
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No agent config values to restore');
-  }
-
-  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, updateData, pageUpdateContext);
+  const { updateData } = planAgentRollback(activity, AGENT_CONFIG_ROLLBACK_FIELDS);
+  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId as string, updateData, pageUpdateContext);
 
   return { restoredValues: updateData, pageMutationMeta };
 }
@@ -1657,89 +1591,52 @@ async function rollbackMemberChange(
   activity: ActivityLogForRollback,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata as { memberId?: string; targetUserId?: string } | null;
-  const previousValues = activity.previousValues || {};
+  const plan = planMemberRollback(activity, new Date());
 
-  if (!activity.driveId) {
-    throw new Error('Drive ID not found in activity');
+  switch (plan.op) {
+    case 'delete': {
+      // Member was added - rollback by removing them
+      await database
+        .delete(driveMembers)
+        .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
+
+      loggers.api.info('[RollbackService] Removed member that was added', {
+        driveId: plan.driveId,
+        userId: plan.userId,
+      });
+
+      return { deleted: true, driveId: plan.driveId, userId: plan.userId };
+    }
+
+    case 'insert': {
+      // Member was removed - rollback by re-adding them with previous values
+      await database.insert(driveMembers).values(plan.values);
+
+      loggers.api.info('[RollbackService] Re-added removed member', {
+        driveId: plan.values.driveId,
+        userId: plan.values.userId,
+        role: plan.values.role,
+      });
+
+      return { ...plan.values };
+    }
+
+    case 'update': {
+      // Role/customRole was changed - restore previous values
+      await database
+        .update(driveMembers)
+        .set(plan.set)
+        .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
+
+      loggers.api.info('[RollbackService] Restored previous member values', {
+        driveId: plan.driveId,
+        userId: plan.userId,
+        restoredFields: Object.keys(plan.set),
+      });
+
+      return plan.set;
+    }
   }
-
-  const targetUserId = metadata?.targetUserId || (previousValues.userId as string);
-  if (!targetUserId) {
-    throw new Error('Target user ID not found in activity');
-  }
-
-  // Determine if this was an add, remove, or role change based on operation and context
-  // Note: member_add and member_remove are the actual operation names from logMemberActivity
-  const wasAdded = activity.operation === 'create' || activity.operation === 'member_add' || !previousValues.role;
-  const wasRemoved = activity.operation === 'delete' || activity.operation === 'trash' || activity.operation === 'member_remove';
-
-  if (wasAdded && !wasRemoved) {
-    // Member was added - rollback by removing them
-    await database
-      .delete(driveMembers)
-      .where(
-        and(
-          eq(driveMembers.driveId, activity.driveId),
-          eq(driveMembers.userId, targetUserId)
-        )
-      );
-
-    loggers.api.info('[RollbackService] Removed member that was added', {
-      driveId: activity.driveId,
-      userId: targetUserId,
-    });
-
-    return { deleted: true, driveId: activity.driveId, userId: targetUserId };
-  }
-
-  if (wasRemoved) {
-    // Member was removed - rollback by re-adding them with previous values
-    const memberData = {
-      driveId: activity.driveId,
-      userId: targetUserId,
-      role: (previousValues.role as 'OWNER' | 'ADMIN' | 'MEMBER') || 'MEMBER',
-      customRoleId: previousValues.customRoleId as string | null,
-      invitedBy: previousValues.invitedBy as string | null,
-      invitedAt: previousValues.invitedAt ? new Date(previousValues.invitedAt as string) : new Date(),
-      acceptedAt: previousValues.acceptedAt ? new Date(previousValues.acceptedAt as string) : new Date(),
-    };
-
-    await database.insert(driveMembers).values(memberData);
-
-    loggers.api.info('[RollbackService] Re-added removed member', {
-      driveId: activity.driveId,
-      userId: targetUserId,
-      role: memberData.role,
-    });
-
-    return memberData;
-  }
-
-  // Role/customRole was changed - restore previous values
-  const updateData = restoreFields(['role', 'customRoleId'], previousValues);
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No member values to restore');
-  }
-
-  await database
-    .update(driveMembers)
-    .set(updateData)
-    .where(
-      and(
-        eq(driveMembers.driveId, activity.driveId),
-        eq(driveMembers.userId, targetUserId)
-      )
-    );
-
-  loggers.api.info('[RollbackService] Restored previous member values', {
-    driveId: activity.driveId,
-    userId: targetUserId,
-    restoredFields: Object.keys(updateData),
-  });
-
-  return updateData;
 }
 
 /**
@@ -1749,118 +1646,76 @@ async function rollbackRoleChange(
   activity: ActivityLogForRollback,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata as { roleId?: string } | null;
-  const previousValues = activity.previousValues || {};
+  const now = new Date();
+  const plan = planRoleRollback(activity, now);
 
-  if (!activity.driveId) {
-    throw new Error('Drive ID not found in activity');
-  }
+  switch (plan.op) {
+    case 'reorder': {
+      for (const [index, roleId] of plan.order.entries()) {
+        await database
+          .update(driveRoles)
+          .set({ position: index, updatedAt: now })
+          .where(eq(driveRoles.id, roleId));
+      }
 
-  if (activity.operation === 'role_reorder') {
-    const previousOrder = previousValues.order as string[] | undefined;
-    if (!previousOrder || previousOrder.length === 0) {
-      throw new Error('No previous role order found for rollback');
+      loggers.api.info('[RollbackService] Restored previous role order', {
+        driveId: activity.driveId,
+        roleCount: plan.order.length,
+      });
+
+      return { order: plan.order };
     }
 
-    for (const [index, roleId] of previousOrder.entries()) {
+    case 'delete-role': {
+      // First, capture which members had this role for audit trail
+      const affectedMembers = await database
+        .select({ userId: driveMembers.userId })
+        .from(driveMembers)
+        .where(eq(driveMembers.customRoleId, plan.roleId));
+
+      // Delete the role (FK constraint will set customRoleId to null for affected members)
+      await database.delete(driveRoles).where(eq(driveRoles.id, plan.roleId));
+
+      loggers.api.info('[RollbackService] Deleted role that was created', {
+        driveId: activity.driveId,
+        roleId: plan.roleId,
+        affectedMemberCount: affectedMembers.length,
+      });
+
+      return {
+        deleted: true,
+        roleId: plan.roleId,
+        affectedMemberUserIds: affectedMembers.map(m => m.userId),
+      };
+    }
+
+    case 'insert-role': {
+      await database.insert(driveRoles).values(plan.values);
+
+      loggers.api.info('[RollbackService] Re-created deleted role', {
+        driveId: activity.driveId,
+        roleId: plan.values.id,
+        name: plan.values.name,
+      });
+
+      return { ...plan.values };
+    }
+
+    case 'update-role': {
       await database
         .update(driveRoles)
-        .set({ position: index, updatedAt: new Date() })
-        .where(eq(driveRoles.id, roleId));
+        .set(plan.set)
+        .where(eq(driveRoles.id, plan.roleId));
+
+      loggers.api.info('[RollbackService] Restored previous role values', {
+        driveId: activity.driveId,
+        roleId: plan.roleId,
+        restoredFields: Object.keys(plan.set),
+      });
+
+      return plan.set;
     }
-
-    loggers.api.info('[RollbackService] Restored previous role order', {
-      driveId: activity.driveId,
-      roleCount: previousOrder.length,
-    });
-
-    return { order: previousOrder };
   }
-
-  const roleId = activity.resourceId || metadata?.roleId;
-  if (!roleId) {
-    throw new Error('Role ID not found in activity');
-  }
-
-  // Determine if this was a create, delete, or update
-  const wasCreated = activity.operation === 'create';
-  const wasDeleted = activity.operation === 'delete' || activity.operation === 'trash';
-
-  if (wasCreated) {
-    // Role was created - rollback by deleting it
-    // First, capture which members had this role for audit trail
-    const affectedMembers = await database
-      .select({ userId: driveMembers.userId })
-      .from(driveMembers)
-      .where(eq(driveMembers.customRoleId, roleId));
-
-    // Delete the role (FK constraint will set customRoleId to null for affected members)
-    await database
-      .delete(driveRoles)
-      .where(eq(driveRoles.id, roleId));
-
-    loggers.api.info('[RollbackService] Deleted role that was created', {
-      driveId: activity.driveId,
-      roleId,
-      affectedMemberCount: affectedMembers.length,
-    });
-
-    return {
-      deleted: true,
-      roleId,
-      affectedMemberUserIds: affectedMembers.map(m => m.userId),
-    };
-  }
-
-  if (wasDeleted) {
-    // Role was deleted - rollback by re-creating it with previous values
-    const roleData = {
-      id: roleId,
-      driveId: activity.driveId,
-      name: (previousValues.name as string) || 'Restored Role',
-      description: previousValues.description as string | null,
-      color: previousValues.color as string | null,
-      isDefault: (previousValues.isDefault as boolean) ?? false,
-      permissions: (previousValues.permissions as Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) || {},
-      position: (previousValues.position as number) ?? 0,
-      updatedAt: new Date(),
-    };
-
-    await database.insert(driveRoles).values(roleData);
-
-    loggers.api.info('[RollbackService] Re-created deleted role', {
-      driveId: activity.driveId,
-      roleId,
-      name: roleData.name,
-    });
-
-    return roleData;
-  }
-
-  // Role was updated - restore previous values
-  const updateData = restoreFields(
-    ['name', 'description', 'color', 'isDefault', 'permissions', 'position'],
-    previousValues
-  );
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No role values to restore');
-  }
-
-  updateData.updatedAt = new Date();
-
-  await database
-    .update(driveRoles)
-    .set(updateData)
-    .where(eq(driveRoles.id, roleId));
-
-  loggers.api.info('[RollbackService] Restored previous role values', {
-    driveId: activity.driveId,
-    roleId,
-    restoredFields: Object.keys(updateData),
-  });
-
-  return updateData;
 }
 
 /**
@@ -1870,85 +1725,33 @@ async function rollbackMessageChange(
   activity: ActivityLogForRollback,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const previousValues = activity.previousValues || {};
   const messageId = activity.resourceId;
-
   const metadata = activity.metadata as Record<string, unknown> | null;
   const conversationType = metadata?.conversationType as string | undefined;
 
   // Determine which table to update based on conversationType
-  // Channel messages use the channelMessages table; global uses messages; page uses chatMessages
-  const { table, isChannel, isGlobal, label: tableLabel } = pickConversationTable({
+  // Channel messages use the channelMessages table; global uses messages; page uses chatMessages.
+  // channelMessages has no editedAt column, so a channel edit restores content only —
+  // planMessageRollback encodes that in `set` while keeping a uniform return value.
+  const { table, isChannel, label: tableLabel } = pickConversationTable({
     conversationType,
     hasPageId: !!activity.pageId,
   });
 
-  switch (activity.operation) {
-    case 'create': {
-      // Deactivate message created during turn
-      await database
-        .update(table)
-        .set({ isActive: false })
-        .where(eq(table.id, messageId));
+  const plan = planMessageRollback(activity, isChannel);
 
-      loggers.api.info(`[RollbackService] Deactivated message that was created (${tableLabel})`, {
-        messageId,
-        pageId: activity.pageId,
-      });
+  await database
+    .update(table)
+    .set(plan.set)
+    .where(eq(table.id, messageId));
 
-      return { deactivated: true, isActive: false };
-    }
+  loggers.api.info(`[RollbackService] Applied message rollback (${tableLabel})`, {
+    messageId,
+    operation: activity.operation,
+    pageId: activity.pageId,
+  });
 
-    case 'message_update': {
-      // Restore previous content, clear editedAt
-      const previousContent = previousValues.content as string;
-      if (!previousContent) {
-        throw new Error('No previous content found for message rollback');
-      }
-
-      if (isChannel) {
-        // channelMessages doesn't have editedAt - just restore content
-        await database
-          .update(channelMessages)
-          .set({ content: previousContent })
-          .where(eq(channelMessages.id, messageId));
-      } else {
-        const msgTable = isGlobal ? messages : chatMessages;
-        await database
-          .update(msgTable)
-          .set({
-            content: previousContent,
-            editedAt: null,
-          })
-          .where(eq(msgTable.id, messageId));
-      }
-
-      loggers.api.info(`[RollbackService] Restored previous message content (${tableLabel})`, {
-        messageId,
-        pageId: activity.pageId,
-      });
-
-      return { content: previousContent, editedAt: null };
-    }
-
-    case 'message_delete': {
-      // Undelete - set isActive = true
-      await database
-        .update(table)
-        .set({ isActive: true })
-        .where(eq(table.id, messageId));
-
-      loggers.api.info(`[RollbackService] Restored deleted message (${tableLabel})`, {
-        messageId,
-        pageId: activity.pageId,
-      });
-
-      return { restored: true, isActive: true };
-    }
-
-    default:
-      throw new Error(`Unsupported message operation: ${activity.operation}`);
-  }
+  return plan.returnValue;
 }
 
 /**
@@ -1965,19 +1768,7 @@ async function redoPageChange(
     throw new Error('Page ID not found in activity');
   }
 
-  const updateData: Record<string, unknown> = {};
-
-  if (targetValues && Object.keys(targetValues).length > 0) {
-    Object.assign(updateData, targetValues);
-  } else if (sourceOperation === 'delete' || sourceOperation === 'trash') {
-    updateData.isTrashed = true;
-  } else if (sourceOperation === 'create') {
-    updateData.isTrashed = false;
-  }
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No values to restore');
-  }
+  const updateData = planPageRedo(targetValues, sourceOperation);
 
   if (updateData.isTrashed === true) {
     const [page] = await database
@@ -2038,19 +1829,7 @@ async function redoDriveChange(
     throw new Error('Drive ID not found in activity');
   }
 
-  const updateData: Record<string, unknown> = {};
-
-  if (targetValues && Object.keys(targetValues).length > 0) {
-    Object.assign(updateData, targetValues);
-  } else if (sourceOperation === 'delete' || sourceOperation === 'trash') {
-    updateData.isTrashed = true;
-  } else if (sourceOperation === 'create') {
-    updateData.isTrashed = false;
-  }
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No values to restore');
-  }
+  const updateData = planDriveRedo(targetValues, sourceOperation);
 
   if (updateData.isTrashed === true) {
     const trashedAt = new Date();
@@ -2103,88 +1882,37 @@ async function redoPermissionChange(
   sourceOperation: ActivityOperation,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata as { targetUserId?: string } | null;
+  const plan = planPermissionRedo(activity, targetValues, sourceOperation);
 
-  if (!activity.pageId) {
-    throw new Error('Page ID not found in activity');
-  }
-
-  const targetUserId =
-    metadata?.targetUserId ||
-    (targetValues?.userId as string | undefined) ||
-    (activity.newValues?.userId as string | undefined);
-
-  if (!targetUserId) {
-    throw new Error('Target user ID not found in activity');
-  }
-
-  switch (sourceOperation) {
-    case 'permission_grant': {
-      if (!targetValues) {
-        throw new Error('No permission values to apply');
-      }
-
-      const permissionData = {
-        pageId: activity.pageId,
-        userId: targetUserId,
-        canView: (targetValues.canView as boolean) ?? false,
-        canEdit: (targetValues.canEdit as boolean) ?? false,
-        canShare: (targetValues.canShare as boolean) ?? false,
-        canDelete: (targetValues.canDelete as boolean) ?? false,
-        note: (targetValues.note as string) ?? null,
-        expiresAt: (targetValues.expiresAt as Date | null) ?? null,
-        grantedBy: (targetValues.grantedBy as string) ?? null,
-      };
-
+  switch (plan.op) {
+    case 'upsert': {
       await database
         .insert(pagePermissions)
-        .values(permissionData)
+        .values(plan.values)
         .onConflictDoUpdate({
           target: [pagePermissions.pageId, pagePermissions.userId],
-          set: permissionData,
+          set: plan.values,
         });
 
-      return permissionData;
+      return { ...plan.values };
     }
 
-    case 'permission_update': {
-      if (!targetValues) {
-        throw new Error('No permission values to apply');
-      }
-
-      const updateData = restoreFields(
-        ['canView', 'canEdit', 'canShare', 'canDelete', 'note', 'expiresAt', 'grantedBy'],
-        targetValues
-      );
-
-      if (Object.keys(updateData).length === 0) {
-        throw new Error('No permission values to apply');
-      }
-
+    case 'update': {
       await database
         .update(pagePermissions)
-        .set(updateData)
-        .where(and(
-          eq(pagePermissions.pageId, activity.pageId),
-          eq(pagePermissions.userId, targetUserId)
-        ));
+        .set(plan.set)
+        .where(and(eq(pagePermissions.pageId, plan.pageId), eq(pagePermissions.userId, plan.userId)));
 
-      return updateData;
+      return plan.set;
     }
 
-    case 'permission_revoke': {
+    case 'delete': {
       await database
         .delete(pagePermissions)
-        .where(and(
-          eq(pagePermissions.pageId, activity.pageId),
-          eq(pagePermissions.userId, targetUserId)
-        ));
+        .where(and(eq(pagePermissions.pageId, plan.pageId), eq(pagePermissions.userId, plan.userId)));
 
-      return { deleted: true, pageId: activity.pageId, userId: targetUserId };
+      return { deleted: true, pageId: plan.pageId, userId: plan.userId };
     }
-
-    default:
-      throw new Error(`Unsupported permission operation: ${sourceOperation}`);
   }
 }
 
@@ -2197,84 +1925,37 @@ async function redoMemberChange(
   sourceOperation: ActivityOperation,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata as { targetUserId?: string } | null;
+  const plan = planMemberRedo(activity, targetValues, sourceOperation, new Date());
 
-  if (!activity.driveId) {
-    throw new Error('Drive ID not found in activity');
-  }
-
-  const targetUserId =
-    metadata?.targetUserId ||
-    (targetValues?.userId as string | undefined) ||
-    (activity.newValues?.userId as string | undefined);
-
-  if (!targetUserId) {
-    throw new Error('Target user ID not found in activity');
-  }
-
-  const parseDate = (value: unknown): Date | null => {
-    if (!value) return null;
-    return value instanceof Date ? value : new Date(value as string);
-  };
-
-  switch (sourceOperation) {
-    case 'member_add': {
-      const memberData = {
-        driveId: activity.driveId,
-        userId: targetUserId,
-        role: (targetValues?.role as 'OWNER' | 'ADMIN' | 'MEMBER') || 'MEMBER',
-        customRoleId: (targetValues?.customRoleId as string | null) ?? null,
-        invitedBy: (targetValues?.invitedBy as string | null) ?? null,
-        invitedAt: parseDate(targetValues?.invitedAt) ?? new Date(),
-        acceptedAt: parseDate(targetValues?.acceptedAt),
-      };
-
+  switch (plan.op) {
+    case 'upsert': {
       await database
         .insert(driveMembers)
-        .values(memberData)
+        .values(plan.values)
         .onConflictDoUpdate({
           target: [driveMembers.driveId, driveMembers.userId],
-          set: memberData,
+          set: plan.values,
         });
 
-      return memberData;
+      return { ...plan.values };
     }
 
-    case 'member_remove': {
+    case 'delete': {
       await database
         .delete(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, activity.driveId),
-          eq(driveMembers.userId, targetUserId)
-        ));
+        .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
 
-      return { deleted: true, driveId: activity.driveId, userId: targetUserId };
+      return { deleted: true, driveId: plan.driveId, userId: plan.userId };
     }
 
-    case 'member_role_change': {
-      if (!targetValues) {
-        throw new Error('No member values to apply');
-      }
-
-      const updateData = restoreFields(['role', 'customRoleId'], targetValues);
-
-      if (Object.keys(updateData).length === 0) {
-        throw new Error('No member values to apply');
-      }
-
+    case 'update': {
       await database
         .update(driveMembers)
-        .set(updateData)
-        .where(and(
-          eq(driveMembers.driveId, activity.driveId),
-          eq(driveMembers.userId, targetUserId)
-        ));
+        .set(plan.set)
+        .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
 
-      return updateData;
+      return plan.set;
     }
-
-    default:
-      throw new Error(`Unsupported member operation: ${sourceOperation}`);
   }
 }
 
@@ -2287,99 +1968,49 @@ async function redoRoleChange(
   sourceOperation: ActivityOperation,
   database: typeof db
 ): Promise<Record<string, unknown>> {
-  const metadata = activity.metadata as { roleId?: string } | null;
-  const roleId = metadata?.roleId || activity.resourceId;
+  const now = new Date();
+  const plan = planRoleRedo(activity, targetValues, sourceOperation, now);
 
-  if (!activity.driveId) {
-    throw new Error('Drive ID not found in activity');
-  }
-
-  if (!roleId) {
-    throw new Error('Role ID not found in activity');
-  }
-
-  if (sourceOperation === 'role_reorder') {
-    const order = (targetValues?.order as string[] | undefined) ?? [];
-    if (order.length === 0) {
-      throw new Error('No role order found to apply');
-    }
-
-    for (const [index, targetRoleId] of order.entries()) {
-      await database
-        .update(driveRoles)
-        .set({ position: index, updatedAt: new Date() })
-        .where(eq(driveRoles.id, targetRoleId));
-    }
-
-    return { order };
-  }
-
-  switch (sourceOperation) {
-    case 'create': {
-      if (!targetValues) {
-        throw new Error('No role values to apply');
+  switch (plan.op) {
+    case 'reorder': {
+      for (const [index, targetRoleId] of plan.order.entries()) {
+        await database
+          .update(driveRoles)
+          .set({ position: index, updatedAt: now })
+          .where(eq(driveRoles.id, targetRoleId));
       }
 
-      const roleData = {
-        id: roleId,
-        driveId: activity.driveId,
-        name: (targetValues.name as string) || 'Restored Role',
-        description: (targetValues.description as string | null) ?? null,
-        color: (targetValues.color as string | null) ?? null,
-        isDefault: (targetValues.isDefault as boolean) ?? false,
-        permissions: (targetValues.permissions as Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>) || {},
-        position: (targetValues.position as number) ?? 0,
-        updatedAt: new Date(),
-      };
-
-      await database.insert(driveRoles).values(roleData);
-
-      return roleData;
+      return { order: plan.order };
     }
 
-    case 'delete': {
+    case 'insert-role': {
+      await database.insert(driveRoles).values(plan.values);
+      return { ...plan.values };
+    }
+
+    case 'delete-role': {
       const affectedMembers = await database
         .select({ userId: driveMembers.userId })
         .from(driveMembers)
-        .where(eq(driveMembers.customRoleId, roleId));
+        .where(eq(driveMembers.customRoleId, plan.roleId));
 
-      await database
-        .delete(driveRoles)
-        .where(eq(driveRoles.id, roleId));
+      await database.delete(driveRoles).where(eq(driveRoles.id, plan.roleId));
 
       return {
         deleted: true,
-        roleId,
+        roleId: plan.roleId,
         affectedMemberUserIds: affectedMembers.map(member => member.userId),
       };
     }
 
-    case 'update': {
-      if (!targetValues) {
-        throw new Error('No role values to apply');
-      }
-
-      const updateData = restoreFields(
-        ['name', 'description', 'color', 'isDefault', 'permissions', 'position'],
-        targetValues
-      );
-
-      if (Object.keys(updateData).length === 0) {
-        throw new Error('No role values to apply');
-      }
-
-      updateData.updatedAt = new Date();
-
+    case 'update-role': {
       await database
         .update(driveRoles)
-        .set(updateData)
-        .where(eq(driveRoles.id, roleId));
+        .set(plan.set)
+        .where(eq(driveRoles.id, plan.roleId));
 
-      return updateData;
+      return plan.set;
     }
-
-    default:
-      throw new Error(`Unsupported role operation: ${sourceOperation}`);
   }
 }
 
@@ -2392,21 +2023,8 @@ async function redoAgentConfigChange(
   database: typeof db,
   pageUpdateContext: PageUpdateContext
 ): Promise<PageChangeResult> {
-  if (!activity.pageId) {
-    throw new Error('Page ID not found in activity');
-  }
-
-  if (!targetValues) {
-    throw new Error('No agent values to apply');
-  }
-
-  const updateData = restoreFields(AGENT_CONFIG_ROLLBACK_FIELDS, targetValues);
-
-  if (Object.keys(updateData).length === 0) {
-    throw new Error('No agent values to apply');
-  }
-
-  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId, updateData, pageUpdateContext);
+  const { updateData } = planAgentRedo(activity, targetValues, AGENT_CONFIG_ROLLBACK_FIELDS);
+  const pageMutationMeta = await applyPageUpdateWithRevision(database, activity.pageId as string, updateData, pageUpdateContext);
 
   return { restoredValues: updateData, pageMutationMeta };
 }
@@ -2424,34 +2042,7 @@ async function redoMessageChange(
   const conversationType = metadata?.conversationType as string | undefined;
   const { table, isChannel } = pickConversationTable({ conversationType, hasPageId: !!activity.pageId });
 
-  const updateData: Record<string, unknown> = {};
-
-  switch (sourceOperation) {
-    case 'message_update': {
-      const content = targetValues?.content as string | undefined;
-      if (!content) {
-        throw new Error('No message content to apply');
-      }
-      updateData.content = content;
-      if (!isChannel) {
-        updateData.editedAt = new Date();
-      }
-      break;
-    }
-
-    case 'message_delete': {
-      updateData.isActive = false;
-      break;
-    }
-
-    case 'create': {
-      updateData.isActive = true;
-      break;
-    }
-
-    default:
-      throw new Error(`Unsupported message operation: ${sourceOperation}`);
-  }
+  const updateData = planMessageRedo(targetValues, sourceOperation, isChannel, new Date());
 
   await database
     .update(table)

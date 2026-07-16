@@ -83,6 +83,9 @@ describe('planPageRollback', () => {
   it('throws when there is nothing to restore', () => {
     assert({ given: 'no updatedFields and empty previousValues', should: 'throw', actual: thrown(() => planPageRollback(act({ operation: 'update', previousValues: {} }), null)), expected: 'No values to restore' });
   });
+  it('handles null previousValues', () => {
+    assert({ given: 'an update with null previousValues and no updatedFields', should: 'throw (nothing to restore)', actual: thrown(() => planPageRollback(act({ operation: 'update', previousValues: null, updatedFields: null }), null)), expected: 'No values to restore' });
+  });
 });
 
 describe('planDriveRollback', () => {
@@ -100,6 +103,9 @@ describe('planDriveRollback', () => {
   });
   it('throws when nothing to restore', () => {
     assert({ given: 'empty previousValues', should: 'throw', actual: thrown(() => planDriveRollback(act({ operation: 'update', previousValues: {} }))), expected: 'No values to restore' });
+  });
+  it('handles null previousValues', () => {
+    assert({ given: 'an update with null previousValues', should: 'throw (nothing to restore)', actual: thrown(() => planDriveRollback(act({ operation: 'update', previousValues: null }))), expected: 'No values to restore' });
   });
 });
 
@@ -130,6 +136,14 @@ describe('planPermissionRollback', () => {
   it('throws on an unsupported operation', () => {
     assert({ given: 'an unsupported permission operation', should: 'throw', actual: thrown(() => planPermissionRollback(act({ operation: 'weird', metadata: { targetUserId: 'u3' } }))), expected: 'Unsupported permission operation: weird' });
   });
+  it('keeps present flags and defaults canView on revoke', () => {
+    assert({
+      given: 'a revoke with canEdit/canShare/canDelete present but canView absent',
+      should: 'default canView to false and keep the present flags',
+      actual: planPermissionRollback(act({ operation: 'permission_revoke', metadata: { targetUserId: 'u3' }, previousValues: { canEdit: true, canShare: true, canDelete: true, grantedBy: null, note: null } })),
+      expected: { op: 'insert', values: { pageId: 'page', userId: 'u3', canView: false, canEdit: true, canShare: true, canDelete: true, grantedBy: null, note: null } },
+    });
+  });
 });
 
 describe('planAgentRollback', () => {
@@ -141,6 +155,9 @@ describe('planAgentRollback', () => {
   });
   it('throws with no restorable config', () => {
     assert({ given: 'previousValues with nothing whitelisted', should: 'throw', actual: thrown(() => planAgentRollback(act({ previousValues: { other: 1 } }), AGENT_FIELDS)), expected: 'No agent config values to restore' });
+  });
+  it('throws on null previousValues', () => {
+    assert({ given: 'null previousValues', should: 'throw', actual: thrown(() => planAgentRollback(act({ previousValues: null }), AGENT_FIELDS)), expected: 'No agent config values to restore' });
   });
 });
 
@@ -167,7 +184,7 @@ describe('planMemberRollback', () => {
       given: 'a member_remove with no recorded dates or role',
       should: 'default invitedAt/acceptedAt to now and role to MEMBER',
       actual: planMemberRollback(act({ operation: 'member_remove', metadata: { targetUserId: 'u2' }, previousValues: { userId: 'u2' } }), NOW),
-      expected: { op: 'insert', values: { driveId: 'drive', userId: 'u2', role: 'MEMBER', customRoleId: null, invitedBy: null, invitedAt: NOW, acceptedAt: NOW } },
+      expected: { op: 'insert', values: { driveId: 'drive', userId: 'u2', role: 'MEMBER', customRoleId: undefined, invitedBy: undefined, invitedAt: NOW, acceptedAt: NOW } },
     });
   });
   it('restores a changed role and customRole', () => {
@@ -196,7 +213,7 @@ describe('planRoleRollback', () => {
       given: 'a role delete with partial previousValues',
       should: 'plan insert-role with defaults filled',
       actual: planRoleRollback(act({ operation: 'delete', resourceId: 'r9', previousValues: { name: 'Admins' } }), NOW),
-      expected: { op: 'insert-role', values: { id: 'r9', driveId: 'drive', name: 'Admins', description: null, color: null, isDefault: false, permissions: {}, position: 0, updatedAt: NOW } },
+      expected: { op: 'insert-role', values: { id: 'r9', driveId: 'drive', name: 'Admins', description: undefined, color: undefined, isDefault: false, permissions: {}, position: 0, updatedAt: NOW } },
     });
   });
   it('updates a changed role and stamps updatedAt', () => {
@@ -204,6 +221,17 @@ describe('planRoleRollback', () => {
   });
   it('throws updating a role with no known fields', () => {
     assert({ given: 'a role update with no known fields', should: 'throw', actual: thrown(() => planRoleRollback(act({ operation: 'update', resourceId: 'r9', previousValues: { unrelated: 1 } }), NOW)), expected: 'No role values to restore' });
+  });
+  it('resolves the role id from metadata when resourceId is empty', () => {
+    assert({ given: 'empty resourceId but metadata.roleId', should: 'use the metadata roleId', actual: planRoleRollback(act({ operation: 'create', resourceId: '', metadata: { roleId: 'rM' } }), NOW), expected: { op: 'delete-role', roleId: 'rM' } });
+  });
+  it('re-creates a deleted role defaulting the name and keeping provided fields', () => {
+    assert({
+      given: 'a role delete with fields but no name',
+      should: 'default the name and keep the provided fields',
+      actual: planRoleRollback(act({ operation: 'delete', resourceId: 'r9', previousValues: { description: 'd', color: 'c', isDefault: true, permissions: { x: { canView: true, canEdit: false, canShare: false } }, position: 5 } }), NOW),
+      expected: { op: 'insert-role', values: { id: 'r9', driveId: 'drive', name: 'Restored Role', description: 'd', color: 'c', isDefault: true, permissions: { x: { canView: true, canEdit: false, canShare: false } }, position: 5, updatedAt: NOW } },
+    });
   });
 });
 

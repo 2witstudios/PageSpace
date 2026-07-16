@@ -89,6 +89,18 @@ describe('planPermissionRedo', () => {
   it('throws on an unsupported source operation', () => {
     assert({ given: 'an unsupported source op', should: 'throw', actual: thrown(() => planPermissionRedo(act({ metadata: { targetUserId: 'u2' } }), {}, 'weird' as never)), expected: 'Unsupported permission operation: weird' });
   });
+  it('resolves the target user from targetValues.userId', () => {
+    assert({ given: 'metadata null and targetValues.userId', should: 'use targetValues.userId', actual: planPermissionRedo(act({ metadata: null }), { userId: 'uT' }, 'permission_revoke'), expected: { op: 'delete', pageId: 'page', userId: 'uT' } });
+  });
+  it('upserts a grant keeping present values and defaulting canEdit', () => {
+    const expiresAt = new Date('2024-03-03T00:00:00.000Z');
+    assert({
+      given: 'a grant redo with canView/canShare/canDelete and note/expiresAt/grantedBy present but canEdit absent',
+      should: 'default canEdit and keep the rest',
+      actual: planPermissionRedo(act({ metadata: { targetUserId: 'u2' } }), { canView: true, canShare: true, canDelete: true, note: 'n', expiresAt, grantedBy: 'g' }, 'permission_grant'),
+      expected: { op: 'upsert', pageId: 'page', userId: 'u2', values: { pageId: 'page', userId: 'u2', canView: true, canEdit: false, canShare: true, canDelete: true, note: 'n', expiresAt, grantedBy: 'g' } },
+    });
+  });
 });
 
 describe('planAgentRedo', () => {
@@ -144,6 +156,21 @@ describe('planMemberRedo', () => {
   it('throws on an unsupported source op', () => {
     assert({ given: 'an unsupported source op', should: 'throw', actual: thrown(() => planMemberRedo(act({ metadata: { targetUserId: 'u2' } }), {}, 'weird' as never, NOW)), expected: 'Unsupported member operation: weird' });
   });
+  it('resolves the target user from targetValues.userId', () => {
+    assert({ given: 'metadata null and targetValues.userId', should: 'use targetValues.userId', actual: planMemberRedo(act({ metadata: null }), { userId: 'uT' }, 'member_remove', NOW), expected: { op: 'delete', driveId: 'drive', userId: 'uT' } });
+  });
+  it('resolves the target user from newValues', () => {
+    assert({ given: 'metadata and targetValues absent, newValues.userId present', should: 'use newValues.userId', actual: planMemberRedo(act({ metadata: null, newValues: { userId: 'uN' } }), null, 'member_remove', NOW), expected: { op: 'delete', driveId: 'drive', userId: 'uN' } });
+  });
+  it('keeps a Date-typed invitedAt as-is', () => {
+    const d = new Date('2024-01-01T00:00:00.000Z');
+    assert({
+      given: 'a member_add redo whose invitedAt is already a Date',
+      should: 'use the Date directly',
+      actual: planMemberRedo(act({ metadata: { targetUserId: 'u2' } }), { invitedAt: d, acceptedAt: d }, 'member_add', NOW),
+      expected: { op: 'upsert', values: { driveId: 'drive', userId: 'u2', role: 'MEMBER', customRoleId: null, invitedBy: null, invitedAt: d, acceptedAt: d } },
+    });
+  });
 });
 
 describe('planRoleRedo', () => {
@@ -184,6 +211,17 @@ describe('planRoleRedo', () => {
   });
   it('throws on an unsupported source op', () => {
     assert({ given: 'an unsupported source op', should: 'throw', actual: thrown(() => planRoleRedo(act({ resourceId: 'r1' }), {}, 'weird' as never, NOW)), expected: 'Unsupported role operation: weird' });
+  });
+  it('resolves the role id from metadata.roleId', () => {
+    assert({ given: 'metadata.roleId present', should: 'use the metadata roleId over resourceId', actual: planRoleRedo(act({ metadata: { roleId: 'rM' }, resourceId: 'ignored' }), {}, 'delete', NOW), expected: { op: 'delete-role', roleId: 'rM' } });
+  });
+  it('inserts a role defaulting the name and keeping provided fields', () => {
+    assert({
+      given: 'a create redo with fields but no name',
+      should: 'default the name and keep the provided fields',
+      actual: planRoleRedo(act({ resourceId: 'r1' }), { description: 'd', color: 'c', isDefault: true, permissions: { x: { canView: true, canEdit: false, canShare: false } }, position: 5 }, 'create', NOW),
+      expected: { op: 'insert-role', values: { id: 'r1', driveId: 'drive', name: 'Restored Role', description: 'd', color: 'c', isDefault: true, permissions: { x: { canView: true, canEdit: false, canShare: false } }, position: 5, updatedAt: NOW } },
+    });
   });
 });
 
