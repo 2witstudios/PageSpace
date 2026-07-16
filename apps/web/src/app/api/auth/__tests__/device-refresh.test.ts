@@ -72,12 +72,14 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
     }),
+    revokeSessionByHash: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
   appendSessionCookie: vi.fn(),
+  getSessionFromCookies: vi.fn(() => null),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({

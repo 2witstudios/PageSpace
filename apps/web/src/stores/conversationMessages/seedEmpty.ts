@@ -8,6 +8,7 @@ import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
  */
 export type PendingMutation =
   | { type: 'remoteMessage'; message: UIMessage }
+  | { type: 'confirmedMessage'; message: UIMessage }
   | { type: 'edit'; payload: MessageEditPayload }
   | { type: 'delete'; messageId: string };
 
@@ -20,7 +21,8 @@ export type PendingMutation =
  * must win, not whichever network request resolves last.
  *
  * `pendingMutationsSinceLoad` records every live remote mutation
- * (append/edit/delete) applied since the current `loadGeneration` started;
+ * (append/confirm-replace/edit/delete) applied since the current `loadGeneration`
+ * started;
  * `applyLoad` replays them onto its loaded snapshot before committing, so a
  * load's DB snapshot — which may have been read before or after any given
  * live mutation, with no ordering guarantee between the two — never wins

@@ -7,6 +7,7 @@ import { applyOptimisticSend } from '@/stores/conversationMessages/applyOptimist
 import { applyConversationEdit } from '@/stores/conversationMessages/applyConversationEdit';
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
+import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 
@@ -16,12 +17,16 @@ interface ConversationMessagesState {
   byConversationId: ConversationMessagesById;
   getEntry: (conversationId: string) => ConversationCacheEntry;
   startLoad: (conversationId: string) => number;
+  /** True while `generation` is still the newest `startLoad` result for `conversationId`. */
+  isLoadCurrent: (conversationId: string, generation: number) => boolean;
   applyLoad: (conversationId: string, generation: number, messages: UIMessage[]) => void;
   failLoad: (conversationId: string, generation: number) => void;
   addOptimisticSend: (conversationId: string, message: UIMessage) => void;
   applyEdit: (conversationId: string, payload: MessageEditPayload) => void;
   applyDelete: (conversationId: string, messageId: string) => void;
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
+  /** Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's docblock. */
+  applyConfirmedMessage: (conversationId: string, message: UIMessage) => void;
 }
 
 export const useConversationMessagesStore = create<ConversationMessagesState>((set, get) => ({
@@ -34,6 +39,9 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
     set({ byConversationId });
     return generation;
   },
+
+  isLoadCurrent: (conversationId, generation) =>
+    get().byConversationId[conversationId]?.loadGeneration === generation,
 
   applyLoad: (conversationId, generation, messages) => {
     set((state) => ({ byConversationId: applyLoad(state.byConversationId, { conversationId, generation, messages }) }));
@@ -57,5 +65,9 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   applyRemoteUserMessage: (conversationId, message) => {
     set((state) => ({ byConversationId: applyRemoteUserMessage(state.byConversationId, { conversationId, message }) }));
+  },
+
+  applyConfirmedMessage: (conversationId, message) => {
+    set((state) => ({ byConversationId: applyConfirmedMessage(state.byConversationId, { conversationId, message }) }));
   },
 }));

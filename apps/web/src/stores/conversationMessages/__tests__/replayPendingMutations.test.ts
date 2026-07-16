@@ -25,6 +25,19 @@ describe('replayPendingMutations', () => {
     expect(result).toEqual([msg('m0'), msg('shared-1')]);
   });
 
+  it('given a confirmedMessage mutation for an id not in the base, should append it', () => {
+    const result = replayPendingMutations([msg('m0')], [{ type: 'confirmedMessage', message: msg('live-1') }]);
+    expect(result).toEqual([msg('m0'), msg('live-1')]);
+  });
+
+  it('given a confirmedMessage mutation for an id already present in the base with STALER content, should REPLACE it in place — not skip it like remoteMessage does', () => {
+    const result = replayPendingMutations(
+      [msg('m0'), msg('shared-1', 'stale-partial')],
+      [{ type: 'confirmedMessage', message: msg('shared-1', 'full-confirmed') }],
+    );
+    expect(result).toEqual([msg('m0'), msg('shared-1', 'full-confirmed')]);
+  });
+
   it('given an edit mutation for an id present in the base, should apply the edit', () => {
     const editedAt = new Date('2024-01-01T00:00:00.000Z');
     const result = replayPendingMutations(
