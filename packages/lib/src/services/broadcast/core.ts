@@ -21,6 +21,13 @@ import { maskEmail } from '../../audit/mask-email';
  * users whose addresses look most unusual. A function return is used verbatim.
  */
 function redactRecipient(text: string, email: string): string {
+  // An empty pattern matches at every position, which would shred the message into
+  // `***@***s***@***o***@***…` and destroy the diagnostic. Unreachable through the send
+  // loop (`decideRecipient` only yields an address `isValidEmail` accepted), but
+  // `LedgerWriteFailed` is exported and the worker will construct it, so this is a guard
+  // against a caller, not against ourselves.
+  if (!email) return text;
+
   const literal = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const masked = maskEmail(email);
   return text.replace(new RegExp(literal, 'gi'), () => masked);

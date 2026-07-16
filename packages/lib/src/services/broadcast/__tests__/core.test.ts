@@ -244,6 +244,18 @@ describe('runBroadcast — recipient privacy', () => {
     expect(out.errors[0]).toContain('$&***@example.com');
   });
 
+  it('given no address at all, should leave the message intact rather than shred it', async () => {
+    // An empty pattern matches at every position. The send loop cannot produce this, but
+    // LedgerWriteFailed is exported and the worker constructs it directly.
+    const error = new LedgerWriteFailed(
+      { email: '', userId: 'u1', sentAt: '2026-07-16T00:00:00.000Z' },
+      new Error('connection terminated'),
+      '   remediation',
+    );
+
+    expect(error.message).toContain('connection terminated');
+  });
+
   it('the fatal ledger error should mask the address it reports, and keep it on the entry', async () => {
     // The message is logged; the machine-readable `entry` is what an operator acts on.
     const { result } = run([user('u1', 'ada@example.com')], {
