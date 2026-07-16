@@ -248,17 +248,25 @@ export interface SentLedgerEntry {
  * Raised when a send succeeded but the ledger did not record it. Fatal by design:
  * the recipient has the email and nothing remembers that, so continuing would risk
  * mailing them again on the next run. Carries what the operator must write down.
+ *
+ * `remediation` exists because the two ledgers need different instructions, and an
+ * instruction that does not match the storage in front of the operator is worse than
+ * none: the file-ledger script wants a JSONL line appended, while the durable path wants
+ * a `broadcast_recipients` row. The default is the script's, which is the caller that
+ * cannot supply its own (it hands `record` to `runBroadcast` and never sees this class).
  */
 export class LedgerWriteFailed extends Error {
   constructor(
     readonly entry: SentLedgerEntry,
     readonly cause: unknown,
+    remediation?: string,
   ) {
     const why = cause instanceof Error ? cause.message : String(cause);
     super(
       `sent to ${entry.email} but failed to record it in the ledger: ${why}\n` +
-        '   Add this line to the ledger before re-running, or that user will be emailed again:\n' +
-        `   ${JSON.stringify(entry)}`,
+        (remediation ??
+          '   Add this line to the ledger before re-running, or that user will be emailed again:\n' +
+            `   ${JSON.stringify(entry)}`),
     );
     this.name = 'LedgerWriteFailed';
   }
@@ -299,7 +307,9 @@ export interface BroadcastResult {
  *    failure to record is FATAL — an unrecorded send would go out twice.
  *  - A send that fails is NOT recorded, so a re-run retries exactly it.
  *  - An address that succeeds is added to `alreadySent` in-memory too, so two
- *    accounts sharing one address don't both get mailed in a single run.
+ *    accounts sharing one address don't both get mailed in a single run. That guard is
+ *    per-process; across workers, `users.emailBidx`'s unique index is what stops two
+ *    accounts holding one address to begin with (`claim` keys on userId, not address).
  *  - A recipient is CLAIMED before the provider call, not after it, when a durable
  *    caller supplies `claim` — the in-memory set above cannot stop a second worker.
  */
@@ -474,6 +484,11 @@ export async function runBroadcast(input: {
       await input.record(entry);
     } catch (error) {
       // The email is already gone. If we cannot remember that, we must stop.
+      //
+      // A `record` that already raised this (the durable adapter does, with its own
+      // remediation) is rethrown untouched: wrapping it again would nest the message and
+      // bury that remediation under this one's — which names the wrong ledger.
+      if (error instanceof LedgerWriteFailed) throw error;
       throw new LedgerWriteFailed(entry, error);
     }
 

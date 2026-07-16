@@ -172,8 +172,18 @@ export const emailBroadcasts = pgTable(
 /**
  * The DB replacement for the JSONL ledger: one row per person per broadcast.
  *
- * `userId` is `set null` so an erasure drops the FK without destroying the audit record
- * of what was sent; `recipientEmail` is denormalized for the same reason.
+ * `userId` CASCADES, matching `email_notification_log` (the sibling send record) rather
+ * than `data_subject_requests`. The distinction matters: a DSR row outlives its subject
+ * because the row IS the evidence that a rights request was honoured, and `subjectEmail`
+ * is retained deliberately for that. Marketing send history makes no such claim — and
+ * `recipientEmail` here is PLAINTEXT (the address we mailed), so keeping it past an
+ * erasure would leave a readable copy of the address behind forever, unreachable by any
+ * erasure step, defeating the field encryption `audience.ts` preserves everywhere else.
+ * Erasing the user erases the record that we mailed them, which is the point.
+ *
+ * `userId` is also `notNull` for a second reason: Postgres treats NULLs as distinct, so a
+ * nullable column would silently punch a hole in the UNIQUE(broadcastId, userId) that the
+ * whole idempotency story rests on.
  */
 export const broadcastRecipients = pgTable(
   'broadcast_recipients',
@@ -182,7 +192,9 @@ export const broadcastRecipients = pgTable(
     broadcastId: text('broadcast_id')
       .notNull()
       .references(() => emailBroadcasts.id, { onDelete: 'cascade' }),
-    userId: text('user_id').references(() => users.id, { onDelete: 'set null' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     recipientEmail: text('recipient_email').notNull(),
 
     status: broadcastRecipientStatus('status').notNull().default('pending'),

@@ -37,13 +37,21 @@ export async function loadAlreadySentUserIds(broadcastId: string): Promise<Set<s
     .where(
       and(eq(broadcastRecipients.broadcastId, broadcastId), eq(broadcastRecipients.status, 'sent')),
     );
-  return new Set(rows.map((r) => r.userId).filter((id): id is string => id !== null));
+  return new Set(rows.map((r) => r.userId));
 }
 
 /**
  * The same resume set, but keyed by normalized ADDRESS — which is what `decideRecipient`
- * and `runBroadcast` compare against, so that two accounts sharing one address cannot
- * both be mailed.
+ * and `runBroadcast` compare against.
+ *
+ * Scope, precisely: this covers a RESUMED run (the addresses a previous run already
+ * mailed) and, together with the in-memory set, two accounts sharing one address within
+ * ONE process. It is not a cross-worker guard for that case — `claimRecipient` conflicts
+ * on `(broadcastId, userId)`, so two workers each claiming a different account that
+ * happens to share an address would both win. What actually prevents that upstream is
+ * `users.emailBidx`, the deterministic-HMAC unique index: two accounts cannot hold the
+ * same address in the first place. (That index is nullable, so it only binds rows the PII
+ * encryption backfill has covered — which is all of them today.)
  */
 export async function loadAlreadySentEmails(broadcastId: string): Promise<Set<string>> {
   const rows = await db
@@ -88,6 +96,13 @@ export const CLAIM_LEASE_MS = 5 * 60 * 1000;
  *
  * A claim is not a promise to send: a claimed recipient whose send then fails is recorded
  * `failed` and retried later (its lease expires like any other).
+ *
+ * This also owns the `attempts` counter — one increment per worker that takes the
+ * recipient — so the number reads as "times we tried to mail this person". The record
+ * writes below deliberately leave it alone rather than counting the same try twice.
+ * That holds because claiming is this module's contract: every durable send is
+ * claim -> send -> record, and a caller that records without claiming has already given
+ * up its protection against double-sending, which is a bigger problem than a stale count.
  */
 export async function claimRecipient(
   broadcastId: string,
@@ -166,13 +181,31 @@ export async function recordSent(
           sentAt,
           errorMessage: null,
           skipReason: null,
-          attempts: sql`${broadcastRecipients.attempts} + 1`,
+          // `attempts` is deliberately untouched: claimRecipient owns that counter, and a
+          // durable send is always claim -> send -> record. Incrementing here too would
+          // report 2 attempts for a clean first-try send.
           updatedAt: new Date(),
         },
       });
   } catch (error) {
     // The recipient has the email and nothing remembers it. Stop the run.
-    throw new LedgerWriteFailed(entry, error);
+    //
+    // The remediation names THIS ledger, not the script's JSONL file — an instruction
+    // that points at storage the operator isn't using is worse than none. It also has to
+    // be honest about the clock: the claim we hold is a lease, so unlike the file ledger
+    // (where nothing re-sends until a human re-runs), doing nothing here is not safe. Once
+    // the lease expires the row looks reclaimable and a retry will mail them again. The
+    // Resend idempotency key (`broadcast:<id>:<userId>`) collapses that within its ~24h
+    // window, which is a backstop, not a fix — after it, the second copy is real.
+    throw new LedgerWriteFailed(
+      entry,
+      error,
+      `   The send is NOT recorded, and the claim on this recipient is a lease that expires\n` +
+        `   in ~${Math.round(CLAIM_LEASE_MS / 60_000)}m — after which a retry WILL mail them again.\n` +
+        `   Insert the row yourself to stop that, then re-run:\n` +
+        `     insert into broadcast_recipients (id, broadcast_id, user_id, recipient_email, status, sent_at)\n` +
+        `     values (<cuid>, '${broadcastId}', '${entry.userId}', '${entry.email}', 'sent', '${entry.sentAt}');`,
+    );
   }
 
   // Secondary analytics record. Best-effort: the send succeeded and IS recorded above, so
@@ -258,7 +291,7 @@ export async function recordFailure(
         set: {
           status: 'failed',
           errorMessage: input.error,
-          attempts: sql`${broadcastRecipients.attempts} + 1`,
+          // Not incremented here either — see recordSent. The claim counted this try.
           updatedAt: new Date(),
         },
         // Same guard as recordSkip: a late failure must never unmark a real send.

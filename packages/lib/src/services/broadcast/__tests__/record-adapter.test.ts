@@ -235,6 +235,14 @@ describe('recordSent', () => {
     expect(call.conflict?.set).toMatchObject({ status: 'sent', errorMessage: null, skipReason: null });
   });
 
+  it('should not re-count an attempt the claim already counted', async () => {
+    // A durable send is always claim -> send -> record, and the claim owns `attempts`.
+    // Incrementing here too would report 2 attempts for a clean first-try send.
+    await recordSent('b1', entry, 'PRODUCT_UPDATE');
+
+    expect(recipientInserts()[0].conflict?.set).not.toHaveProperty('attempts');
+  });
+
   it('given a ledger write failure, should throw LedgerWriteFailed — the email is already gone', async () => {
     // The one fatal case: the recipient has the email and nothing remembers it, so the
     // run must stop rather than re-mail them on the next retry.
@@ -313,6 +321,11 @@ describe('recordFailure', () => {
     expect(setWhereSql(recipientInserts()[0])).toContain("<> 'sent'");
   });
 
+  it('should not re-count an attempt the claim already counted', async () => {
+    await recordFailure('b1', { userId: 'u1', email: 'ada@example.com', error: 'rate limited' });
+    expect(recipientInserts()[0].conflict?.set).not.toHaveProperty('attempts');
+  });
+
   it('given a write failure, should swallow it — the email did not go out', async () => {
     insertFailures.set('recipients', new Error('db down'));
     await expect(
@@ -327,8 +340,13 @@ describe('loadAlreadySentUserIds', () => {
     expect(await loadAlreadySentUserIds('b1')).toEqual(new Set(['u1', 'u2']));
   });
 
-  it('given a recipient whose user was erased, should drop the null id', async () => {
-    selectRows = [{ userId: 'u1' }, { userId: null }];
+  it('given an erased user, should have no row to read at all', async () => {
+    // `userId` is notNull and CASCADEs (matching email_notification_log): erasing the user
+    // erases the record that we mailed them, rather than leaving their plaintext address
+    // behind in a row nothing can reach. So there is no null id to filter — and notNull
+    // also means the UNIQUE(broadcastId, userId) has no NULL hole for two rows to slip
+    // through, since Postgres treats NULLs as distinct.
+    selectRows = [{ userId: 'u1' }];
     expect(await loadAlreadySentUserIds('b1')).toEqual(new Set(['u1']));
   });
 });

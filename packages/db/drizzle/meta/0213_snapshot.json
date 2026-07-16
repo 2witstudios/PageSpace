@@ -1,5 +1,5 @@
 {
-  "id": "0f17c9d2-de10-47aa-95bd-817795ae4971",
+  "id": "7b11c4c6-5caa-4992-af53-6785139b1074",
   "prevId": "6eec56b6-f4ef-4049-a987-343d50f9220b",
   "version": "7",
   "dialect": "postgresql",
@@ -19640,7 +19640,7 @@
           "name": "user_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "recipient_email": {
           "name": "recipient_email",
@@ -19770,7 +19770,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

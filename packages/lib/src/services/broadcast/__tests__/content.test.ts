@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   extractCtaUrls,
+  renderBroadcastEmail,
   renderMarkdownToSafeHtml,
   resolveBroadcastContent,
   type BroadcastTemplateContent,
@@ -218,5 +219,26 @@ describe('extractCtaUrls', () => {
 
   it('given no links, should return nothing so the preflight skips the check entirely', () => {
     expect(extractCtaUrls('<p>no links here</p>')).toEqual([]);
+  });
+
+  it('given an escaped ampersand, should return the URL a browser would actually request', () => {
+    // Markup escapes `&` to `&amp;`. Checking the raw attribute would ask the server for a
+    // parameter literally named `amp;utm_medium`.
+    expect(extractCtaUrls('<a href="https://x.test/d?utm_source=email&amp;utm_medium=broadcast">x</a>')).toEqual([
+      'https://x.test/d?utm_source=email&utm_medium=broadcast',
+    ]);
+  });
+
+  it('should extract a working URL from REAL rendered output, not just hand-written markup', async () => {
+    // The bug this pins was invisible to every other test here because they all use
+    // hand-written HTML with no `&` in it. Only the real renderer escapes, and a
+    // preflight that fails a link which works blocks the send it exists to protect.
+    const html = await renderBroadcastEmail({
+      subject: 'Update',
+      bodyMarkdown: 'Read [the docs](https://pagespace.ai/docs?utm_source=email&utm_medium=broadcast&id=7).',
+      unsubscribeUrl: 'https://app.pagespace.ai/api/notifications/unsubscribe/tok',
+    });
+
+    expect(extractCtaUrls(html)).toContain('https://pagespace.ai/docs?utm_source=email&utm_medium=broadcast&id=7');
   });
 });

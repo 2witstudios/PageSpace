@@ -183,8 +183,34 @@ export function renderBroadcastEmail(input: RenderBroadcastEmailInput): Promise<
 }
 
 /**
+ * Undo the HTML escaping applied to an attribute value, so a URL read out of markup is
+ * the URL a recipient's browser will actually request.
+ *
+ * Fixed alternation over single characters — no quantifier, so nothing to backtrack and
+ * no ReDoS surface on the rendered-email input.
+ */
+const HTML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+  '&#39;': "'",
+  '&#x27;': "'",
+};
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos|#39|#x27);/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? m);
+}
+
+/**
  * The absolute links the email puts in front of recipients, for the reachability
  * preflight — a CTA that 404s reaches everyone at once and cannot be un-sent.
+ *
+ * Reads markup, so the hrefs arrive HTML-escaped and must be decoded before they mean
+ * anything: React Email renders `?a=1&b=2` as `?a=1&amp;b=2`, and checking THAT URL asks
+ * the server for a parameter literally named `amp;b`. A link that works would come back
+ * 400/404 and block the live send — the preflight failing the send it exists to protect.
  *
  * Only `http(s)` is returned: `mailto:` has nothing to fetch. Deduplicated, because a
  * link repeated in the body and the button is one page to check, not two.
@@ -194,7 +220,7 @@ export function extractCtaUrls(html: string): string[] {
   const hrefPattern = /href\s*=\s*["']([^"']+)["']/gi;
 
   for (const match of html.matchAll(hrefPattern)) {
-    const raw = match[1].trim();
+    const raw = decodeHtmlEntities(match[1].trim());
     try {
       const url = new URL(raw);
       if (url.protocol === 'http:' || url.protocol === 'https:') urls.add(raw);

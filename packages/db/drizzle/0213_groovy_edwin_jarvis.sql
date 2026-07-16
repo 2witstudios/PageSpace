@@ -25,7 +25,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS "broadcast_recipients" (
 	"id" text PRIMARY KEY NOT NULL,
 	"broadcast_id" text NOT NULL,
-	"user_id" text,
+	"user_id" text NOT NULL,
 	"recipient_email" text NOT NULL,
 	"status" "broadcast_recipient_status" DEFAULT 'pending' NOT NULL,
 	"skip_reason" text,
@@ -84,7 +84,7 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 DO $$ BEGIN
- ALTER TABLE "broadcast_recipients" ADD CONSTRAINT "broadcast_recipients_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;
+ ALTER TABLE "broadcast_recipients" ADD CONSTRAINT "broadcast_recipients_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
  WHEN duplicate_object THEN null;
 END $$;
