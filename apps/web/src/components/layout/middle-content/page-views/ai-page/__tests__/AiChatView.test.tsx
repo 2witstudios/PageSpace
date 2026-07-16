@@ -82,8 +82,14 @@ vi.mock('@/stores/useEditingStore', () => ({
   isEditingActive: vi.fn(() => false),
 }));
 
+// A fresh `[]` literal on every call (unlike the real store's useShallow-backed
+// selectors) makes every consumer's downstream useMemo/useEffect see a "changed"
+// dependency on every render — confirmed via a local render-count diagnostic to
+// cause an unbounded AiChatView re-render loop that OOMs the process. One stable
+// empty-array reference restores the real store's shallow-stability contract.
+const EMPTY_STREAMS_MOCK: unknown[] = [];
 vi.mock('@/stores/usePendingStreamsStore', () => ({
-  usePendingStreamsStore: Object.assign(vi.fn(() => []), {
+  usePendingStreamsStore: Object.assign(vi.fn(() => EMPTY_STREAMS_MOCK), {
     getState: vi.fn(() => ({
       streams: new Map(),
       getOwnStreams: vi.fn(() => []),
@@ -270,6 +276,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import { ChatLayout } from '@/components/ai/chat/layouts';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
@@ -376,6 +383,9 @@ describe('AiChatView — legacy `${pageId}-default` conversation (no migration)'
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Real, unmocked global store — reset between tests or byConversationId
+    // only grows across this file's whole run (mirrors useConversationMessagesStore.test.ts).
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   const strandedMessages = [
@@ -456,6 +466,7 @@ describe('AiChatView — first send on a freshly minted conversation', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   const setupNoConversations = () => {
@@ -557,6 +568,7 @@ describe('AiChatView initializeChat', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     useConversationsOptionsRef.current = null;
     historyTabPropsRef.current = null;
   });
@@ -1048,6 +1060,7 @@ describe('AiChatView late-joiner conversation sync', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   const setupNoConversationsInit = () => {
@@ -1060,7 +1073,7 @@ describe('AiChatView late-joiner conversation sync', () => {
   };
 
   test('given fireComplete fires with stream.conversationId matching the persisted conversation while currentConversationId is the page-scoped default, should sync ID and append the message', async () => {
-    let capturedCallback: ((messageId: string) => void) | undefined;
+    let capturedCallback: ((messageId: string, completedConvId?: string) => void) | undefined;
     vi.mocked(useChannelStreamSocket).mockImplementation((_pageId, opts) => {
       capturedCallback = opts?.onStreamComplete;
       return { rejoinActiveStreams: vi.fn() };
@@ -1090,13 +1103,29 @@ describe('AiChatView late-joiner conversation sync', () => {
       return makeErrorResponse();
     });
 
-    capturedCallback?.(MESSAGE_ID);
+    capturedCallback?.(MESSAGE_ID, REAL_CONV_ID);
 
+    // This surface is store-first (see file header): the late-joiner reconciliation
+    // path (AiChatView's onStreamComplete, `!isPersistedRef.current` branch) commits
+    // the synthesized message via conversationMessagesActions.applyConfirmedMessage,
+    // not the legacy useChat setMessages — so "should append the message" is verified
+    // against useConversationMessagesStore, and "should sync ID" against the id every
+    // render passes down to useMCPTools.
     await waitFor(() => {
       assert({
         given: 'stream.conversationId matches the persisted conversation while holding page-scoped default',
-        should: 'append the completed AI message',
-        actual: mockSetMessages.mock.calls.some((args) => typeof args[0] === 'function'),
+        should: 'sync currentConversationId to the persisted conversation',
+        actual: latestMcpConversationId(),
+        expected: REAL_CONV_ID,
+      });
+    });
+
+    await waitFor(() => {
+      const entry = useConversationMessagesStore.getState().byConversationId[REAL_CONV_ID];
+      assert({
+        given: 'stream.conversationId matches the persisted conversation while holding page-scoped default',
+        should: 'append the completed AI message to that conversation\'s store entry',
+        actual: entry?.messages.some((m) => m.id === MESSAGE_ID),
         expected: true,
       });
     });
@@ -1507,6 +1536,7 @@ describe('AiChatView remote user-message broadcast', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
 
   test('given onUserMessage fires with conversationId matching the active conversation, should append the message', async () => {
@@ -1660,6 +1690,7 @@ describe('AiChatView stop button for reconnected own streams', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     setStoreSelectors({ remote: [], own: [] });
   });
 
