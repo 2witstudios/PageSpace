@@ -16,8 +16,17 @@ import {
 
 export interface UseOwnStreamMirrorInput {
   status: OwnStreamMirrorStatus;
-  /** The own tab's live assistant message (useChat's local state), or undefined when not actively streaming. */
-  ownAssistantMessage: { id: string; parts: UIMessage['parts'] } | undefined;
+  /**
+   * This chat's ENTIRE message array (useChat's local state) — not a pre-picked message.
+   *
+   * The hook selects its own stream out of it, because "which message is mine" is exactly what
+   * callers kept getting wrong: taking `messages[last]` when it is an assistant works only until
+   * something else appends. On a shared conversation something else does — `chat:stream_complete`
+   * carries no own-stream filter, so AiChatView appends a COLLABORATOR's finished message after
+   * ours, same conversation, surface unmoved. Once an id is latched the hook finds our message BY
+   * THAT ID, so a foreign message can land anywhere without displacing our stream.
+   */
+  ownMessages: readonly { id: string; role: string; parts: UIMessage['parts'] }[];
   pageId: string;
   conversationId: string;
   triggeredBy: { userId: string; displayName: string };
@@ -48,7 +57,7 @@ export interface UseOwnStreamMirrorInput {
  */
 export const useOwnStreamMirror = ({
   status,
-  ownAssistantMessage,
+  ownMessages,
   pageId,
   conversationId,
   triggeredBy,
@@ -80,6 +89,18 @@ export const useOwnStreamMirror = ({
 
   useEffect(() => {
     const sending = isOwnStreamSending(status);
+
+    // WHICH MESSAGE IS MINE. Once an id is latched, ours is the one carrying it — wherever it sits
+    // in the array. Only before the first latch (or after our message has genuinely left the array,
+    // e.g. the SDK replacing it to adopt the server-issued id) do we fall back to "the last message
+    // if it is an assistant's", which is the only way to discover a stream we have not seen yet.
+    const latchedId = mirroredIdRef.current;
+    const latchedMessage = latchedId !== undefined
+      ? ownMessages.find((m) => m.id === latchedId)
+      : undefined;
+    const lastMessage = ownMessages[ownMessages.length - 1];
+    const lastAssistant = lastMessage?.role === 'assistant' ? lastMessage : undefined;
+    const ownAssistantMessage = latchedMessage ?? lastAssistant;
 
     // Rising edge — the send. Capture what is true right now, and hold it.
     if (sending && identityRef.current === undefined) {
@@ -167,12 +188,11 @@ export const useOwnStreamMirror = ({
       return;
     }
 
-    // Deliberately depends on ownAssistantMessage's id/parts and NOT on pageId/conversationId/
-    // triggeredBy: those are latched on the rising edge above and read through liveRef, so a
-    // surface that moves mid-stream must not re-run this. Depending on the message OBJECT is also
-    // avoided — a caller building `{id, parts}` from useChat's live message constructs a fresh
-    // wrapper every render, while useChat only replaces `parts` with a new array reference on a
-    // genuine content update (ai/dist/index.mjs's ReactChatState.replaceMessage clones on write).
+    // Depends on `ownMessages` (useChat replaces the array on every genuine update — its
+    // ReactChatState clones on write) and on `mirroredEntryExists` (so a third-party wipe of our
+    // entry drives its own repair). NOT on pageId/conversationId/triggeredBy: those are latched on
+    // the rising edge above and read through liveRef, so a surface that moves mid-stream must not
+    // re-run this.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, ownAssistantMessage?.id, ownAssistantMessage?.parts, mirroredEntryExists]);
+  }, [status, ownMessages, mirroredEntryExists]);
 };

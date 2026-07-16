@@ -13,15 +13,23 @@ const entry = (id: string) => streams().get(id);
 const TRIGGERED_BY = { userId: 'u1', displayName: 'Me' };
 const text = (t: string) => ({ type: 'text' as const, text: t });
 
+type Msg = { id: string; role: 'user' | 'assistant'; parts: ReturnType<typeof text>[] };
+
 type Props = {
   status: 'ready' | 'submitted' | 'streaming' | 'error';
-  ownAssistantMessage: { id: string; parts: ReturnType<typeof text>[] } | undefined;
+  ownMessages: Msg[];
   pageId: string;
   conversationId: string;
 };
 
+/** The chat's array with our streaming assistant message last — the ordinary case. */
+const streamingAs = (id: string, t: string): Msg[] => [
+  { id: 'u1', role: 'user', parts: [text('ask')] },
+  { id, role: 'assistant', parts: [text(t)] },
+];
+
 const render = (initialProps: Props) =>
-  renderHook((props: Props) => useOwnStreamMirror({ ...props, triggeredBy: TRIGGERED_BY }), {
+  renderHook((props: Props) => useOwnStreamMirror({ ...props, triggeredBy: TRIGGERED_BY } as Parameters<typeof useOwnStreamMirror>[0]), {
     initialProps,
   });
 
@@ -38,22 +46,22 @@ describe('useOwnStreamMirror', () => {
   it('given the surface switches conversation during the submitted window, should record the stream under the conversation it was SENT from', () => {
     const { rerender } = render({
       status: 'ready',
-      ownAssistantMessage: undefined,
+      ownMessages: [],
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
 
     // Send in C. useChat flips to 'submitted' before issuing the request; no assistant message yet.
-    act(() => rerender({ status: 'submitted', ownAssistantMessage: undefined, pageId: 'page-1', conversationId: 'conv-C' }));
+    act(() => rerender({ status: 'submitted', ownMessages: [], pageId: 'page-1', conversationId: 'conv-C' }));
     expect(streams().size).toBe(0);
 
     // The user switches to D while the request is still in flight.
-    act(() => rerender({ status: 'submitted', ownAssistantMessage: undefined, pageId: 'page-1', conversationId: 'conv-D' }));
+    act(() => rerender({ status: 'submitted', ownMessages: [], pageId: 'page-1', conversationId: 'conv-D' }));
 
     // First chunk lands. The surface now says D — the stream is still C's.
     act(() => rerender({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('He')] },
+      ownMessages: streamingAs('m1', 'He'),
       pageId: 'page-1',
       conversationId: 'conv-D',
     }));
@@ -69,7 +77,7 @@ describe('useOwnStreamMirror', () => {
   it('given another conversation history replaces the array mid-send, should keep the live stream and add no phantom', () => {
     const { rerender } = render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('He')] },
+      ownMessages: streamingAs('m1', 'He'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
@@ -77,7 +85,7 @@ describe('useOwnStreamMirror', () => {
 
     act(() => rerender({
       status: 'streaming',
-      ownAssistantMessage: { id: 'old-history-message', parts: [text('a reply from last week')] },
+      ownMessages: streamingAs('old-history-message', 'a reply from last week'),
       pageId: 'page-1',
       conversationId: 'conv-D',
     }));
@@ -93,12 +101,12 @@ describe('useOwnStreamMirror', () => {
   it('given the message array is emptied mid-send, should NOT remove the live stream', () => {
     const { rerender } = render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('He')] },
+      ownMessages: streamingAs('m1', 'He'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
 
-    act(() => rerender({ status: 'streaming', ownAssistantMessage: undefined, pageId: 'page-1', conversationId: 'conv-C' }));
+    act(() => rerender({ status: 'streaming', ownMessages: [], pageId: 'page-1', conversationId: 'conv-C' }));
 
     expect(entry('m1')).toBeDefined();
   });
@@ -108,14 +116,14 @@ describe('useOwnStreamMirror', () => {
   it('given the send ends, should remove the mirrored stream', () => {
     const { rerender } = render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('Hello')] },
+      ownMessages: streamingAs('m1', 'Hello'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
 
     act(() => rerender({
       status: 'ready',
-      ownAssistantMessage: { id: 'm1', parts: [text('Hello')] },
+      ownMessages: streamingAs('m1', 'Hello'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     }));
@@ -128,17 +136,17 @@ describe('useOwnStreamMirror', () => {
   it('given a second send in a different conversation, should latch the new conversation', () => {
     const { rerender } = render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('one')] },
+      ownMessages: streamingAs('m1', 'one'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
-    act(() => rerender({ status: 'ready', ownAssistantMessage: { id: 'm1', parts: [text('one')] }, pageId: 'page-1', conversationId: 'conv-C' }));
+    act(() => rerender({ status: 'ready', ownMessages: streamingAs('m1', 'one'), pageId: 'page-1', conversationId: 'conv-C' }));
 
     // The user is now in D and sends again.
-    act(() => rerender({ status: 'submitted', ownAssistantMessage: undefined, pageId: 'page-1', conversationId: 'conv-D' }));
+    act(() => rerender({ status: 'submitted', ownMessages: [], pageId: 'page-1', conversationId: 'conv-D' }));
     act(() => rerender({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm2', parts: [text('two')] },
+      ownMessages: streamingAs('m2', 'two'),
       pageId: 'page-1',
       conversationId: 'conv-D',
     }));
@@ -159,7 +167,7 @@ describe('useOwnStreamMirror', () => {
   it('given a third party wipes the live entry mid-send, should re-assert it WITHOUT waiting for another token', () => {
     render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('calling a tool...')] },
+      ownMessages: streamingAs('m1', 'calling a tool...'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
@@ -179,7 +187,7 @@ describe('useOwnStreamMirror', () => {
   it('given the array moved onto another message AND the entry was wiped, should restore the latched stream and adopt nothing', () => {
     const { rerender } = render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'm1', parts: [text('He')] },
+      ownMessages: streamingAs('m1', 'He'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
@@ -191,7 +199,7 @@ describe('useOwnStreamMirror', () => {
       usePendingStreamsStore.getState().clearPageStreams('page-1');
       rerender({
         status: 'streaming',
-        ownAssistantMessage: { id: 'old-history-message', parts: [text('old')] },
+        ownMessages: streamingAs('old-history-message', 'old'),
         pageId: 'page-1',
         conversationId: 'conv-D',
       });
@@ -214,7 +222,7 @@ describe('useOwnStreamMirror', () => {
   it('given the SDK swaps in the server-issued id mid-send, should re-target onto it and drop the client-id entry', () => {
     const { rerender } = render({
       status: 'streaming',
-      ownAssistantMessage: { id: 'client-generated-id', parts: [text('running command...')] },
+      ownMessages: streamingAs('client-generated-id', 'running command...'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     });
@@ -223,12 +231,49 @@ describe('useOwnStreamMirror', () => {
     // The `start` chunk lands. Same conversation — this is a rename, not the array moving.
     act(() => rerender({
       status: 'streaming',
-      ownAssistantMessage: { id: 'server-issued-id', parts: [text('running command...')] },
+      ownMessages: streamingAs('server-issued-id', 'running command...'),
       pageId: 'page-1',
       conversationId: 'conv-C',
     }));
 
     expect(entry('server-issued-id')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
     expect(entry('client-generated-id')).toBeUndefined();
+  });
+
+  // THE ROOT of a bug class that recurred three times in this PR in different disguises: the
+  // mirror used to trust "the last assistant message in the array" to be ITS stream. It is not.
+  //
+  // AiChatView renders a shared conversation and has NO isOwn-stream guard on its socket handlers
+  // (unlike GVA/SidebarChatTab): `chat:stream_complete` carries no isOwnStream filter, so a
+  // COLLABORATOR's stream completing in my conversation calls setMessages and appends THEIR
+  // synthesized assistant message after mine — same conversation, surface never moved.
+  //
+  // Selecting our message by the LATCHED ID removes the whole class: a foreign append can land
+  // anywhere in the array and our stream is still ours.
+  it('given a collaborator\'s message is appended after ours mid-send, should keep mirroring OUR stream', () => {
+    const { rerender } = render({
+      status: 'streaming',
+      ownMessages: streamingAs('m1', 'my reply'),
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    });
+    expect(entry('m1')).toBeDefined();
+
+    // Their stream completes in the same shared conversation and is appended LAST.
+    act(() => rerender({
+      status: 'streaming',
+      ownMessages: [
+        ...streamingAs('m1', 'my reply is still going'),
+        { id: 'their-finished-message', role: 'assistant', parts: [text('their reply')] },
+      ],
+      pageId: 'page-1',
+      conversationId: 'conv-C',
+    }));
+
+    // Our stream keeps its entry and keeps receiving content...
+    expect(entry('m1')).toMatchObject({ conversationId: 'conv-C', isOwn: true });
+    expect(entry('m1')?.parts).toEqual([text('my reply is still going')]);
+    // ...and their finished message is never adopted as a live own stream.
+    expect(entry('their-finished-message')).toBeUndefined();
   });
 });

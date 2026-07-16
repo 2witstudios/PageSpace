@@ -480,31 +480,17 @@ const GlobalAssistantView: React.FC = () => {
   // undefined unless the last message is an assistant's — during the submitted window the last
   // message is the user's own, which is exactly why no store entry exists in that window (and why
   // Stop falls back to the send-time conversationId there).
-  const lastAgentMessage = agentMessages[agentMessages.length - 1];
-  const ownAgentAssistantMessage = useMemo(
-    () => (lastAgentMessage && lastAgentMessage.role === 'assistant'
-      ? { id: lastAgentMessage.id, parts: lastAgentMessage.parts }
-      : undefined),
-    [lastAgentMessage],
-  );
   useOwnStreamMirror({
     status: agentStatus,
-    ownAssistantMessage: ownAgentAssistantMessage,
+    ownMessages: agentMessages,
     pageId: selectedAgent?.id ?? '',
     conversationId: agentConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,
   });
 
-  const lastGlobalMessage = globalLocalMessages[globalLocalMessages.length - 1];
-  const ownGlobalAssistantMessage = useMemo(
-    () => (lastGlobalMessage && lastGlobalMessage.role === 'assistant'
-      ? { id: lastGlobalMessage.id, parts: lastGlobalMessage.parts }
-      : undefined),
-    [lastGlobalMessage],
-  );
   useOwnStreamMirror({
     status: globalStatus,
-    ownAssistantMessage: ownGlobalAssistantMessage,
+    ownMessages: globalLocalMessages,
     pageId: channelIdForGlobal ?? '',
     conversationId: globalConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,

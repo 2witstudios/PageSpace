@@ -417,31 +417,17 @@ const SidebarChatTab: React.FC = () => {
     [user?.id, user?.name, user?.email],
   );
 
-  const lastGlobalMessage = globalMessages[globalMessages.length - 1];
-  const ownGlobalAssistantMessage = useMemo(
-    () => (lastGlobalMessage && lastGlobalMessage.role === 'assistant'
-      ? { id: lastGlobalMessage.id, parts: lastGlobalMessage.parts }
-      : undefined),
-    [lastGlobalMessage],
-  );
   useOwnStreamMirror({
     status: globalStatus,
-    ownAssistantMessage: ownGlobalAssistantMessage,
+    ownMessages: globalMessages,
     pageId: channelIdForGlobal ?? '',
     conversationId: globalConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,
   });
 
-  const lastAgentMessage = agentMessages[agentMessages.length - 1];
-  const ownAgentAssistantMessage = useMemo(
-    () => (lastAgentMessage && lastAgentMessage.role === 'assistant'
-      ? { id: lastAgentMessage.id, parts: lastAgentMessage.parts }
-      : undefined),
-    [lastAgentMessage],
-  );
   useOwnStreamMirror({
     status: agentStatus,
-    ownAssistantMessage: ownAgentAssistantMessage,
+    ownMessages: agentMessages,
     pageId: selectedAgent?.id ?? '',
     conversationId: agentConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,

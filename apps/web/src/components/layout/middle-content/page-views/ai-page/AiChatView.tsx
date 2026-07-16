@@ -541,14 +541,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // deliberately reads raw `messages` (useChat), not `plainMessages`: this is the
   // ONE place that must read the SDK's own live-growing content in order to copy it
   // OUT into the store — reading the store here would be circular.
-  const lastMessage = messages[messages.length - 1];
-  const ownAssistantMessage = useMemo(
-    () => (lastMessage && lastMessage.role === 'assistant' ? { id: lastMessage.id, parts: lastMessage.parts } : undefined),
-    [lastMessage],
-  );
   useOwnStreamMirror({
     status,
-    ownAssistantMessage,
+    ownMessages: messages,
     pageId: page.id,
     conversationId: currentConversationId ?? '',
     triggeredBy: { userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' },
