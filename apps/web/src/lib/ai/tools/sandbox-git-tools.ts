@@ -30,33 +30,12 @@ import {
 } from './sandbox-tools';
 import type { MachineRef } from '@/lib/repositories/page-agent-repository';
 import type { ToolExecutionContext } from '../core/types';
+import { evaluatePushGuard } from './sandbox-git/core/refspec';
 
 // Optional per-call working directory, relative to the sandbox root (/workspace).
 // Each tool call is a fresh process, so cwd never persists between calls — pass it
 // to operate inside a cloned subdirectory. The runner validates it (path_escape).
 const cwdField = z.string().max(MAX_PATH_LENGTH).optional();
-
-// Default branch names we refuse to force-push to. Heuristic: only these common
-// names are auto-protected (a custom default branch is not).
-const DEFAULT_BRANCHES = new Set(['main', 'master']);
-
-// The ref a push actually writes on the remote. A push target is a refspec
-// `[+]<src>:<dst>` (or `[+]<branch>`), so the destination is the segment after
-// the last ':' — a bare-name check misses `HEAD:main` or `feature:refs/heads/master`.
-// Returns the lowercased short branch name for comparison against DEFAULT_BRANCHES.
-function pushDestinationBranch(refspec: string): string {
-  const spec = refspec.startsWith('+') ? refspec.slice(1) : refspec;
-  const dst = spec.includes(':') ? spec.slice(spec.lastIndexOf(':') + 1) : spec;
-  return dst.replace(/^refs\/heads\//, '').trim().toLowerCase();
-}
-
-// A delete refspec has an empty source: `:dst` (or `+:dst`). `git push origin
-// :main` deletes the remote default branch — as destructive as a force-push, so
-// the same guard must catch it.
-function isDeleteRefspec(refspec: string): boolean {
-  const spec = refspec.startsWith('+') ? refspec.slice(1) : refspec;
-  return spec.includes(':') && spec.slice(0, spec.lastIndexOf(':')).trim() === '';
-}
 
 // A value starting with "-" passed as a bare positional CLI arg can be
 // reinterpreted as a flag by git/gh's argument parser (e.g. a ref of
@@ -741,29 +720,11 @@ export function createSandboxGitTools({ gitRunDeps, resolveContext, gate, machin
     })
       .strict(),
     execute: async ({ remote, branch, force, set_upstream, cwd }, options) => {
-      // Force-push is fine for a feature/PR branch, but never the default branch.
-      // A push forces when the `force` flag is set OR the refspec is `+`-prefixed
-      // (per-refspec force), so guard both. Require an explicit branch under force
-      // so the target can be verified — we can't see the sandbox's current branch
-      // from here — and check the refspec DESTINATION, not the raw value, so
-      // `HEAD:main` / `feature:refs/heads/master` can't slip past.
-      const forcing = force === true || (branch?.startsWith('+') ?? false);
-      if (forcing && !branch) {
-        return {
-          success: false as const,
-          error:
-            'Force-push requires an explicit branch so the target can be verified. Name the feature/PR branch to push to.',
-        };
-      }
-      // Destructive = force-push (rewrites history) or delete (`:branch`). Either
-      // one against the default branch is refused; a normal fast-forward push is not.
-      const destructive = forcing || (branch ? isDeleteRefspec(branch) : false);
-      if (destructive && branch && DEFAULT_BRANCHES.has(pushDestinationBranch(branch))) {
-        return {
-          success: false as const,
-          error:
-            'Refusing to force-push or delete the default branch (main/master). These are allowed on feature/PR branches only.',
-        };
+      // The force/delete/default-branch decision is the security core, extracted
+      // to sandbox-git/core/refspec.ts and exhaustively branch-tested there.
+      const guard = evaluatePushGuard({ force, branch });
+      if (!guard.ok) {
+        return { success: false as const, error: guard.error };
       }
       return withToken(options, (ctx, token) =>
         gitR(
