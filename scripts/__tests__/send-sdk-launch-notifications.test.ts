@@ -1,21 +1,25 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  decideRecipient,
-  findUnreachableUrls,
-  isLocalhostUrl,
   LedgerCorruptError,
-  listUnsubscribeHeaders,
   loadSentEmails,
   openLedger,
   parseArgs,
-  preflight,
   recordSent,
-  resolveBaseUrl,
-  resolveMarketingBase,
 } from '../lib/sdk-launch-broadcast';
+
+/**
+ * The launch script's own surface: CLI flags and the JSONL ledger.
+ *
+ * The decision logic these used to sit beside (the send loop, the preflight guards,
+ * decideRecipient, URL resolution) moved to `@pagespace/lib/services/broadcast/core` and
+ * is tested there — packages/lib/src/services/broadcast/__tests__/core.test.ts. What
+ * remains here is what is genuinely specific to running this script from a laptop against
+ * a local file. See the re-export contract test in send-sdk-launch-broadcast-loop.test.ts
+ * for the seam that keeps the script importing those functions from one place.
+ */
 
 const LEDGER = '/tmp/ledger.jsonl';
 const tempDirs: string[] = [];
@@ -31,21 +35,6 @@ async function withLedger(contents: string): Promise<string> {
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
-
-const alwaysValid = () => true;
-
-function decide(overrides: Partial<Parameters<typeof decideRecipient>[0]> = {}) {
-  return decideRecipient({
-    email: 'ada@example.com',
-    userId: 'u1',
-    isValidEmail: alwaysValid,
-    alreadySent: new Set(),
-    suppressed: new Set(),
-    optedOut: new Set(),
-    rightsRestricted: new Set(),
-    ...overrides,
-  }).outcome;
-}
 
 describe('parseArgs', () => {
   it('given no flags, should default to a dry run', () => {
@@ -78,162 +67,6 @@ describe('parseArgs', () => {
     // An unverified address was never proven to belong to the account holder.
     // Mailing it is mailing a stranger, so opting in must be deliberate.
     expect(parseArgs([], LEDGER).includeUnverified).toBe(false);
-  });
-});
-
-describe('preflight', () => {
-  const base = {
-    live: true,
-    baseUrl: 'https://app.pagespace.ai',
-    suppressed: new Set<string>(),
-    isOnPrem: false,
-    fromEmail: 'PageSpace <hello@pagespace.ai>',
-  };
-
-  it('given a well-configured live send, should allow it', () => {
-    expect(preflight(base)).toEqual({ ok: true });
-  });
-
-  it('given a localhost app URL, should refuse the live send', () => {
-    // Otherwise every recipient gets an unsubscribe link they cannot use.
-    const result = preflight({ ...base, baseUrl: 'http://localhost:3000' });
-    expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ reason: expect.stringMatching(/localhost/) });
-  });
-
-  it('given an unreadable suppression audience, should refuse the live send', () => {
-    // We cannot prove GDPR-erased users are excluded, so we do not send at all.
-    const result = preflight({ ...base, suppressed: null });
-    expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ reason: expect.stringMatching(/erased users cannot be/) });
-  });
-
-  it('given on-prem mode, should refuse the live send', () => {
-    // sendEmail() silently drops mail on-prem: the run would send nothing while
-    // recording every recipient as already-sent, poisoning the ledger.
-    const result = preflight({ ...base, isOnPrem: true });
-    expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ reason: expect.stringMatching(/on-prem/) });
-  });
-
-  it('given no FROM_EMAIL, should refuse the live send', () => {
-    // Otherwise every send falls back to Resend's sandbox address and fails.
-    const result = preflight({ ...base, fromEmail: undefined });
-    expect(result.ok).toBe(false);
-    expect(result).toMatchObject({ reason: expect.stringMatching(/FROM_EMAIL/) });
-  });
-
-  it('given no postal address, should STILL allow the live send', () => {
-    // We deliberately ship this launch without a physical postal address
-    // rather than publish a home address; the CAN-SPAM tradeoff is accepted.
-    expect(preflight({ ...base })).toEqual({ ok: true });
-  });
-
-  it('given a dry run, should allow every otherwise-unsafe configuration', () => {
-    expect(
-      preflight({
-        live: false,
-        baseUrl: 'http://localhost:3000',
-        suppressed: null,
-        isOnPrem: true,
-        fromEmail: undefined,
-      }),
-    ).toEqual({ ok: true });
-  });
-});
-
-describe('findUnreachableUrls', () => {
-  // The email's CTA points at docs pages that ship in a sibling PR. Mailing
-  // everyone a 404 is not something you can take back.
-  const ok = () => Promise.resolve({ ok: true, status: 200 } as Response);
-
-  it('given reachable pages, should report nothing', async () => {
-    const fetchImpl = vi.fn(ok);
-    expect(await findUnreachableUrls(['https://x/a', 'https://x/b'], fetchImpl)).toEqual([]);
-    expect(fetchImpl).toHaveBeenCalledWith('https://x/a', { method: 'HEAD', redirect: 'follow' });
-  });
-
-  it('given a page that 404s, should report it', async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
-      String(url).endsWith('/cli')
-        ? ({ ok: false, status: 404 } as Response)
-        : ({ ok: true, status: 200 } as Response),
-    );
-
-    const unreachable = await findUnreachableUrls(['https://x/sdk', 'https://x/cli'], fetchImpl);
-
-    expect(unreachable).toEqual(['https://x/cli (HTTP 404)']);
-  });
-
-  it('given a network failure, should report it rather than assume the page is fine', async () => {
-    const fetchImpl = vi.fn(async () => {
-      throw new Error('DNS go boom');
-    });
-
-    const unreachable = await findUnreachableUrls(['https://x/sdk'], fetchImpl);
-
-    expect(unreachable).toEqual(['https://x/sdk (DNS go boom)']);
-  });
-});
-
-describe('listUnsubscribeHeaders', () => {
-  it('should advertise RFC 8058 one-click unsubscribe pointing at the recipient token', () => {
-    // Gmail/Yahoo bulk rules require these headers; a body link alone is not enough.
-    expect(listUnsubscribeHeaders('https://app.pagespace.ai/api/notifications/unsubscribe/tok')).toEqual({
-      'List-Unsubscribe': '<https://app.pagespace.ai/api/notifications/unsubscribe/tok>',
-      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-    });
-  });
-});
-
-describe('isLocalhostUrl', () => {
-  it('given a local address, should report it as localhost', () => {
-    for (const url of ['http://localhost:3000', 'http://127.0.0.1', 'http://0.0.0.0:80', 'http://[::1]']) {
-      expect(isLocalhostUrl(url)).toBe(true);
-    }
-  });
-
-  it('given a public URL, should not report it as localhost', () => {
-    expect(isLocalhostUrl('https://app.pagespace.ai')).toBe(false);
-  });
-
-  it('given an unparseable URL, should fail closed and call it unsafe', () => {
-    expect(isLocalhostUrl('not a url')).toBe(true);
-  });
-});
-
-describe('resolveBaseUrl', () => {
-  it('given a stale localhost NEXT_PUBLIC_APP_URL, should prefer the public WEB_APP_URL', () => {
-    const url = resolveBaseUrl({
-      NEXT_PUBLIC_APP_URL: 'http://localhost:3000',
-      WEB_APP_URL: 'https://app.pagespace.ai',
-    } as NodeJS.ProcessEnv);
-    expect(url).toBe('https://app.pagespace.ai');
-  });
-
-  it('given a trailing slash, should strip it so paths concatenate cleanly', () => {
-    const url = resolveBaseUrl({ WEB_APP_URL: 'https://app.pagespace.ai/' } as NodeJS.ProcessEnv);
-    expect(url).toBe('https://app.pagespace.ai');
-  });
-});
-
-describe('resolveMarketingBase', () => {
-  it('given no configuration, should fall back to the public site', () => {
-    expect(resolveMarketingBase({} as NodeJS.ProcessEnv)).toBe('https://pagespace.ai');
-  });
-
-  it('given a URL with a stray path, should keep only the origin', () => {
-    const base = resolveMarketingBase({ MARKETING_BASE_URL: 'https://pagespace.ai/blog/' } as NodeJS.ProcessEnv);
-    expect(base).toBe('https://pagespace.ai');
-  });
-
-  it('given a malformed or non-http URL, should fall back rather than emit a broken link', () => {
-    expect(resolveMarketingBase({ MARKETING_BASE_URL: 'javascript:alert(1)' } as NodeJS.ProcessEnv)).toBe(
-      'https://pagespace.ai',
-    );
-    expect(resolveMarketingBase({ MARKETING_BASE_URL: 'pagespace.ai' } as NodeJS.ProcessEnv)).toBe(
-      'https://pagespace.ai',
-    );
   });
 });
 
@@ -276,73 +109,5 @@ describe('recordSent', () => {
     await handle.close();
 
     expect(await loadSentEmails(file)).toEqual(new Set(['ada@example.com']));
-  });
-});
-
-describe('decideRecipient', () => {
-  it('given a fresh valid recipient, should send', () => {
-    expect(decide()).toBe('send');
-  });
-
-  it('given a send, should hand back the trimmed address and its normalized ledger key', () => {
-    const decision = decideRecipient({
-      email: '  Ada@Example.com  ',
-      userId: 'u1',
-      isValidEmail: alwaysValid,
-      alreadySent: new Set(),
-      suppressed: new Set(),
-      optedOut: new Set(),
-      rightsRestricted: new Set(),
-    });
-
-    expect(decision).toEqual({
-      outcome: 'send',
-      email: 'Ada@Example.com',
-      emailKey: 'ada@example.com',
-    });
-  });
-
-  it('given an address in the erasure-suppression audience, should skip it', () => {
-    expect(decide({ suppressed: new Set(['ada@example.com']) })).toBe('suppressed');
-  });
-
-  it('given a differently-cased suppressed address, should still skip it', () => {
-    expect(decide({ email: 'ADA@Example.com', suppressed: new Set(['ada@example.com']) })).toBe('suppressed');
-  });
-
-  it('given a user who opted out of product updates, should skip them', () => {
-    expect(decide({ optedOut: new Set(['u1']) })).toBe('opted-out');
-  });
-
-  it('given a user with a pending or blocked GDPR erasure, should skip them', () => {
-    // The Resend suppression audience only holds erasures that already RAN. An
-    // erasure that is queued or blocked leaves a completely normal-looking user
-    // row — and mailing that person is the exact harm they asked us to prevent.
-    expect(decide({ rightsRestricted: new Set(['u1']) })).toBe('rights-restricted');
-  });
-
-  it('should skip a rights-restricted user even when they are not in the suppression list', () => {
-    expect(decide({ rightsRestricted: new Set(['u1']), suppressed: new Set() })).toBe(
-      'rights-restricted',
-    );
-  });
-
-  it('given an address already in the ledger, should skip it', () => {
-    expect(decide({ alreadySent: new Set(['ada@example.com']) })).toBe('already-sent');
-  });
-
-  it('given a missing or invalid address, should skip it', () => {
-    expect(decide({ email: null })).toBe('invalid-email');
-    expect(decide({ email: '   ' })).toBe('invalid-email');
-    expect(decide({ email: 'nope', isValidEmail: () => false })).toBe('invalid-email');
-  });
-
-  it('given an unreadable suppression list, should still return send — the live-send guard is upstream', () => {
-    // `null` means "we could not read the audience". This function has no way to
-    // exclude anyone in that case, which is exactly why the script refuses to go
-    // live before it ever gets here (see the listSuppressedEmails() === null
-    // branch in send-sdk-launch-notifications.ts). Pinned so nobody "fixes" the
-    // null case here and assumes the broadcast is now safe without that guard.
-    expect(decide({ suppressed: null })).toBe('send');
   });
 });

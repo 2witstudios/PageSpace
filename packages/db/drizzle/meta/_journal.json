@@ -1492,6 +1492,13 @@
       "when": 1784136456420,
       "tag": "0212_flowery_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 213,
+      "version": "7",
+      "when": 1784219754348,
+      "tag": "0213_cultured_mole_man",
+      "breakpoints": true
     }
   ]
 }
