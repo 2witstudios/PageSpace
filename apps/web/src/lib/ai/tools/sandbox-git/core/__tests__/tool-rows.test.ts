@@ -26,6 +26,7 @@ const VALIDATED: Array<{ key: string; pass: unknown; fail: unknown }> = [
   { key: 'git_rebase', pass: { branch_or_ref: 'f' }, fail: {} },
   { key: 'git_revert', pass: { sha: 'abcd' }, fail: { sha: 'HEAD' } },
   { key: 'git_branch', pass: { action: 'list' }, fail: { action: 'delete' } },
+  { key: 'git_checkout', pass: { ref: 'main' }, fail: { ref: '--detach' } },
   { key: 'git_push', pass: { branch: 'feature' }, fail: { force: true, branch: 'main' } },
   { key: 'gh_pr_create', pass: { title: 't', body: 'b' }, fail: { title: '', body: 'b' } },
   { key: 'gh_pr_review_comment', pass: { number: 1, body: 'b' }, fail: { number: 1, body: '' } },
@@ -101,6 +102,15 @@ describe('row validators — extra branches', () => {
   });
   test('gh_repo_create invalid name fails before the visibility check', () => {
     assert({ given: 'gh_repo_create with a flag-like name', should: 'fail validate on the name', actual: rowFor('gh_repo_create').validate!({ name: '--x', visibility: 'private' }).ok, expected: false });
+  });
+  test('git_branch create with a valid name passes', () => {
+    assert({ given: 'git_branch create with a normal name', should: 'pass validate', actual: rowFor('git_branch').validate!({ action: 'create', name: 'feature' }).ok, expected: true });
+  });
+  test('git_branch create with a flag-like name fails', () => {
+    assert({ given: 'git_branch create with --contains', should: 'fail validate on flag-safety', actual: rowFor('git_branch').validate!({ action: 'create', name: '--contains' }).ok, expected: false });
+  });
+  test('git_branch list ignores name entirely', () => {
+    assert({ given: 'git_branch list with a flag-like name', should: 'pass validate (name unused in list)', actual: rowFor('git_branch').validate!({ action: 'list', name: '--x' }).ok, expected: true });
   });
 });
 

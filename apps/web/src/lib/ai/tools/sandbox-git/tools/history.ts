@@ -181,6 +181,10 @@ export const HISTORY_TOOL_ROWS: GitToolRow[] = [
     schema: z
       .object({ ref: z.string().min(1), create: z.boolean().optional(), cwd: cwdField })
       .strict(),
+    // ref is passed as a bare argv element, so a flag-like value (--detach,
+    // --orphan) would be parsed as an option — reject it, as the other history
+    // tools do. A real branch/ref name never starts with "-".
+    validate: ({ ref }) => validateFlagSafe(ref, 'ref'),
     buildArgs: ({ ref, create }) => ({ args: buildCheckoutArgs({ ref, create }) }),
   }),
   defineRow({
@@ -192,10 +196,14 @@ export const HISTORY_TOOL_ROWS: GitToolRow[] = [
     schema: z
       .object({ action: z.enum(['list', 'create', 'delete']), name: z.string().optional(), cwd: cwdField })
       .strict(),
-    validate: ({ action, name }) =>
-      action === 'list' || !!name
-        ? { ok: true }
-        : { ok: false, error: 'name is required for create/delete' },
+    // list ignores name (branch -a). create/delete require a name AND reject a
+    // flag-like one — `name` is a bare argv element, so `--contains` etc. would
+    // be parsed as an option.
+    validate: ({ action, name }) => {
+      if (action === 'list') return { ok: true };
+      if (!name) return { ok: false, error: 'name is required for create/delete' };
+      return validateFlagSafe(name, 'name');
+    },
     buildArgs: ({ action, name }) => ({ args: buildBranchArgs({ action, name }) }),
   }),
 ];
