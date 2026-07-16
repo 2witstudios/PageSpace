@@ -7,7 +7,10 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { sessions } from '@pagespace/db/schema/sessions';
 
-const E2E_DIR = path.join(process.cwd(), 'apps/e2e');
+// Location-relative, matching global-setup.ts — see the note there. A cwd-based path made
+// teardown silently skip cleanup ("No .seed-state.json — nothing to clean up") whenever the
+// runner was invoked from anywhere but the repo root, leaking the seeded user and its drive.
+const E2E_DIR = __dirname;
 const STATE_FILE = path.join(E2E_DIR, '.seed-state.json');
 const STORAGE_STATE_FILE = path.join(E2E_DIR, 'storageState.json');
 

@@ -1293,7 +1293,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
   return (
     <AskUserAnswerProvider value={askUserAnswering}>
-    <div className="flex flex-col h-full">
+    <div data-testid="ai-chat-view" className="flex flex-col h-full">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full">
         <div className="p-4 border-b border-[var(--separator)] space-y-3">
           <div className="flex items-center justify-between">

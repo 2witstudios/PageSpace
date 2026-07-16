@@ -1,11 +1,12 @@
 import { randomBytes } from 'crypto';
+import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
-import { conversations } from '@pagespace/db/schema/conversations';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
@@ -129,6 +130,130 @@ export async function createAgentPage(driveId: string, userId: string): Promise<
   const page = await factories.createPage(driveId, { type: 'AI_CHAT' });
   await factories.createPagePermission(page.id, userId, { canView: true, canEdit: true });
   return page.id;
+}
+
+/**
+ * Seed one AI_CHAT conversation: a `conversations` row plus the `chat_messages` rows sharing
+ * its id, alternating user/assistant from `contents`, each a second apart so the loader's
+ * createdAt ordering is unambiguous.
+ *
+ * The `conversations` row is NOT optional. `conversationRepository.listConversations` (and
+ * `countConversations`) LEFT JOIN `conversations` and then filter
+ * `WHERE conv."userId" = $user OR conv."isShared" = true` — with no row the join yields NULL,
+ * both predicates are NULL, and the conversation is invisible to the history list even though
+ * its messages exist. The page would open a fresh empty conversation instead of the seeded
+ * one. Shape mirrors the app's own `createConversation` (type 'page', contextId = pageId).
+ *
+ * Plain-text `content` is deliberate and safe: `parseStructuredContent` returns null for
+ * non-JSON and the loader falls back to a simple text part
+ * (apps/web/src/lib/ai/core/message-utils.ts) — so these rows render as ordinary bubbles.
+ *
+ * Returns the conversationId.
+ */
+export async function seedChatConversation(
+  pageId: string,
+  userId: string,
+  opts: {
+    /** Message bodies, alternating user → assistant → user … Defaults to a 4-turn exchange. */
+    contents?: string[];
+    conversationId?: string;
+    /** createdAt of the first row; each subsequent row is +1s. Default: a minute ago. */
+    startedAt?: Date;
+  } = {},
+): Promise<string> {
+  const conversationId = opts.conversationId ?? createId();
+  const contents = opts.contents ?? [
+    'first user message',
+    'first assistant reply',
+    'second user message',
+    'second assistant reply',
+  ];
+  const startedAt = opts.startedAt ?? new Date(Date.now() - 60_000);
+  const lastMessageAt = new Date(startedAt.getTime() + (contents.length - 1) * 1000);
+
+  await db
+    .insert(conversations)
+    .values({
+      id: conversationId,
+      userId,
+      type: 'page',
+      contextId: pageId,
+      isShared: false,
+      lastMessageAt,
+      updatedAt: lastMessageAt,
+    })
+    .onConflictDoNothing();
+
+  for (let i = 0; i < contents.length; i++) {
+    await factories.createChatMessage(pageId, {
+      conversationId,
+      userId,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: contents[i],
+      createdAt: new Date(startedAt.getTime() + i * 1000),
+    });
+  }
+  return conversationId;
+}
+
+export interface SeededChatPage {
+  pageId: string;
+  /** The older conversation. */
+  conversationA: string;
+  /** The newer conversation — what the page opens on. */
+  conversationB: string;
+}
+
+/**
+ * An AI_CHAT page with TWO seeded conversations, both non-empty. This is the shape the
+ * switch-and-return spec (7.3) and the history specs (7.5) need: switching between two
+ * conversations that each have enough messages to visibly render is what makes a blanked
+ * list detectable.
+ */
+export async function seedChatPage(userId: string, driveId: string): Promise<SeededChatPage> {
+  const pageId = await createAgentPage(driveId, userId);
+  const conversationA = await seedChatConversation(pageId, userId, {
+    contents: ['conversation A: user asks', 'conversation A: assistant answers'],
+    startedAt: new Date(Date.now() - 120_000),
+  });
+  const conversationB = await seedChatConversation(pageId, userId, {
+    contents: ['conversation B: user asks', 'conversation B: assistant answers'],
+    startedAt: new Date(Date.now() - 60_000),
+  });
+  return { pageId, conversationA, conversationB };
+}
+
+/**
+ * Seed history into the UNIFIED `messages` table (the global assistant's store), so
+ * GlobalAssistantView specs have something to render. Pair with `createGlobalConversation`.
+ */
+export async function seedConversationMessages(
+  conversationId: string,
+  userId: string,
+  msgs: { role: 'user' | 'assistant'; content: string }[],
+): Promise<void> {
+  if (msgs.length === 0) return;
+
+  const startedAt = Date.now() - msgs.length * 1000;
+  for (let i = 0; i < msgs.length; i++) {
+    await db.insert(messages).values({
+      conversationId,
+      userId,
+      role: msgs[i].role,
+      content: msgs[i].content,
+      createdAt: new Date(startedAt + i * 1000),
+    });
+  }
+  // Exactly the last message's own createdAt — matching seedChatConversation. Using
+  // `startedAt + msgs.length * 1000` would land a second PAST the last message, which is
+  // `Date.now()` however the messages were staggered: every seeded conversation's
+  // lastMessageAt would then cluster at "now" and the recency ordering that the staggered
+  // timestamps exist to create would be lost.
+  const lastMessageAt = new Date(startedAt + (msgs.length - 1) * 1000);
+  await db
+    .update(conversations)
+    .set({ lastMessageAt })
+    .where(eq(conversations.id, conversationId));
 }
 
 /** Create a global conversation owned by the user (for /api/ai/global/[id]/messages). */

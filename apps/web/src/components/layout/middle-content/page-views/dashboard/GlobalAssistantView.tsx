@@ -1585,7 +1585,7 @@ const GlobalAssistantView: React.FC = () => {
 
   return (
     <AskUserAnswerProvider value={askUserAnswering}>
-    <div className="flex flex-col h-full">
+    <div data-testid="global-assistant-view" className="flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-[var(--separator)]">
         <div className="flex items-center space-x-2">

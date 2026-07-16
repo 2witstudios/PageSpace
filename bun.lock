@@ -170,10 +170,13 @@
       "devDependencies": {
         "@aws-sdk/client-s3": "^3.1045.0",
         "@pagespace/db": "workspace:*",
+        "@pagespace/lib": "workspace:*",
+        "@paralleldrive/cuid2": "^2.2.2",
         "@playwright/test": "^1.52.0",
         "@types/node": "^24.0.0",
         "dotenv": "^16.0.0",
         "typescript": "^5.0.0",
+        "vitest": "^2.1.9",
       },
     },
     "apps/ios": {
@@ -408,6 +411,7 @@
         "next-ws": "^2.2.7",
         "ollama-ai-provider-v2": "^3.6.0",
         "pdfjs-dist": "5.4.296",
+        "pg": "^8.16.3",
         "react": "^19.1.2",
         "react-day-picker": "^9.11.3",
         "react-dom": "^19.1.2",

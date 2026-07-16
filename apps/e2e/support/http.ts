@@ -1,5 +1,6 @@
 import type { APIRequestContext, APIResponse } from '@playwright/test';
 import type { SeededUser } from './db';
+import type { StreamMode } from './mock-openrouter';
 
 const MOCK_BASE = process.env.E2E_MOCK_OPENROUTER_URL ?? 'http://127.0.0.1:4998';
 
@@ -55,6 +56,47 @@ export async function mockCallCount(request: APIRequestContext): Promise<number>
   const res = await request.get(`${MOCK_BASE}/__calls`);
   const json = (await res.json()) as { count: number };
   return json.count;
+}
+
+/**
+ * Choose how the mock paces its next streams, and optionally the slow-mode pacing
+ * (`chunks` × `intervalMs` is the live window a spec gets to assert against).
+ *
+ * `mode` is the ONLY pacing control that works for a send driven through the UI: the app
+ * rewrites unknown model ids to its DEFAULT_MODEL before calling the provider, so seeding a
+ * user with `e2e/slow-stream` does NOT reach the mock. Reset to `instant` by `resetMock`.
+ */
+export async function setStreamConfig(
+  request: APIRequestContext,
+  config: { chunks?: number; intervalMs?: number; mode?: StreamMode },
+): Promise<void> {
+  await request.post(`${MOCK_BASE}/__stream-config`, {
+    headers: { 'content-type': 'application/json' },
+    data: JSON.stringify(config),
+  });
+}
+
+/**
+ * How many mock streams are open right now, how many are held awaiting release, and the
+ * pacing mode in force.
+ *
+ * `mode` is surfaced deliberately: from `open: 0` alone a spec cannot tell "the stream already
+ * finished" from "the mode never took effect", and those have opposite fixes. Assert on it
+ * when a poll for `open`/`held` times out unexpectedly.
+ */
+export async function mockStreams(
+  request: APIRequestContext,
+): Promise<{ open: number; held: number; mode: StreamMode }> {
+  const res = await request.get(`${MOCK_BASE}/__streams`);
+  return (await res.json()) as { open: number; held: number; mode: StreamMode };
+}
+
+/**
+ * End the deterministic live window: flush + terminate every held stream. Pair with
+ * `expect.poll(() => mockStreams(request))` to know the stream was live first.
+ */
+export async function releaseStreams(request: APIRequestContext): Promise<void> {
+  await request.post(`${MOCK_BASE}/__release-stream`);
 }
 
 /**

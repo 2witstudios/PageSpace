@@ -2,15 +2,20 @@
   "name": "@pagespace/e2e",
   "private": true,
   "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {
-    "@pagespace/db": "workspace:*",
     "@aws-sdk/client-s3": "^3.1045.0",
+    "@pagespace/db": "workspace:*",
+    "@pagespace/lib": "workspace:*",
+    "@paralleldrive/cuid2": "^2.2.2",
     "@playwright/test": "^1.52.0",
     "@types/node": "^24.0.0",
     "dotenv": "^16.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^2.1.9"
   }
 }

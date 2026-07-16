@@ -209,7 +209,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
 
     // Loading skeleton
     const LoadingSkeleton = useMemo(() => (
-      <div className="space-y-4">
+      <div data-testid="chat-loading-skeleton" className="space-y-4">
         <div className="flex items-center justify-center h-32 text-muted-foreground">
           <div className="flex items-center space-x-2">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -241,6 +241,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
     return (
       <>
         <ConversationContent
+          data-testid="chat-messages-area"
           className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34"
           onTouchStart={touchHandlers.onTouchStart}
           onTouchMove={touchHandlers.onTouchMove}

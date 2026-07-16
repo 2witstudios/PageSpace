@@ -1,7 +1,14 @@
+import path from 'path';
 import { defineConfig, devices } from '@playwright/test';
 
 const baseURL = process.env.E2E_BASE_URL ?? process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:3000';
 const mockPort = Number(process.env.E2E_MOCK_OPENROUTER_PORT ?? 4998);
+// Playwright hands `storageState` straight to readFile WITHOUT resolving it against the config
+// directory, so a relative path here is CWD-relative — while global-setup writes the file next
+// to itself. The two only agreed when the runner happened to be started from apps/e2e; from the
+// repo root every storageState-backed spec (02-08) died on
+// `ENOENT: ./storageState.json`. Anchor it to this file so writer and reader agree from any cwd.
+const storageStatePath = path.join(__dirname, 'storageState.json');
 
 export default defineConfig({
   testDir: './tests',
@@ -33,7 +40,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        storageState: './storageState.json',
+        storageState: storageStatePath,
       },
     },
   ],
