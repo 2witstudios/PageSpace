@@ -68,6 +68,10 @@ export interface ChatLayoutProps {
   onUndoSuccess?: () => void;
   /** Callback for pull-up refresh (to check for missed messages) */
   onPullUpRefresh?: () => Promise<void>;
+  /** Scroll-near-top handler (epic leaf 6.6) — fetches the next older page. */
+  onScrollNearTop?: () => void;
+  /** Whether an older page is currently loading (inline indicator, not an error state). */
+  isLoadingOlder?: boolean;
 
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
@@ -154,6 +158,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       isReadOnly = false,
       onUndoSuccess,
       onPullUpRefresh,
+      onScrollNearTop,
+      isLoadingOlder,
       renderInput,
       mcpRunningServers = 0,
       mcpServerNames = [],
@@ -285,6 +291,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 isReadOnly={isReadOnly}
                 onUndoSuccess={onUndoSuccess}
                 onPullUpRefresh={onPullUpRefresh}
+                onScrollNearTop={onScrollNearTop}
+                isLoadingOlder={isLoadingOlder}
                 remoteStreams={remoteStreams}
                 findMatchSet={findMatchSet}
                 findCurrentMessageId={findCurrentMessageId}
