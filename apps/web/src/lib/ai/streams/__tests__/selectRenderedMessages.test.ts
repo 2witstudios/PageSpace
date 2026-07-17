@@ -15,7 +15,7 @@ const stream = (overrides: Partial<PendingStream> & { messageId: string }): Pend
   ...overrides,
 });
 
-const emptyEntry: ConversationCacheEntry = { messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] };
+const emptyEntry: ConversationCacheEntry = { messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle' };
 
 describe('selectRenderedMessages', () => {
   it('given an empty cache and no streams, should return an empty array', () => {
@@ -50,10 +50,37 @@ describe('selectRenderedMessages', () => {
     expect(result[0].message.role).toBe('assistant');
   });
 
-  it('given a stream whose messageId already appears in confirmed messages, should drop the stream (cache wins)', () => {
+  // SPEC CHANGE (PR 5B, leaf 5.2 + absorbed E2 D task): a LIVE stream colliding with a
+  // confirmed row is by definition fresher than the cached copy — the cached row is a
+  // DB streaming-placeholder (loads carry includeStreaming=1 so history-rejoin can see
+  // in-flight conversations). Cache-wins here froze the bubble at the placeholder
+  // snapshot for the rest of the generation (the #2092 failure class, moved into the
+  // cache). The stream renders IN PLACE of the cached row, so ordering is stable.
+  it('given a stream whose messageId matches a confirmed row (includeStreaming placeholder), should render the live stream IN PLACE of the cached row', () => {
+    const entry: ConversationCacheEntry = { ...emptyEntry, messages: [msg('m1'), msg('s1'), msg('m2')] };
+    const result = selectRenderedMessages(entry, [
+      stream({ messageId: 's1', parts: [{ type: 'text', text: 'live tokens' }] }),
+    ]);
+    expect(result.map((r) => r.message.id)).toEqual(['m1', 's1', 'm2']);
+    expect(result[1].mode).toBe('streaming');
+    expect(result[1].message.parts).toEqual([{ type: 'text', text: 'live tokens' }]);
+    expect(result[1].message.role).toBe('assistant');
+  });
+
+  it('given a colliding stream rendered in place, should not ALSO append it at the end', () => {
     const entry: ConversationCacheEntry = { ...emptyEntry, messages: [msg('s1')] };
     const result = selectRenderedMessages(entry, [stream({ messageId: 's1' })]);
-    expect(result).toEqual([{ message: msg('s1'), mode: 'confirmed' }]);
+    expect(result).toHaveLength(1);
+  });
+
+  it('given one colliding and one fresh stream, should render the collision in place and append the fresh one', () => {
+    const entry: ConversationCacheEntry = { ...emptyEntry, messages: [msg('s1'), msg('m1')] };
+    const result = selectRenderedMessages(entry, [
+      stream({ messageId: 's1', parts: [{ type: 'text', text: 'rejoined' }] }),
+      stream({ messageId: 's2' }),
+    ]);
+    expect(result.map((r) => r.message.id)).toEqual(['s1', 'm1', 's2']);
+    expect(result.map((r) => r.mode)).toEqual(['streaming', 'confirmed', 'streaming']);
   });
 
   it('given a stream whose messageId already appears in optimisticSends, should drop the stream (cache wins)', () => {
@@ -125,14 +152,22 @@ describe('selectRenderedMessages', () => {
     expect(resultA.map((r) => r.message.id)).toEqual(['a1', 'a-stream']);
   });
 
-  it('switch-away/back: once a stream completes and its message lands in the cache, re-selecting the same conversation drops the now-redundant stream entry', () => {
+  it('switch-away/back: while the completed stream entry lingers, it renders in place under the confirmed row position; once removed, the cache row renders confirmed', () => {
     const streamingEntry: ConversationCacheEntry = emptyEntry;
-    const liveStreams = [stream({ messageId: 's1' })];
+    const liveStreams = [stream({ messageId: 's1', parts: [{ type: 'text', text: 'full reply' }] })];
     const first = selectRenderedMessages(streamingEntry, liveStreams);
     expect(first.map((r) => r.mode)).toEqual(['streaming']);
 
+    // stream_complete commits the confirmed row; the store entry's removal can lag one
+    // render. In that window the (complete) stream parts render in place — identical
+    // content, no flash. Once the entry is gone the cache row renders as confirmed.
     const settledEntry: ConversationCacheEntry = { ...emptyEntry, messages: [msg('s1')] };
-    const second = selectRenderedMessages(settledEntry, liveStreams);
-    expect(second).toEqual([{ message: msg('s1'), mode: 'confirmed' }]);
+    const during = selectRenderedMessages(settledEntry, liveStreams);
+    expect(during.map((r) => r.message.id)).toEqual(['s1']);
+    expect(during[0].mode).toBe('streaming');
+    expect(during[0].message.parts).toEqual([{ type: 'text', text: 'full reply' }]);
+
+    const after = selectRenderedMessages(settledEntry, []);
+    expect(after).toEqual([{ message: msg('s1'), mode: 'confirmed' }]);
   });
 });

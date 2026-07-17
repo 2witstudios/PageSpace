@@ -18,8 +18,41 @@ describe('useConversationMessagesStore', () => {
 
   it('given a conversation never seen before, getEntry should return a seeded empty entry without mutating the store', () => {
     const entry = useConversationMessagesStore.getState().getEntry('c1');
-    expect(entry).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] });
+    expect(entry).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle' });
     expect(useConversationMessagesStore.getState().byConversationId.c1).toBeUndefined();
+  });
+
+  it('given applyServerSnapshot, should commit the messages as loaded truth in one step', () => {
+    const { applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    applyServerSnapshot('c1', [msg('m1'), msg('m2')]);
+    const entry = getEntry('c1');
+    expect(entry.messages).toEqual([msg('m1'), msg('m2')]);
+    expect(entry.loadStatus).toBe('loaded');
+  });
+
+  it('given applyServerSnapshot, should supersede an in-flight load (its later applyLoad is dropped as stale)', () => {
+    const { startLoad, applyServerSnapshot, applyLoad, getEntry } = useConversationMessagesStore.getState();
+    const inFlight = startLoad('c1');
+    applyServerSnapshot('c1', [msg('snapshot')]);
+    applyLoad('c1', inFlight, [msg('stale')]);
+    expect(getEntry('c1').messages).toEqual([msg('snapshot')]);
+  });
+
+  it('given applyServerSnapshot containing an optimistic send id, should reconcile it out of optimisticSends', () => {
+    const { addOptimisticSend, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    addOptimisticSend('c1', msg('opt1'));
+    applyServerSnapshot('c1', [msg('opt1')]);
+    const entry = getEntry('c1');
+    expect(entry.optimisticSends).toEqual([]);
+    expect(entry.messages).toEqual([msg('opt1')]);
+  });
+
+  it('given seedConversation for a freshly minted id, should mark the entry loaded-empty so no fetch is pending for it', () => {
+    const { seedConversation, getEntry } = useConversationMessagesStore.getState();
+    seedConversation('c-new');
+    const entry = getEntry('c-new');
+    expect(entry.messages).toEqual([]);
+    expect(entry.loadStatus).toBe('loaded');
   });
 
   it('given startLoad then applyLoad with the returned generation, should commit the loaded messages', () => {
