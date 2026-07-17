@@ -1,5 +1,5 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 
@@ -7,8 +7,18 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
 }));
 
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+
+/** Stable across calls (unlike a fresh `vi.fn()` per `getState()`) so tests can
+ * assert on startEditing/endEditing pairs across renders. */
+const editingStore = { startEditing: vi.fn(), endEditing: vi.fn() };
+vi.mock('@/stores/useEditingStore', () => ({
+  useEditingStore: { getState: () => editingStore },
+}));
+
 /**
- * Every (language, value) pair Monaco has been handed, across ALL renders.
+ * Every (language, value, readOnly) triple Monaco has been handed, across ALL
+ * renders.
  *
  * The final DOM is not enough to police "never show one file's content under
  * another file's name": React flushes the pane's effect before paint, so a bad
@@ -17,22 +27,47 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
  * real setValue against its model. Recording renders is what makes that window
  * observable.
  */
-const monacoRenders: { language: string | undefined; value: string }[] = [];
+const monacoRenders: { language: string | undefined; value: string; readOnly: boolean | undefined }[] = [];
 
 // Monaco is next/dynamic(ssr:false); stub it so the pane's fetch/state logic and
-// the props it hands the editor (value, language, readOnly) are what's asserted.
+// the props it hands the editor (value, language, readOnly, onChange) are what's
+// asserted. The stub renders a textarea wired to onChange so tests can simulate
+// a user editing the buffer without needing the real Monaco bundle.
 vi.mock('@/components/editors/MonacoEditor', () => ({
-  default: ({ value, language, readOnly }: { value: string; language?: string; readOnly?: boolean }) => {
-    monacoRenders.push({ language, value });
+  default: ({
+    value,
+    language,
+    readOnly,
+    onChange,
+  }: {
+    value: string;
+    language?: string;
+    readOnly?: boolean;
+    onChange?: (value: string | undefined) => void;
+  }) => {
+    monacoRenders.push({ language, value, readOnly });
+    // Read-only renders `value` as plain text; editable renders a textarea bound
+    // to `onChange` instead of ALSO showing the text, so `monaco.textContent`
+    // reflects the buffer exactly once either way (a textarea's value is its
+    // own text-node child in the DOM, so rendering both would double it).
     return (
       <div data-testid="monaco" data-language={language} data-readonly={String(readOnly)}>
-        {value}
+        {readOnly ? (
+          value
+        ) : (
+          <textarea
+            aria-label="editor-content"
+            value={value}
+            onChange={(e) => onChange?.(e.target.value)}
+          />
+        )}
       </div>
     );
   },
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { toast } from 'sonner';
 import FilesFilePane from './FilesFilePane';
 import type { FilesScope } from './files-scope';
 
@@ -62,21 +97,21 @@ describe('FilesFilePane', () => {
     monacoRenders.length = 0;
   });
 
-  test('reads the selected file and shows it read-only with a detected language', async () => {
+  test('reads the selected file and shows it editable with a detected language', async () => {
     vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'export const x = 1;', encoding: 'utf8', truncated: false }));
     renderPane('src/index.ts');
 
     const monaco = await waitFor(() => screen.getByTestId('monaco'));
 
     assert({
-      given: 'a .ts file whose read succeeds',
-      should: 'render its content read-only in Monaco with typescript highlighting',
+      given: 'a .ts file whose read succeeds cleanly (not truncated)',
+      should: 'mount it editable in Monaco with typescript highlighting',
       actual: {
         value: monaco.textContent,
         language: monaco.getAttribute('data-language'),
         readOnly: monaco.getAttribute('data-readonly'),
       },
-      expected: { value: 'export const x = 1;', language: 'typescript', readOnly: 'true' },
+      expected: { value: 'export const x = 1;', language: 'typescript', readOnly: 'false' },
     });
   });
 
@@ -106,6 +141,27 @@ describe('FilesFilePane', () => {
       should: 'surface a Truncated banner alongside the content',
       actual: screen.queryByText('Truncated') !== null,
       expected: true,
+    });
+  });
+
+  test('a truncated read stays read-only with no Save affordance', async () => {
+    // Saving a truncated view would silently drop the file's tail on disk — the
+    // route caps a single read at 2 MiB, so a truncated buffer never has the
+    // whole file to begin with.
+    vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'partial', encoding: 'utf8', truncated: true }));
+    renderPane();
+
+    const monaco = await waitFor(() => screen.getByTestId('monaco'));
+
+    assert({
+      given: 'a truncated read',
+      should: 'stay read-only in Monaco (no editable buffer mounted) and never offer a Save button',
+      actual: {
+        readOnly: monaco.getAttribute('data-readonly'),
+        editorTextarea: screen.queryByLabelText('editor-content'),
+        saveButton: screen.queryByTitle('Save file (Cmd/Ctrl-S)'),
+      },
+      expected: { readOnly: 'true', editorTextarea: null, saveButton: null },
     });
   });
 
@@ -412,6 +468,283 @@ describe('FilesFilePane', () => {
       should: 'use the root-scope copy, not the branch-scope "checkout" phrasing',
       actual: message.textContent,
       expected: 'This file is no longer on the machine.',
+    });
+  });
+
+  describe('editing and save', () => {
+    const editContent = async (text: string) => {
+      const editor = screen.getByLabelText('editor-content');
+      await userEvent.clear(editor);
+      await userEvent.type(editor, text);
+      return editor;
+    };
+
+    test('editing a clean file marks it dirty and shows the Save affordance', async () => {
+      vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'export const x = 1;', encoding: 'utf8', truncated: false }));
+      renderPane('src/index.ts');
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('export const x = 2;');
+      await waitFor(() => screen.getByTitle('Unsaved changes'));
+
+      assert({
+        given: 'a clean text file edited in the editor',
+        should: 'show the dirty dot and a Save button',
+        actual: {
+          dirtyDot: screen.queryByTitle('Unsaved changes') !== null,
+          saveButton: screen.queryByTitle('Save file (Cmd/Ctrl-S)') !== null,
+        },
+        expected: { dirtyDot: true, saveButton: true },
+      });
+    });
+
+    test('Save POSTs the edited content with scope fields and cleans the dirty state', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (vi.mocked(fetchWithAuth).mock.calls.length < 2) throw new Error('not saved yet');
+      });
+
+      const call = vi.mocked(fetchWithAuth).mock.calls[1];
+      const options = call[1] as RequestInit;
+
+      assert({
+        given: 'a dirty branch-scope file, saved via the Save button',
+        should: "POST kind:'file' utf8 content plus scope fields to the files route, then clean the dirty state",
+        actual: {
+          url: call[0],
+          method: options.method,
+          body: JSON.parse(String(options.body)),
+          dirtyAfter: screen.queryByTitle('Unsaved changes'),
+          saveButtonAfter: screen.queryByTitle('Save file (Cmd/Ctrl-S)'),
+        },
+        expected: {
+          url: '/api/machines/files',
+          method: 'POST',
+          body: {
+            machineId: 'machine-1',
+            projectName: 'repo',
+            branchName: 'main',
+            path: 'src/index.ts',
+            kind: 'file',
+            encoding: 'utf8',
+            content: 'after',
+          },
+          dirtyAfter: null,
+          saveButtonAfter: null,
+        },
+      });
+    });
+
+    test('root scope saves omit projectName/branchName from the POST body', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+      renderPane('README.md', { kind: 'root' });
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (vi.mocked(fetchWithAuth).mock.calls.length < 2) throw new Error('not saved yet');
+      });
+
+      const body = JSON.parse(String((vi.mocked(fetchWithAuth).mock.calls[1][1] as RequestInit).body));
+
+      assert({
+        given: 'a dirty root-scope file, saved',
+        should: 'POST without projectName/branchName, matching the root-scope read',
+        actual: { projectName: body.projectName, branchName: body.branchName },
+        expected: { projectName: undefined, branchName: undefined },
+      });
+    });
+
+    test('Cmd/Ctrl-S saves the dirty draft', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+
+      await act(async () => {
+        fireEvent.keyDown(document, { key: 's', ctrlKey: true });
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        if (vi.mocked(fetchWithAuth).mock.calls.length < 2) throw new Error('not saved yet');
+      });
+
+      assert({
+        given: 'a dirty draft and a Ctrl-S keypress',
+        should: 'trigger the same save POST as clicking Save, and prevent the browser default',
+        actual: {
+          fetches: vi.mocked(fetchWithAuth).mock.calls.length,
+          method: (vi.mocked(fetchWithAuth).mock.calls[1][1] as RequestInit).method,
+        },
+        expected: { fetches: 2, method: 'POST' },
+      });
+    });
+
+    test('a 403 save failure toasts the edit-access copy and leaves the draft dirty', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ error: "You don't have edit access to this machine", reason: 'forbidden' }, 403));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (vi.mocked(toast.error).mock.calls.length === 0) throw new Error('not toasted yet');
+      });
+
+      assert({
+        given: 'a save rejected with 403',
+        should: 'toast the edit-access copy and leave the draft dirty',
+        actual: {
+          toastMessage: vi.mocked(toast.error).mock.calls[0]?.[0],
+          stillDirty: screen.queryByTitle('Unsaved changes') !== null,
+        },
+        expected: { toastMessage: "You don't have edit access to this machine", stillDirty: true },
+      });
+    });
+
+    test('a 413 save failure toasts the too-large copy', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ error: 'File is too large to upload', reason: 'too_large' }, 413));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (vi.mocked(toast.error).mock.calls.length === 0) throw new Error('not toasted yet');
+      });
+
+      assert({
+        given: 'a save rejected with 413',
+        should: 'toast the too-large copy',
+        actual: vi.mocked(toast.error).mock.calls[0]?.[0],
+        expected: 'File is too large to upload',
+      });
+    });
+
+    test("a save failure for any other reason toasts the route's own error text", async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ error: 'Failed to complete the operation on the machine', reason: 'exec_failed' }, 502));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (vi.mocked(toast.error).mock.calls.length === 0) throw new Error('not toasted yet');
+      });
+
+      assert({
+        given: 'a save rejected for a reason other than 403/413',
+        should: "toast the route's own error text unmodified",
+        actual: vi.mocked(toast.error).mock.calls[0]?.[0],
+        expected: 'Failed to complete the operation on the machine',
+      });
+    });
+
+    test('registers with useEditingStore while dirty and releases the same session id after save', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => {
+        if (editingStore.startEditing.mock.calls.length === 0) throw new Error('not registered yet');
+      });
+      const sessionId = editingStore.startEditing.mock.calls[0][0];
+
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (!editingStore.endEditing.mock.calls.some((c) => c[0] === sessionId)) throw new Error('not released yet');
+      });
+
+      assert({
+        given: "a draft that went dirty (useEditingStore registration, repo rule) then was saved",
+        should: 'register a session while dirty and release that SAME session id once the save cleans the draft',
+        actual: {
+          registeredWhileDirty: editingStore.startEditing.mock.calls.some((c) => c[0] === sessionId && c[1] === 'document'),
+          releasedAfterSave: editingStore.endEditing.mock.calls.some((c) => c[0] === sessionId),
+        },
+        expected: { registeredWhileDirty: true, releasedAfterSave: true },
+      });
+    });
+
+    test('the reload button confirms before discarding a dirty draft, and declining keeps it', async () => {
+      vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Unsaved changes'));
+
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await userEvent.click(screen.getByTitle('Reload file'));
+
+      assert({
+        given: 'a dirty draft, Reload clicked, but the discard confirm declined',
+        should: 'ask for confirmation and skip the re-fetch, leaving the dirty draft intact',
+        actual: {
+          confirmed: confirmSpy.mock.calls.length,
+          fetches: vi.mocked(fetchWithAuth).mock.calls.length,
+          stillDirty: screen.queryByTitle('Unsaved changes') !== null,
+        },
+        expected: { confirmed: 1, fetches: 1, stillDirty: true },
+      });
+
+      confirmSpy.mockRestore();
+    });
+
+    test('a confirmed reload discards the dirty draft and re-fetches', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ content: 'reloaded from disk', encoding: 'utf8', truncated: false }));
+      renderPane('src/index.ts', BRANCH_SCOPE);
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Unsaved changes'));
+
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await userEvent.click(screen.getByTitle('Reload file'));
+      await waitFor(() => screen.getByText('reloaded from disk'));
+
+      assert({
+        given: 'a dirty draft, Reload clicked, discard confirmed',
+        should: 're-fetch the file and clear the dirty state',
+        actual: {
+          confirmed: confirmSpy.mock.calls.length,
+          value: screen.getByTestId('monaco').textContent,
+          stillDirty: screen.queryByTitle('Unsaved changes') !== null,
+        },
+        expected: { confirmed: 1, value: 'reloaded from disk', stillDirty: false },
+      });
+
+      confirmSpy.mockRestore();
     });
   });
 });
