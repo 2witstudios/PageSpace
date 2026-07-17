@@ -46,12 +46,13 @@ const treeListings: string[] = [];
 
 vi.mock('../workspace/MachineFileTree', () => ({
   default: function MachineFileTreeStub({
-    branchName,
+    scope,
     onSelectFile,
   }: {
-    branchName: string;
+    scope: { kind: 'root' } | { kind: 'branch'; projectName: string; branchName: string };
     onSelectFile?: (path: string) => void;
   }) {
+    const branchName = scope.kind === 'branch' ? scope.branchName : 'root';
     useEffect(() => {
       treeListings.push(branchName);
     }, [branchName]);
@@ -65,8 +66,16 @@ vi.mock('../workspace/MachineFileTree', () => ({
 
 // Stub the main pane so FilesTab's composition (which file, which branch) is what's asserted.
 vi.mock('./FilesFilePane', () => ({
-  default: ({ path, branchName }: { path: string; branchName: string }) => (
-    <div data-testid="file-pane">pane:{branchName}:{path}</div>
+  default: ({
+    path,
+    scope,
+  }: {
+    path: string;
+    scope: { kind: 'root' } | { kind: 'branch'; projectName: string; branchName: string };
+  }) => (
+    <div data-testid="file-pane">
+      pane:{scope.kind === 'branch' ? scope.branchName : 'root'}:{path}
+    </div>
   ),
 }));
 

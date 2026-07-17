@@ -1,33 +1,42 @@
 "use client";
 
 /**
- * MachineFileTree — the Code tab's inner-sidebar file explorer over one branch
- * checkout's working tree (Machine page rebuild, Phase 2).
+ * MachineFileTree — the Files tab's file explorer over a Machine's filesystem:
+ * either its own root Sprite (`/workspace`) or one project/branch checkout
+ * within it, per `FilesScope` (Machine Files Manager epic, Part A).
  *
  * Sibling of MachineTree.tsx and follows its plain border-border inner-sidebar
  * row conventions (this is NOT one of the app's liquid-glass sidebars). Reads
  * `/api/machines/files` (mode=list). Each directory fetches its immediate
- * children only when its listing first becomes visible — a real checkout can be
- * large, so there is deliberately no eager whole-tree walk on mount — and
+ * children only when its listing first becomes visible — a real filesystem can
+ * be large, so there is deliberately no eager whole-tree walk on mount — and
  * listings are cached per path, so collapsing and re-expanding a folder never
  * refetches. Expansion state lives in one root-level set keyed by path (not in
  * per-node component state), so collapsing a parent does not discard which of
- * its descendants were expanded. The working tree is LIVE (agent terminals
- * write and delete files), so the header offers a manual refresh that drops the
- * whole cache while keeping expansion — every visible directory then reloads.
- * Cache and expansion also reset when the terminal/project/branch identity
- * changes, via a React key remount.
+ * its descendants were expanded. The filesystem is LIVE (agent terminals write
+ * and delete files), so the header offers a manual refresh that drops the whole
+ * cache while keeping expansion — every visible directory then reloads. Cache
+ * and expansion also reset when the machine or scope identity changes, via a
+ * React key remount keyed on `filesScopeKey`.
  *
- * Presentation-only about selection: file rows report their checkout-relative
- * path through `onSelectFile`; the Code tab owns what selection does (e.g.
- * driving the Monaco read-only viewer).
+ * Every path handled here — cache keys, `onSelectFile`, `selectedPath` — is
+ * relative to the scope root: `/workspace` for root scope, the checkout root
+ * for branch scope.
+ *
+ * Row visuals match the drive sidebar's `PageTreeItem` (the canonical
+ * PageSpace filesystem look) — depth-indented rows, a single rotating chevron
+ * in the indent gutter, `text-primary` folder icons — without importing it
+ * (it's welded to dnd-kit/context-menus/multi-select).
+ *
+ * Presentation-only about selection: file rows report their scope-relative
+ * path through `onSelectFile`; the Files tab owns what selection does (e.g.
+ * driving the file pane).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MachineDirectoryEntry } from '@pagespace/lib/services/sandbox/machine-fs';
 import { cn } from '@/lib/utils';
 import {
-  ChevronDown,
   ChevronRight,
   File as FileIcon,
   Folder,
@@ -38,14 +47,14 @@ import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { SidebarLoading, SidebarNotice } from '../tabs/tab-states';
 import { readErrorBody } from '../tabs/checkout-states';
+import { type FilesScope, filesScopeKey, filesScopeSearchParams } from '../tabs/files-scope';
 
 export interface MachineFileTreeProps {
   machineId: string;
-  projectName: string;
-  branchName: string;
-  /** Called with the clicked file's path RELATIVE to the branch checkout root (e.g. `src/index.ts`). Omit to render files as non-interactive rows. */
+  scope: FilesScope;
+  /** Called with the clicked file's path RELATIVE to the scope root (e.g. `src/index.ts`). Omit to render files as non-interactive rows. */
   onSelectFile?: (path: string) => void;
-  /** Checkout-relative path of the file the parent currently shows, for the selected-row highlight. */
+  /** Scope-relative path of the file the parent currently shows, for the selected-row highlight. */
   selectedPath?: string | null;
 }
 
@@ -79,16 +88,16 @@ const readErrorMessage = (body: unknown): string | null => readErrorBody(body).e
 
 export default function MachineFileTree(props: MachineFileTreeProps) {
   // Remount on identity change so the per-path cache and all expansion state
-  // reset together — a different branch is a different tree.
+  // reset together — a different machine or scope is a different tree.
   return (
     <FileTreeRoot
-      key={`${props.machineId}\u0000${props.projectName}\u0000${props.branchName}`}
+      key={`${props.machineId}\u0000${filesScopeKey(props.scope)}`}
       {...props}
     />
   );
 }
 
-function FileTreeRoot({ machineId, projectName, branchName, onSelectFile, selectedPath }: MachineFileTreeProps) {
+function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath }: MachineFileTreeProps) {
   // The ref is the canonical cache — synchronously readable, so two renders
   // racing the same path (e.g. a collapse/re-expand while the listing is still
   // in flight) can never issue a duplicate fetch. The state map is a snapshot
@@ -109,7 +118,7 @@ function FileTreeRoot({ machineId, projectName, branchName, onSelectFile, select
       if (existing !== undefined && existing.status !== 'error') return;
       setDirectoryState(path, { status: 'loading' });
       try {
-        const search = new URLSearchParams({ machineId, projectName, branchName });
+        const search = filesScopeSearchParams(machineId, scope);
         if (path.length > 0) search.set('path', path);
         const res = await fetchWithAuth(`/api/machines/files?${search.toString()}`);
         if (!res.ok) {
@@ -129,7 +138,13 @@ function FileTreeRoot({ machineId, projectName, branchName, onSelectFile, select
         });
       }
     },
-    [machineId, projectName, branchName, setDirectoryState],
+    // Safe without an inline-constructed scope: `scope` is FilesTab state with
+    // stable identity across re-renders, AND the key on the exported component
+    // remounts this whole tree whenever the scope changes — so this callback
+    // never needs to notice a scope change mid-life, only mount fresh with the
+    // new one. A scope built fresh on every render here would defeat that and
+    // cause a refetch loop.
+    [machineId, scope, setDirectoryState],
   );
 
   const toggleExpanded = useCallback((path: string) => {
@@ -171,7 +186,7 @@ function FileTreeRoot({ machineId, projectName, branchName, onSelectFile, select
           <RefreshCw className="size-3" />
         </Button>
       </div>
-      <DirectoryChildren path="" ctx={ctx} />
+      <DirectoryChildren path="" depth={0} ctx={ctx} />
     </div>
   );
 }
@@ -181,8 +196,11 @@ function FileTreeRoot({ machineId, projectName, branchName, onSelectFile, select
  * and every expanded folder. Fetch-on-render: becoming visible with no cache
  * entry is what triggers the (lazy) load, which also makes refresh trivial —
  * clearing the cache reloads exactly the directories currently on screen.
+ * `depth` is the indent level of the ENTRIES rendered here (one deeper than
+ * the directory whose children these are), threaded down instead of nested
+ * `pl-*` wrapper divs, matching PageTreeItem's flat-indent convention.
  */
-function DirectoryChildren({ path, ctx }: { path: string; ctx: TreeContext }) {
+function DirectoryChildren({ path, depth, ctx }: { path: string; depth: number; ctx: TreeContext }) {
   const { loadDirectory } = ctx;
   const state = ctx.directories.get(path);
   const needsLoad = state === undefined;
@@ -213,16 +231,26 @@ function DirectoryChildren({ path, ctx }: { path: string; ctx: TreeContext }) {
       {state.entries.map((entry) => {
         const entryPath = path.length > 0 ? `${path}/${entry.name}` : entry.name;
         return entry.type === 'directory' ? (
-          <DirectoryNode key={entry.name} name={entry.name} path={entryPath} ctx={ctx} />
+          <DirectoryNode key={entry.name} name={entry.name} path={entryPath} depth={depth} ctx={ctx} />
         ) : (
-          <FileNode key={entry.name} name={entry.name} path={entryPath} ctx={ctx} />
+          <FileNode key={entry.name} name={entry.name} path={entryPath} depth={depth} ctx={ctx} />
         );
       })}
     </>
   );
 }
 
-function DirectoryNode({ name, path, ctx }: { name: string; path: string; ctx: TreeContext }) {
+function DirectoryNode({
+  name,
+  path,
+  depth,
+  ctx,
+}: {
+  name: string;
+  path: string;
+  depth: number;
+  ctx: TreeContext;
+}) {
   const expanded = ctx.expandedPaths.has(path);
 
   return (
@@ -232,30 +260,40 @@ function DirectoryNode({ name, path, ctx }: { name: string; path: string; ctx: T
         onClick={() => ctx.toggleExpanded(path)}
         aria-expanded={expanded}
         data-testid="file-tree-dir-toggle"
-        className="flex w-full min-w-0 items-center gap-1 rounded-sm py-1 pr-1 text-left hover:bg-accent/50"
+        className="relative flex w-full min-w-0 items-center rounded-lg py-1.5 pr-1 text-left transition-all hover:bg-gray-200 dark:hover:bg-gray-700"
+        style={{ paddingLeft: `${depth * 8 + 16}px` }}
       >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            'absolute h-3 w-3 shrink-0 text-gray-500 transition-transform duration-200',
+            expanded && 'rotate-90',
+          )}
+          style={{ left: `${depth * 8}px` }}
+        />
         {expanded ? (
-          <ChevronDown className="size-3.5 shrink-0" />
+          <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
         ) : (
-          <ChevronRight className="size-3.5 shrink-0" />
+          <Folder className="h-4 w-4 shrink-0 text-primary" />
         )}
-        {expanded ? (
-          <FolderOpen className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <Folder className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-        <span className="truncate">{name}</span>
+        <span className="ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100">{name}</span>
       </button>
-      {expanded && (
-        <div className="pl-4">
-          <DirectoryChildren path={path} ctx={ctx} />
-        </div>
-      )}
+      {expanded && <DirectoryChildren path={path} depth={depth + 1} ctx={ctx} />}
     </div>
   );
 }
 
-function FileNode({ name, path, ctx }: { name: string; path: string; ctx: TreeContext }) {
+function FileNode({
+  name,
+  path,
+  depth,
+  ctx,
+}: {
+  name: string;
+  path: string;
+  depth: number;
+  ctx: TreeContext;
+}) {
   const selected = ctx.selectedPath === path;
   return (
     <button
@@ -264,16 +302,15 @@ function FileNode({ name, path, ctx }: { name: string; path: string; ctx: TreeCo
       disabled={ctx.onSelectFile === undefined}
       aria-current={selected ? 'true' : undefined}
       data-testid="file-tree-file"
+      style={{ paddingLeft: `${depth * 8 + 16}px` }}
       className={cn(
-        'flex w-full min-w-0 items-center gap-1 rounded-sm py-1 pr-1 text-left hover:bg-accent/50',
-        selected && 'bg-accent',
+        'flex w-full min-w-0 items-center rounded-lg py-1.5 pr-1 text-left transition-all',
+        selected ? 'bg-gray-200 dark:bg-gray-700' : 'hover:bg-gray-200 dark:hover:bg-gray-700',
         ctx.onSelectFile === undefined && 'cursor-default',
       )}
     >
-      {/* Spacer keeps file labels aligned with sibling folder labels (which spend this slot on a chevron). */}
-      <span className="size-3.5 shrink-0" aria-hidden="true" />
-      <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="truncate">{name}</span>
+      <FileIcon className="h-4 w-4 shrink-0 text-gray-500" />
+      <span className="ml-1.5 truncate text-sm font-medium text-gray-900 dark:text-gray-100">{name}</span>
     </button>
   );
 }
