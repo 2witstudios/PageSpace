@@ -61,6 +61,36 @@ describe('withAdvisoryLock', () => {
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 
+  // pg's release(err) only destroys the connection when handed an actual Error — a raw driver
+  // rejection value (drivers CAN reject with strings/objects) passed through unwrapped would be
+  // truthy enough to look intentional but is not guaranteed to trip pg's destroy path. The
+  // helper must wrap it so the destroy-instead-of-pool decision (and the operator-visible log)
+  // hold regardless of what the driver rejected with.
+  it('given the unlock query rejects with a non-Error value, should wrap it in an Error (preserving the original text) and still destroy the connection', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce('unlock rejected as a plain string'),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'ok');
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'ok' });
+    expect(client.release).toHaveBeenCalledTimes(1);
+    const releasedWith = client.release.mock.calls[0][0];
+    expect(releasedWith).toBeInstanceOf(Error);
+    expect((releasedWith as Error).message).toContain('unlock rejected as a plain string');
+    // The recurring-failure signal must stay operator-visible even for non-Error rejections.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Advisory unlock failed'),
+      'unlock rejected as a plain string',
+    );
+    errorSpy.mockRestore();
+  });
+
   // Leaf 5.6/5.7 (triaged D fix, fmfmzw4g4gh6u6q9cjt7ylne): the lock connection's own failure
   // must be a STRUCTURALLY distinct, resolved outcome — never a thrown/rejected promise — so a
   // caller can tell "the lock machinery is broken" apart from "fn threw" without guessing. Before

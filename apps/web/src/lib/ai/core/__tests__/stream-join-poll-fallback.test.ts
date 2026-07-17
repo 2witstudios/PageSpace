@@ -177,6 +177,132 @@ describe('startStreamJoinPollFallback', () => {
     expect(mockFetchWithAuth).not.toHaveBeenCalled();
   });
 
+  // The abort can land at ANY await point inside an in-flight tick, not just between ticks.
+  // Each suspension point re-checks the signal so a snapshot from a tick that outlived its
+  // caller (e.g. stream_complete arrived and the DB-reload path already took over) can never
+  // clobber the authoritative final content.
+  describe('signal aborts mid-tick (at each suspension point)', () => {
+    it('given the signal aborts while the fetch is in flight, should discard the resolved response without calling onSnapshot', async () => {
+      const controller = new AbortController();
+      mockFetchWithAuth.mockImplementation(async () => {
+        controller.abort();
+        return okResponse([{ messageId: 'msg-1', parts: [{ type: 'text', text: 'stale' }] }]);
+      });
+      const onSnapshot = vi.fn();
+      const onNotFound = vi.fn();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, onNotFound);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(onNotFound).not.toHaveBeenCalled();
+    });
+
+    it('given the signal aborts while the body json is being read, should discard the parsed payload without calling onSnapshot or onNotFound', async () => {
+      const controller = new AbortController();
+      mockFetchWithAuth.mockResolvedValue({
+        ok: true,
+        json: async () => {
+          controller.abort();
+          // A payload with NO matching row — if the post-json abort check were missing, this
+          // would wrongly fire onNotFound after the caller already moved on.
+          return { streams: [] };
+        },
+      });
+      const onSnapshot = vi.fn();
+      const onNotFound = vi.fn();
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, onNotFound);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onSnapshot).not.toHaveBeenCalled();
+      expect(onNotFound).not.toHaveBeenCalled();
+    });
+
+    it('given the abort lands before the clearInterval listener is even registered, a later interval tick should return at the entry guard without fetching', async () => {
+      const controller = new AbortController();
+      // Aborting synchronously INSIDE the first fetch call happens before
+      // startStreamJoinPollFallback reaches its own addEventListener('abort') line, so the
+      // interval is never cleared by the listener — the per-tick entry guard is the only thing
+      // standing between that orphaned interval and a fetch against an aborted signal.
+      mockFetchWithAuth.mockImplementation(async () => {
+        controller.abort();
+        return okResponse([{ messageId: 'msg-1', parts: [] }]);
+      });
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+
+      mockFetchWithAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS * 3);
+
+      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given the fetch rejects because the abort landed mid-flight, should stay silent (no retry warning for an intentional stop)', async () => {
+      const controller = new AbortController();
+      mockFetchWithAuth.mockImplementation(async () => {
+        controller.abort();
+        throw new Error('socket closed');
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+  });
+
+  // fetch rejects DOMException-style AbortErrors from cancellation paths that don't flip THIS
+  // signal (e.g. the auth wrapper's own internal timeout/retry cancellation). Not a failure
+  // worth warning about — but also not a reason to stop: the interval keeps polling.
+  it('given a tick rejects with an AbortError while the signal is NOT aborted, should stay silent and keep polling on the next interval', async () => {
+    mockFetchWithAuth
+      .mockRejectedValueOnce(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }))
+      .mockResolvedValueOnce(okResponse([{ messageId: 'msg-1', parts: [{ type: 'text', text: 'recovered' }] }]));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const controller = new AbortController();
+    const onSnapshot = vi.fn();
+
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, onSnapshot, vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+    expect(onSnapshot).toHaveBeenCalledWith([{ type: 'text', text: 'recovered' }]);
+    warnSpy.mockRestore();
+  });
+
+  it('given a tick rejects with a non-Error value, should warn and keep polling (not an abort, just a broken tick)', async () => {
+    mockFetchWithAuth
+      .mockRejectedValueOnce('a rejected string, not an Error instance')
+      .mockResolvedValueOnce(okResponse([{ messageId: 'msg-1', parts: [] }]));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const controller = new AbortController();
+
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), vi.fn());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(STREAM_JOIN_POLL_INTERVAL_MS);
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it('given a response body with no streams field at all, should treat it as row-gone (terminal) rather than crashing', async () => {
+    mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({}) });
+    const controller = new AbortController();
+    const onNotFound = vi.fn();
+
+    startStreamJoinPollFallback('page-a', 'msg-1', controller.signal, vi.fn(), onNotFound);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onNotFound).toHaveBeenCalledTimes(1);
+  });
+
   it('given a poll tick returns a non-ok response, should not call onSnapshot but should still tick again', async () => {
     mockFetchWithAuth
       .mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) })

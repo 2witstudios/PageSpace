@@ -127,7 +127,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockInsert.mockReturnValue({ values: mockInsertValues });
   mockInsertValues.mockReturnValue({ onConflictDoUpdate: mockOnConflictDoUpdate });
-  mockOnConflictDoUpdate.mockResolvedValue(undefined);
+  // The page-chat chain ends `.returning(...)` (reports whether the CAS wrote — the mention
+  // gate needs it); the global chain awaits the upsert directly and ignores this shape.
+  mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
+  mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
+  mockSelect.mockReturnValue({ from: mockSelectFrom });
+  mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
+  // Default the mention-gate lookups to "page gone" so tests not about notifications never
+  // trip the notify path.
+  mockSelectWhere.mockResolvedValue([]);
+  mockNotifyMentionedUsers.mockResolvedValue(undefined);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   // Defaults to "one row actually settled" (rowCount: 1) — the common case. Tests exercising the
   // zero-row race (a concurrent reap already settled this row) override this per-case.
@@ -364,7 +373,7 @@ describe('materializeInterruptedStream — settling the session row', () => {
   });
 
   it('does not settle the session row when the message write fails', async () => {
-    mockOnConflictDoUpdate.mockRejectedValue(new Error('db down'));
+    mockReturning.mockRejectedValue(new Error('db down'));
 
     await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
 
@@ -385,7 +394,7 @@ describe('materializeInterruptedStream — settling the session row', () => {
   });
 
   it('logs a non-Error message-write rejection without throwing, and reports false', async () => {
-    mockOnConflictDoUpdate.mockRejectedValue('a rejected string, not an Error instance');
+    mockReturning.mockRejectedValue('a rejected string, not an Error instance');
 
     await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
     expect(mockLoggerWarn).toHaveBeenCalledWith(
@@ -418,7 +427,7 @@ describe('materializeInterruptedStream — broadcast', () => {
   });
 
   it('does not broadcast when the message write failed (nothing was actually materialized)', async () => {
-    mockOnConflictDoUpdate.mockRejectedValue(new Error('db down'));
+    mockReturning.mockRejectedValue(new Error('db down'));
 
     await materializeInterruptedStream(pageRow());
 
@@ -448,7 +457,6 @@ describe('materializeInterruptedStream — broadcast', () => {
 
 describe('materializeInterruptedStream — never throws', () => {
   it('resolves (with false, since the session row never settled) even when every DB call rejects', async () => {
-    mockOnConflictDoUpdate.mockResolvedValue(undefined);
     mockUpdateWhere.mockRejectedValue(new Error('db down'));
     mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
 
