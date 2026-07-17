@@ -39,12 +39,10 @@ import {
   loadAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
-import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
-import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useSendHandoff, useCacheMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -445,6 +443,32 @@ const SidebarChatTab: React.FC = () => {
     triggeredBy: mirrorTriggeredBy,
   });
 
+  // Shared store-first message actions (F2/F9): actions reason over SETTLED rows
+  // only — a synthesized live-stream row must never reach retry/delete's
+  // server-side DELETEs (the live bubble's verb is Stop).
+  const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
+
+  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
+    agentId: selectedAgent?.id || null,
+    conversationId: currentConversationId,
+    renderedMessages,
+    isOwnSendLive,
+    setMessages,
+    regenerate,
+  });
+
+  // Display ids come from the RENDERED list (affordance placement + streaming
+  // animation are display concerns; the actions above use the settled set).
+  const lastAssistantMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'assistant')?.id,
+    [plainMessages],
+  );
+  const lastUserMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'user')?.id,
+    [plainMessages],
+  );
+
+
   // ============================================
   // Centralized Assistant Settings (from store)
   // ============================================
@@ -768,12 +792,24 @@ const SidebarChatTab: React.FC = () => {
     buildSidebarChatRequestBody,
   ]);
 
+  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
+  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
+  // question on a conversation opened from history/reload would silently do nothing.
+  // Seed the settled rendered rows first (same imperative, action-scoped write as the
+  // retry seed; skipped while our own send is live).
+  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
+    if (!isOwnSendLive) {
+      setMessages(stableMessages);
+    }
+    return addToolResult(args);
+  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
+
   // plainMessages (store-rendered): "answerable" is decided by the conversation's
   // LAST message, and remote edits/deletes/messages update the store, not useChat.
   const askUserAnswering = useAskUserAnswering({
     messages: plainMessages,
     status,
-    addToolResult,
+    addToolResult: seededAddToolResult,
     wrapSend,
     buildBody: buildAskUserAnswerBody,
   });
@@ -786,59 +822,6 @@ const SidebarChatTab: React.FC = () => {
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
-
-  const {
-    handleEdit: handleEditBase,
-    handleDelete: handleDeleteBase,
-    handleRetry: handleRetryBase,
-    lastAssistantMessageId,
-    lastUserMessageId,
-  } = useMessageActions({
-    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
-    isOwnStreamLive: isStreaming || activeStream?.isOwn === true,
-    agentId: selectedAgent?.id || null,
-    conversationId: currentConversationId,
-    // The rendered view — lastAssistantMessageId/lastUserMessageId must reflect
-    // what the user sees, not useChat's bookkeeping copy.
-    messages: plainMessages,
-    setMessages,
-    regenerate,
-  });
-
-  // Cache writes after the base call resolves (network-confirmed) — the sender's own
-  // tab never receives its own edited/deleted broadcast back. Same shape as AiChatView.
-  const handleEdit = useCallback(async (messageId: string, newContent: string) => {
-    const original = plainMessages.find((m) => m.id === messageId);
-    await handleEditBase(messageId, newContent);
-    if (!currentConversationId || !original) return;
-    const payload: MessageEditPayload = {
-      messageId,
-      parts: original.parts.map((p) => (p.type === 'text' ? { ...p, text: newContent } : p)),
-      editedAt: new Date(),
-    };
-    conversationMessagesActions.applyEdit(currentConversationId, payload);
-  }, [handleEditBase, plainMessages, currentConversationId]);
-
-  const handleDelete = useCallback(async (messageId: string) => {
-    await handleDeleteBase(messageId);
-    if (!currentConversationId) return;
-    conversationMessagesActions.applyDelete(currentConversationId, messageId);
-  }, [handleDeleteBase, currentConversationId]);
-
-  const handleRetry = useCallback(async () => {
-    // regenerate() indexes into useChat's OWN local array, and post-cutover nothing
-    // keeps that array in sync with loaded history — seed it from the rendered list
-    // at the moment of the action (imperative, user-action-scoped; not an effect
-    // syncing containers, so rail 11 stands). Skipped while our own send is live:
-    // the array is the mirror's read source then.
-    if (!(isStreaming || activeStream?.isOwn === true)) {
-      setMessages(plainMessages);
-    }
-    const toRemove = getAssistantMessagesAfterLastUser(plainMessages).map((m) => m.id);
-    await handleRetryBase();
-    if (!currentConversationId) return;
-    for (const id of toRemove) conversationMessagesActions.applyDelete(currentConversationId, id);
-  }, [handleRetryBase, plainMessages, currentConversationId, isStreaming, activeStream?.isOwn, setMessages]);
 
   // NO heldStreamMsgIdRef (PR 5A): the stream's assistant messageId was latched here on the
   // first 'streaming' render and held so Stop could name it after the surface moved on. The store

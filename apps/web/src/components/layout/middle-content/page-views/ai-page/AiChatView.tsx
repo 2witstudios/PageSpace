@@ -34,13 +34,13 @@ import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { useRenderedMessages } from '@/hooks/useRenderedMessages';
 import { useActiveStream, useConversationActiveStream, getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
 import { useStopStream } from '@/hooks/useStopStream';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
-import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
@@ -49,7 +49,7 @@ import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 // Shared hooks and components
 import {
   useMCPTools,
-  useMessageActions,
+  useCacheMessageActions,
   useProviderSettings,
   useConversations,
   useConversationIdentity,
@@ -649,68 +649,30 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const isLoading = !isInitialized || isLoadingMessages;
 
   // ============================================
-  // MESSAGE ACTIONS (shared hook)
+  // MESSAGE ACTIONS — shared store-first wrapper (F2/F9, PR #2098 review): actions
+  // reason over SETTLED rows only, so a synthesized live-stream row can never reach
+  // retry/delete's server-side DELETEs; cache writes land after the base call
+  // resolves. One implementation with GlobalAssistantView and SidebarChatTab.
   // ============================================
-  // useMessageActions is SHARED across AiChatView/GlobalAssistantView/SidebarChatTab;
-  // only AiChatView is cut over to store-first rendering in this PR, so it is left
-  // untouched (its internal optimistic writes still target useChat's setMessages,
-  // which no longer renders here but stays correct for the other, not-yet-cut-over
-  // surfaces). `messages: plainMessages` feeds it the actual rendered view, so
-  // `lastAssistantMessageId`/`lastUserMessageId` and its internal lookups reflect
-  // what the user sees, not useChat's separate bookkeeping copy.
-  const {
-    handleEdit: handleEditBase,
-    handleDelete: handleDeleteBase,
-    handleRetry: handleRetryBase,
-    lastAssistantMessageId,
-    lastUserMessageId,
-  } = useMessageActions({
-    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
-    isOwnStreamLive: isStreaming || activeStream?.isOwn === true,
+  const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: page.id,
     conversationId: currentConversationId,
-    messages: plainMessages,
+    renderedMessages,
+    isOwnSendLive: isStreaming || activeStream?.isOwn === true,
     setMessages,
     regenerate,
   });
 
-  // The sender's own tab never receives its own chat:message_edited/chat:message_deleted
-  // broadcast back (useChannelStreamSocket filters on isOwnStream before invoking
-  // onMessageEdited/onMessageDeleted — see below) — so without an explicit store write
-  // here, editing or deleting your own message would show no visual change at all.
-  // Applied only AFTER the base call resolves (network-confirmed), so a failure — which
-  // useMessageActions already rolls its own copy back for and rethrows — leaves the
-  // store untouched too.
-  const handleEdit = useCallback(async (messageId: string, newContent: string) => {
-    const original = plainMessages.find((m) => m.id === messageId);
-    await handleEditBase(messageId, newContent);
-    if (!currentConversationId || !original) return;
-    const payload: MessageEditPayload = {
-      messageId,
-      parts: original.parts.map((p) => (p.type === 'text' ? { ...p, text: newContent } : p)),
-      editedAt: new Date(),
-    };
-    conversationMessagesActions.applyEdit(currentConversationId, payload);
-  }, [handleEditBase, plainMessages, currentConversationId]);
-
-  const handleDelete = useCallback(async (messageId: string) => {
-    await handleDeleteBase(messageId);
-    if (!currentConversationId) return;
-    conversationMessagesActions.applyDelete(currentConversationId, messageId);
-  }, [handleDeleteBase, currentConversationId]);
-
-  const handleRetry = useCallback(async () => {
-    // Same computation useMessageActions.handleRetry runs internally (against
-    // the same plainMessages source) to decide which rows to DELETE
-    // server-side — shared via getAssistantMessagesAfterLastUser so the two
-    // call sites can't drift, computed here BEFORE the base call so we know
-    // what to remove from the store once those deletes (and the regenerate()
-    // call) have gone out.
-    const toRemove = getAssistantMessagesAfterLastUser(plainMessages).map((m) => m.id);
-    await handleRetryBase();
-    if (!currentConversationId) return;
-    for (const id of toRemove) conversationMessagesActions.applyDelete(currentConversationId, id);
-  }, [handleRetryBase, plainMessages, currentConversationId]);
+  // Display ids come from the RENDERED list (affordance placement + streaming
+  // animation are display concerns; the actions above use the settled set).
+  const lastAssistantMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'assistant')?.id,
+    [plainMessages],
+  );
+  const lastUserMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'user')?.id,
+    [plainMessages],
+  );
 
   // ============================================
   // INITIALIZATION EFFECTS
@@ -928,9 +890,18 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             const i = prev.findIndex((m) => m.id === messageId);
             return i === -1 ? [...prev, synthesized] : prev.map((m, j) => (j === i ? synthesized : m));
           });
+          // F1 (PR #2098 review): an OWN reply's commit proves the user rows that
+          // triggered it are persisted — promote them into confirmed messages FIRST,
+          // so the reply appends after them and the question can never render below
+          // the answer (the selector orders confirmed before optimistic).
+          conversationMessagesActions.promoteOptimisticSends(stream.conversationId);
         }
         if (currentConversationId) {
           conversationMessagesActions.applyConfirmedMessage(currentConversationId, synthesized);
+          // F6: the socket broadcast can outrace the SSE multicast's final frames, so
+          // the committed parts may be truncated. Background snapshot heal — no
+          // loading-state flip, generation-safe, best-effort.
+          void refreshConversationSnapshot(page.id, currentConversationId);
         }
         return;
       }

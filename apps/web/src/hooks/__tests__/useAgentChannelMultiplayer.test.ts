@@ -63,6 +63,15 @@ vi.mock('@/lib/ai/core/stream-abort-client', () => ({
   abortActiveStreamByMessageId: mockAbortByMessageId,
 }));
 
+const { mockLoadAgentConversationMessages, mockRefreshConversationSnapshot } = vi.hoisted(() => ({
+  mockLoadAgentConversationMessages: vi.fn().mockResolvedValue(undefined),
+  mockRefreshConversationSnapshot: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/hooks/conversationMessagesLoaders', () => ({
+  loadAgentConversationMessages: mockLoadAgentConversationMessages,
+  refreshConversationSnapshot: mockRefreshConversationSnapshot,
+}));
+
 // Real Zustand stores imported AFTER mocks. useConversationMessagesStore is REAL:
 // the hook's message callbacks are cache writes now (PR 5B, leaf 5.6), and the
 // behavior under test is what lands in the cache.
@@ -194,7 +203,7 @@ describe('useAgentChannelMultiplayer', () => {
       expect(cacheMessages('conv-different')).toEqual([]);
     });
 
-    it('given a completion with NO usable store entry for the active conversation (joinFailed / zero parts), should reload via the surface-provided loadConversation', () => {
+    it('given a completion with NO usable store entry for the active conversation (joinFailed / zero parts), should reload via the RAW cache loader — never the surface loadConversation, which also sets identity and pushes the URL', () => {
       pendingStreams.current = new Map([[ 'msg-empty', streamFixture({ messageId: 'msg-empty', parts: [] }) ]]);
       const loadConversation = vi.fn();
 
@@ -204,8 +213,53 @@ describe('useAgentChannelMultiplayer', () => {
         capturedChannel.options?.onStreamComplete?.('msg-empty', 'conv-active');
       });
 
-      expect(loadConversation).toHaveBeenCalledWith('conv-active');
+      expect(mockLoadAgentConversationMessages).toHaveBeenCalledWith(AGENT.id, 'conv-active');
+      expect(loadConversation).not.toHaveBeenCalled();
       expect(cacheMessages('conv-active')).toEqual([]);
+    });
+
+    it('given an OWN completion, should promote pending optimistic sends BEFORE the commit so the question renders above the reply (F1)', () => {
+      useConversationMessagesStore.getState().addOptimisticSend('conv-active', {
+        id: 'u-sent', role: 'user', parts: [{ type: 'text', text: 'my question' }],
+      } as UIMessage);
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-done');
+      });
+
+      expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['u-sent', 'msg-done']);
+      expect(useConversationMessagesStore.getState().getEntry('conv-active').optimisticSends).toEqual([]);
+    });
+
+    it("given ANOTHER TAB's completion, should NOT promote this tab's optimistic sends (a remote reply proves nothing about our rows)", () => {
+      useConversationMessagesStore.getState().addOptimisticSend('conv-active', {
+        id: 'u-unsent', role: 'user', parts: [{ type: 'text', text: 'still in flight' }],
+      } as UIMessage);
+      pendingStreams.current = new Map([[ 'msg-foreign', streamFixture({ messageId: 'msg-foreign', isOwn: false }) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-foreign');
+      });
+
+      expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['msg-foreign']);
+      expect(useConversationMessagesStore.getState().getEntry('conv-active').optimisticSends.map((m) => m.id)).toEqual(['u-unsent']);
+    });
+
+    it('given a completion commit, should fire the background snapshot heal (the socket broadcast can outrace the SSE tail — F6)', () => {
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-done');
+      });
+
+      expect(mockRefreshConversationSnapshot).toHaveBeenCalledWith(AGENT.id, 'conv-active');
     });
 
     it('given a zero-parts completion for a DIFFERENT conversation, should neither commit nor reload', () => {

@@ -8,6 +8,7 @@ import { applyConversationEdit } from '@/stores/conversationMessages/applyConver
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
+import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
 import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
@@ -28,6 +29,8 @@ interface ConversationMessagesState {
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
   /** Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's docblock. */
   applyConfirmedMessage: (conversationId: string, message: UIMessage) => void;
+  /** Promote optimistic sends into confirmed messages — call on OWN stream commit only (see promoteOptimisticSends). */
+  promoteOptimisticSends: (conversationId: string) => void;
   /**
    * Commits an already-fetched server message list as the conversation's new
    * loaded truth in one step (startLoad + applyLoad composed) — for callers
@@ -84,6 +87,10 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   applyConfirmedMessage: (conversationId, message) => {
     set((state) => ({ byConversationId: applyConfirmedMessage(state.byConversationId, { conversationId, message }) }));
+  },
+
+  promoteOptimisticSends: (conversationId) => {
+    set((state) => ({ byConversationId: promoteOptimisticSends(state.byConversationId, conversationId) }));
   },
 
   applyServerSnapshot: (conversationId, messages) => {

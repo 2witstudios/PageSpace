@@ -59,7 +59,7 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 // Shared hooks and components
 import {
   useMCPTools,
-  useMessageActions,
+  useCacheMessageActions,
   useProviderSettings,
   useChatTransport,
   useSendHandoff,
@@ -104,8 +104,6 @@ import {
   loadAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
-import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
-import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { createId } from '@paralleldrive/cuid2';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
@@ -531,71 +529,32 @@ const GlobalAssistantView: React.FC = () => {
   }, [currentConversationId, selectedAgent]);
 
   // ============================================
-  // MESSAGE ACTIONS (shared hook + cache wrappers, PR 4 pattern)
+  // MESSAGE ACTIONS — shared store-first wrapper (F2/F9: actions reason over
+  // SETTLED rows only; the live bubble's verb is Stop, and a synthesized
+  // streaming row must never reach retry/delete's server-side DELETEs).
   // ============================================
   const setMessages = selectedAgent ? setAgentMessages : setGlobalLocalMessages;
+  const isOwnSendLive = selectedAgent ? agentSendUnsafeToClobber : globalSendUnsafeToClobber;
 
-  const {
-    handleEdit: handleEditBase,
-    handleDelete: handleDeleteBase,
-    handleRetry: handleRetryBase,
-    lastAssistantMessageId,
-    lastUserMessageId,
-  } = useMessageActions({
-    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
-    isOwnStreamLive: selectedAgent ? agentSendUnsafeToClobber : globalSendUnsafeToClobber,
+  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
-    // The rendered view — lastAssistantMessageId/lastUserMessageId and the hook's
-    // internal lookups must reflect what the user sees, not useChat's bookkeeping copy.
-    messages: plainMessages,
+    renderedMessages,
+    isOwnSendLive,
     setMessages,
     regenerate,
   });
 
-  // The sender's own tab never receives its own edited/deleted broadcast back
-  // (own-tab dedup in useChannelStreamSocket) — so the cache write happens here,
-  // after the base call resolves (network-confirmed; a failure rolls back inside
-  // the base hook and leaves the cache untouched). Same shape as AiChatView.
-  const handleEdit = useCallback(async (messageId: string, newContent: string) => {
-    const original = plainMessages.find((m) => m.id === messageId);
-    await handleEditBase(messageId, newContent);
-    if (!currentConversationId || !original) return;
-    const payload: MessageEditPayload = {
-      messageId,
-      parts: original.parts.map((p) => (p.type === 'text' ? { ...p, text: newContent } : p)),
-      editedAt: new Date(),
-    };
-    conversationMessagesActions.applyEdit(currentConversationId, payload);
-  }, [handleEditBase, plainMessages, currentConversationId]);
-
-  const handleDelete = useCallback(async (messageId: string) => {
-    await handleDeleteBase(messageId);
-    if (!currentConversationId) return;
-    conversationMessagesActions.applyDelete(currentConversationId, messageId);
-  }, [handleDeleteBase, currentConversationId]);
-
-  const handleRetry = useCallback(async () => {
-    // regenerate() indexes into useChat's OWN local array (crashes if empty,
-    // throws "not found" on an unknown id). Post-cutover nothing keeps that
-    // array in sync with loaded history — the loads write the cache — so a
-    // Retry on a conversation opened from history would act on an empty or
-    // stale transport copy. Seed it from the rendered list at the moment of
-    // the action (imperative, user-action-scoped — NOT an effect syncing two
-    // containers, so rail 11 stands). Skipped while our own send is live: the
-    // array is the mirror's read source then, and a retry mid-own-stream is
-    // not a meaningful action anyway.
-    if (!(selectedAgent ? agentSendUnsafeToClobber : globalSendUnsafeToClobber)) {
-      setMessages(plainMessages);
-    }
-    // Same computation the base handleRetry runs (against the same plainMessages
-    // source) to decide which rows to DELETE server-side — computed BEFORE the
-    // base call so we know what to remove from the cache once it has gone out.
-    const toRemove = getAssistantMessagesAfterLastUser(plainMessages).map((m) => m.id);
-    await handleRetryBase();
-    if (!currentConversationId) return;
-    for (const id of toRemove) conversationMessagesActions.applyDelete(currentConversationId, id);
-  }, [handleRetryBase, plainMessages, currentConversationId, selectedAgent, agentSendUnsafeToClobber, globalSendUnsafeToClobber, setMessages]);
+  // Display ids come from the RENDERED list (affordance placement + streaming
+  // animation are display concerns; the actions above use the settled set).
+  const lastAssistantMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'assistant')?.id,
+    [plainMessages],
+  );
+  const lastUserMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'user')?.id,
+    [plainMessages],
+  );
 
   // Rejoin-first recovery probe for useStreamRecovery.
   // On a network error (e.g. iOS backgrounding kills the fetch):
@@ -1141,13 +1100,26 @@ const GlobalAssistantView: React.FC = () => {
     mcpToolSchemas,
   ]);
 
+  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
+  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
+  // question on a conversation opened from history/reload would silently do nothing.
+  // Seed the settled rendered rows first (same imperative, action-scoped write as the
+  // retry seed; skipped while our own send is live — the array is the mirror's read
+  // source then, and a live own turn means the transport already holds the question).
+  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
+    if (!isOwnSendLive) {
+      setMessages(stableMessages);
+    }
+    return addToolResult(args);
+  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
+
   // plainMessages (store-rendered), not useChat's raw `messages`: "answerable" is
   // decided by whether the ask_user part sits on the conversation's LAST message,
   // and remote edits/deletes/messages update the store, not useChat's local array.
   const askUserAnswering = useAskUserAnswering({
     messages: plainMessages,
     status,
-    addToolResult,
+    addToolResult: seededAddToolResult,
     wrapSend,
     buildBody: buildAskUserAnswerBody,
   });

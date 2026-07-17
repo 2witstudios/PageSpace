@@ -7,6 +7,7 @@ export { useConversations } from './useConversations';
 export { useConversationIdentity } from './useConversationIdentity';
 export type { ConversationIdentityResolveResult } from './useConversationIdentity';
 export { useMessageActions } from './useMessageActions';
+export { useCacheMessageActions } from './useCacheMessageActions';
 export { useProviderSettings } from './useProviderSettings';
 export { useChatTransport } from './useChatTransport';
 export { useStreamingRegistration } from './useStreamingRegistration';

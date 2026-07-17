@@ -31,6 +31,10 @@ export const applyConversationEdit = (
     [event.conversationId]: {
       ...existing,
       messages: applyMessageEdit(existing.messages, event.payload),
+      // The user's own just-sent message lives in optimisticSends until promoted or
+      // load-reconciled — an edit of it must render too (the delete transition already
+      // handled both arrays; edit was the asymmetric one — F4, PR #2098 review).
+      optimisticSends: applyMessageEdit(existing.optimisticSends, event.payload),
       pendingMutationsSinceLoad: [...existing.pendingMutationsSinceLoad, { type: 'edit', payload: event.payload }],
     },
   };

@@ -18,21 +18,22 @@ export interface RenderedMessage {
  * surface renders — merge-at-render, so no effect ordering can blank a live
  * stream.
  *
- * Id collisions (PR 5B): a LIVE stream whose `messageId` matches a row in
- * `messages` renders IN PLACE of that row, with the stream's parts — the
- * pending-stream entry is by definition fresher than any cached copy of the
- * same id. The colliding cached row is a DB streaming-placeholder (loads
- * carry `includeStreaming=1` so a history rejoin can see an in-flight
- * conversation); letting the cache win froze the bubble at the placeholder
- * snapshot for the rest of the generation — the #2092 failure class, moved
- * into the cache. At completion the two carry identical content, so the
- * one-render lag between the confirmed commit and the entry's removal cannot
- * flash. A stream colliding with an `optimisticSends` id is still dropped
- * (an optimistic send is a user message; an assistant stream under that id
- * is a duplicate echo, never fresher content). `messages` are assumed
- * pre-ordered (DB order); `optimisticSends` render in send order after them;
- * non-colliding streams are ordered by `startedAt` among themselves and
- * rendered last.
+ * Id collisions (PR 5B): a LIVE stream whose `messageId` matches a cached row
+ * renders IN PLACE of that row — but ONLY when the cached row is a DB
+ * streaming-placeholder (`status: 'streaming'`; loads carry
+ * `includeStreaming=1` so a history rejoin can see an in-flight
+ * conversation). Letting the cache win on the placeholder froze the bubble
+ * at the snapshot for the rest of the generation — the #2092 failure class,
+ * moved into the cache. A colliding row WITHOUT that status is a complete
+ * persisted/committed reply and the cache wins: a lingering stream entry
+ * whose removal event was lost (socket blip) must never override the full
+ * reply with a stale partial (the deleted `mergeServerAndPending` invariant,
+ * restored with in-place position semantics). A stream colliding with an
+ * `optimisticSends` id is still dropped (an optimistic send is a user
+ * message; an assistant stream under that id is a duplicate echo, never
+ * fresher content). `messages` are assumed pre-ordered (DB order);
+ * `optimisticSends` render in send order after them; non-colliding streams
+ * are ordered by `startedAt` among themselves and rendered last.
  *
  * `activeStreams` must already be filtered to this conversation by the
  * caller (`selectChannelRemoteStreams` + conversationId filter) — this
@@ -46,7 +47,8 @@ export const selectRenderedMessages = (
 
   const confirmed: RenderedMessage[] = cacheEntry.messages.map((message) => {
     const liveStream = streamById.get(message.id);
-    return liveStream
+    const isStreamingPlaceholder = (message as UIMessage & { status?: string }).status === 'streaming';
+    return liveStream && isStreamingPlaceholder
       ? {
           message: synthesizeAssistantMessage(liveStream.messageId, liveStream.parts, liveStream.startedAt),
           mode: 'streaming' as const,

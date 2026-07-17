@@ -87,4 +87,24 @@ describe('applyConversationEdit', () => {
     });
     expect(result.c1.loadGeneration).toBe(1);
   });
+
+  // F4 (PR #2098 review): post-cutover the user's own just-sent message lives in
+  // optimisticSends until promoted/reconciled — an edit of it must render. The delete
+  // transition already handles both arrays; edit was the asymmetric one.
+  it('given the edited id is in optimisticSends (own just-sent message), should apply the edit there too', () => {
+    const initial: ConversationMessagesById = {
+      c1: {
+        messages: [],
+        optimisticSends: [{ id: 'opt1', role: 'user', parts: [{ type: 'text', text: 'typo' }] }],
+        loadGeneration: 1,
+        pendingMutationsSinceLoad: [],
+        loadStatus: 'loaded',
+      },
+    };
+    const result = applyConversationEdit(initial, {
+      conversationId: 'c1',
+      payload: { messageId: 'opt1', parts: [{ type: 'text', text: 'fixed' }], editedAt: new Date() },
+    });
+    expect(result.c1.optimisticSends[0].parts).toEqual([{ type: 'text', text: 'fixed' }]);
+  });
 });

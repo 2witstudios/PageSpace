@@ -44,6 +44,46 @@ export const loadGlobalConversationMessages = async (conversationId: string): Pr
   }
 };
 
+/**
+ * Background snapshot heal (F6, PR #2098 review): re-fetch the conversation and
+ * commit via `applyServerSnapshot` — no `startLoad`, so `loadStatus` never flips
+ * to 'loading' (no input-disable flicker, no skeleton) and mutations recorded
+ * while the fetch was in flight are replayed onto the snapshot.
+ *
+ * Used after a stream-complete commit: the committed pending-stream parts give
+ * instant render continuity, but the socket broadcast can outrace the SSE
+ * multicast's final frames, so the parts may be a truncated snapshot — this
+ * reconciles the authoritative DB row shortly after. Best-effort: a failure
+ * leaves the committed parts standing (warn, never a UI error).
+ */
+export const refreshConversationSnapshot = async (
+  agentId: string | null,
+  conversationId: string,
+): Promise<void> => {
+  try {
+    if (agentId) {
+      const result = await fetchAgentConversationMessages(agentId, conversationId, {
+        limit: 50,
+        includeStreaming: true,
+      });
+      conversationMessagesActions.applyServerSnapshot(conversationId, result.messages);
+      return;
+    }
+    const res = await fetchWithAuth(
+      `/api/ai/global/${conversationId}/messages?limit=50&includeStreaming=1`,
+    );
+    if (!res.ok) {
+      console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, res.status);
+      return;
+    }
+    const data = await res.json();
+    const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
+    conversationMessagesActions.applyServerSnapshot(conversationId, messages);
+  } catch (error) {
+    console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, error);
+  }
+};
+
 export const loadAgentConversationMessages = async (
   agentId: string,
   conversationId: string,

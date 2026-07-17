@@ -1,16 +1,16 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useChannelStreamSocket } from './useChannelStreamSocket';
 import { usePageSocketRoom } from './usePageSocketRoom';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
 } from '@/lib/ai/streams/shouldRefreshOnReconnect';
-import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
-import { getActiveStreamById } from '@/hooks/useActiveStream';
-import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import {
+  loadAgentConversationMessages,
+  refreshConversationSnapshot,
+} from '@/hooks/conversationMessagesLoaders';
+import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
 
 export interface UseAgentChannelMultiplayerOptions {
   selectedAgent: { id: string } | null;
@@ -66,53 +66,27 @@ export function useAgentChannelMultiplayer({
   // NO STOP-SLOT CLAIM PROTOCOL (PR 5A, leaf 5.5.7) — every surface READS
   // `useConversationActiveStream(agentId, conversationId)`, and a read cannot be declined.
 
-  const { rejoinActiveStreams } = useChannelStreamSocket(channelId, {
-    // These three fire only for a REMOTE tab's action (useChannelStreamSocket drops
-    // own-tab events via isOwnStream before invoking) — the local user's own
-    // edit/delete/send is written by the surfaces' own handlers.
-    onUserMessage: (message, payload) => {
-      const conversationId = agentConversationIdRef.current;
-      if (payload.conversationId !== conversationId || !conversationId) return;
-      conversationMessagesActions.applyRemoteUserMessage(conversationId, message);
-    },
-    onMessageEdited: (payload) => {
-      const conversationId = agentConversationIdRef.current;
-      if (payload.conversationId !== conversationId || !conversationId) return;
-      const editPayload: MessageEditPayload = {
-        messageId: payload.messageId,
-        parts: payload.parts,
-        editedAt: new Date(payload.editedAt),
-      };
-      conversationMessagesActions.applyEdit(conversationId, editPayload);
-    },
-    onMessageDeleted: (payload) => {
-      const conversationId = agentConversationIdRef.current;
-      if (payload.conversationId !== conversationId || !conversationId) return;
-      conversationMessagesActions.applyDelete(conversationId, payload.messageId);
-    },
-    onStreamComplete: (messageId, completedConvId) => {
-      const stream = getActiveStreamById(messageId);
-      if (stream && stream.parts.length > 0 && stream.conversationId === agentConversationIdRef.current) {
-        // COMMIT by id — upsert, never skip. An existing row under this id is NOT
-        // proof we already have the content: a mid-stream reload can have seeded the
-        // cache with a half-streamed includeStreaming placeholder, and it is exactly
-        // then that rejoin-recovery accumulates the FULL reply into `stream.parts`.
-        // Also closes the own-stream gap: the mirror removes the pending-stream
-        // entry the instant status leaves streaming, and without this commit the
-        // reply would flash to missing (no confirmed row AND no live stream).
-        conversationMessagesActions.applyConfirmedMessage(
-          stream.conversationId,
-          synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt),
-        );
-        return;
-      }
-      // No usable store entry (SSE join failed / zero parts): the message IS durably
-      // persisted — reload the conversation's cache entry rather than losing it.
-      if (shouldReloadOnComountComplete(stream, completedConvId, agentConversationIdRef.current)) {
-        void loadConversationRef.current(completedConvId!);
-      }
-    },
-  });
+  // The shared socket-events → cache protocol (see buildConversationCacheHandlers):
+  // remote user/edit/delete writes, and the completion commit with own-send
+  // promotion + background snapshot heal. Cache reloads here use the RAW loaders
+  // keyed by the channel (agent page id) — never the surface's loadConversation,
+  // which also sets identity and pushes the URL; a completion for the conversation
+  // already on screen must not do either.
+  const cacheHandlers = useMemo(
+    () =>
+      buildConversationCacheHandlers({
+        getActiveConversationId: () => agentConversationIdRef.current,
+        reloadConversation: (conversationId) => {
+          if (channelId) void loadAgentConversationMessages(channelId, conversationId);
+        },
+        refreshSnapshot: (conversationId) => {
+          if (channelId) void refreshConversationSnapshot(channelId, conversationId);
+        },
+      }),
+    [channelId],
+  );
+
+  const { rejoinActiveStreams } = useChannelStreamSocket(channelId, cacheHandlers);
 
   // NO editing-store registration here (PR 5A, leaf 5.7): the one derived, conversation-keyed
   // registration for the whole app lives in GlobalChatProvider (useDerivedStreamingRegistrations).

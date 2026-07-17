@@ -16,18 +16,15 @@ import {
 } from '@/lib/ai/shared';
 import { shouldRefreshOnReconnect } from '@/lib/ai/streams/shouldRefreshOnReconnect';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
-import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
-import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { useSocketStore } from '@/stores/useSocketStore';
 import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { loadGlobalConversationMessages } from '@/hooks/conversationMessagesLoaders';
+import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
+import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
 import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
 
 /**
@@ -233,59 +230,22 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const channelId = userId ? globalChannelId(userId) : null;
 
   const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId ?? undefined, {
-    // Cross-tab same-user events (P2-P4): targeted cache writes, same shape as the
-    // merged AiChatView's socket handlers. These fire only for a REMOTE tab's action
-    // (useChannelStreamSocket drops own-tab events via isOwnStream before invoking) —
-    // the local user's own edit/delete/send is written by the surfaces' own handlers.
-    //
-    // NO useChat dual-write here, unlike AiChatView: this provider cannot reach the
-    // surfaces' transport instances, and post-cutover their arrays are bookkeeping
-    // only — the surfaces re-seed the transport at the one action that needs it
-    // (retry; see their handleRetry wrappers).
-    onUserMessage: (message, payload) => {
-      if (payload.conversationId !== currentConversationId || !currentConversationId) return;
-      conversationMessagesActions.applyRemoteUserMessage(currentConversationId, message);
-    },
-    onMessageEdited: (payload) => {
-      if (payload.conversationId !== currentConversationId || !currentConversationId) return;
-      const editPayload: MessageEditPayload = {
-        messageId: payload.messageId,
-        parts: payload.parts,
-        editedAt: new Date(payload.editedAt),
-      };
-      conversationMessagesActions.applyEdit(currentConversationId, editPayload);
-    },
-    onMessageDeleted: (payload) => {
-      if (payload.conversationId !== currentConversationId || !currentConversationId) return;
-      conversationMessagesActions.applyDelete(currentConversationId, payload.messageId);
-    },
+    // P2-P4 + P6: the shared socket-events → cache protocol (one implementation with
+    // the agent channels — see buildConversationCacheHandlers for the commit/promote/
+    // heal semantics). NO useChat dual-write here, unlike AiChatView: this provider
+    // cannot reach the surfaces' transport instances, and post-cutover their arrays
+    // are bookkeeping only — the surfaces re-seed the transport at the actions that
+    // need it (retry, ask_user answers).
+    ...buildConversationCacheHandlers({
+      getActiveConversationId: () => currentConversationIdRef.current,
+      reloadConversation: loadGlobalConversationMessages,
+      refreshSnapshot: (conversationId) => refreshConversationSnapshot(null, conversationId),
+    }),
     // P5: a remote tab's undo restructures the conversation wholesale — reload the
     // cache entry. Guard kept as the pure fn (cross-conversation + own-tab).
     onUndoApplied: (payload) => {
       if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
       void loadGlobalConversationMessages(payload.conversationId);
-    },
-    // P6: commit the completed stream's content into the cache — for OWN streams too.
-    // The old "own fresh stream: surface's useChat already has it" no-op is wrong
-    // post-cutover (useChat never renders): the mirror removes the pending-stream
-    // entry the instant status leaves streaming, and if nothing has committed the
-    // final content to the cache by the render after that, the reply flashes to
-    // missing. `applyConfirmedMessage` (upsert-by-id) also overwrites a half-streamed
-    // includeStreaming placeholder row loaded mid-stream.
-    onStreamComplete: (messageId, completedConvId) => {
-      const stream = getActiveStreamById(messageId);
-      if (stream && stream.parts.length > 0 && stream.conversationId === currentConversationIdRef.current) {
-        conversationMessagesActions.applyConfirmedMessage(
-          stream.conversationId,
-          synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt),
-        );
-        return;
-      }
-      // No usable store entry (SSE join failed / zero parts): the message IS durably
-      // persisted — reload the cache entry rather than silently losing the reply.
-      if (shouldReloadOnComountComplete(stream, completedConvId, currentConversationIdRef.current)) {
-        void loadGlobalConversationMessages(completedConvId!);
-      }
     },
     onGlobalConversationAdded: (payload) => {
       setLatestGlobalConversationAdded(payload);

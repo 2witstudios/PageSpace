@@ -45,6 +45,13 @@ export const conversationMessagesActions = {
    */
   applyConfirmedMessage: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message),
+  /**
+   * Promote optimistic sends into confirmed messages. Call on THIS TAB'S OWN
+   * stream commit only — an own reply proves the user rows that triggered it
+   * are persisted; a remote reply proves nothing about this tab's sends.
+   */
+  promoteOptimisticSends: (conversationId: string): void =>
+    useConversationMessagesStore.getState().promoteOptimisticSends(conversationId),
   /** Commit an already-fetched server list as loaded truth in one step (supersedes in-flight loads). */
   applyServerSnapshot: (conversationId: string, messages: UIMessage[]): void =>
     useConversationMessagesStore.getState().applyServerSnapshot(conversationId, messages),
