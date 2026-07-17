@@ -55,14 +55,23 @@ vi.mock('@pagespace/lib/services/broadcast/audience', () => ({
   countAudience: vi.fn(),
 }));
 
-vi.mock('@/lib/broadcast/enqueue', () => ({
-  enqueueBroadcast: vi.fn(),
-}));
+vi.mock('@/lib/broadcast/enqueue', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/broadcast/enqueue')>('@/lib/broadcast/enqueue');
+  return {
+    BroadcastNotEnqueuedError: actual.BroadcastNotEnqueuedError,
+    BroadcastEnqueueUnconfirmedError: actual.BroadcastEnqueueUnconfirmedError,
+    enqueueBroadcast: vi.fn(),
+  };
+});
 
 import { POST, GET } from '../route';
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
 import { countAudience } from '@pagespace/lib/services/broadcast/audience';
-import { enqueueBroadcast } from '@/lib/broadcast/enqueue';
+import {
+  BroadcastEnqueueUnconfirmedError,
+  BroadcastNotEnqueuedError,
+  enqueueBroadcast,
+} from '@/lib/broadcast/enqueue';
 
 const mockRepo = vi.mocked(broadcastRepository);
 const mockCountAudience = vi.mocked(countAudience);
@@ -233,7 +242,7 @@ describe('/api/admin/broadcasts', () => {
       const body = await response.json();
 
       expect(response.status).toBe(202);
-      expect(body).toEqual({ broadcastId: 'bc_1', jobId: 'job_1' });
+      expect(body).toEqual({ broadcastId: 'bc_1', jobId: 'job_1', enqueue: 'confirmed' });
 
       expect(mockRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -241,6 +250,7 @@ describe('/api/admin/broadcasts', () => {
           engine: 'transactional',
           contentMode: 'compose',
           bodyMarkdown: 'We shipped something.',
+          templateId: null,
           dryRun: false,
           sendLimit: 5,
           delayMs: 120,
@@ -252,9 +262,26 @@ describe('/api/admin/broadcasts', () => {
       expect(mockRepo.markFailed).not.toHaveBeenCalled();
     });
 
-    it('marks the broadcast failed when the enqueue throws', async () => {
+    it('drops a stale templateId from a compose-mode create', async () => {
       mockRepo.create.mockResolvedValue({ id: 'bc_1' } as never);
-      mockEnqueue.mockRejectedValue(new Error('processor unreachable'));
+      mockEnqueue.mockResolvedValue({ jobId: 'job_1' });
+      mockRepo.markQueued.mockResolvedValue(1);
+
+      const response = await POST(postRequest({ ...liveBody, templateId: 'tpl_deleted' }));
+
+      expect(response.status).toBe(202);
+      // A compose send never read the template, so it must not reference one —
+      // a stale/deleted id would otherwise break the insert on the FK or record
+      // a template this send never used.
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ contentMode: 'compose', templateId: null }),
+      );
+    });
+
+    it('marks the broadcast failed when the enqueue definitely did not land', async () => {
+      mockRepo.create.mockResolvedValue({ id: 'bc_1' } as never);
+      mockEnqueue.mockRejectedValue(new BroadcastNotEnqueuedError('processor refused: 401'));
+      mockRepo.markFailed.mockResolvedValue(1);
 
       const response = await POST(postRequest(liveBody));
       const body = await response.json();
@@ -263,8 +290,70 @@ describe('/api/admin/broadcasts', () => {
       expect(body.broadcastId).toBe('bc_1');
       expect(mockRepo.markFailed).toHaveBeenCalledWith(
         'bc_1',
-        expect.stringContaining('processor unreachable'),
+        expect.stringContaining('processor refused'),
       );
+      expect(mockRepo.markQueued).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fail the row on an unconfirmed enqueue — a job may exist', async () => {
+      mockRepo.create.mockResolvedValue({ id: 'bc_1' } as never);
+      mockEnqueue.mockRejectedValue(
+        new BroadcastEnqueueUnconfirmedError('timeout; retry: timeout'),
+      );
+      mockRepo.appendStepResult.mockResolvedValue(undefined);
+
+      const response = await POST(postRequest(liveBody));
+      const body = await response.json();
+
+      // 202, not 500: a 500 invites a retried POST, which creates a FRESH row
+      // with a fresh singletonKey — a genuine second mass send.
+      expect(response.status).toBe(202);
+      expect(body).toEqual({ broadcastId: 'bc_1', jobId: null, enqueue: 'unconfirmed' });
+      expect(mockRepo.markFailed).not.toHaveBeenCalled();
+      expect(mockRepo.markQueued).not.toHaveBeenCalled();
+      expect(mockRepo.appendStepResult).toHaveBeenCalledWith(
+        'bc_1',
+        expect.objectContaining({ step: 'enqueue', status: 'failed' }),
+      );
+    });
+
+    it('reconciles when markFailed reports the worker already advanced the row', async () => {
+      mockRepo.create.mockResolvedValue({ id: 'bc_1' } as never);
+      mockEnqueue.mockRejectedValue(new BroadcastNotEnqueuedError('processor refused: 400'));
+      mockRepo.markFailed.mockResolvedValue(0);
+      mockRepo.findById.mockResolvedValue({ id: 'bc_1', jobId: 'job_prior', status: 'in_progress' } as never);
+
+      const response = await POST(postRequest(liveBody));
+      const body = await response.json();
+
+      // markFailed's guard refusing means a job exists and is sending — report
+      // that send instead of a retryable failure.
+      expect(response.status).toBe(202);
+      expect(body).toEqual({ broadcastId: 'bc_1', jobId: 'job_prior', enqueue: 'confirmed' });
+    });
+
+    it('still returns 202 when markQueued bookkeeping fails after a successful enqueue', async () => {
+      mockRepo.create.mockResolvedValue({ id: 'bc_1' } as never);
+      mockEnqueue.mockResolvedValue({ jobId: 'job_1' });
+      mockRepo.markQueued.mockRejectedValue(new Error('db blip'));
+
+      const response = await POST(postRequest(liveBody));
+      const body = await response.json();
+
+      expect(response.status).toBe(202);
+      expect(body).toEqual({ broadcastId: 'bc_1', jobId: 'job_1', enqueue: 'confirmed' });
+      expect(mockRepo.markFailed).not.toHaveBeenCalled();
+    });
+
+    it('treats a deduped enqueue (job already queued) as confirmed with an unknown jobId', async () => {
+      mockRepo.create.mockResolvedValue({ id: 'bc_1' } as never);
+      mockEnqueue.mockResolvedValue({ jobId: null });
+
+      const response = await POST(postRequest(liveBody));
+      const body = await response.json();
+
+      expect(response.status).toBe(202);
+      expect(body).toEqual({ broadcastId: 'bc_1', jobId: null, enqueue: 'confirmed' });
       expect(mockRepo.markQueued).not.toHaveBeenCalled();
     });
 

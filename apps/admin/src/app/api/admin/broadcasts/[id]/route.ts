@@ -98,12 +98,25 @@ export const POST = withAdminAuth<RouteContext>(async (admin, request, context) 
       );
     }
 
-    await broadcastRepository.appendStepResult(id, {
-      step: action,
-      status: 'ok',
-      detail: reason,
-      at: new Date().toISOString(),
-    });
+    // The status write above IS the intervention — the worker yields to it
+    // mid-run — and it has landed. The step note is UI-facing evidence, and the
+    // durable record of who/why is the auditRequest below; so a note failure is
+    // logged, not surfaced. A 500 here would misreport a cancel that DID land,
+    // and the retry it invites would hit the no-op branch anyway.
+    try {
+      await broadcastRepository.appendStepResult(id, {
+        step: action,
+        status: 'ok',
+        detail: reason,
+        at: new Date().toISOString(),
+      });
+    } catch (error) {
+      loggers.api.warn('Broadcast intervention step-result append failed', {
+        broadcastId: id,
+        action,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     loggers.api.info('Admin broadcast intervention', {
       adminId: admin.id,

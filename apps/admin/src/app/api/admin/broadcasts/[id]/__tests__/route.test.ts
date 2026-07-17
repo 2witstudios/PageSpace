@@ -192,6 +192,20 @@ describe('/api/admin/broadcasts/[id]', () => {
       });
     });
 
+    it('returns 200 when the step-result note fails — the status write IS the intervention', async () => {
+      mockRepo.findById.mockResolvedValue(baseBroadcast);
+      mockRepo.updateStatus.mockResolvedValue(1);
+      mockRepo.appendStepResult.mockRejectedValue(new Error('db blip'));
+
+      const response = await POST(postRequest({ action: 'cancel', reason: 'Wrong audience' }), context);
+      const body = await response.json();
+
+      // A 500 here would misreport a cancel that DID land, and its retry hits
+      // the no-op branch anyway. The reason survives in the audit log.
+      expect(response.status).toBe(200);
+      expect(body).toEqual({ id: 'bc_1', status: 'cancelled' });
+    });
+
     it('409s when the broadcast reached a terminal state first', async () => {
       mockRepo.findById.mockResolvedValue({ ...baseBroadcast, status: 'completed' });
       mockRepo.updateStatus.mockResolvedValue(0);

@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { withAdminAuth } from '@/lib/auth';
 import { broadcastCreateSchema } from '@/lib/broadcasts/schema';
-import { enqueueBroadcast } from '@/lib/broadcast/enqueue';
+import {
+  BroadcastEnqueueUnconfirmedError,
+  enqueueBroadcast,
+} from '@/lib/broadcast/enqueue';
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
 import { countAudience } from '@pagespace/lib/services/broadcast/audience';
 import {
@@ -49,6 +52,24 @@ async function resolveContent(parsed: {
         : null;
     },
   );
+}
+
+/** Best-effort progress-trail note. The trail is UI-facing evidence, not the
+ *  audit record (auditRequest is) — its failure must never fail the request. */
+async function appendStepResultSafe(broadcastId: string, detail: string): Promise<void> {
+  try {
+    await broadcastRepository.appendStepResult(broadcastId, {
+      step: 'enqueue',
+      status: 'failed',
+      detail,
+      at: new Date().toISOString(),
+    });
+  } catch (error) {
+    loggers.api.warn('Broadcast step-result append failed', {
+      broadcastId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export const POST = withAdminAuth(async (admin, request) => {
@@ -119,8 +140,12 @@ export const POST = withAdminAuth(async (admin, request) => {
       subject: content.subject,
       engine: input.engine,
       contentMode: input.contentMode,
-      templateId: input.templateId ?? null,
-      bodyMarkdown: input.bodyMarkdown ?? null,
+      // Only the field the active mode reads is stored. The other one may hold
+      // stale form state (e.g. a template id kept after switching to compose),
+      // and persisting it would either break the insert on a deleted template
+      // FK or record a reference to a template this send never used.
+      templateId: input.contentMode === 'template' ? (input.templateId ?? null) : null,
+      bodyMarkdown: input.contentMode === 'compose' ? (input.bodyMarkdown ?? null) : null,
       audienceDefinition,
       dryRun: false,
       sendLimit: input.sendLimit ?? null,
@@ -128,12 +153,64 @@ export const POST = withAdminAuth(async (admin, request) => {
       createdByUserId: admin.id,
     });
 
-    let jobId: string;
+    const recordAudit = (details: Record<string, unknown>) =>
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: admin.id,
+        resourceType: 'broadcast',
+        resourceId: broadcast.id,
+        details: {
+          source: 'admin',
+          action: 'broadcast_create_live',
+          subject: content.subject,
+          engine: input.engine,
+          contentMode: input.contentMode,
+          audienceDefinition,
+          sendLimit: input.sendLimit ?? null,
+          delayMs: input.delayMs ?? null,
+          ...details,
+        },
+      });
+
+    // jobId is null when the processor deduped the enqueue (a job for this
+    // broadcast already exists — same outcome, id unknown).
+    let jobId: string | null;
     try {
       ({ jobId } = await enqueueBroadcast({ broadcastId: broadcast.id, callerUserId: admin.id }));
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      await broadcastRepository.markFailed(broadcast.id, `enqueue failed: ${msg}`);
+
+      if (error instanceof BroadcastEnqueueUnconfirmedError) {
+        // A job MAY exist. Failing the row would be a lie the worker ignores
+        // (it yields only to cancelled/paused/completed) — mail could go out
+        // under a status that told the admin the send died, inviting a second
+        // broadcast. Report accepted-but-unconfirmed and point at the status
+        // page, where a landed job shows progress and a lost one stays pending.
+        await appendStepResultSafe(broadcast.id, `enqueue unconfirmed: ${msg}`);
+        loggers.api.warn('Broadcast enqueue unconfirmed — job may exist', {
+          broadcastId: broadcast.id,
+          error: msg,
+        });
+        recordAudit({ jobId: null, enqueue: 'unconfirmed' });
+        return NextResponse.json(
+          { broadcastId: broadcast.id, jobId: null, enqueue: 'unconfirmed' },
+          { status: 202 },
+        );
+      }
+
+      // Definitely not enqueued (token minting failed or the processor refused
+      // the request) — the one case where failing the row is safe and honest.
+      const failed = await broadcastRepository.markFailed(broadcast.id, `enqueue failed: ${msg}`);
+      if (failed === 0) {
+        // markFailed's guard refused: the worker already advanced the row, so a
+        // job exists after all. Report the send that is actually happening.
+        const row = await broadcastRepository.findById(broadcast.id);
+        recordAudit({ jobId: row?.jobId ?? null, enqueue: 'confirmed' });
+        return NextResponse.json(
+          { broadcastId: broadcast.id, jobId: row?.jobId ?? null, enqueue: 'confirmed' },
+          { status: 202 },
+        );
+      }
       loggers.api.error('Broadcast enqueue failed', error instanceof Error ? error : undefined);
       return NextResponse.json(
         { error: 'Failed to enqueue broadcast job', broadcastId: broadcast.id },
@@ -141,7 +218,20 @@ export const POST = withAdminAuth(async (admin, request) => {
       );
     }
 
-    await broadcastRepository.markQueued(broadcast.id, jobId);
+    if (jobId !== null) {
+      try {
+        await broadcastRepository.markQueued(broadcast.id, jobId);
+      } catch (error) {
+        // Bookkeeping only: the job IS live and the worker advances the row on
+        // its own. A 500 here would invite a retried POST — a fresh row with a
+        // fresh singletonKey, i.e. a genuine second mass send.
+        loggers.api.warn('markQueued failed after successful enqueue — worker will advance the row', {
+          broadcastId: broadcast.id,
+          jobId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
 
     loggers.api.info('Admin created live broadcast', {
       adminId: admin.id,
@@ -151,25 +241,12 @@ export const POST = withAdminAuth(async (admin, request) => {
       sendLimit: input.sendLimit ?? null,
     });
 
-    auditRequest(request, {
-      eventType: 'data.write',
-      userId: admin.id,
-      resourceType: 'broadcast',
-      resourceId: broadcast.id,
-      details: {
-        source: 'admin',
-        action: 'broadcast_create_live',
-        subject: content.subject,
-        engine: input.engine,
-        contentMode: input.contentMode,
-        audienceDefinition,
-        sendLimit: input.sendLimit ?? null,
-        delayMs: input.delayMs ?? null,
-        jobId,
-      },
-    });
+    recordAudit({ jobId, enqueue: 'confirmed' });
 
-    return NextResponse.json({ broadcastId: broadcast.id, jobId }, { status: 202 });
+    return NextResponse.json(
+      { broadcastId: broadcast.id, jobId, enqueue: 'confirmed' },
+      { status: 202 },
+    );
   } catch (error) {
     loggers.api.error('Error creating broadcast', error instanceof Error ? error : undefined);
     return NextResponse.json({ error: 'Failed to create broadcast' }, { status: 500 });
