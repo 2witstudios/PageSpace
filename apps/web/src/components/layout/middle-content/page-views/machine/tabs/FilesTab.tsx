@@ -134,12 +134,16 @@ export default function FilesTab({ machineId }: FilesTabProps) {
     [confirmDiscardIfDirty],
   );
 
+  // Returns whether the navigation was ACCEPTED — a declined dirty-discard
+  // confirm keeps the current file, and the caller (the sheet-closing wrapper
+  // below) must not close over a click that changed nothing. A re-click on the
+  // open file counts as accepted: the file the user asked for IS showing.
   const onSelectFile = useCallback(
-    (next: string) => {
-      // Re-clicking the open file is a no-op, not a discard.
-      if (next === selectionRef.current.path) return;
-      if (!confirmDiscardIfDirty()) return;
+    (next: string): boolean => {
+      if (next === selectionRef.current.path) return true;
+      if (!confirmDiscardIfDirty()) return false;
       setSelection((current) => ({ ...current, path: next }));
+      return true;
     },
     [confirmDiscardIfDirty],
   );
@@ -214,8 +218,11 @@ export default function FilesTab({ machineId }: FilesTabProps) {
               machineId={machineId}
               scope={scope}
               onSelectFile={(next) => {
-                onSelectFile(next);
-                close();
+                // Close the mobile sheet only when navigation actually
+                // happened — a declined dirty-discard confirm keeps the
+                // current file, and yanking the sheet away on top of that
+                // would look like the click was obeyed.
+                if (onSelectFile(next)) close();
               }}
               selectedPath={path}
               onPathRemoved={onPathRemoved}

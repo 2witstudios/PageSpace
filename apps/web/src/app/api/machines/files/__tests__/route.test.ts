@@ -202,6 +202,37 @@ describe('/api/machines/files machine-side symlink confinement', () => {
   });
 });
 
+describe('/api/machines/files request-body size ceiling', () => {
+  it('413s an over-ceiling declared Content-Length before parsing the body', async () => {
+    const req = new Request('http://localhost/api/machines/files', {
+      method: 'POST',
+      body: '{}',
+      headers: { 'content-type': 'application/json', 'content-length': String(20 * 1024 * 1024) },
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(413);
+    expect((await res.json()).reason).toBe('too_large');
+    // Rejected on the declared size alone — nothing downstream ever ran.
+    expect(canEditMachine).not.toHaveBeenCalled();
+    expect(writeMachineFile).not.toHaveBeenCalled();
+  });
+
+  it('accepts a normal-sized declared body (the ceiling is above the base64-inflated content cap)', async () => {
+    const body = JSON.stringify({ ...BRANCH_BODY, path: 'a.txt', kind: 'file', content: 'x' });
+    const req = new Request('http://localhost/api/machines/files', {
+      method: 'POST',
+      body,
+      headers: { 'content-type': 'application/json', 'content-length': String(body.length) },
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('/api/machines/files write parent-preflight contract', () => {
   it('maps writeMachineFile not_found (parent deleted on the live machine) to the documented 404', async () => {
     writeMachineFile.mockResolvedValue({ ok: false, reason: 'not_found' });

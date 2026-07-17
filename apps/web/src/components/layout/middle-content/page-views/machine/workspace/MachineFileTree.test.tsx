@@ -826,6 +826,88 @@ describe('MachineFileTree', () => {
       });
     });
 
+    test('a file whose read fails is skipped with its own toast and the rest of the batch still uploads', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      // A FileReader that fails for exactly one file name, real for the rest —
+      // models a file deleted/permission-changed between pick and read.
+      const RealFileReader = window.FileReader;
+      class SelectivelyFailingFileReader extends RealFileReader {
+        override readAsDataURL(blob: Blob): void {
+          if (blob instanceof File && blob.name === 'bad.bin') {
+            setTimeout(() => this.dispatchEvent(new ProgressEvent('error')));
+            return;
+          }
+          super.readAsDataURL(blob);
+        }
+      }
+      vi.stubGlobal('FileReader', SelectivelyFailingFileReader);
+      try {
+        renderTree({ scope: { kind: 'root' } });
+        await waitFor(() => screen.getByText('README.md'));
+        const rootFetchesBefore = listCallsFor('');
+
+        const badFile = new File(['x'], 'bad.bin', { type: 'application/octet-stream' });
+        const goodFile = new File(['ok'], 'good.txt', { type: 'text/plain' });
+        const input = screen.getByTestId('file-tree-upload-input') as HTMLInputElement;
+        await userEvent.click(screen.getByTitle('Upload files'));
+        await userEvent.upload(input, [badFile, goodFile]);
+
+        await waitFor(() => {
+          if (calls.length < 1) throw new Error('surviving upload not posted yet');
+        });
+        await waitFor(() => {
+          if (listCallsFor('') <= rootFetchesBefore) throw new Error('target dir not relisted yet');
+        });
+
+        assert({
+          given: 'a batch where the first file fails to read client-side',
+          should: 'toast that file by name, still upload the rest, and re-list once',
+          actual: {
+            posted: calls.map((c) => (c.body as Record<string, unknown>).path),
+            badToasted: toastMocks.error.mock.calls.some((c) => String(c[0]).includes('bad.bin')),
+          },
+          expected: { posted: ['good.txt'], badToasted: true },
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    test('a listing already in flight when the cache is invalidated can never resurrect stale entries', async () => {
+      // Root listing: first call held by the test (it will resolve LATE with
+      // the pre-refresh entries); every later call answers fresh entries.
+      const stale = deferredResponse();
+      let rootCalls = 0;
+      vi.mocked(fetchWithAuth).mockImplementation(async (...args: unknown[]) => {
+        const init = (args[1] ?? {}) as RequestInit;
+        if (typeof init.method === 'string' && init.method !== 'GET') return jsonResponse({ ok: true });
+        if (requestedPath(String(args[0])) === '') {
+          rootCalls += 1;
+          if (rootCalls === 1) return stale.promise;
+          return jsonResponse({ entries: [{ name: 'fresh.txt', type: 'file' }] });
+        }
+        return jsonResponse({ entries: [] });
+      });
+      renderTree({ scope: { kind: 'root' } });
+
+      // First listing is pending; refresh evicts its marker and starts call 2.
+      await userEvent.click(screen.getByTitle('Refresh files'));
+      await waitFor(() => screen.getByText('fresh.txt'));
+
+      // NOW the pre-refresh listing lands, carrying the stale world.
+      stale.resolve(jsonResponse({ entries: [{ name: 'stale.txt', type: 'file' }] }));
+      // Give the stale resolution every chance to (wrongly) commit.
+      await new Promise((r) => setTimeout(r, 25));
+
+      assert({
+        given: 'a refresh while the first listing was still in flight, with the old listing resolving after the fresh one rendered',
+        should: 'keep the fresh entries — the evicted marker means the stale resolution is discarded, not committed',
+        actual: { fresh: screen.queryByText('fresh.txt') !== null, stale: screen.queryByText('stale.txt') },
+        expected: { fresh: true, stale: null },
+      });
+    });
+
     test('a file over the 10 MiB client cap is skipped with a toast and never POSTed, without blocking the rest of the batch', async () => {
       const calls: MutationCall[] = [];
       cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));

@@ -107,6 +107,25 @@ const RESOURCE_TYPE = 'machine';
 const MAX_FILE_READ_BYTES = 2 * 1024 * 1024;
 const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+/**
+ * Request-body ceiling for the mutating verbs, checked against Content-Length
+ * BEFORE `request.json()` buffers anything: base64 inflates the 10 MiB content
+ * cap by 4/3, plus slack for the JSON envelope. An oversized declared body is
+ * rejected without ever being read, so it cannot spike memory just to be
+ * turned away by the post-decode cap. (A chunked request without
+ * Content-Length still falls through to the post-decode cap — the declared-
+ * length check is a fast-path bound, not the only line.)
+ */
+const MAX_MUTATION_REQUEST_BYTES = Math.ceil((MAX_UPLOAD_BYTES * 4) / 3) + 64 * 1024;
+
+/** 413 for a declared body size over the ceiling, before any buffering. */
+function rejectOversizedBody(request: Request): NextResponse | null {
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_MUTATION_REQUEST_BYTES) {
+    return NextResponse.json({ error: 'File is too large to upload', reason: 'too_large' }, { status: 413 });
+  }
+  return null;
+}
 
 function requireString(value: unknown, field: string): { ok: true; value: string } | { ok: false; error: NextResponse } {
   if (typeof value !== 'string' || value.length === 0) {
@@ -431,6 +450,9 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
+  const oversized = rejectOversizedBody(request);
+  if (oversized) return oversized;
+
   const parsedBody = await parseJsonBody(request);
   if (!parsedBody.ok) return parsedBody.error;
   const body = parsedBody.value;
@@ -491,6 +513,9 @@ export async function PATCH(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
+  const oversized = rejectOversizedBody(request);
+  if (oversized) return oversized;
+
   const parsedBody = await parseJsonBody(request);
   if (!parsedBody.ok) return parsedBody.error;
   const body = parsedBody.value;
@@ -544,6 +569,9 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
+
+  const oversized = rejectOversizedBody(request);
+  if (oversized) return oversized;
 
   const parsedBody = await parseJsonBody(request);
   if (!parsedBody.ok) return parsedBody.error;

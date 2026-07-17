@@ -307,7 +307,15 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
       const existing = cacheRef.current.get(path);
       // Loaded or in flight → cache hit, no refetch. Only an error is retryable.
       if (existing !== undefined && existing.status !== 'error') return;
-      setDirectoryState(path, { status: 'loading' });
+      // The loading marker doubles as this load's claim ticket: `invalidate`/
+      // `refresh` evict it, and a fresh load for the same path installs its OWN
+      // marker — so committing only while OUR marker is still the cache entry
+      // (reference equality) means a listing that raced a mutation's
+      // invalidation can never resolve late and resurrect pre-mutation
+      // entries, while a newer load's result is never clobbered either.
+      const marker: DirectoryState = { status: 'loading' };
+      const stillOurs = () => cacheRef.current.get(path) === marker;
+      setDirectoryState(path, marker);
       try {
         const search = filesScopeSearchParams(machineId, scope);
         if (path.length > 0) search.set('path', path);
@@ -318,11 +326,13 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
         }
         const body = (await res.json()) as { entries?: unknown };
         if (!Array.isArray(body.entries)) throw new Error('Malformed file listing response');
+        if (!stillOurs()) return;
         setDirectoryState(path, {
           status: 'loaded',
           entries: sortEntries(body.entries as MachineDirectoryEntry[]),
         });
       } catch (err) {
+        if (!stillOurs()) return;
         setDirectoryState(path, {
           status: 'error',
           message: err instanceof Error ? err.message : 'Failed to list directory',
@@ -509,7 +519,17 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
             toast.error(`${file.name}: File is too large to upload`);
             continue;
           }
-          const content = await readFileAsBase64(file);
+          // Per-file, not batch-level: a FileReader rejection (file deleted or
+          // permission-changed between pick and read) must skip THIS file with
+          // its own toast and keep the rest of the batch going — an aborted
+          // loop would silently drop every later file.
+          let content: string;
+          try {
+            content = await readFileAsBase64(file);
+          } catch {
+            toast.error(`${file.name}: Could not read the file`);
+            continue;
+          }
           const path = joinPath(targetPath, file.name);
           await runMutation(
             {

@@ -498,6 +498,61 @@ describe('FilesFilePane', () => {
       });
     });
 
+    test('a draft edited back to the loaded content is clean again', async () => {
+      vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'original', encoding: 'utf8', truncated: false }));
+      renderPane('src/index.ts');
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('changed');
+      await waitFor(() => screen.getByTitle('Unsaved changes'));
+      await editContent('original');
+
+      await waitFor(() => {
+        if (screen.queryByTitle('Unsaved changes') !== null) throw new Error('still dirty');
+      });
+      assert({
+        given: 'an edit fully reverted to the loaded content',
+        should: 'drop the dirty dot and Save affordance — there is no edit left to save',
+        actual: {
+          dirtyDot: screen.queryByTitle('Unsaved changes'),
+          saveButton: screen.queryByTitle('Save file (Cmd/Ctrl-S)'),
+        },
+        expected: { dirtyDot: null, saveButton: null },
+      });
+    });
+
+    test("a save completing after further edits does not discard the newer draft", async () => {
+      let releaseSave: (() => void) | undefined;
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'v1', encoding: 'utf8', truncated: false }))
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              releaseSave = () => resolve(jsonResponse({ ok: true }));
+            }),
+        );
+      renderPane('src/index.ts');
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('v2');
+      await waitFor(() => screen.getByTitle('Unsaved changes'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      // Keep typing while the POST is still in flight…
+      await editContent('v3');
+      // …then let the v2 save land.
+      releaseSave?.();
+
+      await waitFor(() => {
+        if (screen.queryByTitle('Unsaved changes') === null) throw new Error('newer draft was discarded');
+      });
+      assert({
+        given: 'a save of v2 that completes after the user typed v3',
+        should: 'keep v3 as an unsaved draft instead of letting the stale completion clear it',
+        actual: screen.queryByTitle('Unsaved changes') !== null,
+        expected: true,
+      });
+    });
+
     test('reports dirty transitions up through onDirtyChange, ending false on unmount', async () => {
       vi.mocked(fetchWithAuth)
         .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))

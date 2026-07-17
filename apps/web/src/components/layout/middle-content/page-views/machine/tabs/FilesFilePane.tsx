@@ -224,7 +224,10 @@ export default function FilesFilePane({ machineId, scope, path, onDirtyChange }:
   // saving it would silently drop the file's tail on disk, so it stays
   // read-only no matter what the banner already says.
   const editable = current.status === 'loaded' && !current.truncated;
-  const dirty = editable && draft !== null;
+  // A draft that has been edited BACK to the loaded content is clean — no Save
+  // affordance, no navigation guard, no editing-store session for an edit that
+  // no longer exists.
+  const dirty = editable && draft !== null && draft !== current.content;
 
   // Mirror the dirty flag up to the parent so ITS navigation (file clicks,
   // scope switches) can confirm before discarding — see the prop doc. The
@@ -253,9 +256,18 @@ export default function FilesFilePane({ machineId, scope, path, onDirtyChange }:
     };
   }, [dirty, machineId]);
 
+  // Kept current by plain assignment so an async save completion can ask
+  // "is the pane still showing the file I saved?" without a stale closure.
+  const latestPathRef = useRef(path);
+  latestPathRef.current = path;
+
   const save = async () => {
-    if (!dirty || current.status !== 'loaded' || draft === null) return;
+    // `saving` also gates re-entrancy: the Cmd/Ctrl-S listener bypasses the
+    // disabled Save button, so without it a held keystroke would fire
+    // overlapping POSTs whose completions race each other's setDraft.
+    if (!dirty || current.status !== 'loaded' || draft === null || saving) return;
     const content = draft;
+    const savedPath = path;
     setSaving(true);
     try {
       const res = await fetchWithAuth('/api/machines/files', {
@@ -264,7 +276,7 @@ export default function FilesFilePane({ machineId, scope, path, onDirtyChange }:
         body: JSON.stringify({
           machineId,
           ...filesScopeBodyFields(scope),
-          path,
+          path: savedPath,
           kind: 'file',
           encoding: 'utf8',
           content,
@@ -281,8 +293,15 @@ export default function FilesFilePane({ machineId, scope, path, onDirtyChange }:
         toast.error(message);
         return;
       }
-      setState({ status: 'loaded', path, content, truncated: false });
-      setDraft(null);
+      // The user may have kept typing while the POST was in flight, or
+      // navigated to another file. Only adopt the saved content as the loaded
+      // state if the pane still shows the saved file, and only clear the draft
+      // if it is still EXACTLY what was submitted — a newer draft is unsaved
+      // work and must survive the older save's completion.
+      if (latestPathRef.current === savedPath) {
+        setState({ status: 'loaded', path: savedPath, content, truncated: false });
+      }
+      setDraft((d) => (d === content ? null : d));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save file');
     } finally {
