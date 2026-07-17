@@ -22,7 +22,13 @@ export type FilesScope = { kind: 'root' } | { kind: 'branch'; projectName: strin
 export const filesScopeKey = (scope: FilesScope): string =>
   scope.kind === 'root' ? 'root' : JSON.stringify(['branch', scope.projectName, scope.branchName]);
 
-/** The files route's query params for a given scope — `projectName`/`branchName` only appear for branch scope. */
+/**
+ * The files route's query params for a given scope — `projectName`/`branchName`
+ * only appear for branch scope. The route itself doesn't accept root-scope
+ * requests yet (that's a separate epic task landing the GET root-scope
+ * support); this helper is forward-declared so FilesTab/MachineFileTree can
+ * adopt `FilesScope` in one place once both land, rather than twice.
+ */
 export const filesScopeSearchParams = (machineId: string, scope: FilesScope): URLSearchParams => {
   const params = new URLSearchParams({ machineId });
   if (scope.kind === 'branch') {
