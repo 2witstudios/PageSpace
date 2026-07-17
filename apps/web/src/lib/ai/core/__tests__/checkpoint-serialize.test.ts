@@ -176,6 +176,22 @@ describe('capPartsToByteBudget', () => {
       expect(result.parts).toEqual([c]);
       expect(result.survivingFromRawIndex).toBe(12);
     });
+
+    // `parts` and `originRawIndex` are documented as parallel arrays, but the function cannot
+    // enforce that at the type level — a caller passing a truncated/mismatched origins array
+    // must land in the SAFE direction. 0 means "skip nothing": the rejoining client re-replays
+    // frames whose effect is already seeded (a self-correcting duplicate, the direction this
+    // module's docs call harmless) instead of over-skipping and permanently losing content.
+    it('given an originRawIndex that does not cover the drop point (mismatched parallel arrays), should fall back to 0 — under-skip, never over-skip', () => {
+      const oldest = text('a'.repeat(50));
+      const newest = text('b'.repeat(50));
+      const result = capPartsToByteBudget([oldest, newest], [], 60);
+
+      expect(result.wasCapped).toBe(true);
+      expect(result.prefixDropped).toBe(true);
+      expect(result.parts).toEqual([newest]);
+      expect(result.survivingFromRawIndex).toBe(0);
+    });
   });
 });
 

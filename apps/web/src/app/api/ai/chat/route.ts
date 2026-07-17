@@ -152,6 +152,49 @@ export async function POST(request: Request) {
   // createUIMessageStream even finishes constructing) must not leave the placeholder stuck at
   // 'streaming' forever (excluded from reads, 409s on edit/delete).
   let assistantMessagePersisted = false;
+  // Mention-notification context + once-flag shared by the THREE writes that can flip the
+  // assistant placeholder out of 'streaming' (execute-end, onFinish, the outer-catch cleanup).
+  // Whichever terminal write lands FIRST carries `mentionNotify` into saveMessageToDatabase;
+  // the flag (latched only after a SUCCESSFUL save, so a failed execute-end persist still lets
+  // onFinish notify) suppresses the later writes — one request never notifies the same
+  // @mention twice. Hoisted out of the try (unlike `page`) because the outer-catch cleanup
+  // needs it too. materialize-interrupted-stream.ts's CAS-gated notify RELIES on this contract:
+  // it only notifies rows it flips out of 'streaming' itself, on the premise that any row the
+  // route flipped was already notified by the route (Codex P2, PR #2097).
+  let mentionPage: { driveId: string; title: string } | undefined;
+  let mentionNotified = false;
+  const mentionNotifyFor = (
+    content: string,
+  ): { driveId: string; triggeredByUserId: string; mentionerName: string } | undefined => {
+    // Mirrors the gate the onFinish save historically applied (page.driveId present, a
+    // triggering user, conversation explicitly shared) plus saveMessageToDatabase's own
+    // content.trim() firing condition — so the flag can only latch when a notification
+    // would actually have been dispatched.
+    if (mentionNotified || !mentionPage || !userId || !isConversationShared || !content.trim()) {
+      return undefined;
+    }
+    return { driveId: mentionPage.driveId, triggeredByUserId: userId, mentionerName: mentionPage.title };
+  };
+  // The gate + attach + latch protocol in ONE place, so a terminal-write site can't get one of
+  // the three steps wrong (e.g. latching before the save resolves, which would eat the mention
+  // when the save then fails). Callers keep their own try/catch and assistantMessagePersisted
+  // handling — this owns only the exactly-once mention contract.
+  //
+  // Best-effort exactly-once, named honestly: the latch flips only AFTER the save resolves
+  // (deliberately — latching before it would lose the mention when the save fails), so two
+  // terminal writers overlapping in flight (the outer-catch cleanup racing a still-running
+  // execute-end) can each pass the gate before either latches, and a stalled-but-alive stream
+  // reaped by another instance's materializer can be re-notified by this process's own later
+  // save. Both windows resolve to a DUPLICATE ping, never a lost one — the epic's chosen
+  // direction. The durable fix (idempotent createMentionNotification per user+message) is a
+  // filed epic D task.
+  const saveTerminalAssistantMessage = async (
+    args: Omit<Parameters<typeof saveMessageToDatabase>[0], 'mentionNotify'>,
+  ): Promise<void> => {
+    const mentionNotify = mentionNotifyFor(args.content);
+    await saveMessageToDatabase({ ...args, ...(mentionNotify && { mentionNotify }) });
+    if (mentionNotify) mentionNotified = true;
+  };
   // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
   // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
   // from, so by the time the outer catch below runs, a fresh getBufferedParts() call would
@@ -354,6 +397,9 @@ export async function POST(request: Request) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
+    // pages.driveId is NOT NULL in the schema, so this is unconditional; mentionNotifyFor's
+    // !mentionPage guard covers only the outer-catch running before this line executes.
+    mentionPage = { driveId: page.driveId, title: page.title };
 
     // Vision capability gate — reject images sent to non-vision models
     if (messageHasImages) {
@@ -1516,8 +1562,16 @@ export async function POST(request: Request) {
             const bufferedParts = lifecycle!.getBufferedParts();
             const aborted = isRunAborted({ agentRun, abortSignal });
             const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+            // This write may be the sole record of the message (see the docblock above) — it
+            // must carry the mention gate, or an @mention in a reply whose onFinish never runs
+            // is silently never notified (Codex P2, PR #2097). Notification content is the
+            // buffered snapshot THIS save persists; if onFinish's refined responseMessage ever
+            // contained mention text the buffer missed (which would indicate an onChunk
+            // text-forwarding gap, not expected), that delta is not re-notified — filed as an
+            // epic D task rather than re-checking on refine, which would duplicate-notify on
+            // every normal run.
             try {
-              await saveMessageToDatabase({
+              await saveTerminalAssistantMessage({
                 messageId: serverAssistantMessageId,
                 pageId: chatId,
                 conversationId: conversationId!,
@@ -1603,7 +1657,10 @@ export async function POST(request: Request) {
                 toolResults: extractedToolResults.length
               });
 
-              await saveMessageToDatabase({
+              // Usually a no-op for mentions: the execute-end save above already carried the
+              // gate and latched the once-flag. Attaches only when that save failed or never
+              // ran, so this refinement write is the request's first (and only) notifier.
+              await saveTerminalAssistantMessage({
                 messageId,
                 pageId: chatId,
                 conversationId: conversationId!,
@@ -1614,13 +1671,6 @@ export async function POST(request: Request) {
                 toolResults,
                 uiMessage,
                 status: aborted ? 'interrupted' : 'complete',
-                ...(page?.driveId && userId && isConversationShared && {
-                  mentionNotify: {
-                    driveId: page.driveId,
-                    triggeredByUserId: userId,
-                    mentionerName: page.title ?? undefined,
-                  },
-                }),
               });
               assistantMessagePersisted = true;
 
@@ -1792,7 +1842,12 @@ export async function POST(request: Request) {
     // 'interrupted' row for a request that never started generating.
     if (!assistantMessagePersisted && serverAssistantMessageId && chatId && conversationId && lifecycle && !lifecycle.preAborted) {
       try {
-        await saveMessageToDatabase({
+        // Same exactly-once contract as execute-end/onFinish: this is a terminal write that
+        // flips the placeholder out of 'streaming', so if it is the request's FIRST successful
+        // terminal write (it only runs when the other two never landed), it carries the
+        // mention gate — otherwise a buffered @mention in the salvaged partial reply would be
+        // notified by no one (the materializer skips rows the route already flipped).
+        await saveTerminalAssistantMessage({
           messageId: serverAssistantMessageId,
           pageId: chatId,
           conversationId,

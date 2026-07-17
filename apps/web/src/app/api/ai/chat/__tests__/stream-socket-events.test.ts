@@ -683,6 +683,118 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
     });
   });
 
+  // PR #2097, Codex P2 finding: the route has THREE writes that can flip the assistant
+  // placeholder out of 'streaming' (execute-end, onFinish, and the outer-catch cleanup), but
+  // only onFinish carried mentionNotify. execute-end's own docblock says "when onFinish never
+  // runs, this write stands as the sole record" — in that documented gap the @mention
+  // notification was permanently lost, and materialize-interrupted-stream's CAS-gated notify
+  // (which assumes "the route flipped it ⇒ the route notified") could never recover it.
+  // Contract: whichever terminal write lands FIRST carries the mention gate, exactly once per
+  // request.
+  describe('mention notification exactly-once across terminal writes', () => {
+    const sharedConversation = () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: CONV_ID, userId: 'user-1', isShared: true,
+      });
+    };
+
+    const assistantSaves = () =>
+      mockSaveMessageToDatabase.mock.calls.filter((c: { role?: string }[]) => c[0]?.role === 'assistant');
+
+    it('given onFinish never runs (its documented failure mode), the execute-end save carries mentionNotify', async () => {
+      sharedConversation();
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+
+      const saves = assistantSaves();
+      expect(saves.length).toBeGreaterThan(0);
+      expect(saves[0][0].mentionNotify).toEqual({
+        driveId: 'drive-1',
+        triggeredByUserId: 'user-1',
+        mentionerName: 'Test Page',
+      });
+    });
+
+    it('given both execute-end and onFinish run, exactly ONE assistant save carries mentionNotify', async () => {
+      sharedConversation();
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const withNotify = assistantSaves().filter((c) => c[0]?.mentionNotify !== undefined);
+      expect(withNotify).toHaveLength(1);
+    });
+
+    it('given the execute-end save rejects, the onFinish save still carries mentionNotify (the flag only latches on success)', async () => {
+      sharedConversation();
+      let failedOnce = false;
+      mockSaveMessageToDatabase.mockImplementation(async (args: { role?: string }) => {
+        if (args.role === 'assistant' && !failedOnce) {
+          failedOnce = true;
+          throw new Error('execute-end persist down');
+        }
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const saves = assistantSaves();
+      expect(saves).toHaveLength(2);
+      expect(saves[1][0].mentionNotify).toBeDefined();
+    });
+
+    it('given a private conversation, NO terminal write carries mentionNotify', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: CONV_ID, userId: 'user-1', isShared: false,
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const withNotify = assistantSaves().filter((c) => c[0]?.mentionNotify !== undefined);
+      expect(withNotify).toHaveLength(0);
+    });
+
+    it('given the outer-catch cleanup is the only terminal write (createUIMessageStream threw), it carries mentionNotify', async () => {
+      sharedConversation();
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('stream creation failed');
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      const saves = assistantSaves();
+      expect(saves.length).toBeGreaterThan(0);
+      expect(saves[0][0]).toMatchObject({ status: 'interrupted' });
+      expect(saves[0][0].mentionNotify).toEqual({
+        driveId: 'drive-1',
+        triggeredByUserId: 'user-1',
+        mentionerName: 'Test Page',
+      });
+    });
+
+    it('given the outer-catch cleanup fires for a private conversation, it does NOT carry mentionNotify', async () => {
+      mockGetConversation.mockResolvedValueOnce({
+        id: CONV_ID, userId: 'user-1', isShared: false,
+      });
+      const { createUIMessageStream } = await import('ai');
+      vi.mocked(createUIMessageStream).mockImplementationOnce(() => {
+        throw new Error('stream creation failed');
+      });
+
+      await POST(makeRequest({ conversationId: CONV_ID }));
+
+      const saves = assistantSaves();
+      expect(saves.length).toBeGreaterThan(0);
+      expect(saves[0][0].mentionNotify).toBeUndefined();
+    });
+  });
+
   describe('chunk forwarding', () => {
     it('given a text-delta chunk, should forward a text part to lifecycle.pushPart', async () => {
       await POST(makeRequest());

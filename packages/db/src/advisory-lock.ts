@@ -61,6 +61,55 @@ export type WithAdvisoryLockResult<T> =
       error: unknown;
     };
 
+/**
+ * Release the connection — destroying it when handed an error — swallowing any synchronous
+ * release failure (a double-release from a hook, a pool already shut down). Every exit of
+ * withAdvisoryLock funnels through this: a throwing release() must never replace the promised
+ * resolved outcome (acquired/lock_busy/connection_error) with a rejection. Logged plainly (not
+ * via @pagespace/lib's logger — packages/db must not depend on packages/lib). Never throws.
+ *
+ * The key is logged via JSON.stringify as a %s argument to a CONSTANT format string: lock keys
+ * can be derived from request-supplied ids (e.g. a per-conversation lock), so a raw key in the
+ * format position could smuggle %-directives, and unescaped newlines could forge log lines
+ * (CodeQL js/tainted-format-string, js/log-injection — PR #2097).
+ */
+function releaseQuietly(client: AdvisoryLockClient, lockKey: string, destroyWithError?: Error): void {
+  try {
+    client.release(destroyWithError);
+  } catch (releaseError) {
+    console.error(
+      '[withAdvisoryLock:%s] release() itself failed — connection already released or pool gone: %s',
+      JSON.stringify(lockKey),
+      releaseError instanceof Error ? releaseError.message : String(releaseError),
+    );
+  }
+}
+
+/**
+ * Unlock and return the connection to the pool — or, when the unlock query itself fails,
+ * destroy the connection instead. A session that failed to unlock may still hold the
+ * session-level advisory lock; returned to the pool alive it would leak the lock permanently
+ * (every future try-lock sees lock_busy forever). Postgres releases session advisory locks
+ * when the backend dies, so destroying is the safe exit. Never throws.
+ */
+async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string): Promise<void> {
+  try {
+    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
+    client.release();
+  } catch (unlockError) {
+    const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
+    console.error(
+      '[withAdvisoryLock:%s] Advisory unlock failed — destroying the connection so the session lock cannot leak into the pool: %s',
+      JSON.stringify(lockKey),
+      err.message,
+    );
+    // Also reached when the SUCCESS-path release() above threw — releaseQuietly keeps the
+    // second (destroy) release from escaping and breaking the never-throws contract the
+    // caller's finally relies on.
+    releaseQuietly(client, lockKey, err);
+  }
+}
+
 export async function withAdvisoryLock<T>(
   pool: AdvisoryLockPool,
   lockKey: string,
@@ -73,61 +122,35 @@ export async function withAdvisoryLock<T>(
     return { outcome: 'connection_error', error };
   }
 
-  let lockAcquired = false;
-  // Set only when a query ON THIS CLIENT (try-lock or unlock) itself threw —
-  // NOT when `fn()` throws, since `fn` runs against its own I/O and leaves
-  // this lock connection's protocol state untouched.
-  let clientPoisoned = false;
-
+  // The try-lock query gets its own catch, separate from `fn`'s errors below: a query that
+  // threw ON THIS CLIENT leaves the connection's protocol state indeterminate, so it is
+  // destroyed on release rather than pooled as if healthy — and the failure is lock machinery,
+  // reported as a resolved `connection_error` outcome, never a rejection.
+  let lockResult: { rows: Record<string, unknown>[] };
   try {
-    let lockResult: { rows: Record<string, unknown>[] };
-    try {
-      lockResult = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired', [lockKey]);
-    } catch (tryLockError) {
-      clientPoisoned = true;
-      throw tryLockError;
-    }
-    lockAcquired = Boolean(lockResult.rows[0]?.acquired);
-    if (!lockAcquired) {
-      return { outcome: 'lock_busy' };
-    }
+    lockResult = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired', [lockKey]);
+  } catch (error) {
+    releaseQuietly(
+      client,
+      lockKey,
+      new Error(`withAdvisoryLock(${JSON.stringify(lockKey)}): try-lock query failed, connection left in an indeterminate state`),
+    );
+    return { outcome: 'connection_error', error };
+  }
 
+  if (!lockResult.rows[0]?.acquired) {
+    releaseQuietly(client, lockKey);
+    return { outcome: 'lock_busy' };
+  }
+
+  // `fn`'s own errors run against its own I/O and leave this lock connection's protocol state
+  // untouched — they are NOT lock machinery and keep propagating as a rejection (the caller's
+  // own error, unwrapped), after the lock is released either way. unlockAndRelease never
+  // throws, so the finally cannot mask fn's rejection.
+  try {
     const result = await fn();
     return { outcome: 'acquired', result };
-  } catch (error) {
-    // Only the try-lock query poisons the client — `fn`'s own errors leave this lock
-    // connection's protocol state untouched, so they are NOT lock machinery and must
-    // keep propagating as a rejection (the caller's own error, unwrapped).
-    if (clientPoisoned) {
-      return { outcome: 'connection_error', error };
-    }
-    throw error;
   } finally {
-    if (lockAcquired) {
-      try {
-        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey]);
-        client.release();
-      } catch (unlockError) {
-        const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
-        // A session that failed to unlock may still hold the session-level
-        // advisory lock; returned to the pool alive it would leak the lock
-        // permanently (every future try-lock sees lock_busy forever). Destroy
-        // it instead — Postgres releases session advisory locks when the
-        // backend dies. Logged plainly (not via @pagespace/lib's logger —
-        // packages/db must not depend on packages/lib) so a recurring failure
-        // is operator-visible before the dedicated pool is starved.
-        console.error(
-          `[withAdvisoryLock:${lockKey}] Advisory unlock failed — destroying the connection so the session lock cannot leak into the pool:`,
-          err.message,
-        );
-        client.release(err);
-      }
-    } else {
-      client.release(
-        clientPoisoned
-          ? new Error(`withAdvisoryLock(${lockKey}): try-lock query failed, connection left in an indeterminate state`)
-          : undefined,
-      );
-    }
+    await unlockAndRelease(client, lockKey);
   }
 }

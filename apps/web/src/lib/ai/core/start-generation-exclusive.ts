@@ -29,14 +29,15 @@ import { loggers, logPerformance } from '@pagespace/lib/logging/logger-config';
  * once per call, either inside the lock or, on degrade, once unlocked. It never runs twice for
  * one `startGenerationExclusive` call — enforced structurally, not by classifying a catch: the
  * loop below awaits `withAdvisoryLock(pool, lockKey, run)` unwrapped and only branches on its
- * RESOLVED outcome (`connection_error` | `lock_busy` | `acquired`). Any rejection — `run`
- * itself throwing, or `withAdvisoryLock`'s post-run lock-release throwing and overriding an
- * already-successful return (`finally` can still do that; see advisory-lock.ts) — is never
- * caught here, so there is no reclassification step that could mistake "run already ran" for
- * "the lock never engaged" and re-invoke `run` unlocked. `withAdvisoryLock` itself never calls
- * `fn` more than once per call, so a rejection propagating straight through this function is
- * always safe. Every operation inside `run` is ALSO expected to catch and log its own errors
- * (each call site's own try/catch) — this function's job is only to never double-invoke it.
+ * RESOLVED outcome (`connection_error` | `lock_busy` | `acquired`). The only rejection that can
+ * come out of that await is `run`'s own — `withAdvisoryLock`'s release machinery never throws
+ * (a failed unlock destroys the connection; a failed destroy is swallowed and logged; see
+ * advisory-lock.ts), so a successful `run` always surfaces as `acquired` with its result. `run`'s
+ * rejection is never caught here, so there is no reclassification step that could mistake "run
+ * already ran" for "the lock never engaged" and re-invoke `run` unlocked. `withAdvisoryLock`
+ * itself never calls `fn` more than once per call. Every operation inside `run` is ALSO expected
+ * to catch and log its own errors (each call site's own try/catch) — this function's job is only
+ * to never double-invoke it.
  */
 
 export const MAX_LOCK_BUSY_RETRIES = 3;
@@ -136,14 +137,12 @@ export async function startGenerationExclusive<T>(
     // failures, so a catch site had to disambiguate "run threw" from "the lock connection
     // itself broke" before deciding whether re-invoking `run` unlocked was safe. This
     // version never introduces that catch site at all: `withAdvisoryLock` is awaited
-    // unwrapped, so ANY rejection (`run` throwing, or the post-run lock-release throwing
-    // and overriding a successful return — `withAdvisoryLock`'s `finally` can still do
-    // that, see advisory-lock.ts:105-131) propagates straight out of this function without
-    // ever being caught and reinterpreted. `run` runs at most once per call either way —
-    // `withAdvisoryLock` itself never invokes it twice — so there is no reclassification
-    // step left for `runSettled` to guard. Verified directly: every test in
-    // start-generation-exclusive.test.ts, including the "post-run lock release throws"
-    // case PR #2080 added, passes unchanged against this simpler shape.
+    // unwrapped, and since its release machinery never throws (unlockAndRelease /
+    // releaseQuietly in advisory-lock.ts — a failed unlock destroys the connection, a
+    // failed destroy is swallowed and logged), the ONLY rejection that can propagate out
+    // of this function is `run`'s own, never caught and reinterpreted here. `run` runs at
+    // most once per call either way — `withAdvisoryLock` itself never invokes it twice —
+    // so there is no reclassification step left for `runSettled` to guard.
     const attempt = await withAdvisoryLock(pool, lockKey, run);
 
     if (attempt.outcome === 'connection_error') {

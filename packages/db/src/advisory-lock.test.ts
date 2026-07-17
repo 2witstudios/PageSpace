@@ -61,6 +61,115 @@ describe('withAdvisoryLock', () => {
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 
+  // The never-throws contract must hold even when release() itself throws: without the guard,
+  // the success-path release throwing would route into the catch, whose destroy-release then
+  // throws a synchronous double-release error that escapes — replacing a successful fn() result
+  // with a rejection inside withAdvisoryLock's finally.
+  it('given release() itself throws after a successful unlock, should swallow the double-release error and still resolve acquired', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }),
+      release: vi
+        .fn()
+        .mockImplementationOnce(() => { throw new Error('release hook failed'); })
+        .mockImplementationOnce(() => { throw new Error('Release called on a client which has already been released'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({
+      outcome: 'acquired',
+      result: 'ok',
+    });
+
+    expect(client.release).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'Release called on a client which has already been released',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given release() throws a non-Error value, should stringify it in the destroy-release log and still resolve', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }),
+      release: vi
+        .fn()
+        .mockImplementationOnce(() => { throw new Error('release hook failed'); })
+        .mockImplementationOnce(() => { throw 'released twice'; }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({
+      outcome: 'acquired',
+      result: 'ok',
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'released twice',
+    );
+    errorSpy.mockRestore();
+  });
+
+  // Lock keys can be derived from request-supplied ids, so the failure log must treat the key
+  // as data: constant format string (%s), newlines stripped — a crafted key must not be able to
+  // forge log lines or smuggle %-directives (CodeQL js/log-injection / js/tainted-format-string).
+  it('given a lock key containing newlines, should log it JSON-escaped as a format argument, never interpolated into the format string', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce(new Error('unlock failed')),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await withAdvisoryLock(pool, 'evil\nkey\r%s', async () => 'ok');
+
+    const [format, keyArg] = errorSpy.mock.calls[0];
+    expect(format).not.toContain('evil');
+    // JSON.stringify escapes the newlines to literal \n/\r — a crafted key cannot start a new
+    // log line, and the constant format string means %s in the key is inert data.
+    expect(keyArg).toBe(JSON.stringify('evil\nkey\r%s'));
+    errorSpy.mockRestore();
+  });
+
+  // pg's release(err) only destroys the connection when handed an actual Error — a raw driver
+  // rejection value (drivers CAN reject with strings/objects) passed through unwrapped would be
+  // truthy enough to look intentional but is not guaranteed to trip pg's destroy path. The
+  // helper must wrap it so the destroy-instead-of-pool decision (and the operator-visible log)
+  // hold regardless of what the driver rejected with.
+  it('given the unlock query rejects with a non-Error value, should wrap it in an Error (preserving the original text) and still destroy the connection', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce('unlock rejected as a plain string'),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'ok');
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'ok' });
+    expect(client.release).toHaveBeenCalledTimes(1);
+    const releasedWith = client.release.mock.calls[0][0];
+    expect(releasedWith).toBeInstanceOf(Error);
+    expect((releasedWith as Error).message).toContain('unlock rejected as a plain string');
+    // The recurring-failure signal must stay operator-visible even for non-Error rejections.
+    // Constant format string + args (never the key interpolated into the format position) —
+    // see the CodeQL note at the console.error call.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Advisory unlock failed'),
+      JSON.stringify('my-lock'),
+      'unlock rejected as a plain string',
+    );
+    errorSpy.mockRestore();
+  });
+
   // Leaf 5.6/5.7 (triaged D fix, fmfmzw4g4gh6u6q9cjt7ylne): the lock connection's own failure
   // must be a STRUCTURALLY distinct, resolved outcome — never a thrown/rejected promise — so a
   // caller can tell "the lock machinery is broken" apart from "fn threw" without guessing. Before
@@ -88,6 +197,46 @@ describe('withAdvisoryLock', () => {
 
     expect(result).toEqual({ outcome: 'connection_error', error: connectError });
     expect(fn).not.toHaveBeenCalled();
+  });
+
+  // CodeRabbit (PR #2097): every exit must keep its promised RESOLVED outcome even when
+  // release() itself throws — not just the post-acquisition paths the earlier tests covered.
+  it('given release() throws on the lock-busy path, should still resolve lock_busy', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }),
+      release: vi.fn(() => { throw new Error('pool gone'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'unreachable')).resolves.toEqual({
+      outcome: 'lock_busy',
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'pool gone',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given release() throws on the try-lock-failure path, should still resolve connection_error', async () => {
+    const client = makeClient({
+      query: vi.fn().mockRejectedValueOnce(new Error('connection reset')),
+      release: vi.fn(() => { throw new Error('pool gone'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'unreachable');
+
+    expect(result).toMatchObject({ outcome: 'connection_error', error: expect.any(Error) });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'pool gone',
+    );
+    errorSpy.mockRestore();
   });
 
   it('given fn itself throws after acquiring, should still unlock cleanly (fn error does not poison the lock connection) and rethrow', async () => {
