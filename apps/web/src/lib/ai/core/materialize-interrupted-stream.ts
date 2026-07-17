@@ -206,9 +206,11 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           setWhere: eq(chatMessages.status, 'streaming'),
         })
         // `.returning` reports whether the CAS actually landed. When it returns nothing, the
-        // row already left 'streaming' via its own onFinish — which already fired this exact
-        // notification behind the same gate — so notifying again here would double-page the
-        // mentioned user for one reply.
+        // row already left 'streaming' via one of the route's own terminal writes (execute-end,
+        // onFinish, or its outer-catch cleanup) — and the route guarantees whichever of those
+        // lands first carries this exact notification behind the same gate (`mentionNotifyFor`
+        // + its once-flag, route.ts; Codex P2 on PR #2097) — so notifying again here would
+        // double-page the mentioned user for one reply.
         .returning({ id: chatMessages.id });
 
       // Same gate order as saveMessageToDatabase: assistant role is implicit here, and the

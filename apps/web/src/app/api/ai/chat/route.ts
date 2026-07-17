@@ -152,6 +152,29 @@ export async function POST(request: Request) {
   // createUIMessageStream even finishes constructing) must not leave the placeholder stuck at
   // 'streaming' forever (excluded from reads, 409s on edit/delete).
   let assistantMessagePersisted = false;
+  // Mention-notification context + once-flag shared by the THREE writes that can flip the
+  // assistant placeholder out of 'streaming' (execute-end, onFinish, the outer-catch cleanup).
+  // Whichever terminal write lands FIRST carries `mentionNotify` into saveMessageToDatabase;
+  // the flag (latched only after a SUCCESSFUL save, so a failed execute-end persist still lets
+  // onFinish notify) suppresses the later writes — one request never notifies the same
+  // @mention twice. Hoisted out of the try (unlike `page`) because the outer-catch cleanup
+  // needs it too. materialize-interrupted-stream.ts's CAS-gated notify RELIES on this contract:
+  // it only notifies rows it flips out of 'streaming' itself, on the premise that any row the
+  // route flipped was already notified by the route (Codex P2, PR #2097).
+  let mentionPage: { driveId: string; title: string } | undefined;
+  let mentionNotified = false;
+  const mentionNotifyFor = (
+    content: string,
+  ): { driveId: string; triggeredByUserId: string; mentionerName: string } | undefined => {
+    // Mirrors the gate the onFinish save historically applied (page.driveId present, a
+    // triggering user, conversation explicitly shared) plus saveMessageToDatabase's own
+    // content.trim() firing condition — so the flag can only latch when a notification
+    // would actually have been dispatched.
+    if (mentionNotified || !mentionPage || !userId || !isConversationShared || !content.trim()) {
+      return undefined;
+    }
+    return { driveId: mentionPage.driveId, triggeredByUserId: userId, mentionerName: mentionPage.title };
+  };
   // Captured by the inner catch (createUIMessageStream construction failure) BEFORE it calls
   // lifecycle.finish() — finish() deletes the multicast registry entry getBufferedParts() reads
   // from, so by the time the outer catch below runs, a fresh getBufferedParts() call would
@@ -354,6 +377,7 @@ export async function POST(request: Request) {
       loggers.ai.warn('AI Chat API: Page not found', { chatId });
       return NextResponse.json({ error: 'Page not found' }, { status: 404 });
     }
+    mentionPage = page.driveId ? { driveId: page.driveId, title: page.title } : undefined;
 
     // Vision capability gate — reject images sent to non-vision models
     if (messageHasImages) {
@@ -1516,6 +1540,10 @@ export async function POST(request: Request) {
             const bufferedParts = lifecycle!.getBufferedParts();
             const aborted = isRunAborted({ agentRun, abortSignal });
             const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
+            // This write may be the sole record of the message (see the docblock above) — it
+            // must carry the mention gate, or an @mention in a reply whose onFinish never runs
+            // is silently never notified (Codex P2, PR #2097).
+            const mentionNotify = mentionNotifyFor(payload.content);
             try {
               await saveMessageToDatabase({
                 messageId: serverAssistantMessageId,
@@ -1525,8 +1553,10 @@ export async function POST(request: Request) {
                 role: 'assistant',
                 ...payload,
                 status: aborted ? 'interrupted' : 'complete',
+                ...(mentionNotify && { mentionNotify }),
               });
               assistantMessagePersisted = true;
+              if (mentionNotify) mentionNotified = true;
             } catch (e) {
               loggers.ai.error('AI Chat API: execute-end persist failed', e as Error);
             }
@@ -1603,6 +1633,10 @@ export async function POST(request: Request) {
                 toolResults: extractedToolResults.length
               });
 
+              // Usually a no-op for mentions: the execute-end save above already carried the
+              // gate and latched the once-flag. Attaches only when that save failed or never
+              // ran, so this refinement write is the request's first (and only) notifier.
+              const mentionNotify = mentionNotifyFor(messageContent);
               await saveMessageToDatabase({
                 messageId,
                 pageId: chatId,
@@ -1614,15 +1648,10 @@ export async function POST(request: Request) {
                 toolResults,
                 uiMessage,
                 status: aborted ? 'interrupted' : 'complete',
-                ...(page?.driveId && userId && isConversationShared && {
-                  mentionNotify: {
-                    driveId: page.driveId,
-                    triggeredByUserId: userId,
-                    mentionerName: page.title ?? undefined,
-                  },
-                }),
+                ...(mentionNotify && { mentionNotify }),
               });
               assistantMessagePersisted = true;
+              if (mentionNotify) mentionNotified = true;
 
               loggers.ai.debug('AI Chat API: AI response message saved to database with tools');
             } catch (error) {
@@ -1792,15 +1821,24 @@ export async function POST(request: Request) {
     // 'interrupted' row for a request that never started generating.
     if (!assistantMessagePersisted && serverAssistantMessageId && chatId && conversationId && lifecycle && !lifecycle.preAborted) {
       try {
+        const cleanupPayload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedPartsAtError);
+        // Same exactly-once contract as execute-end/onFinish: this is a terminal write that
+        // flips the placeholder out of 'streaming', so if it is the request's FIRST successful
+        // terminal write (it only runs when the other two never landed), it carries the
+        // mention gate — otherwise a buffered @mention in the salvaged partial reply would be
+        // notified by no one (the materializer skips rows the route already flipped).
+        const mentionNotify = mentionNotifyFor(cleanupPayload.content);
         await saveMessageToDatabase({
           messageId: serverAssistantMessageId,
           pageId: chatId,
           conversationId,
           userId: null,
           role: 'assistant',
-          ...buildAssistantPersistencePayload(serverAssistantMessageId, bufferedPartsAtError),
+          ...cleanupPayload,
           status: 'interrupted',
+          ...(mentionNotify && { mentionNotify }),
         });
+        if (mentionNotify) mentionNotified = true;
       } catch (cleanupError) {
         loggers.ai.error('AI Chat API: failed to terminalize placeholder row after error', cleanupError as Error);
       }
