@@ -296,16 +296,16 @@ describe('startGenerationExclusive', () => {
       expect(client.release).toHaveBeenCalledTimes(1);
     });
 
-    it('given run() SUCCEEDS but withAdvisoryLock\'s post-run lock release then throws, should propagate that error and NOT invoke run a second time unlocked', async () => {
-      // Codex review finding on PR #2080: withAdvisoryLock's `finally` releases the Postgres
-      // session AFTER fn() resolves (packages/db/src/advisory-lock.ts:76-103). If the unlock
-      // query rejects AND the destroy-on-release fallback (`client.release(err)`) also throws,
-      // that exception is uncaught and escapes the finally block, overriding the successful
-      // return value — so `withAdvisoryLock`'s overall promise rejects despite `run` having
-      // already completed successfully. A `runThrew`-only flag (set only inside guardedRun's
-      // catch) would stay false here and this would be misclassified as `lock_error`,
-      // triggering degradeToUnlocked and a second, unlocked invocation of an already-succeeded
-      // `run`. `runSettled` (set on BOTH the success and failure paths) closes this.
+    it('given run() SUCCEEDS but withAdvisoryLock\'s post-run unlock AND destroy both throw, should still resolve locked with run\'s result and NOT invoke run a second time unlocked', async () => {
+      // Codex review finding on PR #2080, contract updated by PR #2097: withAdvisoryLock's
+      // release machinery (`unlockAndRelease`/`releaseQuietly` in
+      // packages/db/src/advisory-lock.ts) now NEVER throws — a failed unlock destroys the
+      // connection, and a destroy that itself throws is swallowed and logged. So even this
+      // double failure (unlock query rejects, then `client.release(err)` throws too) can no
+      // longer escape the finally and override `run`'s already-successful return. The
+      // property this test has always guarded is unchanged: `run` executes exactly once and
+      // is never re-invoked unlocked — but now the caller also keeps the successful result
+      // instead of losing an already-started generation to lock-cleanup noise.
       const releaseError = new Error('release also failed');
       const client: AdvisoryLockClient = {
         query: vi
@@ -320,9 +320,14 @@ describe('startGenerationExclusive', () => {
       const run = vi.fn(async () => 'lifecycle-handle');
       const sleep = vi.fn(async () => {});
 
-      await expect(startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep })).rejects.toThrow(releaseError);
+      const result = await startGenerationExclusive({ conversationId: 'conv-1', run, pool, sleep });
 
+      expect(result).toEqual({ outcome: 'locked', result: 'lifecycle-handle' });
       expect(run).toHaveBeenCalledTimes(1);
+      // The destroy WAS attempted (release(err)) — the failure is contained, not skipped.
+      expect(client.release).toHaveBeenCalledWith(expect.any(Error));
+      // Not a lock_error: no degrade telemetry for a post-run cleanup failure.
+      expect(mockLogPerformance).not.toHaveBeenCalled();
     });
 
     it('given a prior call on the SAME conversation had run() throw, a later call that hits a genuine lock-machinery failure should still degrade normally', async () => {
