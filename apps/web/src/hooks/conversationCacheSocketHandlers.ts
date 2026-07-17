@@ -63,7 +63,7 @@ export const buildConversationCacheHandlers = ({
     conversationMessagesActions.applyDelete(conversationId, payload.messageId);
   },
 
-  onStreamComplete: (messageId: string, completedConvId?: string) => {
+  onStreamComplete: (messageId: string, completedConvId?: string, _info?: { joinFailed: boolean }, aborted?: boolean) => {
     const conversationId = getActiveConversationId();
     const stream = getActiveStreamById(messageId);
     if (stream && stream.parts.length > 0 && stream.conversationId === conversationId) {
@@ -81,9 +81,13 @@ export const buildConversationCacheHandlers = ({
       if (stream.isOwn) {
         conversationMessagesActions.promoteOptimisticSends(stream.conversationId);
       }
+      // epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): badge a crash-reaped or Stopped
+      // stream as 'interrupted' the instant this tab hears about it, instead of only
+      // after the next reload — the persisted row already carries this status
+      // (message-utils.ts), this just stops a live-open tab from rendering stale.
       conversationMessagesActions.applyConfirmedMessage(
         stream.conversationId,
-        synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt),
+        synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt, aborted ? 'interrupted' : 'complete'),
       );
       // F6: the socket broadcast can outrace the SSE multicast's final frames, so the
       // committed parts may be truncated. The commit gives instant continuity; this

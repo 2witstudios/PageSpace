@@ -849,7 +849,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onConversationDeleted: () => {
       refreshConversations();
     },
-    onStreamComplete: (messageId, completedConvId) => {
+    onStreamComplete: (messageId, completedConvId, _info, aborted) => {
+      // epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): badge a crash-reaped or Stopped stream as
+      // 'interrupted' the instant this tab hears about it, instead of only after the next
+      // reload — the persisted row already carries this status; this just stops a live-open
+      // tab from rendering stale.
+      const terminalStatus = aborted ? 'interrupted' as const : 'complete' as const;
       const stream = getActiveStreamById(messageId);
 
       // The conversation row is definitely on the server by now (the stream that just
@@ -896,7 +901,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         // handlers above) — covers the cross-instance-recovery case, where the
         // recovered content never went through this tab's own useChat stream and would
         // otherwise leave regenerate()'s bookkeeping short of it.
-        const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
+        const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt, terminalStatus);
         // The useChat dual-write is for OUR OWN stream only. `chat:stream_complete` carries no
         // own-stream filter, so on a shared conversation this handler also sees a COLLABORATOR's
         // stream completing in our conversation — and appending their message into our transport's
@@ -954,7 +959,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             setIdentity(persisted.id);
             conversationMessagesActions.applyConfirmedMessage(
               persisted.id,
-              synthesizeAssistantMessage(messageId, parts, startedAt),
+              synthesizeAssistantMessage(messageId, parts, startedAt, terminalStatus),
             );
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));

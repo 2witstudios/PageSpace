@@ -63,10 +63,20 @@ export interface UseChannelStreamSocketOptions {
    * synthesize a bubble from what it has. Consumers that key on "is there still a store
    * entry?" would otherwise silently do nothing and lose the reply.
    */
+  /**
+   * `aborted` (epic leaf 6.8, D ixpwr76xepu2x9v4pxgksyhz) is `payload.aborted` from
+   * `chat:stream_complete` — undefined on the two SSE-local finalize paths (a plain
+   * join resolve, or the poll-fallback noticing the row vanished), which have no
+   * server-told answer to that question. Consumers that replace-in-place with
+   * `synthesizeAssistantMessage` should pass `aborted ? 'interrupted' : 'complete'`
+   * as its `status` so a tab with the conversation open badges the interrupted
+   * state immediately, not only on the next reload.
+   */
   onStreamComplete?: (
     messageId: string,
     conversationId?: string,
     info?: { joinFailed: boolean },
+    aborted?: boolean,
   ) => void;
   /** Fires once per messageId when DB bootstrap finds an in-flight stream from this browser session. */
   onOwnStreamBootstrap?: (event: { messageId: string; conversationId: string }) => void;
@@ -255,10 +265,11 @@ export function useChannelStreamSocket(
       messageId: string,
       conversationId?: string,
       info?: { joinFailed: boolean },
+      aborted?: boolean,
     ) => {
       if (processed.has(messageId)) return;
       processed.add(messageId);
-      onStreamCompleteRef.current?.(messageId, conversationId, info);
+      onStreamCompleteRef.current?.(messageId, conversationId, info, aborted);
     };
 
     const fireOwnFinalize = (messageId: string) => {
@@ -572,7 +583,7 @@ export function useChannelStreamSocket(
       }
       joinDelivered.delete(payload.messageId);
       try {
-        fireComplete(payload.messageId, payload.conversationId, { joinFailed: didJoinFail });
+        fireComplete(payload.messageId, payload.conversationId, { joinFailed: didJoinFail }, payload.aborted);
       } finally {
         removeStream(payload.messageId);
         fireOwnFinalize(payload.messageId);

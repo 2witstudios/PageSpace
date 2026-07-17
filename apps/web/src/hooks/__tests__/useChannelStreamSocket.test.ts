@@ -278,7 +278,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false }, undefined);
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (SSE path)', async () => {
@@ -485,7 +485,7 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, undefined);
     });
 
     // Line-by-line scan finding: a re-entrant chat:stream_start for the same messageId (e.g. a
@@ -977,7 +977,7 @@ describe('useChannelStreamSocket', () => {
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
       expect(mockRemoveStream).toHaveBeenCalledWith('msg-1');
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, undefined);
     });
 
     it('should call onStreamComplete before removeStream so stream data is available in the callback (socket path)', async () => {
@@ -1079,7 +1079,7 @@ describe('useChannelStreamSocket', () => {
       mockRemoveStream.mockClear();
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
-      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true });
+      expect(onStreamComplete).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: true }, undefined);
       // Removed BEFORE the callback fired: shouldReloadOnComountComplete keys on the
       // absence of a store entry to choose the reload-from-DB branch over synthesizing
       // a bubble from what is, at best, a stale snapshot.
@@ -1141,7 +1141,7 @@ describe('useChannelStreamSocket', () => {
       await act(async () => { resolveJoin(); });
 
       expect(firstCallback).not.toHaveBeenCalled();
-      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false });
+      expect(secondCallback).toHaveBeenCalledWith('msg-1', 'conv-1', { joinFailed: false }, undefined);
     });
   });
 
