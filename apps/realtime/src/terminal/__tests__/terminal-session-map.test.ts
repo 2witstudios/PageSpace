@@ -15,7 +15,7 @@ function fakeViewer(userId = 'user1'): TerminalViewer {
 
 function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
   return {
-    command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn(), setViewerAttached: vi.fn() },
+    command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn(), setViewerAttached: vi.fn(), isQuiesced: () => false },
     sandboxId,
     sessionKey,
     lastViewerUserId: 'user1',
