@@ -158,11 +158,12 @@ describe('usePageAgentSidebarChat', () => {
         })
       );
 
+      const message = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'Hello' }] };
       act(() => {
-        result.current.sendMessage({ text: 'Hello' });
+        result.current.sendMessage(message);
       });
 
-      expect(mockGlobalSendMessage).toHaveBeenCalledWith({ text: 'Hello' }, undefined);
+      expect(mockGlobalSendMessage).toHaveBeenCalledWith(message, undefined);
       expect(mockAgentSendMessage).not.toHaveBeenCalled();
     });
 
@@ -233,12 +234,13 @@ describe('usePageAgentSidebarChat', () => {
         })
       );
 
+      const message = { id: 'u-2', role: 'user' as const, parts: [{ type: 'text' as const, text: 'Hello Agent' }] };
       act(() => {
-        result.current.sendMessage({ text: 'Hello Agent' }, { body: { test: true } });
+        result.current.sendMessage(message, { body: { test: true } });
       });
 
       expect(mockAgentSendMessage).toHaveBeenCalledWith(
-        { text: 'Hello Agent' },
+        message,
         { body: { test: true } }
       );
       expect(mockGlobalSendMessage).not.toHaveBeenCalled();

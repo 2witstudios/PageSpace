@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, ReactNode, useState, useReducer, useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { createContext, useContext, ReactNode, useReducer, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DefaultChatTransport, UIMessage } from 'ai';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { conversationState } from '@/lib/ai/core/conversation-state';
@@ -22,32 +22,37 @@ import { useAuth } from '@/hooks/useAuth';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import type { ChatGlobalConversationAddedPayload } from '@/lib/websocket/socket-utils';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { getActiveStreamById } from '@/hooks/useActiveStream';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { loadGlobalConversationMessages, refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
+import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
 import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStreamingRegistrations';
 
 /**
  * Global Chat Context — two tiers to minimize re-render noise:
  *
- * 1. GlobalChatConversationContext — conversation controls + refreshSignal, rarely changes
+ * 1. GlobalChatConversationContext — conversation identity + controls, rarely changes
  * 2. GlobalChatConfigContext — chatConfig (stable)
  *
- * Messages are owned exclusively by useChat in each surface (GlobalAssistantView,
- * SidebarChatTab). Context holds no duplicate message state.
+ * NO MESSAGE TIER (PR 5B). `initialMessages`/`isMessagesLoading` used to live here as a
+ * fetched-messages slot the surfaces watched and copied into their useChat instances via
+ * setMessages — one refetch-and-replace writer among several, each of which could clobber a
+ * live stream and so each of which grew a clobber guard (#2061). Loads now commit to
+ * `useConversationMessagesStore` (the shared per-conversation cache) via
+ * `loadGlobalConversationMessages`, and surfaces render
+ * `selectRenderedMessages(cacheEntry, activeStreams)` through the `useRenderedMessages`
+ * facade — merge-at-render, so no effect ordering can blank a live stream, and the guards
+ * are deleted rather than arbitrated.
+ *
+ * NO refreshSignal (PR 5B, leaf 5.4). Remote events (reconnect, undo, cross-tab
+ * edits/deletes, stream completions) no longer signal surfaces to refetch-and-setMessages;
+ * each producer below writes the cache directly (targeted action) or triggers a cache
+ * reload (staleness-guarded by the store's loadGeneration).
  *
  * NO STREAM TIER (PR 5A). `isStreaming`/`stopStreaming` used to live here as a single shared
  * SLOT, written by a claim protocol on this side and directly by GlobalAssistantView on the
- * other, and read by SidebarChatTab. Two co-mounted surfaces writing one slot is what the
- * claim/release/re-examine machinery existed to arbitrate — and every "the slot belongs to
- * somebody else" bug came out of it, including the gap where a surface that declined a claim
- * never re-claimed the slot once it was freed, leaving a live stream with no Stop button.
- *
- * That fact now lives in `usePendingStreamsStore`, which already receives
- * {messageId, conversationId, isOwn} on bootstrap AND live stream_start. Both surfaces READ it
+ * other, and read by SidebarChatTab. That fact now lives in `usePendingStreamsStore`, read
  * via `useConversationActiveStream(channelId, conversationId)`. Selectors don't claim, so the
  * whole class is gone by construction rather than by arbitration.
- *
- * Remote events (reconnect, undo, cross-tab messages/edits/deletes) increment
- * `refreshSignal`. Surfaces watch it and self-fetch when it changes. (PR 5B deletes this too.)
  */
 
 // ============================================
@@ -56,22 +61,7 @@ import { DerivedStreamingRegistrations } from '@/components/ai/shared/DerivedStr
 
 interface GlobalChatConversationContextValue {
   currentConversationId: string | null;
-  /** Fetched messages from the last loadConversation/createNewConversation.
-   *  Surfaces watch this reference and apply via setMessages (not via useChat
-   *  config, which ignores the messages prop after construction). */
-  initialMessages: UIMessage[];
   isInitialized: boolean;
-  /**
-   * True while messages are being fetched for an ALREADY-known conversation
-   * (loadConversation), decoupled from identity resolution — loadConversation
-   * adopts its id synchronously (closing the create/select race), so
-   * isInitialized alone no longer covers this fetch window. Without this, a
-   * conversation switch could flash the previous conversation's messages
-   * under the new conversation's identity/header with no loading indicator.
-   */
-  isMessagesLoading: boolean;
-  /** Increments when remote events require surfaces to re-fetch messages from DB. */
-  refreshSignal: number;
   setCurrentConversationId: (id: string | null) => void;
   loadConversation: (id: string) => Promise<void>;
   createNewConversation: () => Promise<void>;
@@ -119,49 +109,20 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, []);
   const currentConversationId = conversationIdFrom(identity);
 
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const isInitialized = !isResolving(identity) && identity.status !== 'idle';
-  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
-  const [refreshSignal, setRefreshSignal] = useState(0);
   const [latestGlobalConversationAdded, setLatestGlobalConversationAdded] = useState<ChatGlobalConversationAddedPayload | null>(null);
 
 
   // The id is already known — adopt it synchronously, before the messages
   // fetch even starts, so a send fired right after switching can't race.
+  // Messages land in the shared conversation cache; the loader's
+  // loadGeneration gate replaces the local stale-result check, and it carries
+  // includeStreaming=1 so a history-tab rejoin sees the in-flight placeholder
+  // row (selectRenderedMessages renders the live stream in its place).
   const loadConversation = useCallback(async (conversationId: string) => {
     dispatchIdentity({ type: 'IDENTITY_SET', conversationId });
     conversationState.setActiveConversationId(conversationId);
-    setIsMessagesLoading(true);
-    try {
-      // includeStreaming=1: leaf 5.2 (history-tab rejoin). A conversation opened from a
-      // streaming-badged history entry has an in-flight 'streaming' placeholder row that a
-      // default fetch excludes (see chat-message-repository.ts's includeStreaming contract).
-      // Including it here is what lets mergeServerAndPending recognize and replace it with
-      // the live pending-stream content once the channel-wide bootstrap/socket attach (already
-      // running for every conversation via useChannelStreamSocket below) discovers the same
-      // stream — no separate rejoin path needed. Harmless for the common non-streaming case:
-      // there is no such row to include.
-      const messagesResponse = await fetchWithAuth(
-        `/api/ai/global/${conversationId}/messages?limit=50&includeStreaming=1`
-      );
-      // Drop a stale result if the user switched to a different conversation
-      // while this fetch was in flight.
-      if (conversationIdFrom(identityRef.current) !== conversationId) return;
-      if (messagesResponse.ok) {
-        const messageData = await messagesResponse.json();
-        const loadedMessages = Array.isArray(messageData) ? messageData : messageData.messages || [];
-        setInitialMessages(loadedMessages);
-      } else {
-        console.error('Failed to load conversation:', conversationId);
-        setInitialMessages([]);
-      }
-      setIsMessagesLoading(false);
-    } catch (error) {
-      console.error('Error loading conversation:', error);
-      if (conversationIdFrom(identityRef.current) !== conversationId) return;
-      setInitialMessages([]);
-      setIsMessagesLoading(false);
-    }
+    await loadGlobalConversationMessages(conversationId);
   }, [dispatchIdentity]);
 
   const createNewConversation = useCallback(async () => {
@@ -171,7 +132,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       });
       if (newConversation && newConversation.id) {
         dispatchIdentity({ type: 'IDENTITY_SET', conversationId: newConversation.id });
-        setInitialMessages([]);
+        // A just-created conversation has no server rows — mark it loaded-empty
+        // in the cache so nothing fetches for it and no loading state shows.
+        conversationMessagesActions.seedConversation(newConversation.id);
         conversationState.setActiveConversationId(newConversation.id);
         if (!getAgentId()) {
           setConversationId(newConversation.id, 'push');
@@ -201,8 +164,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
 
         const response = await fetchWithAuth('/api/ai/global/active');
+        // CR2 (CodeRabbit round 2): everything below this await is a BOOTSTRAP
+        // result, and the user may have created/selected a conversation while it
+        // was in flight — their IDENTITY_SET moved the reducer past 'resolving',
+        // and a stale bootstrap must not overwrite it. (loadConversation itself
+        // keeps its unconditional IDENTITY_SET: a user-initiated select always
+        // wins; only these post-await bootstrap adoptions are guarded.)
+        if (!isResolving(identityRef.current)) return;
         if (response.ok) {
           const conversation = await response.json();
+          if (!isResolving(identityRef.current)) return;
           if (conversation && conversation.id) {
             await loadConversation(conversation.id);
             if (!hasAgent) {
@@ -229,9 +200,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ============================================
-  // Socket reconnect — signal surfaces rather than fetching here.
-  // Fetching here can't reach surface useChat setters and triggers an
-  // unnecessary loading-spinner flash via setIsInitialized(false).
+  // Socket reconnect — reload the active conversation's cache entry (P1).
+  // The loadGeneration gate drops it if a newer load supersedes; merge-at-render
+  // means it cannot blank a live stream regardless of timing.
   // ============================================
   const connectionStatus = useSocketStore((s) => s.connectionStatus);
   const hasInitialConnectRef = useRef(false);
@@ -251,7 +222,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
       hasInitialConnectRef.current,
     );
     if (refreshNow && isInitializedRef.current && currentConversationIdRef.current) {
-      setRefreshSignal((n) => n + 1);
+      void loadGlobalConversationMessages(currentConversationIdRef.current);
     }
 
     if (prevStatus !== 'connected' && connectionStatus === 'connected') {
@@ -266,78 +237,31 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   const userId = user?.id ?? null;
   const channelId = userId ? globalChannelId(userId) : null;
 
-  const setRefreshSignalRef = useRef(setRefreshSignal);
-  setRefreshSignalRef.current = setRefreshSignal;
-
   const { rejoinActiveStreams: rejoinGlobalStream } = useChannelStreamSocket(channelId ?? undefined, {
-    // Cross-tab same-user events: signal surfaces to re-fetch rather than
-    // updating context state that nobody renders from.
-    onUserMessage: (_message, payload) => {
-      if (payload.conversationId !== currentConversationId) return;
-      setRefreshSignalRef.current((n) => n + 1);
-    },
-    onMessageEdited: (payload) => {
-      if (payload.conversationId !== currentConversationId) return;
-      setRefreshSignalRef.current((n) => n + 1);
-    },
-    onMessageDeleted: (payload) => {
-      if (payload.conversationId !== currentConversationId) return;
-      setRefreshSignalRef.current((n) => n + 1);
-    },
+    // P2-P4 + P6: the shared socket-events → cache protocol (one implementation with
+    // the agent channels — see buildConversationCacheHandlers for the commit/promote/
+    // heal semantics). NO useChat dual-write here, unlike AiChatView: this provider
+    // cannot reach the surfaces' transport instances, and post-cutover their arrays
+    // are bookkeeping only — the surfaces re-seed the transport at the actions that
+    // need it (retry, ask_user answers).
+    ...buildConversationCacheHandlers({
+      getActiveConversationId: () => currentConversationIdRef.current,
+      reloadConversation: loadGlobalConversationMessages,
+      refreshSnapshot: (conversationId) => refreshConversationSnapshot(null, conversationId),
+    }),
+    // P5: a remote tab's undo restructures the conversation wholesale — reload the
+    // cache entry. Guard kept as the pure fn (cross-conversation + own-tab).
     onUndoApplied: (payload) => {
       if (!shouldRefreshAfterUndo(payload, currentConversationId, getBrowserSessionId())) return;
-      setRefreshSignalRef.current((n) => n + 1);
+      void loadGlobalConversationMessages(payload.conversationId);
     },
-    onStreamComplete: (messageId, completedConvId, info) => {
-      const stream = getActiveStreamById(messageId);
-      // Remote or bootstrapped stream: signal surfaces to fetch the persisted message.
-      if (stream && stream.conversationId === currentConversationIdRef.current) {
-        setRefreshSignalRef.current((n) => n + 1);
-        return;
-      }
-      // The SSE join failed (the stream ran on another web instance), so its store entry
-      // was dropped and there is nothing here to render — but the message IS durably
-      // persisted. Without this we'd fall through to "our useChat already has it" and
-      // silently lose the reply.
-      if (info?.joinFailed && completedConvId === currentConversationIdRef.current) {
-        setRefreshSignalRef.current((n) => n + 1);
-        return;
-      }
-      // Own fresh stream: surface's useChat already has the message.
-    },
-    // NO onOwnStreamBootstrap/onActiveStreamsSnapshot/onOwnStreamFinalize claim handlers
-    // (PR 5A). `useChannelStreamSocket` already records {messageId, conversationId, isOwn} in
-    // usePendingStreamsStore on bootstrap AND live stream_start, before the isOwn/consuming
-    // attach decision — so the fact these three handlers used to project into a slot is already
-    // in the store, for free, and both surfaces read it with
-    // `useConversationActiveStream(channelId, conversationId)`.
-    //
-    // Deleted with them: the ownership arbitration they needed (which claim wins, whether the
-    // slot is still ours to release, re-examining a claim made before identity resolved) and
-    // the reconciliation for the paths where a finalize event can never arrive (a socket-instance
-    // swap tears the effect down without finalizing, stranding the claim forever). A selector
-    // has no claim to strand.
     onGlobalConversationAdded: (payload) => {
       setLatestGlobalConversationAdded(payload);
     },
   });
 
-  const prevConversationIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (currentConversationId !== prevConversationIdRef.current && currentConversationId) {
-      prevConversationIdRef.current = currentConversationId;
-    }
-  }, [currentConversationId]);
-
   const apiEndpoint = currentConversationId ? `/api/ai/global/${currentConversationId}/messages` : '';
   const transport = useChatTransport(currentConversationId, apiEndpoint, channelId);
-
-  // NO activeStreams-map cleanup (PR 5A, leaf 5.8): the client-side chatId→streamId map is gone.
-  // It existed so Stop could name a stream, but it was only populated once the response HEADERS
-  // landed and was torn down by these very cleanups on a conversation switch — so it was empty
-  // in both windows where Stop matters most. Aborts now name the stream by messageId (from the
-  // store) or by the send-time conversationId, neither of which needs a map to keep in sync,
-  // and so neither needs an owner to free it.
 
   const chatConfig = useMemo(() => {
     if (!currentConversationId || !transport) return null;
@@ -365,10 +289,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 
   const conversationContextValue: GlobalChatConversationContextValue = useMemo(() => ({
     currentConversationId,
-    initialMessages,
     isInitialized,
-    isMessagesLoading,
-    refreshSignal,
     setCurrentConversationId,
     loadConversation,
     createNewConversation,
@@ -377,10 +298,7 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
   }), [
     setCurrentConversationId,
     currentConversationId,
-    initialMessages,
     isInitialized,
-    isMessagesLoading,
-    refreshSignal,
     loadConversation,
     createNewConversation,
     rejoinGlobalStream,
@@ -411,9 +329,9 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
 // ============================================
 
 /**
- * Conversation controls without subscribing to streaming state.
+ * Conversation identity + controls without subscribing to streaming state.
  * Best for: history panels, navigation, conversation management.
- * Also provides `refreshSignal` for surfaces that need to re-fetch on remote events.
+ * Messages are NOT here (PR 5B): read them via useRenderedMessages(channelId, conversationId).
  */
 export function useGlobalChatConversation() {
   const context = useContext(GlobalChatConversationContext);

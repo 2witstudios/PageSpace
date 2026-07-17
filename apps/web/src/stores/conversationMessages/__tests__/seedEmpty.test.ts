@@ -8,6 +8,7 @@ describe('seedEmpty', () => {
       optimisticSends: [],
       loadGeneration: 0,
       pendingMutationsSinceLoad: [],
+      loadStatus: 'idle',
     });
   });
 

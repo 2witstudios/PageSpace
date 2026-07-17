@@ -21,22 +21,28 @@ import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChatConversation, useGlobalChatConfig } from '@/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
-import { usePendingStreamsStore, type PendingStream } from '@/stores/usePendingStreamsStore';
-import { useShallow } from 'zustand/react/shallow';
+import { type PendingStream } from '@/stores/usePendingStreamsStore';
 import { useAuth } from '@/hooks/useAuth';
 import { dedupRemoteStreams } from '@/lib/ai/streams/dedupRemoteStreams';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import { selectChannelRemoteStreams } from '@/lib/ai/streams/selectChannelRemoteStreams';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { toast } from 'sonner';
 import { LocationContext } from '@/lib/ai/shared';
 import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
-import { useConversationActiveStream, mergeServerMessagesWithOwnStream } from '@/hooks/useActiveStream';
+import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
+import { useRenderedMessages, useConversationLoadState } from '@/hooks/useRenderedMessages';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import {
+  loadGlobalConversationMessages,
+  loadAgentConversationMessages,
+} from '@/hooks/conversationMessagesLoaders';
+import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
+import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useSendHandoff, useCacheMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
@@ -46,9 +52,7 @@ import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
-import { shouldApplyLoadedMessages } from '@/lib/ai/streams/shouldApplyLoadedMessages';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
-import { mergeServerAndPending } from '@/lib/ai/streams/mergeServerAndPending';
 import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
 import { canConcludeTurnIsLost, type RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
 import { evictStalePartial, canEvictStalePartial } from '@/lib/ai/streams/evictStalePartial';
@@ -194,10 +198,7 @@ const SidebarChatTab: React.FC = () => {
   const {
     currentConversationId: globalConversationId,
     isInitialized: globalIsInitialized,
-    isMessagesLoading: globalIsMessagesLoading,
-    initialMessages: globalInitialMessages,
     createNewConversation: createGlobalConversation,
-    refreshSignal,
     rejoinGlobalStream,
   } = useGlobalChatConversation();
 
@@ -211,12 +212,9 @@ const SidebarChatTab: React.FC = () => {
   const {
     selectedAgent,
     conversationId: agentConversationId,
-    initialMessages: agentInitialMessages,
     isInitialized: agentIsInitialized,
-    isMessagesLoading: agentIsMessagesLoading,
     selectAgent,
     createNewConversation: createAgentConversation,
-    refreshConversation: refreshAgentConversation,
     loadConversation: loadSidebarAgentConversation,
   } = usePageAgentSidebarState();
 
@@ -246,7 +244,6 @@ const SidebarChatTab: React.FC = () => {
   // Sidebar Chat (custom hook - unified interface)
   // ============================================
   const {
-    messages,
     sendMessage,
     status,
     error,
@@ -286,11 +283,6 @@ const SidebarChatTab: React.FC = () => {
   const currentConversationIdRef = useRef<string | null>(null);
   currentConversationIdRef.current = currentConversationId;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
-  // Identity can be 'ready' (isInitialized true) while messages for the
-  // conversation just switched to are still in flight — decoupled from
-  // identity resolution so a switch doesn't flash the previous conversation's
-  // messages under the new one with no loading indicator.
-  const isMessagesLoading = selectedAgent ? agentIsMessagesLoading : globalIsMessagesLoading;
   const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
   // Mirrored so the resume handler can read it AFTER its awaits. Its own closure captured the
   // pre-background value, which cannot tell it whether a generation has since restarted.
@@ -320,28 +312,45 @@ const SidebarChatTab: React.FC = () => {
   // OLD conversation's still-in-flight request. Scoping the read by conversation answers
   // "is a stream live for what I'm showing" directly, with nothing to latch and nothing to claim.
   const activeStream = useConversationActiveStream(streamChannelId, currentConversationId);
-  const remoteStreams = usePendingStreamsStore(
-    useShallow((state) =>
-      selectChannelRemoteStreams(state, {
-        selectedAgent,
-        agentConversationId,
-        globalChannelId: channelIdForGlobal,
-        globalConversationId,
-      }),
-    ),
-  );
+  // Remote in-progress streams — one facade read per mode (container-agnostic
+  // consumer rule: components never reach into usePendingStreamsStore directly).
+  const { streams: agentRemoteStreams } = useActiveStream(selectedAgent?.id ?? '', agentConversationId);
+  const { streams: globalRemoteStreams } = useActiveStream(channelIdForGlobal ?? '', globalConversationId);
+  const remoteStreams = selectedAgent ? agentRemoteStreams : globalRemoteStreams;
 
-  // Agent-mode wiring (Tasks 4 + 5 + 6 for the sidebar). No-op when
-  // selectedAgent is null. Joins the agent socket room, bootstrap-replays
-  // in-flight streams, claims the dashboard stop slot under co-mount safety,
-  // registers `ai-channel-${agent.id}` with the editing store (same key as
-  // GlobalAssistantView agent mode → natural same-channel de-dup), and
-  // re-fetches the active conversation on socket reconnect.
+  // ============================================
+  // STORE-FIRST RENDERING (PR 5B, leaf 5.2)
+  // ============================================
+  // The rendered list is `selectRenderedMessages(conversationCache, activeStreams)`
+  // via the facade — useChat's `messages` never renders (transport/controller only).
+  // Loading/error UI reads the cache entry's load state (replaces the context's
+  // isMessagesLoading, the sidebar store's flag, and this file's loadGlobalMessages
+  // local state, stale-request ref and error state).
+  const renderedMessages = useRenderedMessages(streamChannelId ?? '', currentConversationId);
+  const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+  const messagesLoadState = useConversationLoadState(currentConversationId);
+  const isMessagesLoading = messagesLoadState.isLoading;
+
+  // Reload the active conversation's cache entry — the one refetch path for this
+  // surface (undo, app resume, error retry). Staleness is the loader's
+  // loadGeneration gate; merge-at-render keeps a live stream visible over any DB
+  // snapshot, which is what deleted this surface's #2061 clobber guards.
+  const reloadCurrentConversation = useCallback(async () => {
+    const conversationId = currentConversationId;
+    if (!conversationId) return;
+    if (selectedAgent) {
+      await loadAgentConversationMessages(selectedAgent.id, conversationId);
+    } else {
+      await loadGlobalConversationMessages(conversationId);
+    }
+  }, [currentConversationId, selectedAgent]);
+
+  // Agent-mode multiplayer wiring. No-op when selectedAgent is null. Message
+  // callbacks write the shared conversation cache (PR 5B, leaf 5.6); reconnect
+  // reloads via the sidebar state's cache-committing loader.
   const { rejoinActiveStreams: rejoinAgentStream } = useAgentChannelMultiplayer({
     selectedAgent,
     agentConversationId,
-    setLocalMessages: setMessages,
-    surfaceComponentName: 'SidebarChatTab',
     loadConversation: loadSidebarAgentConversation,
   });
 
@@ -369,10 +378,10 @@ const SidebarChatTab: React.FC = () => {
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
-  // INTERIM (PR 5A → deleted in PR 5B): the three #2061 clobber guards below still ask "is MY OWN
-  // stream producing content for the conversation I'm about to load/refresh" — narrower than
-  // displayIsStreaming, which also covers streams this surface merely shows a Stop button for.
-  // `activeStream` is already conversation-scoped, so `isOwn === true` is exactly that question.
+  // "Is MY OWN stream live for the conversation on screen". The #2061 clobber guards that
+  // consumed this died with PR 5B (merge-at-render); what remains is the resume handler's
+  // "had a turn in flight" record — conversation-scoped, so a stream still running against
+  // a conversation the user left cannot trigger a regenerate for the one on screen.
   const isOwnStreamForCurrentConversation = activeStream?.isOwn === true;
 
   const remoteStreamingUser = !displayIsStreaming
@@ -381,13 +390,13 @@ const SidebarChatTab: React.FC = () => {
 
   const streamingAssistantText = useMemo(() => {
     if (!displayIsStreaming) return null;
-    const last = messages[messages.length - 1];
+    const last = plainMessages[plainMessages.length - 1];
     if (!last || last.role !== 'assistant') return null;
     return (last.parts ?? [])
       .filter((p) => p.type === 'text')
       .map((p) => (p as { type: 'text'; text: string }).text)
       .join('');
-  }, [messages, displayIsStreaming]);
+  }, [plainMessages, displayIsStreaming]);
 
 
 
@@ -433,6 +442,32 @@ const SidebarChatTab: React.FC = () => {
     triggeredBy: mirrorTriggeredBy,
   });
 
+  // Shared store-first message actions (F2/F9): actions reason over SETTLED rows
+  // only — a synthesized live-stream row must never reach retry/delete's
+  // server-side DELETEs (the live bubble's verb is Stop).
+  const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
+
+  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
+    agentId: selectedAgent?.id || null,
+    conversationId: currentConversationId,
+    renderedMessages,
+    isOwnSendLive,
+    setMessages,
+    regenerate,
+  });
+
+  // Display ids come from the RENDERED list (affordance placement + streaming
+  // animation are display concerns; the actions above use the settled set).
+  const lastAssistantMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'assistant')?.id,
+    [plainMessages],
+  );
+  const lastUserMessageId = useMemo(
+    () => [...plainMessages].reverse().find((m) => m.role === 'user')?.id,
+    [plainMessages],
+  );
+
+
   // ============================================
   // Centralized Assistant Settings (from store)
   // ============================================
@@ -454,16 +489,14 @@ const SidebarChatTab: React.FC = () => {
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
   const voiceBaselineRef = useRef<string | null | undefined>(undefined);
 
-  // Global-mode load-on-select state: tracks in-progress DB fetches and their
-  // failures so the sidebar never shows a silent blank on conversation select.
-  const [isLoadingGlobalMessages, setIsLoadingGlobalMessages] = useState(false);
-  const [globalMessagesLoadError, setGlobalMessagesLoadError] = useState<Error | null>(null);
-  // Stale-request guard: holds the conversationId of the most recent load request.
-  const globalLoadRequestedIdRef = useRef<string | null>(null);
-  // Synchronously updated each render — lets tryRecover read the live message
-  // count without adding messages to its useCallback deps.
-  const currentMessagesRef = useRef(messages);
-  currentMessagesRef.current = messages;
+  // Synchronously updated each render — lets tryRecover read the CURRENT
+  // CONVERSATION's rendered rows without adding them to its useCallback deps.
+  // plainMessages, not the transport array (CR1, CodeRabbit round 2): the
+  // transport accumulates rows across conversation switches and is never
+  // seeded from loads post-cutover, so its last-user id could belong to a
+  // different conversation and defeat the persisted-reply check.
+  const currentMessagesRef = useRef<UIMessage[]>([]);
+  currentMessagesRef.current = plainMessages;
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -539,77 +572,12 @@ const SidebarChatTab: React.FC = () => {
   // dashboard each held a session for the SAME stream, and neither covered a bootstrapped stream
   // (useChat is idle for those, so both reported "not streaming" while one was live on screen).
 
-  // Fetches the latest DB messages for the active global conversation and writes
-  // them to the useChat instance via setGlobalMessages. Single writer for the
-  // global-mode server→view path; shared by the load-on-select effect, the
-  // refreshSignal handler, and the retry button.
-  //
-  // NOTE: prod runs multiple web instances — live tokens from a stream on another
-  // instance won't be in the pending store; the persisted message still shows up
-  // on the next DB load. Cross-instance live-token rejoin is a known follow-up.
-  // Returns the in-flight promise so callers that need to know the load has LANDED can await it
-  // (the resume handler does). Callers that just want to kick a refresh off — load-on-select,
-  // refreshSignal, retry — can keep ignoring the result.
-  const loadGlobalMessages = useCallback((conversationId: string): Promise<void> => {
-    globalLoadRequestedIdRef.current = conversationId;
-    setIsLoadingGlobalMessages(true);
-    setGlobalMessagesLoadError(null);
-
-    return fetchWithAuth(`/api/ai/global/${conversationId}/messages`)
-      .then(async (res) => {
-        if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
-        if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
-        const data = await res.json();
-        if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
-        const serverMessages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-        // Reconcile with any in-flight own stream to avoid dropping the streaming bubble.
-        const ownStream = Array.from(usePendingStreamsStore.getState().streams.values())
-          .find((s) => s.isOwn && s.conversationId === conversationId);
-        const merged = ownStream
-          ? mergeServerAndPending(serverMessages, ownStream.parts, ownStream.messageId, ownStream.startedAt)
-          : serverMessages;
-        setGlobalMessages(merged);
-        setGlobalMessagesLoadError(null);
-      })
-      .catch((err) => {
-        if (!shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) return;
-        // Keep prior messages — never silently blank on failure.
-        setGlobalMessagesLoadError(err instanceof Error ? err : new Error('Failed to load messages'));
-      })
-      .finally(() => {
-        if (shouldApplyLoadedMessages(conversationId, globalLoadRequestedIdRef.current)) {
-          setIsLoadingGlobalMessages(false);
-        }
-      });
-  }, [setGlobalMessages]);
-
-  // When remote events fire (reconnect, undo from another tab, cross-tab
-  // edit/delete), GlobalChatContext increments refreshSignal. If
-  // GlobalAssistantView is not mounted (user is on a page, not the dashboard),
-  // this sidebar is responsible for re-fetching global messages.
-  // Routed through loadGlobalMessages so the stale-request guard prevents a
-  // race where a slow refreshSignal fetch overwrites a newer conversation's messages.
-  const prevSidebarRefreshSignalRef = useRef(refreshSignal);
-  const globalIsInitializedRef = useRef(globalIsInitialized);
-  globalIsInitializedRef.current = globalIsInitialized;
-  useEffect(() => {
-    if (refreshSignal === prevSidebarRefreshSignalRef.current) return;
-    // The ref is only advanced when the refetch actually runs (see the load-on-select
-    // effects below for the full rationale) — a refreshSignal bump that arrives mid-stream
-    // must be retried once streaming ends, not marked "seen" and dropped. Without this, a
-    // remote event that fires while this surface happens to be streaming for an unrelated
-    // reason would be silently lost if no further remote event bumps refreshSignal again.
-    //
-    // Guarded on `isOwnStreamForCurrentConversation`, NOT the broader `displayIsStreaming` —
-    // switching to a different global conversation does not abort an in-flight send in the old
-    // one (stable useChat id), so displayIsStreaming can stay true for a conversation that is no
-    // longer the one being loaded. Blocking on that would strand this refetch behind an
-    // unrelated stream in a conversation the user already left.
-    if (!selectedAgent && globalIsInitializedRef.current && globalConversationId && !isOwnStreamForCurrentConversation) {
-      prevSidebarRefreshSignalRef.current = refreshSignal;
-      loadGlobalMessages(globalConversationId);
-    }
-  }, [refreshSignal, selectedAgent, globalConversationId, isOwnStreamForCurrentConversation, loadGlobalMessages]);
+  // NO loadGlobalMessages and NO refreshSignal consumer (PR 5B, leaves 5.2/5.4):
+  // every load/refresh commits to the shared conversation cache (context loaders,
+  // sidebar-state loaders, reloadCurrentConversation above), remote events write the
+  // cache directly in GlobalChatContext, and rendering merges the live stream back in
+  // at render — so the stale-request ref, the own-stream reconcile merge, and the
+  // #2061 clobber guards that arbitrated those writes are deleted, not moved.
 
   // ============================================
   // Effects: UI State
@@ -634,8 +602,8 @@ const SidebarChatTab: React.FC = () => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = messages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = messages[messages.length - 1];
+      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
+      const lastOverallMsg = plainMessages[plainMessages.length - 1];
       // During streaming the last overall message is the in-progress assistant reply;
       // the baseline should be the previously-finalized message before it.
       const streamingAssistantIdx =
@@ -649,7 +617,7 @@ const SidebarChatTab: React.FC = () => {
 
     if (displayIsStreaming) return;
 
-    const lastAssistantMsg = [...messages].reverse().find((m) => m.role === 'assistant');
+    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
     if (!lastAssistantMsg) return;
     const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
     const text = textParts.map((p) => (p as { text: string }).text).join('');
@@ -661,23 +629,16 @@ const SidebarChatTab: React.FC = () => {
         ? current
         : { id: lastAssistantMsg.id, text }
     );
-  }, [messages, displayIsStreaming, isVoiceModeActive]);
+  }, [plainMessages, displayIsStreaming, isVoiceModeActive]);
 
-  // Refresh this surface from the DB after a background resume, catching a reply that landed
-  // while we were away. Reached on the WEB resume path only (an idle tab coming back); the
-  // native path recovers through tryRecover, which never reads the DB while a run is live.
-  //
-  // Global mode funnels through `loadGlobalMessages` — the documented single writer for the
-  // global-mode server→view path — rather than doing its own fetch. That loader carries the
-  // stale-response check, so a response arriving after the user switched conversation cannot
-  // clobber the conversation they moved to. The raw fetch this replaced had no such guard.
+  // Refresh this surface from the DB after a background resume, catching a reply that
+  // landed while we were away. Reached on the WEB resume path only (an idle tab coming
+  // back); the native path recovers through tryRecover, which never reads the DB while
+  // a run is live. One cache reload for both modes (leaf 5.4 W3).
   const handleAppResume = useCallback(async () => {
-    if (selectedAgent) {
-      await refreshAgentConversation();
-    } else if (globalConversationId && globalIsInitialized) {
-      await loadGlobalMessages(globalConversationId);
-    }
-  }, [selectedAgent, refreshAgentConversation, globalConversationId, globalIsInitialized, loadGlobalMessages]);
+    if (!isInitialized) return;
+    await reloadCurrentConversation();
+  }, [isInitialized, reloadCurrentConversation]);
 
   // NO activeStreams cleanup (PR 5A, leaf 5.5.8): the client chatId->streamId map is deleted, so
   // there is no per-surface entry to free — and no way for one surface's cleanup to delete
@@ -697,74 +658,28 @@ const SidebarChatTab: React.FC = () => {
   // ============================================
 
   const handleRetryGlobalMessageLoad = useCallback(() => {
-    if (selectedAgent || !globalConversationId || !globalIsInitialized) return;
-    loadGlobalMessages(globalConversationId);
-  }, [selectedAgent, globalConversationId, globalIsInitialized, loadGlobalMessages]);
+    void reloadCurrentConversation();
+  }, [reloadCurrentConversation]);
 
-  // Load-on-select guarantee for global mode: with a stable useChat id,
-  // surfaces must explicitly re-apply messages on conversation load/reselect.
-  // The sidebar re-fetches via loadGlobalMessages (includes stale-request
-  // guard + own-stream reconciliation). Seeded to `null` so the initial-mount
-  // load is also covered by this effect (avoids a second, redundant effect).
-  const prevSidebarGlobalMessagesRef = useRef<UIMessage[] | null>(null);
-  useEffect(() => {
-    if (globalInitialMessages === prevSidebarGlobalMessagesRef.current) return;
-    // Guarded the same way as the refreshSignal effect above — without this, a
-    // mount/reload/conversation-switch that lands while this surface's own send is already
-    // streaming clobbers the in-progress assistant bubble with a stale DB snapshot that
-    // predates the reply.
-    //
-    // `isOwnStreamForCurrentConversation`, not the broader `displayIsStreaming`: a conversation
-    // switch does not abort an in-flight send in the conversation just left (stable useChat id),
-    // so displayIsStreaming can stay true there while `globalConversationId` has already moved
-    // on to an idle conversation — blocking on it would strand the newly-selected conversation
-    // behind an unrelated stream.
-    //
-    // The ref is only advanced INSIDE the guard. If the guard blocks (streaming), the ref
-    // stays stale on purpose — every dependency change (including isOwnStreamForCurrentConversation
-    // flipping false) re-runs the effect, and while the ref is stale this same
-    // `globalInitialMessages` reference still reads as "changed," so the load is retried
-    // instead of permanently lost. Advancing the ref unconditionally (before the guard) would
-    // mark this reference as seen even though it was never applied, silently stranding the
-    // sidebar on stale/empty history once streaming ends.
-    if (!selectedAgent && globalIsInitialized && globalConversationId && !isOwnStreamForCurrentConversation) {
-      prevSidebarGlobalMessagesRef.current = globalInitialMessages;
-      loadGlobalMessages(globalConversationId);
-    }
-  }, [globalInitialMessages, selectedAgent, globalIsInitialized, globalConversationId, isOwnStreamForCurrentConversation, loadGlobalMessages]);
-
-  // Load-on-select guarantee for agent mode: with a stable useChat id, the
-  // sidebar's agent Chat instance is never recreated on conversation switch,
-  // so usePageAgentSidebarState's fetched messages must be explicitly applied
-  // via setMessages. Seeded to `null` so the initial-mount/agent-select load
-  // is also covered by this effect.
-  const prevSidebarAgentMessagesRef = useRef<UIMessage[] | null>(null);
-  useEffect(() => {
-    if (agentInitialMessages === prevSidebarAgentMessagesRef.current) return;
-    // Same guard as the global-mode load-on-select effect above (conversation-scoped, not the
-    // broader displayIsStreaming — switching agent conversations doesn't abort the old one's
-    // in-flight send either), and the same ref-advances-only-on-apply discipline: a
-    // mount/reload/agent-switch that lands mid-stream must not clobber the in-progress
-    // assistant bubble, but it also must not be forgotten once the stream ends — advancing the
-    // ref here regardless of the guard would do exactly that.
-    if (selectedAgent && !isOwnStreamForCurrentConversation) {
-      prevSidebarAgentMessagesRef.current = agentInitialMessages;
-      setMessages(agentInitialMessages);
-    }
-  }, [agentInitialMessages, selectedAgent, isOwnStreamForCurrentConversation, setMessages]);
+  // NO load-on-select effects (PR 5B, leaf 5.2): loads commit straight to the
+  // conversation cache (GlobalChatContext / sidebar-state loaders), and rendering is
+  // `selectRenderedMessages(cacheEntry, activeStreams)` — there is no useChat array
+  // to re-apply loaded history into and no mid-stream clobber to guard against
+  // (merge-at-render). This deletes this surface's remaining #2061 clobber guards.
 
   const handleNewConversation = useCallback(async () => {
     try {
       if (selectedAgent) {
+        // No setMessages([]) (leaf 5.4 W6): rendering is per-conversation from the
+        // cache, and createAgentConversation seeds the new id loaded-empty.
         await createAgentConversation();
-        setMessages([]);
       } else {
         await createGlobalConversation();
       }
     } catch {
       toast.error('Failed to create new conversation');
     }
-  }, [selectedAgent, createAgentConversation, createGlobalConversation, setMessages]);
+  }, [selectedAgent, createAgentConversation, createGlobalConversation]);
 
   // Shared shape for every sidebar send path (text, voice, ask-user-answer) —
   // all three need "the request body for wherever we're sending right now,
@@ -822,8 +737,20 @@ const SidebarChatTab: React.FC = () => {
     setInput('');
     clearFiles();
 
+    // Client-minted id, parts-form send (PR 4 pattern): only that shape preserves the
+    // id end to end, and the id is what lets the cache reconcile the optimistic bubble
+    // against its broadcast/load echoes. Written to the cache immediately — the
+    // sender's own tab never receives its own chat:user_message broadcast back, and
+    // this is what makes the bubble appear the same tick (leaf 5.2 acceptance).
+    const userMessage = buildUserMessage({
+      id: createId(),
+      text: text.trim().length > 0 ? text : undefined,
+      files: sendFiles,
+    }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage({ text, files: sendFiles }, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
+    wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -844,8 +771,12 @@ const SidebarChatTab: React.FC = () => {
     const isReadOnly = !writeMode;
     const contextRef = buildFreshContextRef();
 
+    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
+    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage({ text }, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
+    wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
   }, [
     currentConversationId,
     writeMode,
@@ -864,10 +795,24 @@ const SidebarChatTab: React.FC = () => {
     buildSidebarChatRequestBody,
   ]);
 
+  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
+  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
+  // question on a conversation opened from history/reload would silently do nothing.
+  // Seed the settled rendered rows first (same imperative, action-scoped write as the
+  // retry seed; skipped while our own send is live).
+  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
+    if (!isOwnSendLive) {
+      setMessages(stableMessages);
+    }
+    return addToolResult(args);
+  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
+
+  // plainMessages (store-rendered): "answerable" is decided by the conversation's
+  // LAST message, and remote edits/deletes/messages update the store, not useChat.
   const askUserAnswering = useAskUserAnswering({
-    messages,
+    messages: plainMessages,
     status,
-    addToolResult,
+    addToolResult: seededAddToolResult,
     wrapSend,
     buildBody: buildAskUserAnswerBody,
   });
@@ -880,24 +825,6 @@ const SidebarChatTab: React.FC = () => {
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);
-
-  const unifiedSetMessages = useCallback(
-    (msgs: UIMessage[] | ((prev: UIMessage[]) => UIMessage[])) => {
-      setMessages(msgs);
-    },
-    [setMessages]
-  );
-
-  const { handleEdit, handleDelete, handleRetry, lastAssistantMessageId, lastUserMessageId } =
-    useMessageActions({
-    // Gates the post-edit reconcile refetch's whole-array write (see useMessageActions).
-    isOwnStreamLive: isStreaming || activeStream?.isOwn === true,
-      agentId: selectedAgent?.id || null,
-      conversationId: currentConversationId,
-      messages,
-      setMessages: unifiedSetMessages,
-      regenerate,
-    });
 
   // NO heldStreamMsgIdRef (PR 5A): the stream's assistant messageId was latched here on the
   // first 'streaming' render and held so Stop could name it after the surface moved on. The store
@@ -919,12 +846,12 @@ const SidebarChatTab: React.FC = () => {
     if (!conversationId) return { recovered: false, probeAnswered, dbAnswered };
     const channelId = selectedAgent?.id ?? channelIdForGlobal;
     if (!channelId) return { recovered: false, probeAnswered, dbAnswered };
-    // Every write below happens after an await, into a useChat instance whose id is constant
-    // across conversation switches. Re-check the LIVE conversation before each one, exactly as
-    // loadGlobalMessages does — otherwise a recovery for the conversation the user just left
-    // lands in the one they moved to.
+    // Every transport write below happens after an await, into a useChat instance whose
+    // id is constant across conversation switches. Re-check the LIVE conversation before
+    // each one — otherwise a recovery for the conversation the user just left lands in
+    // the one they moved to. (The cache write is conversation-keyed; no gate needed.)
     const stillOnThisConversation = () =>
-      shouldApplyLoadedMessages(conversationId, currentConversationIdRef.current);
+      conversationId === currentConversationIdRef.current;
 
     // Step 1: live stream check
     try {
@@ -979,6 +906,9 @@ const SidebarChatTab: React.FC = () => {
 
     // Step 2: DB check for a persisted reply to the CURRENT turn.
     try {
+      // Token BEFORE the fetch — a stale recovery snapshot must not overwrite
+      // anything fresher committed while it was in flight (CR4).
+      const snapshotToken = conversationMessagesActions.beginServerSnapshot(conversationId);
       const url = selectedAgent
         ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
         : `/api/ai/global/${conversationId}/messages`;
@@ -1017,15 +947,10 @@ const SidebarChatTab: React.FC = () => {
           stillOnThisConversation() &&
           decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch'
         ) {
-          // Write the SAME normalized array the guards above were computed from. Reading
-          // defensively and then writing `data.messages` raw would blank the surface outright if
-          // the route ever answered with a bare array.
-          const serverMessages = msgs as unknown as UIMessage[];
-          if (selectedAgent) {
-            setMessages(serverMessages);
-          } else {
-            setGlobalMessages(serverMessages);
-          }
+          // Commit the SAME normalized array the guards above were computed from, as the
+          // conversation's loaded truth — the cache write is conversation-keyed and renders
+          // via merge-at-render (PR 5B: the refetch branch becomes a cache commit).
+          conversationMessagesActions.applyServerSnapshot(conversationId, snapshotToken, msgs as unknown as UIMessage[]);
           return { recovered: true, probeAnswered, dbAnswered };
         }
       }
@@ -1228,47 +1153,25 @@ const SidebarChatTab: React.FC = () => {
     setUndoDialogMessageId(messageId);
   }, []);
 
+  // Undo restructures the conversation server-side — reload the cache entry (leaf 5.4
+  // W4). No transport write and no own-stream merge dance: merge-at-render keeps a live
+  // own stream visible over any DB snapshot.
   const handleUndoSuccess = useCallback(async () => {
     setUndoDialogMessageId(null);
-    if (!currentConversationId) return;
-    if (selectedAgent) {
-      // Agent mode: direct fetch (loadGlobalMessages is global-only).
-      try {
-        const res = await fetchWithAuth(
-          `/api/ai/page-agents/${selectedAgent.id}/conversations/${currentConversationId}/messages`,
-        );
-        if (res.ok) {
-          const data = await res.json();
-          // MERGE, don't skip — same shape as this file's own global-mode loadGlobalMessages, and
-          // for two reasons. Agent mode renders from useChat, so skipping would leave a confirmed
-          // destructive undo invisible until the user navigates away and back. And a raw write
-          // would hand useOwnStreamMirror an array whose newest row is somebody else's finished
-          // message (see mergeServerMessagesWithOwnStream). Merging applies the undo and keeps our
-          // own live bubble last.
-          setMessages(mergeServerMessagesWithOwnStream(data.messages, currentConversationId, currentMessagesRef.current));
-        }
-      } catch (error) {
-        console.error('Failed to refresh messages after undo:', error);
-      }
-    } else {
-      // Global mode: route through loadGlobalMessages for stale guard + pending merge.
-      loadGlobalMessages(currentConversationId);
-    }
-  }, [currentConversationId, selectedAgent, setMessages, loadGlobalMessages]);
+    await reloadCurrentConversation();
+  }, [reloadCurrentConversation]);
 
   // ============================================
   // Computed Values for Rendering
   // ============================================
 
-  // Use messages from the useChat hook directly for both modes.
-  // useChat instances are independent (no shared state). GlobalAssistantView and
-  // SidebarChatTab each manage their own useChat and sync via explicit fetch + setMessages.
-  const displayMessages = messages;
+  // The store-first render source (PR 5B): confirmed + optimistic + live-streaming,
+  // merged at render. useChat's `messages` never renders.
+  const displayMessages = plainMessages;
 
-  // Two independent "messages not ready yet" signals feed the same in-place indicator:
-  // identity-level isMessagesLoading (both modes) and the global-mode direct fetch flag.
+  // One "messages not ready yet" signal: the cache entry's load state.
   const messagesAreaMode = selectMessagesAreaMode({
-    isLoading: isMessagesLoading || (!selectedAgent && isLoadingGlobalMessages),
+    isLoading: isMessagesLoading,
     messageCount: displayMessages.length,
     streamCount: remoteStreams.length,
   });
@@ -1330,8 +1233,9 @@ const SidebarChatTab: React.FC = () => {
         )}
       </div>
 
-      {/* Global-mode message-load error — shown above messages so it's always visible. */}
-      {!selectedAgent && globalMessagesLoadError && (
+      {/* Message-load error (from the conversation cache) — shown above messages so
+          it's always visible; a failed load keeps the prior snapshot. */}
+      {messagesLoadState.hasError && (
         <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-destructive/10 text-destructive text-xs border-b border-destructive/20">
           <span className="truncate">Failed to load messages</span>
           <Button

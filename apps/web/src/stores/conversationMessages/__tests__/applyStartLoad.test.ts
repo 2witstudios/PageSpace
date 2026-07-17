@@ -11,6 +11,7 @@ describe('applyStartLoad', () => {
       optimisticSends: [],
       loadGeneration: 1,
       pendingMutationsSinceLoad: [],
+      loadStatus: 'loading',
     });
   });
 
@@ -21,6 +22,7 @@ describe('applyStartLoad', () => {
         optimisticSends: [],
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
+        loadStatus: 'loaded',
       },
     };
     const { byConversationId, generation } = applyStartLoad(initial, 'c1');
@@ -35,6 +37,7 @@ describe('applyStartLoad', () => {
         optimisticSends: [{ id: 'opt1', role: 'user', parts: [] }],
         loadGeneration: 1,
         pendingMutationsSinceLoad: [],
+        loadStatus: 'loaded',
       },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');
@@ -44,7 +47,7 @@ describe('applyStartLoad', () => {
 
   it('given other conversations tracked, should not touch them', () => {
     const initial: ConversationMessagesById = {
-      other: { messages: [], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [] },
+      other: { messages: [], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');
     expect(byConversationId.other).toBe(initial.other);
@@ -57,6 +60,7 @@ describe('applyStartLoad', () => {
         optimisticSends: [],
         loadGeneration: 1,
         pendingMutationsSinceLoad: [{ type: 'remoteMessage', message: { id: 'm1', role: 'user', parts: [] } }],
+        loadStatus: 'loaded',
       },
     };
     const { byConversationId } = applyStartLoad(initial, 'c1');

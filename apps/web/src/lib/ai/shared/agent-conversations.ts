@@ -35,6 +35,15 @@ export interface FetchAgentMessagesOptions {
   limit?: number;
   cursor?: string;
   direction?: 'before' | 'after';
+  /**
+   * Include the in-flight streaming placeholder row (the route excludes it by
+   * default). Cache loads pass this so a history rejoin can see a conversation
+   * that is still generating — `selectRenderedMessages` renders the live
+   * pending-stream entry in place of the placeholder row (E2 D task
+   * co2as25wcpme4m4gxqu4zgcj: the badge lit but agent click-through showed a
+   * stale placeholder because these loads never asked for it).
+   */
+  includeStreaming?: boolean;
 }
 
 export interface FetchAgentMessagesResult {
@@ -55,6 +64,7 @@ export async function fetchAgentConversationMessages(
   if (options?.limit) params.set('limit', String(options.limit));
   if (options?.cursor) params.set('cursor', options.cursor);
   if (options?.direction) params.set('direction', options.direction);
+  if (options?.includeStreaming) params.set('includeStreaming', '1');
 
   const queryString = params.toString();
   const url = `/api/ai/page-agents/${agentId}/conversations/${conversationId}/messages${queryString ? `?${queryString}` : ''}`;

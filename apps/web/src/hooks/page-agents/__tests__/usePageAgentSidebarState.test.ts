@@ -6,6 +6,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { usePageAgentSidebarState, SidebarAgentInfo, useSidebarAgentStore } from '../usePageAgentSidebarState';
+// REAL conversation cache: the hook's loaders commit messages there (PR 5B, leaf 5.3).
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
@@ -57,13 +59,13 @@ describe('usePageAgentSidebarState', () => {
     // Reset Zustand store state to initial values
     useSidebarAgentStore.setState({
       selectedAgent: null,
+      identity: { status: 'idle' },
       conversationId: null,
-      initialMessages: [],
       isInitialized: false,
-      isMessagesLoading: false,
       agentIdForConversation: null,
       _loadingAgentId: null,
     });
+    useConversationMessagesStore.setState({ byConversationId: {} });
     // Clear localStorage
     localStorage.clear();
     // Reset all mocks
@@ -93,10 +95,6 @@ describe('usePageAgentSidebarState', () => {
       expect(result.current.conversationId).toBeNull();
     });
 
-    it('should start with empty initialMessages', () => {
-      const { result } = renderHook(() => usePageAgentSidebarState());
-      expect(result.current.initialMessages).toEqual([]);
-    });
 
     it('should start as not initialized', () => {
       const { result } = renderHook(() => usePageAgentSidebarState());
@@ -276,7 +274,9 @@ describe('usePageAgentSidebarState', () => {
       });
 
       expect(result.current.conversationId).toBe('conv-existing');
-      expect(result.current.initialMessages).toEqual(mockMessages);
+      await waitFor(() => {
+        expect(useConversationMessagesStore.getState().getEntry('conv-existing').messages).toEqual(mockMessages);
+      });
     });
 
     it('should create new conversation if none exists', async () => {
@@ -302,9 +302,11 @@ describe('usePageAgentSidebarState', () => {
       });
 
       // The id is now generated client-side (cuid2), not read from the
-      // server response — just verify one was adopted.
+      // server response — just verify one was adopted, seeded loaded-empty.
       expect(result.current.conversationId).not.toBeNull();
-      expect(result.current.initialMessages).toEqual([]);
+      const entry = useConversationMessagesStore.getState().getEntry(result.current.conversationId as string);
+      expect(entry.messages).toEqual([]);
+      expect(entry.loadStatus).toBe('loaded');
     });
 
     it('should recover from a transient list-fetch error by falling back to a client-generated new conversation', async () => {
@@ -324,7 +326,7 @@ describe('usePageAgentSidebarState', () => {
       });
 
       expect(result.current.conversationId).not.toBeNull();
-      expect(result.current.initialMessages).toEqual([]);
+      expect(useConversationMessagesStore.getState().getEntry(result.current.conversationId as string).messages).toEqual([]);
     });
   });
 
@@ -367,7 +369,9 @@ describe('usePageAgentSidebarState', () => {
 
       expect(newConvId).not.toBeNull();
       expect(result.current.conversationId).toBe(newConvId);
-      expect(result.current.initialMessages).toEqual([]);
+      const entry = useConversationMessagesStore.getState().getEntry(newConvId as unknown as string);
+      expect(entry.messages).toEqual([]);
+      expect(entry.loadStatus).toBe('loaded');
     });
 
     it('should return null if no agent is selected', async () => {
@@ -442,7 +446,7 @@ describe('usePageAgentSidebarState', () => {
       await act(() => loadPromise);
     });
 
-    it('given loadConversation is called, should set isMessagesLoading true until its messages fetch resolves', async () => {
+    it('given loadConversation is called, the cache entry should read loading until its messages fetch resolves, and the fetch should carry includeStreaming=1', async () => {
       mockFetchWithAuth.mockResolvedValueOnce({ ok: true, json: async () => ({ conversations: [] }) });
 
       const { result } = renderHook(() => usePageAgentSidebarState());
@@ -462,14 +466,17 @@ describe('usePageAgentSidebarState', () => {
       });
 
       expect(result.current.conversationId).toBe('picked-from-history');
-      expect(result.current.isMessagesLoading).toBe(true);
+      expect(useConversationMessagesStore.getState().getEntry('picked-from-history').loadStatus).toBe('loading');
+      // Absorbed E2 D task: agent-mode history rejoin must see the in-flight placeholder.
+      const messagesFetchUrl = mockFetchWithAuth.mock.calls[mockFetchWithAuth.mock.calls.length - 1][0] as string;
+      expect(messagesFetchUrl).toContain('includeStreaming=1');
 
       await act(async () => {
         resolveMessages({ ok: true, json: async () => ({ messages: [] }) });
         await loadPromise;
       });
 
-      expect(result.current.isMessagesLoading).toBe(false);
+      expect(useConversationMessagesStore.getState().getEntry('picked-from-history').loadStatus).toBe('loaded');
     });
   });
 
@@ -511,50 +518,15 @@ describe('usePageAgentSidebarState', () => {
         expect(result.current.isInitialized).toBe(true);
       });
 
-      expect(result.current.initialMessages).toEqual(initialMessages);
+      await waitFor(() => {
+        expect(useConversationMessagesStore.getState().getEntry('conv-123').messages).toEqual(initialMessages);
+      });
 
       await act(async () => {
         await result.current.refreshConversation();
       });
 
-      expect(result.current.initialMessages).toEqual(updatedMessages);
-    });
-  });
-
-  // ============================================
-  // updateMessages Tests
-  // ============================================
-  describe('updateMessages', () => {
-    it('should update messages optimistically', async () => {
-      mockFetchWithAuth
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ conversations: [] }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ conversationId: 'conv-123' }),
-        });
-
-      const { result } = renderHook(() => usePageAgentSidebarState());
-
-      act(() => {
-        result.current.selectAgent(mockAgent);
-      });
-
-      await waitFor(() => {
-        expect(result.current.isInitialized).toBe(true);
-      });
-
-      const newMessages = [
-        { id: 'msg-1', role: 'user', content: 'Test' },
-      ] as never[];
-
-      act(() => {
-        result.current.updateMessages(newMessages);
-      });
-
-      expect(result.current.initialMessages).toEqual(newMessages);
+      expect(useConversationMessagesStore.getState().getEntry('conv-123').messages).toEqual(updatedMessages);
     });
   });
 
@@ -657,33 +629,22 @@ describe('usePageAgentSidebarState', () => {
   // transferFromDashboard Tests
   // ============================================
   describe('transferFromDashboard', () => {
-    it('should transfer agent state from dashboard store', () => {
-      const mockMessages = [
-        { id: 'msg-1', role: 'user', content: 'Hello' },
-        { id: 'msg-2', role: 'assistant', content: 'Hi!' },
-      ] as never[];
-
+    it('should transfer agent selection + conversation identity from dashboard store (agent + conversationId ONLY — the cache already holds the messages)', () => {
       const { result } = renderHook(() => usePageAgentSidebarState());
 
-      // Initially empty
       expect(result.current.selectedAgent).toBeNull();
       expect(result.current.conversationId).toBeNull();
-      expect(result.current.initialMessages).toEqual([]);
       expect(result.current.isInitialized).toBe(false);
 
-      // Transfer state from dashboard
       act(() => {
         useSidebarAgentStore.getState().transferFromDashboard({
           agent: mockAgent,
           conversationId: 'conv-from-dashboard',
-          messages: mockMessages,
         });
       });
 
-      // Verify state was transferred
       expect(result.current.selectedAgent).toEqual(mockAgent);
       expect(result.current.conversationId).toBe('conv-from-dashboard');
-      expect(result.current.initialMessages).toEqual(mockMessages);
       expect(result.current.isInitialized).toBe(true);
     });
 
@@ -694,54 +655,42 @@ describe('usePageAgentSidebarState', () => {
         useSidebarAgentStore.getState().transferFromDashboard({
           agent: mockAgent,
           conversationId: null,
-          messages: [],
         });
       });
 
       expect(result.current.selectedAgent).toEqual(mockAgent);
       expect(result.current.conversationId).toBeNull();
-      expect(result.current.initialMessages).toEqual([]);
       expect(result.current.isInitialized).toBe(true);
     });
 
     it('should override existing sidebar state when transferring', () => {
       const { result } = renderHook(() => usePageAgentSidebarState());
 
-      // Set up initial state
       act(() => {
         result.current.selectAgent(mockAgent2);
       });
-
-      // Wait for initialization
       act(() => {
         useSidebarAgentStore.setState({
           conversationId: 'existing-conv',
-          initialMessages: [{ id: 'old-msg', role: 'user', content: 'Old' }] as never[],
           isInitialized: true,
           agentIdForConversation: mockAgent2.id,
         });
       });
 
-      // Transfer new state from dashboard
-      const newMessages = [{ id: 'new-msg', role: 'user', content: 'New' }] as never[];
       act(() => {
         useSidebarAgentStore.getState().transferFromDashboard({
           agent: mockAgent,
           conversationId: 'dashboard-conv',
-          messages: newMessages,
         });
       });
 
-      // Verify state was replaced
       expect(result.current.selectedAgent).toEqual(mockAgent);
       expect(result.current.conversationId).toBe('dashboard-conv');
-      expect(result.current.initialMessages).toEqual(newMessages);
     });
 
     it('should clear loading state when transferring', () => {
       const { result } = renderHook(() => usePageAgentSidebarState());
 
-      // Simulate loading state
       act(() => {
         useSidebarAgentStore.setState({
           _loadingAgentId: 'some-agent',
@@ -749,16 +698,13 @@ describe('usePageAgentSidebarState', () => {
         });
       });
 
-      // Transfer should clear loading
       act(() => {
         useSidebarAgentStore.getState().transferFromDashboard({
           agent: mockAgent,
           conversationId: 'conv-123',
-          messages: [],
         });
       });
 
-      // Verify loading state is cleared
       expect(result.current.isInitialized).toBe(true);
       expect(useSidebarAgentStore.getState()._loadingAgentId).toBeNull();
     });
@@ -768,49 +714,10 @@ describe('usePageAgentSidebarState', () => {
         useSidebarAgentStore.getState().transferFromDashboard({
           agent: mockAgent,
           conversationId: 'conv-123',
-          messages: [],
         });
       });
 
       expect(useSidebarAgentStore.getState().agentIdForConversation).toBe(mockAgent.id);
-    });
-
-    it('should handle empty messages array', () => {
-      const { result } = renderHook(() => usePageAgentSidebarState());
-
-      act(() => {
-        useSidebarAgentStore.getState().transferFromDashboard({
-          agent: mockAgent,
-          conversationId: 'conv-123',
-          messages: [],
-        });
-      });
-
-      expect(result.current.initialMessages).toEqual([]);
-      expect(result.current.isInitialized).toBe(true);
-    });
-
-    it('should transfer large message arrays efficiently', () => {
-      const { result } = renderHook(() => usePageAgentSidebarState());
-
-      // Create a large message array
-      const largeMessages = Array.from({ length: 100 }, (_, i) => ({
-        id: `msg-${i}`,
-        role: i % 2 === 0 ? 'user' : 'assistant',
-        content: `Message ${i}`,
-      })) as never[];
-
-      act(() => {
-        useSidebarAgentStore.getState().transferFromDashboard({
-          agent: mockAgent,
-          conversationId: 'conv-large',
-          messages: largeMessages,
-        });
-      });
-
-      expect(result.current.initialMessages).toHaveLength(100);
-      expect(result.current.initialMessages[0]).toEqual(largeMessages[0]);
-      expect(result.current.initialMessages[99]).toEqual(largeMessages[99]);
     });
   });
 });

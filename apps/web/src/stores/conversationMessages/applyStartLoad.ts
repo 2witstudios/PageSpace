@@ -22,7 +22,12 @@ export const applyStartLoad = (
   return {
     byConversationId: {
       ...byConversationId,
-      [conversationId]: { ...existing, loadGeneration: generation, pendingMutationsSinceLoad: [] },
+      [conversationId]: {
+        ...existing,
+        loadGeneration: generation,
+        pendingMutationsSinceLoad: [],
+        loadStatus: 'loading',
+      },
     },
     generation,
   };

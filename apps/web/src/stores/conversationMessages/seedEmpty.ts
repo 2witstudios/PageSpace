@@ -40,11 +40,20 @@ export type PendingMutation =
  * switch) clears it. Revisit with a cap or per-message-id collapse if a wired
  * consumer (PR 4/5) shows this mattering under real traffic.
  */
+/**
+ * Load lifecycle of the entry's `messages` snapshot, so surfaces render
+ * loading/error UI straight from the cache (PR 5B, leaf 5.2) instead of
+ * per-surface local state. 'error' never implies cleared messages — a failed
+ * reload keeps the prior snapshot (see `applyFailLoad`).
+ */
+export type ConversationLoadStatus = 'idle' | 'loading' | 'loaded' | 'error';
+
 export interface ConversationCacheEntry {
   messages: UIMessage[];
   optimisticSends: UIMessage[];
   loadGeneration: number;
   pendingMutationsSinceLoad: PendingMutation[];
+  loadStatus: ConversationLoadStatus;
 }
 
 export type ConversationMessagesById = Record<string, ConversationCacheEntry>;
@@ -55,4 +64,5 @@ export const seedEmpty = (): ConversationCacheEntry => ({
   optimisticSends: [],
   loadGeneration: 0,
   pendingMutationsSinceLoad: [],
+  loadStatus: 'idle',
 });

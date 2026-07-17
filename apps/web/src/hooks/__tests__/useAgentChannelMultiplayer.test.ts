@@ -63,8 +63,20 @@ vi.mock('@/lib/ai/core/stream-abort-client', () => ({
   abortActiveStreamByMessageId: mockAbortByMessageId,
 }));
 
-// Real Zustand store imported AFTER mocks
+const { mockLoadAgentConversationMessages, mockRefreshConversationSnapshot } = vi.hoisted(() => ({
+  mockLoadAgentConversationMessages: vi.fn().mockResolvedValue(undefined),
+  mockRefreshConversationSnapshot: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/hooks/conversationMessagesLoaders', () => ({
+  loadAgentConversationMessages: mockLoadAgentConversationMessages,
+  refreshConversationSnapshot: mockRefreshConversationSnapshot,
+}));
+
+// Real Zustand stores imported AFTER mocks. useConversationMessagesStore is REAL:
+// the hook's message callbacks are cache writes now (PR 5B, leaf 5.6), and the
+// behavior under test is what lands in the cache.
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import { useAgentChannelMultiplayer } from '../useAgentChannelMultiplayer';
 
 const CONV_ID = 'conv-1';
@@ -75,8 +87,6 @@ const baseOptions = (
 ): Parameters<typeof useAgentChannelMultiplayer>[0] => ({
   selectedAgent: null,
   agentConversationId: null,
-  setLocalMessages: vi.fn(),
-  surfaceComponentName: 'TestSurface',
   loadConversation: vi.fn(),
   ...overrides,
 });
@@ -94,7 +104,11 @@ describe('useAgentChannelMultiplayer', () => {
     capturedChannel.options = undefined;
     mockSocketStatus.current = 'disconnected';
     pendingStreams.current = new Map();
+    useConversationMessagesStore.setState({ byConversationId: {} });
   });
+
+  const cacheMessages = (conversationId: string) =>
+    useConversationMessagesStore.getState().getEntry(conversationId).messages;
 
   describe('subscription', () => {
     it('given a selected agent, the channel-stream socket should be subscribed to the agent id', () => {
@@ -113,175 +127,229 @@ describe('useAgentChannelMultiplayer', () => {
     });
   });
 
-  describe('local message synthesis on stream complete', () => {
-    it("given OUR OWN stream finalizes whose conversationId matches the active agent conversation, the synthesized assistant message should be appended via setLocalMessages", () => {
-      pendingStreams.current = new Map([
-        [
-          'msg-done',
-          {
-            messageId: 'msg-done',
-            pageId: AGENT.id,
-            conversationId: 'conv-active',
-            triggeredBy: { userId: 'me', displayName: 'Me' },
-            parts: [{ type: 'text', text: 'final response text' }],
-            // OUR OWN stream. This dual-write is local bookkeeping for the tab that made the
-            // request; the fixture previously said `isOwn: false` (userId 'someone-else'), which
-            // asserted that ANOTHER tab's finished reply gets appended into this chat's array —
-            // encoding the bug rather than the contract. useOwnStreamMirror reads this array to
-            // find its own live stream, so a foreign message landing after ours makes it
-            // re-target onto a finished message. See the foreign-stream test below.
-            isOwn: true,
-          },
-        ],
-      ]);
+  describe('stream complete → cache commit (leaf 5.6.1: replace-by-id vs reload)', () => {
+    const streamFixture = (overrides: Partial<{ messageId: string; conversationId: string; parts: UIMessage['parts']; isOwn: boolean }>) => ({
+      messageId: 'msg-done',
+      pageId: AGENT.id,
+      conversationId: 'conv-active',
+      triggeredBy: { userId: 'me', displayName: 'Me' },
+      parts: [{ type: 'text' as const, text: 'final response text' }],
+      isOwn: true,
+      ...overrides,
+    });
 
-      const setLocalMessages = vi.fn();
-      renderWiring(baseOptions({
-        selectedAgent: AGENT,
-        agentConversationId: 'conv-active',
-        setLocalMessages,
-      }));
+    it('given OUR OWN stream finalizes for the active conversation, the synthesized assistant message should be committed to the conversation cache', () => {
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
 
       act(() => {
         capturedChannel.options?.onStreamComplete?.('msg-done');
       });
 
-      expect(setLocalMessages).toHaveBeenCalledTimes(1);
-      const updater = setLocalMessages.mock.calls[0][0] as (prev: UIMessage[]) => UIMessage[];
-      expect(updater([])).toEqual([
-        {
-          id: 'msg-done',
-          role: 'assistant',
-          parts: [{ type: 'text', text: 'final response text' }],
-        },
+      expect(cacheMessages('conv-active')).toEqual([
+        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }] },
       ]);
     });
 
-    it("given a stream finalizes whose conversationId does not match the active agent conversation, setLocalMessages should not be called", () => {
-      pendingStreams.current = new Map([
-        [
-          'msg-stale',
-          {
-            messageId: 'msg-stale',
-            pageId: AGENT.id,
-            conversationId: 'conv-different',
-            triggeredBy: { userId: 'x', displayName: 'X' },
-            parts: [{ type: 'text', text: 'belongs to different conversation' }],
-            isOwn: false,
-          },
-        ],
-      ]);
+    it("given ANOTHER TAB's stream finalizes for the active conversation, its content should ALSO commit to the cache (the isOwn gate protected the transport array, which no longer receives writes)", () => {
+      pendingStreams.current = new Map([[ 'msg-foreign', streamFixture({
+        messageId: 'msg-foreign',
+        parts: [{ type: 'text' as const, text: 'other tab reply' }],
+        isOwn: false,
+      }) ]]);
 
-      const setLocalMessages = vi.fn();
-      renderWiring(baseOptions({
-        selectedAgent: AGENT,
-        agentConversationId: 'conv-active',
-        setLocalMessages,
-      }));
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-foreign');
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([
+        { id: 'msg-foreign', role: 'assistant', parts: [{ type: 'text', text: 'other tab reply' }] },
+      ]);
+    });
+
+    it('given the cache already holds a HALF-STREAMED row under the same id (includeStreaming placeholder), the commit should REPLACE it, not skip (the rejoin content-loss fix)', () => {
+      useConversationMessagesStore.getState().applyServerSnapshot(
+        'conv-active',
+        useConversationMessagesStore.getState().beginServerSnapshot('conv-active'),
+        [{ id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'half-stre' }] } as UIMessage],
+      );
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-done');
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([
+        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }] },
+      ]);
+    });
+
+    it('given a stream finalizes for a DIFFERENT conversation, nothing should be committed to the active conversation', () => {
+      pendingStreams.current = new Map([[ 'msg-stale', streamFixture({
+        messageId: 'msg-stale',
+        conversationId: 'conv-different',
+      }) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
 
       act(() => {
         capturedChannel.options?.onStreamComplete?.('msg-stale');
       });
 
-      expect(setLocalMessages).not.toHaveBeenCalled();
+      expect(cacheMessages('conv-active')).toEqual([]);
+      expect(cacheMessages('conv-different')).toEqual([]);
     });
 
-    it('given a stream finalizes with empty parts, setLocalMessages should not be called', () => {
-      pendingStreams.current = new Map([
-        [
-          'msg-empty',
-          {
-            messageId: 'msg-empty',
-            pageId: AGENT.id,
-            conversationId: 'conv-active',
-            triggeredBy: { userId: 'x', displayName: 'X' },
-            parts: [],
-            isOwn: false,
-          },
-        ],
-      ]);
+    it('given a completion with NO usable store entry for the active conversation (joinFailed / zero parts), should reload via the RAW cache loader — never the surface loadConversation, which also sets identity and pushes the URL', () => {
+      pendingStreams.current = new Map([[ 'msg-empty', streamFixture({ messageId: 'msg-empty', parts: [] }) ]]);
+      const loadConversation = vi.fn();
 
-      const setLocalMessages = vi.fn();
-      renderWiring(baseOptions({
-        selectedAgent: AGENT,
-        agentConversationId: 'conv-active',
-        setLocalMessages,
-      }));
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active', loadConversation }));
 
       act(() => {
-        capturedChannel.options?.onStreamComplete?.('msg-empty');
+        capturedChannel.options?.onStreamComplete?.('msg-empty', 'conv-active');
       });
 
-      expect(setLocalMessages).not.toHaveBeenCalled();
+      expect(mockLoadAgentConversationMessages).toHaveBeenCalledWith(AGENT.id, 'conv-active');
+      expect(loadConversation).not.toHaveBeenCalled();
+      expect(cacheMessages('conv-active')).toEqual([]);
+    });
+
+    it('given an OWN completion, should promote pending optimistic sends BEFORE the commit so the question renders above the reply (F1)', () => {
+      useConversationMessagesStore.getState().addOptimisticSend('conv-active', {
+        id: 'u-sent', role: 'user', parts: [{ type: 'text', text: 'my question' }],
+      } as UIMessage);
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-done');
+      });
+
+      expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['u-sent', 'msg-done']);
+      expect(useConversationMessagesStore.getState().getEntry('conv-active').optimisticSends).toEqual([]);
+    });
+
+    it("given ANOTHER TAB's completion, should NOT promote this tab's optimistic sends (a remote reply proves nothing about our rows)", () => {
+      useConversationMessagesStore.getState().addOptimisticSend('conv-active', {
+        id: 'u-unsent', role: 'user', parts: [{ type: 'text', text: 'still in flight' }],
+      } as UIMessage);
+      pendingStreams.current = new Map([[ 'msg-foreign', streamFixture({ messageId: 'msg-foreign', isOwn: false }) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-foreign');
+      });
+
+      expect(cacheMessages('conv-active').map((m) => m.id)).toEqual(['msg-foreign']);
+      expect(useConversationMessagesStore.getState().getEntry('conv-active').optimisticSends.map((m) => m.id)).toEqual(['u-unsent']);
+    });
+
+    it('given a completion commit, should fire the background snapshot heal (the socket broadcast can outrace the SSE tail — F6)', () => {
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-done');
+      });
+
+      expect(mockRefreshConversationSnapshot).toHaveBeenCalledWith(AGENT.id, 'conv-active');
+    });
+
+    it('given a zero-parts completion for a DIFFERENT conversation, should neither commit nor reload', () => {
+      pendingStreams.current = new Map();
+      const loadConversation = vi.fn();
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active', loadConversation }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-x', 'conv-different');
+      });
+
+      expect(loadConversation).not.toHaveBeenCalled();
     });
   });
 
-  describe('remote user-message broadcast', () => {
-    it('given onUserMessage fires with conversationId matching the active agent conversation, should append via setLocalMessages', () => {
-      const setLocalMessages = vi.fn();
-      renderWiring(baseOptions({
-        selectedAgent: AGENT,
-        agentConversationId: 'conv-active',
-        setLocalMessages,
-      }));
+  describe('remote user-message broadcast → cache append', () => {
+    const remoteUser = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'remote prompt' }] };
+    const payloadFor = (conversationId: string) => ({
+      message: remoteUser,
+      pageId: AGENT.id,
+      conversationId,
+      triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
+    });
 
-      const remoteUser = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'remote prompt' }] };
+    it('given onUserMessage fires for the active agent conversation, should append the message to its cache entry', () => {
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
       act(() => {
-        capturedChannel.options?.onUserMessage?.(remoteUser, {
-          message: remoteUser,
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-active'));
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([remoteUser]);
+    });
+
+    it('given onUserMessage fires for a different conversationId, should not write the active cache entry', () => {
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-different'));
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([]);
+    });
+
+    it('given onUserMessage fires twice for the same id (co-mounted surfaces both deliver), the append should be idempotent', () => {
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-active'));
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-active'));
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([remoteUser]);
+    });
+
+    it("given onMessageEdited fires for the active conversation, the cache row's parts should be replaced", () => {
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-active'));
+        capturedChannel.options?.onMessageEdited?.({
+          messageId: 'u-1',
+          pageId: AGENT.id,
+          conversationId: 'conv-active',
+          parts: [{ type: 'text', text: 'edited' }],
+          editedAt: '2026-01-01T00:00:00.000Z',
+          triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
+        });
+      });
+
+      expect(cacheMessages('conv-active')[0].parts).toEqual([{ type: 'text', text: 'edited' }]);
+    });
+
+    it('given onMessageDeleted fires for the active conversation, the cache row should be removed', () => {
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onUserMessage?.(remoteUser, payloadFor('conv-active'));
+        capturedChannel.options?.onMessageDeleted?.({
+          messageId: 'u-1',
           pageId: AGENT.id,
           conversationId: 'conv-active',
           triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
         });
       });
 
-      expect(setLocalMessages).toHaveBeenCalledTimes(1);
-      const updater = setLocalMessages.mock.calls[0][0] as (prev: UIMessage[]) => UIMessage[];
-      expect(updater([])).toEqual([remoteUser]);
-    });
-
-    it('given onUserMessage fires for a different conversationId, should NOT call setLocalMessages', () => {
-      const setLocalMessages = vi.fn();
-      renderWiring(baseOptions({
-        selectedAgent: AGENT,
-        agentConversationId: 'conv-active',
-        setLocalMessages,
-      }));
-
-      const remoteUser = { id: 'u-1', role: 'user' as const, parts: [{ type: 'text' as const, text: 'wrong conv' }] };
-      act(() => {
-        capturedChannel.options?.onUserMessage?.(remoteUser, {
-          message: remoteUser,
-          pageId: AGENT.id,
-          conversationId: 'conv-different',
-          triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
-        });
-      });
-
-      expect(setLocalMessages).not.toHaveBeenCalled();
-    });
-
-    it('given onUserMessage fires for a messageId already in messages, the updater should leave the array unchanged', () => {
-      const setLocalMessages = vi.fn();
-      renderWiring(baseOptions({
-        selectedAgent: AGENT,
-        agentConversationId: 'conv-active',
-        setLocalMessages,
-      }));
-
-      const remoteUser = { id: 'u-already', role: 'user' as const, parts: [{ type: 'text' as const, text: 'dup' }] };
-      act(() => {
-        capturedChannel.options?.onUserMessage?.(remoteUser, {
-          message: remoteUser,
-          pageId: AGENT.id,
-          conversationId: 'conv-active',
-          triggeredBy: { userId: 'other', displayName: 'Other', browserSessionId: 'sess-x' },
-        });
-      });
-
-      const updater = setLocalMessages.mock.calls[0][0] as (prev: UIMessage[]) => UIMessage[];
-      const prev = [remoteUser];
-      expect(updater(prev)).toBe(prev); // same reference — no append happened
+      expect(cacheMessages('conv-active')).toEqual([]);
     });
   });
 

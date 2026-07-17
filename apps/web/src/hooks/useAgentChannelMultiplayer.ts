@@ -1,154 +1,95 @@
-import { useEffect, useRef } from 'react';
-import type { UIMessage } from 'ai';
+import { useEffect, useMemo, useRef } from 'react';
 import { useChannelStreamSocket } from './useChannelStreamSocket';
 import { usePageSocketRoom } from './usePageSocketRoom';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
-import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
-import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
-import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import {
   shouldRefreshOnReconnect,
   type ConnectionStatus,
 } from '@/lib/ai/streams/shouldRefreshOnReconnect';
-import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
+import {
+  loadAgentConversationMessages,
+  refreshConversationSnapshot,
+} from '@/hooks/conversationMessagesLoaders';
+import { buildConversationCacheHandlers } from '@/hooks/conversationCacheSocketHandlers';
 
 export interface UseAgentChannelMultiplayerOptions {
   selectedAgent: { id: string } | null;
   agentConversationId: string | null;
-  /** useChat-style messages setter for local synthesis on stream completion. */
-  setLocalMessages: (updater: (prev: UIMessage[]) => UIMessage[]) => void;
-  /** True when the surface is locally driving a stream (e.g. via useChat). */
-  /** componentName for the editing-store metadata. */
-  surfaceComponentName: string;
   /**
-   * Re-fetch handler invoked on socket reconnect (after the initial connect).
-   * Surface owns this — dashboard agent mode passes the dashboard store
-   * loader, sidebar agent mode passes its own sidebar-state loader, since
-   * those two surfaces resolve to different agents/conversations.
+   * Re-fetch handler invoked on socket reconnect (after the initial connect)
+   * and when a completion has no usable store entry to commit. Surface owns
+   * this — dashboard agent mode passes the dashboard store loader, sidebar
+   * agent mode passes its own sidebar-state loader, since those two surfaces
+   * resolve to different agents/conversations. Both commit to the shared
+   * conversation cache (PR 5B).
    */
   loadConversation: (conversationId: string) => void | Promise<void>;
 }
 
 /**
  * Wires a surface (GlobalAssistantView agent mode, SidebarChatTab agent mode)
- * to the multiplayer streaming pipeline for an agent's page channel:
+ * to the multiplayer streaming pipeline for an agent's page channel — the
+ * agent-mode twin of the global path in GlobalChatContext (PR 5B, leaf 5.6):
  *
  * - Joins the agent's socket room.
  * - Bootstrap-replays in-flight streams from the DB and subscribes to live
  *   chat:stream_start / chat:stream_complete events via useChannelStreamSocket.
- * - On stream completion, synthesizes the assistant message locally and
- *   appends to the surface's useChat messages state.
- * - Single-writer-claims the dashboard store's agent stop-streaming slot when
- *   bootstrap discovers an own stream; releases only if THIS surface claimed.
- *   Co-mounted surfaces (dashboard + sidebar agent mode) preserve each
- *   other's claim — first writer wins.
- * - Registers the channel with the editing store under `ai-channel-${id}` so
- *   SWR is blocked while a stream is in flight, including the bootstrap-replay
- *   window before useChat has re-engaged.
+ * - Message callbacks write the shared conversation cache directly — there is
+ *   no `setLocalMessages` and no transport-array write left here. That also
+ *   removes the whole "foreign message lands in the array the own-stream
+ *   mirror reads" hazard this hook's completion handler used to gate on
+ *   `stream.isOwn` for: the cache write is safe for ANY stream (a second
+ *   tab's included) because nothing derives stream identity from the cache.
  * - Refreshes the active conversation when the socket transitions back to
  *   connected after an offline blip (skipped on the very first connect).
+ *
+ * Both consuming surfaces can be co-mounted on the same conversation; every
+ * cache action here is idempotent (append-if-absent / upsert-by-id), so the
+ * duplicate delivery is harmless by construction.
  *
  * Pass `selectedAgent: null` to no-op (e.g. the surface is in global mode).
  */
 export function useAgentChannelMultiplayer({
   selectedAgent,
   agentConversationId,
-  setLocalMessages,
   loadConversation,
 }: UseAgentChannelMultiplayerOptions): { rejoinActiveStreams: () => void } {
   const channelId = selectedAgent?.id;
 
   usePageSocketRoom(channelId);
 
-  // Stable refs so the hook's callbacks see the latest setter / conversation
-  // id without re-binding the socket subscription on every render.
-  const setLocalMessagesRef = useRef(setLocalMessages);
-  setLocalMessagesRef.current = setLocalMessages;
+  // Stable ref so the hook's callbacks see the latest conversation id without
+  // re-binding the socket subscription on every render.
   const agentConversationIdRef = useRef(agentConversationId);
   agentConversationIdRef.current = agentConversationId;
 
-  // NO STOP-SLOT CLAIM PROTOCOL (PR 5A, leaf 5.5.7).
-  //
-  // Deleted here: the claimed-messageId/claimed-key/owned-stop-fn refs, releaseStopSlotIfStillOurs,
-  // its channelId-keyed cleanup, and the bootstrap/snapshot/finalize handlers that drove them.
-  //
-  // All of it existed to arbitrate a single shared slot in usePageAgentDashboardStore between
-  // co-mounted writers — including a documented KNOWN GAP with no fix inside that design: the
-  // protocol had no HANDOFF, so a surface declined the slot (first writer wins) never re-claimed
-  // it once the claimant released, and could render a live own stream with NO STOP BUTTON until it
-  // remounted. That gap is fixed by construction now: every surface READS
+  // NO STOP-SLOT CLAIM PROTOCOL (PR 5A, leaf 5.5.7) — every surface READS
   // `useConversationActiveStream(agentId, conversationId)`, and a read cannot be declined.
 
-  const { rejoinActiveStreams } = useChannelStreamSocket(channelId, {
-    onUserMessage: (message, payload) => {
-      if (payload.conversationId !== agentConversationIdRef.current) return;
-      setLocalMessagesRef.current((prev) =>
-        prev.some((m) => m.id === message.id) ? prev : [...prev, message],
-      );
-    },
-    onMessageEdited: (payload) => {
-      if (payload.conversationId !== agentConversationIdRef.current) return;
-      setLocalMessagesRef.current((prev) =>
-        applyMessageEdit(prev, {
-          messageId: payload.messageId,
-          parts: payload.parts,
-          editedAt: new Date(payload.editedAt),
-        }),
-      );
-    },
-    onMessageDeleted: (payload) => {
-      if (payload.conversationId !== agentConversationIdRef.current) return;
-      setLocalMessagesRef.current((prev) => applyMessageDelete(prev, payload.messageId));
-    },
-    onStreamComplete: (messageId, completedConvId) => {
-      const stream = usePendingStreamsStore.getState().streams.get(messageId);
-      if (stream && stream.parts.length > 0 && stream.conversationId === agentConversationIdRef.current) {
-        // REPLACE by id — do not skip. An existing message with this id is NOT proof we already
-        // have the content.
-        //
-        // The server names the assistant message (`generateId: () => serverAssistantMessageId`),
-        // so useChat's copy and the stream's `messageId` are the SAME id. And useChat does not
-        // roll back on error: a mid-stream network drop leaves its HALF-STREAMED message sitting
-        // in the array. That is exactly the path the rejoin machinery exists for — recovery
-        // rejoins the multicast, `stream.parts` accumulates the FULL reply, and this fires on
-        // completion.
-        //
-        // A skip-if-present guard therefore threw the complete reply away and left the user
-        // staring at the truncated one, with the real text stranded in the DB until they
-        // navigated away and back. Replacing is right in both cases: same id means same message,
-        // and `stream.parts` is the authoritative, complete version of it.
-        const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
-        // OUR OWN stream only. `chat:stream_complete` carries no own-tab filter (unlike the
-        // user/edit/delete handlers, which all drop own-tab events), so this also fires for a
-        // stream from ANOTHER TAB — `isOwn` is browserSessionId-scoped, so a second tab of the
-        // same user counts, no collaborator needed. Appending that tab's finished reply into THIS
-        // chat's array is meaningless for the local bookkeeping this write exists for, and
-        // actively harmful: useOwnStreamMirror reads this array to find its own live stream, and
-        // a foreign message landing after ours makes it re-target onto a finished message — an
-        // isOwn phantom whose Stop aborts nothing, silently, while our generation keeps billing.
-        // Same gate AiChatView's stream_complete dual-write carries.
-        if (stream.isOwn) {
-        setLocalMessagesRef.current((prev) => {
-            const i = prev.findIndex((m) => m.id === messageId);
-            return i === -1
-              ? [...prev, synthesized]
-              : prev.map((m, j) => (j === i ? synthesized : m));
-          });
-        }
-        return;
-      }
-      if (shouldReloadOnComountComplete(stream, completedConvId, agentConversationIdRef.current)) {
-        loadConversationRef.current(completedConvId!);
-      }
-    },
-  });
+  // The shared socket-events → cache protocol (see buildConversationCacheHandlers):
+  // remote user/edit/delete writes, and the completion commit with own-send
+  // promotion + background snapshot heal. Cache reloads here use the RAW loaders
+  // keyed by the channel (agent page id) — never the surface's loadConversation,
+  // which also sets identity and pushes the URL; a completion for the conversation
+  // already on screen must not do either.
+  const cacheHandlers = useMemo(
+    () =>
+      buildConversationCacheHandlers({
+        getActiveConversationId: () => agentConversationIdRef.current,
+        reloadConversation: (conversationId) => {
+          if (channelId) void loadAgentConversationMessages(channelId, conversationId);
+        },
+        refreshSnapshot: (conversationId) => {
+          if (channelId) void refreshConversationSnapshot(channelId, conversationId);
+        },
+      }),
+    [channelId],
+  );
+
+  const { rejoinActiveStreams } = useChannelStreamSocket(channelId, cacheHandlers);
 
   // NO editing-store registration here (PR 5A, leaf 5.7): the one derived, conversation-keyed
   // registration for the whole app lives in GlobalChatProvider (useDerivedStreamingRegistrations).
-  // This site ORed the surface's local streaming flag with the dashboard store's bootstrap-driven
-  // flag precisely because neither alone covered a mid-stream refresh — the derived registration
-  // reads live store entries directly, so there is nothing left to OR.
 
   // Reconnect-refresh: re-fetch the active agent conversation when the socket
   // transitions back to connected. Skipped on the very first connect (already

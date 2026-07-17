@@ -45,4 +45,20 @@ export const conversationMessagesActions = {
    */
   applyConfirmedMessage: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message),
+  /**
+   * Promote optimistic sends into confirmed messages. Call on THIS TAB'S OWN
+   * stream commit only — an own reply proves the user rows that triggered it
+   * are persisted; a remote reply proves nothing about this tab's sends.
+   */
+  promoteOptimisticSends: (conversationId: string): void =>
+    useConversationMessagesStore.getState().promoteOptimisticSends(conversationId),
+  /** Capture the token a background snapshot must present at commit — call BEFORE the fetch. */
+  beginServerSnapshot: (conversationId: string): number =>
+    useConversationMessagesStore.getState().beginServerSnapshot(conversationId),
+  /** Silently commit an already-fetched server list as loaded truth; dropped if the token went stale. */
+  applyServerSnapshot: (conversationId: string, generationToken: number, messages: UIMessage[]): void =>
+    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages),
+  /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
+  seedConversation: (conversationId: string): void =>
+    useConversationMessagesStore.getState().seedConversation(conversationId),
 };

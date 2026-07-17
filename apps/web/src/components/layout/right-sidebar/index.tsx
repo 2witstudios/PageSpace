@@ -70,13 +70,16 @@ function RightPanel({ className, variant }: RightPanelProps) {
     if (prevIsDashboardContext.current && !isDashboardContext) {
       setLocalActiveTab('chat');
 
-      // Transfer agent state from dashboard to sidebar for seamless handoff
+      // Transfer agent state from dashboard to sidebar for seamless handoff.
+      // Agent + conversationId ONLY (PR 5B, leaf 5.3.3): the shared conversation
+      // cache already holds that conversation's messages, and a live stream
+      // renders from the pending-streams store either way — a messages payload
+      // here was a hidden store-to-store copy the exit greps couldn't see.
       const dashboardState = usePageAgentDashboardStore.getState();
       if (dashboardState.selectedAgent) {
         useSidebarAgentStore.getState().transferFromDashboard({
           agent: dashboardState.selectedAgent,
           conversationId: dashboardState.conversationId,
-          messages: dashboardState.conversationMessages,
         });
       }
     }

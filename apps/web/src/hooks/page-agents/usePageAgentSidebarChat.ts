@@ -1,6 +1,6 @@
-import { useEffect, useRef, useMemo, useCallback } from 'react';
+import { useEffect, useMemo, useCallback } from 'react';
 import { useChat, UseChatOptions } from '@ai-sdk/react';
-import { UIMessage, type FileUIPart } from 'ai';
+import { UIMessage, type CreateUIMessage } from 'ai';
 import { SidebarAgentInfo } from './usePageAgentSidebarState';
 
 /**
@@ -9,8 +9,8 @@ import { SidebarAgentInfo } from './usePageAgentSidebarState';
 export interface UseSidebarChatReturn {
   /** Current messages (from active mode) */
   messages: UIMessage[];
-  /** Send a message */
-  sendMessage: (message: { text: string; files?: FileUIPart[] }, options?: { body?: Record<string, unknown> }) => void;
+  /** Send a message — parts-form (client-minted id preserved end to end, PR 5B). */
+  sendMessage: (message: CreateUIMessage<UIMessage>, options?: { body?: Record<string, unknown> }) => void;
   /** Current status */
   status: 'ready' | 'submitted' | 'streaming' | 'error';
   /** Current error (if any) */
@@ -76,9 +76,6 @@ export function usePageAgentSidebarChat({
   globalChatConfig,
   agentChatConfig,
 }: UseSidebarChatOptions): UseSidebarChatReturn {
-  // Track previous agent for mode switching
-  const prevAgentRef = useRef<SidebarAgentInfo | null>(null);
-
   // ============================================
   // Global Mode Chat Instance
   // ============================================
@@ -127,22 +124,10 @@ export function usePageAgentSidebarChat({
     }
   }, [selectedAgent, agentStatus, agentStop]);
 
-  // Clear agent messages when switching agents
-  useEffect(() => {
-    const prevAgent = prevAgentRef.current;
-    const currentAgent = selectedAgent;
-
-    // Switching to global mode - clear agent messages
-    if (!currentAgent && prevAgent) {
-      setAgentMessages([]);
-    }
-    // Switching to a different agent - clear stale messages
-    else if (currentAgent && prevAgent && currentAgent.id !== prevAgent.id) {
-      setAgentMessages([]);
-    }
-
-    prevAgentRef.current = currentAgent;
-  }, [selectedAgent, setAgentMessages]);
+  // NO clear-messages-on-switch effect (PR 5B, leaf 5.4 W6): rendering is
+  // per-conversation from the shared conversation cache, so a stale transport
+  // array renders nothing — and the own-stream mirror latches only during its
+  // own send (PR 5A), so an un-cleared array cannot mislead it either.
 
   // ============================================
   // Unified Interface: Select correct values based on mode
@@ -159,7 +144,7 @@ export function usePageAgentSidebarChat({
 
   // Wrap sendMessage to use correct function
   const sendMessage = useCallback(
-    (message: { text: string; files?: FileUIPart[] }, options?: { body?: Record<string, unknown> }) => {
+    (message: CreateUIMessage<UIMessage>, options?: { body?: Record<string, unknown> }) => {
       if (selectedAgent) {
         agentSendMessage(message, options);
       } else {
