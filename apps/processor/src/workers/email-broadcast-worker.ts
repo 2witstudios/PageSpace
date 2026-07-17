@@ -15,12 +15,18 @@
  *    `broadcast:<id>:<userId>` idempotency key backstop the races.
  *  - A refusal (on-prem live send, failed preflight, unresolvable content,
  *    unreachable CTA) is terminal-for-retry: the row is marked `failed` with the
- *    reason and the worker RETURNS, because retrying a config problem just
- *    re-fails it.
+ *    reason in `blockedReason` and the worker RETURNS, because retrying a config
+ *    problem just re-fails it. Retryable failures set `lastError` and THROW.
  *  - Per-recipient send failures — including sendEmail's 3/hr rate-limit throw —
  *    are recorded `failed` (never `sent`) by the ledger and the run continues;
  *    the terminal `failed` + rethrow at the end is what makes pg-boss come back
  *    for them.
+ *  - Cancel/pause: the worker re-reads the row before every page and halts when
+ *    an admin has cancelled or paused the broadcast, and every status write it
+ *    makes refuses to overturn those two states. Halting ENDS the pg-boss job
+ *    (a paused job deliberately does not burn retries waiting) — resuming a
+ *    paused broadcast means re-enqueueing it via POST /api/broadcast/enqueue,
+ *    which is safe because the ledger resume set skips everyone already mailed.
  */
 
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
@@ -28,7 +34,7 @@ import {
   findUnreachableUrls,
   resolveBaseUrl,
   runBroadcast,
-  type BroadcastResult,
+  ON_PREM_LIVE_SEND_REFUSAL,
   type SkipReason,
 } from '@pagespace/lib/services/broadcast/core';
 import {
@@ -51,19 +57,14 @@ import type { EmailBroadcastJobData } from '../types';
 /** Audience page size for the keyset walk — never materialize the whole table. */
 const AUDIENCE_PAGE_SIZE = 500;
 
+/**
+ * The admin-set states this worker must never overturn. An operator's cancel or
+ * pause can land at any instant between one of our reads and one of our writes;
+ * every status write below carries this guard so the race loses to the human.
+ */
+const OPERATOR_STATES = ['cancelled', 'paused'] as const;
+
 const nowIso = () => new Date().toISOString();
-
-const emptySkips = (): Record<SkipReason, number> => ({
-  'invalid-email': 0,
-  'already-sent': 0,
-  suppressed: 0,
-  'opted-out': 0,
-  'rights-restricted': 0,
-});
-
-function addSkips(into: Record<SkipReason, number>, from: Record<SkipReason, number>): void {
-  for (const key of Object.keys(from) as SkipReason[]) into[key] += from[key];
-}
 
 const totalSkips = (skips: Record<SkipReason, number>) =>
   Object.values(skips).reduce((a, b) => a + b, 0);
@@ -71,7 +72,8 @@ const totalSkips = (skips: Record<SkipReason, number>) =>
 /**
  * Mark the broadcast failed for a reason no retry can fix, and record the step
  * that refused. Returning (not throwing) afterwards is what keeps pg-boss from
- * re-running a config problem.
+ * re-running a config problem. Refusals live in `blockedReason` (a terminal
+ * diagnosis), never `lastError` (a retryable one).
  */
 async function refuse(broadcastId: string, step: string, reason: string): Promise<void> {
   console.error(`[email-broadcast] ${broadcastId} refused at ${step}: ${reason}`);
@@ -81,10 +83,12 @@ async function refuse(broadcastId: string, step: string, reason: string): Promis
     detail: reason,
     at: nowIso(),
   });
-  await broadcastRepository.updateStatus(broadcastId, 'failed', {
-    blockedReason: reason,
-    completedAt: new Date(),
-  });
+  await broadcastRepository.updateStatus(
+    broadcastId,
+    'failed',
+    { blockedReason: reason, completedAt: new Date() },
+    { unlessStatus: [...OPERATOR_STATES] },
+  );
 }
 
 export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise<void> {
@@ -100,6 +104,10 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
     broadcast.status === 'cancelled' ||
     broadcast.status === 'paused'
   ) {
+    // Returning completes the pg-boss job, ending any retry chain. For
+    // cancelled/completed that is exactly right; for paused it is a deliberate
+    // trade — a pause of unknown length must not sit burning retries — so
+    // resuming is a fresh enqueue (see module doc), not a retry.
     console.log(`[email-broadcast] broadcast ${broadcastId} is ${broadcast.status}; nothing to do`);
     return;
   }
@@ -110,21 +118,31 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
 
   // On-prem guard FIRST, before any status transition or provider read. sendEmail
   // is a silent no-op on-prem, so a "successful" live run would record everyone as
-  // sent while sending nothing — poisoning the ledger for the real send.
+  // sent while sending nothing — poisoning the ledger for the real send. The
+  // reason text is core's own (preflight repeats this check); refusing here just
+  // spares the row a doomed in_progress transition.
   if (live && isOnPrem()) {
-    await refuse(
-      broadcastId,
-      'preflight',
-      'DEPLOYMENT_MODE is on-prem, where sendEmail() silently drops mail. The run would send ' +
-        'nothing while recording every recipient as already-sent.',
-    );
+    await refuse(broadcastId, 'preflight', ON_PREM_LIVE_SEND_REFUSAL);
     return;
   }
 
-  await broadcastRepository.updateStatus(broadcastId, 'in_progress', {
-    ...(broadcast.startedAt ? {} : { startedAt: new Date() }),
-    lastError: null,
-  });
+  // blockedReason is cleared here for the refused-then-rerun path: a broadcast
+  // refused for a since-fixed config problem (say FROM_EMAIL) is re-enqueued, and
+  // a stale refusal must not survive onto a row that then completes.
+  const advanced = await broadcastRepository.updateStatus(
+    broadcastId,
+    'in_progress',
+    {
+      startedAt: broadcast.startedAt ?? new Date(),
+      lastError: null,
+      blockedReason: null,
+    },
+    { unlessStatus: [...OPERATOR_STATES, 'completed'] },
+  );
+  if (advanced === 0) {
+    console.log(`[email-broadcast] ${broadcastId} was cancelled/paused/completed before start`);
+    return;
+  }
 
   // --- Resolve what this broadcast says (compose vs template). A failure here
   // means the admin's intent is ambiguous; the safe reading is "don't send". ---
@@ -168,7 +186,12 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
     suppressed = await listSuppressedEmails();
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    await broadcastRepository.updateStatus(broadcastId, 'failed', { lastError: msg });
+    await broadcastRepository.updateStatus(
+      broadcastId,
+      'failed',
+      { lastError: msg },
+      { unlessStatus: [...OPERATOR_STATES] },
+    );
     throw error;
   }
 
@@ -216,24 +239,48 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
     broadcastRepository.loadAlreadySentEmails(broadcastId),
   ]);
 
+  // The canary budget counts attempts across EVERY run of this broadcast, so it
+  // has to start from the ledger, not from zero: this worker rethrows when
+  // recipients fail, pg-boss retries with backoff, and a per-process counter
+  // would hand each retry a fresh budget — a 25-person canary quietly walking
+  // 250 people across ten retries. Ledger rows that consumed budget are exactly
+  // the sent + failed ones (skips never count; dry runs write no rows and send
+  // nothing, so zero is right for them).
+  const priorAttempts =
+    live && broadcast.sendLimit !== null
+      ? await broadcastRepository
+          .countRecipientsByStatus(broadcastId)
+          .then((c) => c.sent + c.failed)
+      : 0;
+
   // The durable ledger for this run: claim-before-send (DB-clock lease) plus the
   // sent/skip/failure records. This — not the in-memory set — is the double-send guard.
   const ledger = broadcastRepository.createBroadcastLedger(broadcastId, broadcast.notificationType);
 
   // --- The send, one keyset page at a time. ---
-  const totals: BroadcastResult = {
-    sent: 0,
-    attempted: 0,
-    skipped: emptySkips(),
-    claimedElsewhere: 0,
-    errors: [],
-  };
+  const totals = { sent: 0, attempted: 0, skipped: 0, claimedElsewhere: 0 };
+  const errors: string[] = [];
   let totalTargeted = 0;
   let cursor: string | null = null;
   let batch = 0;
 
   try {
     do {
+      // Honour a mid-run cancel/pause before every page: a multi-hour live send
+      // must stop when the admin says stop, not when the audience runs out.
+      const current = await broadcastRepository.findById(broadcastId);
+      const halt = !current ? 'row deleted' : OPERATOR_STATES.find((s) => s === current.status);
+      if (halt) {
+        console.log(`[email-broadcast] ${broadcastId} halted mid-run (${halt})`);
+        await broadcastRepository.appendStepResult(broadcastId, {
+          step: 'halted',
+          status: 'skipped',
+          detail: `stopped after batch ${batch}: broadcast is ${halt}`,
+          at: nowIso(),
+        });
+        return;
+      }
+
       const page = await resolveAudience(broadcast.audienceDefinition, {
         limit: AUDIENCE_PAGE_SIZE,
         after: cursor,
@@ -243,10 +290,10 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
       totalTargeted += page.rows.length;
       batch++;
 
-      // The canary cap counts ATTEMPTS across the whole run, not per page.
       const remainingLimit =
-        broadcast.sendLimit === null ? null : Math.max(0, broadcast.sendLimit - totals.attempted);
-      if (remainingLimit !== null && remainingLimit === 0) break;
+        broadcast.sendLimit === null
+          ? null
+          : broadcast.sendLimit - priorAttempts - totals.attempted;
 
       const result = await runBroadcast({
         live,
@@ -267,7 +314,14 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
         // (record is never invoked on a dry run — the live gate precedes it.)
         claim: live ? ledger.claim : undefined,
         record: ledger.record,
-        onSkip: live ? ledger.onSkip : undefined,
+        // 'already-sent' skips are deliberately not persisted: they only arise on
+        // a resumed run (users.emailBidx keeps addresses unique), where the row is
+        // already `sent` — recordSkip's own guard would refuse the demotion — and
+        // a 49k-sent resume would otherwise burn one guaranteed-no-op round trip
+        // per already-mailed recipient before reaching the ones it exists to retry.
+        onSkip: live
+          ? (skip) => (skip.reason === 'already-sent' ? Promise.resolve() : ledger.onSkip(skip))
+          : undefined,
         onFailure: live ? ledger.onFailure : undefined,
         now: nowIso,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -277,29 +331,22 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
 
       totals.sent += result.sent;
       totals.attempted += result.attempted;
+      totals.skipped += totalSkips(result.skipped);
       totals.claimedElsewhere += result.claimedElsewhere;
-      totals.errors.push(...result.errors);
-      addSkips(totals.skipped, result.skipped);
+      errors.push(...result.errors);
 
       // Progress after every page, so the admin UI polls live numbers. Live counts
       // come from the ledger (a retry re-walks part of the audience; recounting is
       // what keeps the numbers true); a dry run has no ledger rows to count.
-      if (live) {
-        const counts = await broadcastRepository.countRecipientsByStatus(broadcastId);
-        await broadcastRepository.updateCounts(broadcastId, {
-          totalTargeted,
-          sentCount: counts.sent,
-          skippedCount: counts.skipped,
-          failedCount: counts.failed,
-        });
-      } else {
-        await broadcastRepository.updateCounts(broadcastId, {
-          totalTargeted,
-          sentCount: totals.sent,
-          skippedCount: totalSkips(totals.skipped),
-          failedCount: totals.errors.length,
-        });
-      }
+      const counts = live
+        ? await broadcastRepository.countRecipientsByStatus(broadcastId)
+        : { sent: totals.sent, skipped: totals.skipped, failed: errors.length };
+      await broadcastRepository.updateCounts(broadcastId, {
+        totalTargeted,
+        sentCount: counts.sent,
+        skippedCount: counts.skipped,
+        failedCount: counts.failed,
+      });
       await broadcastRepository.appendStepResult(broadcastId, {
         step: `batch-${batch}`,
         status: result.errors.length > 0 ? 'failed' : 'ok',
@@ -310,11 +357,16 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
         at: nowIso(),
       });
 
-      if (broadcast.sendLimit !== null && totals.attempted >= broadcast.sendLimit) {
+      if (
+        broadcast.sendLimit !== null &&
+        priorAttempts + totals.attempted >= broadcast.sendLimit
+      ) {
         await broadcastRepository.appendStepResult(broadcastId, {
           step: 'send-limit',
           status: 'ok',
-          detail: `stopped at sendLimit=${broadcast.sendLimit} attempts`,
+          detail:
+            `stopped at sendLimit=${broadcast.sendLimit} attempts` +
+            (priorAttempts > 0 ? ` (${priorAttempts} from earlier runs)` : ''),
           at: nowIso(),
         });
         break;
@@ -325,29 +377,64 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
     // surface the reason on the row, then let pg-boss retry with backoff. The
     // resume set + claims make the retry pick up where this attempt stopped.
     const msg = error instanceof Error ? error.message : String(error);
-    await broadcastRepository.updateStatus(broadcastId, 'failed', { lastError: msg });
+    await broadcastRepository.updateStatus(
+      broadcastId,
+      'failed',
+      { lastError: msg },
+      { unlessStatus: [...OPERATOR_STATES] },
+    );
     throw error;
   }
 
   const summary =
     `sent=${totals.sent} attempted=${totals.attempted} targeted=${totalTargeted} ` +
-    `skipped=${totalSkips(totals.skipped)} failed=${totals.errors.length} ` +
+    `skipped=${totals.skipped} failed=${errors.length} ` +
     `claimedElsewhere=${totals.claimedElsewhere}`;
 
-  if (totals.errors.length > 0) {
-    // Per-recipient failures (rate limits, provider errors) are retryable: they are
-    // recorded `failed` in the ledger, never `sent`, so the rethrow below makes
-    // pg-boss re-run the job and re-attempt exactly them.
+  // Recipients a rival worker held when we walked past them have an UNKNOWN
+  // outcome: the rival may finish sending — or may have died mid-send, leaving a
+  // lease that expires in minutes and a recipient nobody will ever return for if
+  // this run declares the broadcast `completed` (the terminal short-circuit would
+  // then drop every future job for it). Not `completed`, so: retry. The retry
+  // re-walks cheaply (resume set skips everyone sent) and either finds the rival
+  // recorded them `sent` — clean finish — or reclaims them once the lease lapses.
+  if (errors.length === 0 && totals.claimedElsewhere > 0) {
     const lastError =
-      `${totals.errors.length} recipient(s) failed; ` +
-      `latest: ${totals.errors[totals.errors.length - 1]}`;
+      `${totals.claimedElsewhere} recipient(s) were claimed by another worker; ` +
+      'retrying to confirm their outcome';
     await broadcastRepository.appendStepResult(broadcastId, {
       step: 'finalize',
       status: 'failed',
       detail: summary,
       at: nowIso(),
     });
-    await broadcastRepository.updateStatus(broadcastId, 'failed', { lastError });
+    await broadcastRepository.updateStatus(
+      broadcastId,
+      'failed',
+      { lastError },
+      { unlessStatus: [...OPERATOR_STATES] },
+    );
+    throw new Error(`email-broadcast ${broadcastId}: ${lastError}`);
+  }
+
+  if (errors.length > 0) {
+    // Per-recipient failures (rate limits, provider errors) are retryable: they are
+    // recorded `failed` in the ledger, never `sent`, and the rethrow below makes
+    // pg-boss re-run the job and re-attempt exactly them.
+    const lastError =
+      `${errors.length} recipient(s) failed; latest: ${errors[errors.length - 1]}`;
+    await broadcastRepository.appendStepResult(broadcastId, {
+      step: 'finalize',
+      status: 'failed',
+      detail: summary,
+      at: nowIso(),
+    });
+    await broadcastRepository.updateStatus(
+      broadcastId,
+      'failed',
+      { lastError },
+      { unlessStatus: [...OPERATOR_STATES] },
+    );
     throw new Error(`email-broadcast ${broadcastId} finished with failures: ${lastError}`);
   }
 
@@ -357,9 +444,11 @@ export async function runEmailBroadcastJob(data: EmailBroadcastJobData): Promise
     detail: summary,
     at: nowIso(),
   });
-  await broadcastRepository.updateStatus(broadcastId, 'completed', {
-    completedAt: new Date(),
-    lastError: null,
-  });
+  await broadcastRepository.updateStatus(
+    broadcastId,
+    'completed',
+    { completedAt: new Date(), lastError: null },
+    { unlessStatus: [...OPERATOR_STATES] },
+  );
   console.log(`[email-broadcast] ${broadcastId} -> completed (${summary})`);
 }

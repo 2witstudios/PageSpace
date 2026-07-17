@@ -402,6 +402,28 @@ describe('runBroadcast — undecryptable rows', () => {
     expect(out.errors).toEqual(['user u1: could not decrypt PII: bad ciphertext']);
     expect(h.sent).toEqual(['ada@example.com']);
   });
+
+  it('should report the undecryptable row through onFailure, so a durable ledger records it', async () => {
+    // Without a ledger row this user is invisible in the admin's failed count —
+    // lastError's message would be the only trace of who a run could never reach.
+    const failures: Array<{ userId: string; email: string; error: string }> = [];
+    const { result } = run([user('u1', 'bad@example.com'), user('u2', 'ada@example.com')], {
+      decrypt: async (row: BroadcastUser) => {
+        if (row.id === 'u1') throw new Error('bad ciphertext');
+        return row;
+      },
+      onFailure: async (f) => {
+        failures.push(f);
+      },
+    });
+
+    await result;
+
+    // Empty email on purpose: the address IS the thing that would not decrypt.
+    expect(failures).toEqual([
+      { userId: 'u1', email: '', error: 'could not decrypt PII: bad ciphertext' },
+    ]);
+  });
 });
 
 describe('runBroadcast — durable observers', () => {

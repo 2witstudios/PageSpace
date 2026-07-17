@@ -233,14 +233,34 @@ describe('QueueManager', () => {
 
       await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' });
 
-      // sendEmail's per-recipient limiter blocks for an hour; the default 3×5s
-      // policy would exhaust every retry in seconds and strand rate-limited
-      // recipients as `failed` forever. Exponential backoff from 60s crosses
-      // the window.
+      // sendEmail's per-recipient limiter blocks for roughly an hour; the default
+      // 3×5s policy would exhaust every retry in seconds and strand rate-limited
+      // recipients as `failed` forever. Exponential backoff from 60s crosses the
+      // window. expireInSeconds must dwarf the longest legitimate attempt: the
+      // pg-boss default of 15 minutes would fail a long-running send mid-flight
+      // and start a concurrent duplicate run.
       expect(mockBossSend).toHaveBeenCalledWith(
         'email-broadcast',
         { broadcastId: 'bcast-1' },
-        expect.objectContaining({ retryLimit: 10, retryDelay: 60, retryBackoff: true })
+        expect.objectContaining({
+          retryLimit: 10,
+          retryDelay: 60,
+          retryBackoff: true,
+          expireInSeconds: 6 * 60 * 60,
+        })
+      );
+    });
+
+    it('lets caller options (e.g. singletonKey) pass through and win over queue defaults', async () => {
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' }, { singletonKey: 'bcast-1' });
+
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'email-broadcast',
+        { broadcastId: 'bcast-1' },
+        expect.objectContaining({ singletonKey: 'bcast-1', retryLimit: 10 })
       );
     });
 

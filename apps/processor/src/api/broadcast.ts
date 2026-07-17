@@ -24,13 +24,27 @@ router.post('/enqueue', async (req, res) => {
   }
 
   try {
-    const jobId = await queueManager.addJob('email-broadcast', { broadcastId });
+    // singletonKey dedupes at the layer that owns job identity: a double-click
+    // or a retried POST (lost response) must not start a second concurrent walk
+    // of the same audience. The per-recipient claim ledger stays the LAST line
+    // of defence, not the only one. pg-boss releases the key once the job
+    // completes, so re-enqueueing a paused/refused broadcast still works.
+    const jobId = await queueManager.addJob(
+      'email-broadcast',
+      { broadcastId },
+      { singletonKey: broadcastId },
+    );
     return res.json({ success: true, jobId });
   } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to enqueue broadcast job';
+    // addJob surfaces pg-boss's null jobId (singleton conflict) as this throw.
+    if (message.includes('duplicate or rejected')) {
+      return res.status(409).json({
+        error: 'A job for this broadcast is already queued or running',
+      });
+    }
     console.error('[broadcast] enqueue failed:', error);
-    return res.status(500).json({
-      error: error instanceof Error ? error.message : 'Failed to enqueue broadcast job',
-    });
+    return res.status(500).json({ error: message });
   }
 });
 

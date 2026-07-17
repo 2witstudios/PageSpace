@@ -7,7 +7,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, desc, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, desc, eq, inArray, notInArray, sql } from '@pagespace/db/operators';
 import {
   broadcastTemplates,
   emailBroadcasts,
@@ -90,15 +90,31 @@ export const broadcastRepository = {
     return row ?? null;
   },
 
+  /**
+   * Write a status (plus patch fields).
+   *
+   * `unlessStatus` makes the write conditional, for the same race `markQueued`
+   * guards: the durable worker reads the row once per page, so an admin's
+   * cancel/pause can land between that read and the worker's own write — and an
+   * unconditional `completed` would silently overturn the operator's decision.
+   * Returns rows updated; 0 means the guard rejected it and the caller must
+   * treat the OTHER status as the truth (typically: stop sending).
+   */
   updateStatus: async (
     id: string,
     status: EmailBroadcastStatus,
     patch: UpdateBroadcastStatusPatch = {},
-  ): Promise<void> => {
-    await db
+    opts: { unlessStatus?: EmailBroadcastStatus[] } = {},
+  ): Promise<number> => {
+    const where = opts.unlessStatus?.length
+      ? and(eq(emailBroadcasts.id, id), notInArray(emailBroadcasts.status, opts.unlessStatus))
+      : eq(emailBroadcasts.id, id);
+    const rows = await db
       .update(emailBroadcasts)
       .set({ status, updatedAt: new Date(), ...patch })
-      .where(eq(emailBroadcasts.id, id));
+      .where(where)
+      .returning({ id: emailBroadcasts.id });
+    return rows.length;
   },
 
   /**

@@ -150,11 +150,18 @@ const page = (rows: Array<{ id: string; name: string | null; email: string | nul
 const ADA = { id: 'user-ada', name: 'Ada', email: 'ada@example.com' };
 const BOB = { id: 'user-bob', name: 'Bob', email: 'bob@example.com' };
 
+/** Every worker status write carries the guard that keeps it from overturning an
+ *  admin's cancel/pause; assertions accept any guard shape that includes those. */
+const guarded = expect.objectContaining({
+  unlessStatus: expect.arrayContaining(['cancelled', 'paused']),
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockRepo.createBroadcastLedger.mockReturnValue(mockLedger);
   mockRepo.loadAlreadySentEmails.mockResolvedValue(new Set());
   mockRepo.countRecipientsByStatus.mockResolvedValue({ pending: 0, sent: 0, skipped: 0, failed: 0 });
+  mockRepo.updateStatus.mockResolvedValue(1);
   mockLedger.claim.mockResolvedValue(true);
   mockLedger.record.mockResolvedValue(undefined);
   mockLedger.onSkip.mockResolvedValue(undefined);
@@ -194,6 +201,17 @@ describe('runEmailBroadcastJob — terminal short-circuits', () => {
       expect(mockEngine.sendOne).not.toHaveBeenCalled();
     },
   );
+
+  it('stops without sending when a cancel wins the race for the in_progress transition', async () => {
+    mockRepo.findById.mockResolvedValue(makeBroadcast());
+    // The guarded write reports 0 rows: an operator state landed first.
+    mockRepo.updateStatus.mockResolvedValue(0);
+
+    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+
+    expect(mockResolveContent).not.toHaveBeenCalled();
+    expect(mockEngine.sendOne).not.toHaveBeenCalled();
+  });
 });
 
 describe('runEmailBroadcastJob — on-prem guard', () => {
@@ -208,6 +226,7 @@ describe('runEmailBroadcastJob — on-prem guard', () => {
       'bcast-1',
       'failed',
       expect.objectContaining({ blockedReason: expect.stringContaining('on-prem') }),
+      guarded,
     );
     expect(mockResolveAudience).not.toHaveBeenCalled();
     expect(mockEngine.sendOne).not.toHaveBeenCalled();
@@ -227,6 +246,7 @@ describe('runEmailBroadcastJob — on-prem guard', () => {
       'bcast-1',
       'completed',
       expect.objectContaining({ completedAt: expect.any(Date) }),
+      guarded,
     );
   });
 });
@@ -242,6 +262,7 @@ describe('runEmailBroadcastJob — preflight', () => {
       'bcast-1',
       'failed',
       expect.objectContaining({ blockedReason: 'FROM_EMAIL is not set' }),
+      guarded,
     );
     expect(mockResolveAudience).not.toHaveBeenCalled();
     expect(mockEngine.sendOne).not.toHaveBeenCalled();
@@ -259,6 +280,7 @@ describe('runEmailBroadcastJob — preflight', () => {
       expect.objectContaining({
         blockedReason: 'Broadcast is in compose mode but has no body.',
       }),
+      guarded,
     );
     expect(mockEngine.sendOne).not.toHaveBeenCalled();
   });
@@ -266,9 +288,7 @@ describe('runEmailBroadcastJob — preflight', () => {
   it('marks failed and stops when a live body carries an unreachable link', async () => {
     mockRepo.findById.mockResolvedValue(makeBroadcast());
     mockExtractCtaUrls.mockReturnValue(['https://pagespace.ai/gone']);
-    // findUnreachableUrls is the REAL core implementation, driven by the injected
-    // fetch default — so give the URL a real failure by making it unparseable to
-    // the probe: easier to intercept via global fetch.
+    // findUnreachableUrls is the REAL core implementation, driven by global fetch.
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue({ ok: false, status: 404 } as Response);
@@ -285,8 +305,25 @@ describe('runEmailBroadcastJob — preflight', () => {
       expect.objectContaining({
         blockedReason: expect.stringContaining('https://pagespace.ai/gone'),
       }),
+      guarded,
     );
     expect(mockEngine.sendOne).not.toHaveBeenCalled();
+  });
+
+  it('clears a stale blockedReason when a refused broadcast is re-run after the config fix', async () => {
+    mockRepo.findById.mockResolvedValue(makeBroadcast({ status: 'failed' }));
+
+    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+
+    // Without this, the earlier refusal ('FROM_EMAIL is not set…') survives onto
+    // a row that then completes, and the admin UI shows a successful send
+    // annotated with a blocking reason.
+    expect(mockRepo.updateStatus).toHaveBeenCalledWith(
+      'bcast-1',
+      'in_progress',
+      expect.objectContaining({ blockedReason: null, lastError: null }),
+      expect.anything(),
+    );
   });
 });
 
@@ -302,11 +339,10 @@ describe('runEmailBroadcastJob — resume', () => {
     expect(mockEngine.sendOne).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-bob', email: 'bob@example.com' }),
     );
-    // The skip is persisted with its reason so the admin sees WHY, and the resumed
-    // recipient is never claimed (claim happens only on the send path).
-    expect(mockLedger.onSkip).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-ada', reason: 'already-sent' }),
-    );
+    // 'already-sent' skips are deliberately NOT persisted: Ada's ledger row is
+    // already `sent` (recordSkip's guard would refuse the demotion anyway), and a
+    // 49k-sent resume must not burn one no-op round trip per mailed recipient.
+    expect(mockLedger.onSkip).not.toHaveBeenCalled();
     expect(mockLedger.claim).toHaveBeenCalledTimes(1);
     expect(mockLedger.record).toHaveBeenCalledTimes(1);
     expect(mockLedger.record).toHaveBeenCalledWith(
@@ -316,7 +352,54 @@ describe('runEmailBroadcastJob — resume', () => {
       'bcast-1',
       'completed',
       expect.objectContaining({ completedAt: expect.any(Date) }),
+      guarded,
     );
+  });
+
+  it('still persists non-resume skips (opted-out) through the ledger', async () => {
+    mockRepo.findById.mockResolvedValue(makeBroadcast());
+    mockLoadOptedOut.mockResolvedValue(new Set(['user-ada']));
+    mockResolveAudience.mockResolvedValue(page([ADA, BOB]));
+
+    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+
+    expect(mockLedger.onSkip).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user-ada', reason: 'opted-out' }),
+    );
+    expect(mockEngine.sendOne).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runEmailBroadcastJob — canary sendLimit', () => {
+  it('stops at sendLimit attempts within a run', async () => {
+    mockRepo.findById.mockResolvedValue(makeBroadcast({ sendLimit: 1 }));
+    mockResolveAudience
+      .mockResolvedValueOnce(page([ADA, BOB], 'user-bob'))
+      .mockResolvedValue(page([], null));
+
+    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+
+    expect(mockEngine.sendOne).toHaveBeenCalledTimes(1);
+    // The limit break happens before a second page is fetched.
+    expect(mockResolveAudience).toHaveBeenCalledTimes(1);
+    const steps = mockRepo.appendStepResult.mock.calls.map(([, r]) => r.step);
+    expect(steps).toContain('send-limit');
+  });
+
+  it('counts attempts from PRIOR runs against the budget, so a retry cannot escalate a canary', async () => {
+    // A 2-person canary whose first attempt sent 1 and failed 1: the pg-boss
+    // retry must attempt NOTHING — a per-process counter would hand it a fresh
+    // budget of 2 brand-new people per retry, walking far past the cap.
+    mockRepo.findById.mockResolvedValue(makeBroadcast({ sendLimit: 2 }));
+    mockRepo.countRecipientsByStatus.mockResolvedValue({ pending: 0, sent: 1, skipped: 0, failed: 1 });
+    mockRepo.loadAlreadySentEmails.mockResolvedValue(new Set(['ada@example.com']));
+    mockResolveAudience.mockResolvedValue(page([ADA, BOB]));
+
+    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+
+    expect(mockEngine.sendOne).not.toHaveBeenCalled();
+    const steps = mockRepo.appendStepResult.mock.calls.map(([, r]) => r.step);
+    expect(steps).toContain('send-limit');
   });
 });
 
@@ -341,21 +424,60 @@ describe('runEmailBroadcastJob — send failures', () => {
       'bcast-1',
       'failed',
       expect.objectContaining({ lastError: expect.stringContaining('1 recipient(s) failed') }),
+      guarded,
     );
     // The address is redacted before it can land on the row.
     const failedCall = mockRepo.updateStatus.mock.calls.find(([, status]) => status === 'failed');
     expect(failedCall?.[2]?.lastError).not.toContain('ada@example.com');
   });
 
-  it('does not mail a recipient another worker has claimed', async () => {
+  it('does not mail a claimed recipient, and does NOT declare the broadcast completed over them', async () => {
     mockRepo.findById.mockResolvedValue(makeBroadcast());
     mockResolveAudience.mockResolvedValue(page([ADA]));
     mockLedger.claim.mockResolvedValue(false);
 
-    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+    // The rival's outcome is unknown: it may have died mid-send. Completing here
+    // would strand the recipient as pending forever (the terminal short-circuit
+    // drops every future job). Retry instead — the resume set makes it cheap.
+    await expect(runEmailBroadcastJob({ broadcastId: 'bcast-1' })).rejects.toThrow(
+      /claimed by another worker/,
+    );
 
     expect(mockEngine.sendOne).not.toHaveBeenCalled();
     expect(mockLedger.record).not.toHaveBeenCalled();
+    expect(mockRepo.updateStatus).not.toHaveBeenCalledWith(
+      'bcast-1',
+      'completed',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+});
+
+describe('runEmailBroadcastJob — mid-run cancel/pause', () => {
+  it('halts between pages when the admin cancels, and never overwrites the cancel', async () => {
+    // Job-start read is 'queued'; the page-2 pre-flight read sees the cancel.
+    mockRepo.findById
+      .mockResolvedValueOnce(makeBroadcast())
+      .mockResolvedValueOnce(makeBroadcast())
+      .mockResolvedValue(makeBroadcast({ status: 'cancelled' }));
+    mockResolveAudience
+      .mockResolvedValueOnce(page([ADA], 'user-ada'))
+      .mockResolvedValue(page([BOB], null));
+
+    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
+
+    // Page 1 was sent before the cancel; page 2 must never be fetched or mailed.
+    expect(mockEngine.sendOne).toHaveBeenCalledTimes(1);
+    expect(mockEngine.sendOne).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-ada' }));
+    const steps = mockRepo.appendStepResult.mock.calls.map(([, r]) => r.step);
+    expect(steps).toContain('halted');
+    expect(mockRepo.updateStatus).not.toHaveBeenCalledWith(
+      'bcast-1',
+      'completed',
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });
 
@@ -381,6 +503,7 @@ describe('runEmailBroadcastJob — dry run', () => {
       'bcast-1',
       'completed',
       expect.objectContaining({ completedAt: expect.any(Date) }),
+      guarded,
     );
   });
 });
@@ -420,21 +543,6 @@ describe('runEmailBroadcastJob — pagination, counts and step results', () => {
     const steps = mockRepo.appendStepResult.mock.calls.map(([, r]) => r.step);
     expect(steps).toEqual(expect.arrayContaining(['batch-1', 'batch-2', 'finalize']));
   });
-
-  it('stops at sendLimit attempts (a canary cannot walk the whole audience)', async () => {
-    mockRepo.findById.mockResolvedValue(makeBroadcast({ sendLimit: 1 }));
-    mockResolveAudience
-      .mockResolvedValueOnce(page([ADA, BOB], 'user-bob'))
-      .mockResolvedValue(page([], null));
-
-    await runEmailBroadcastJob({ broadcastId: 'bcast-1' });
-
-    expect(mockEngine.sendOne).toHaveBeenCalledTimes(1);
-    // The limit break happens before a second page is fetched.
-    expect(mockResolveAudience).toHaveBeenCalledTimes(1);
-    const steps = mockRepo.appendStepResult.mock.calls.map(([, r]) => r.step);
-    expect(steps).toContain('send-limit');
-  });
 });
 
 describe('runEmailBroadcastJob — suppression read', () => {
@@ -448,6 +556,7 @@ describe('runEmailBroadcastJob — suppression read', () => {
       'bcast-1',
       'failed',
       expect.objectContaining({ lastError: 'Resend 500' }),
+      guarded,
     );
     expect(mockEngine.sendOne).not.toHaveBeenCalled();
   });
