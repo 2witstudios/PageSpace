@@ -9,6 +9,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import MachineFileTree from './MachineFileTree';
+import type { FilesScope } from '../tabs/files-scope';
 
 /**
  * Fake checkout served by the mocked /api/machines/files. Root order is
@@ -58,10 +59,10 @@ const cannedFetch = (overrides: Record<string, () => Promise<Response>> = {}) =>
 const listCallsFor = (path: string): number =>
   vi.mocked(fetchWithAuth).mock.calls.filter((call) => requestedPath(String(call[0])) === path).length;
 
+const BRANCH_SCOPE: FilesScope = { kind: 'branch', projectName: 'my-repo', branchName: 'main' };
+
 const renderTree = (props: Partial<Parameters<typeof MachineFileTree>[0]> = {}) =>
-  render(
-    <MachineFileTree machineId="machine-1" projectName="my-repo" branchName="main" {...props} />,
-  );
+  render(<MachineFileTree machineId="machine-1" scope={BRANCH_SCOPE} {...props} />);
 
 const expandFolder = async (name: string) => {
   const label = await waitFor(() => screen.getByText(name));
@@ -90,6 +91,21 @@ describe('MachineFileTree', () => {
       should: 'show the root directory entries returned by the files API',
       actual: [screen.getByText('src').textContent, screen.getByText('README.md').textContent],
       expected: ['src', 'README.md'],
+    });
+  });
+
+  test('root scope lists without projectName/branchName params', async () => {
+    renderTree({ scope: { kind: 'root' } });
+
+    await waitFor(() => screen.getByText('README.md'));
+    const call = vi.mocked(fetchWithAuth).mock.calls[0];
+    const url = new URL(String(call[0]), 'http://test');
+
+    assert({
+      given: 'a tree mounted with root scope',
+      should: "list the files route with no projectName/branchName — just machineId",
+      actual: { projectName: url.searchParams.get('projectName'), branchName: url.searchParams.get('branchName') },
+      expected: { projectName: null, branchName: null },
     });
   });
 
@@ -197,7 +213,10 @@ describe('MachineFileTree', () => {
     await waitFor(() => screen.getByText('index.ts'));
 
     rerender(
-      <MachineFileTree machineId="machine-1" projectName="my-repo" branchName="dev" />,
+      <MachineFileTree
+        machineId="machine-1"
+        scope={{ kind: 'branch', projectName: 'my-repo', branchName: 'dev' }}
+      />,
     );
     await waitFor(() => {
       if (listCallsFor('') < 2) throw new Error('new branch root listing not fetched yet');

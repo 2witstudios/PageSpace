@@ -97,8 +97,7 @@ export default function FilesTab({ machineId }: FilesTabProps) {
           // update, so the pane unmounts anyway.
           <FilesFilePane
             machineId={machineId}
-            projectName={branch.projectName}
-            branchName={branch.branchName}
+            scope={{ kind: 'branch', projectName: branch.projectName, branchName: branch.branchName }}
             path={path}
           />
         ) : (
@@ -266,8 +265,7 @@ function BranchFiles({
   return (
     <MachineFileTree
       machineId={machineId}
-      projectName={projectName}
-      branchName={branchName}
+      scope={{ kind: 'branch', projectName, branchName }}
       onSelectFile={onSelectFile}
       selectedPath={selectedPath}
     />

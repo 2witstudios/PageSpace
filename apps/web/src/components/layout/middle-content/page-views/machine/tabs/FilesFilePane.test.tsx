@@ -34,12 +34,15 @@ vi.mock('@/components/editors/MonacoEditor', () => ({
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import FilesFilePane from './FilesFilePane';
+import type { FilesScope } from './files-scope';
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-const renderPane = (path = 'src/index.ts') =>
-  render(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path={path} />);
+const BRANCH_SCOPE: FilesScope = { kind: 'branch', projectName: 'repo', branchName: 'main' };
+
+const renderPane = (path = 'src/index.ts', scope: FilesScope = BRANCH_SCOPE) =>
+  render(<FilesFilePane machineId="machine-1" scope={scope} path={path} />);
 
 const requested = (call: unknown[], param: string): string | null =>
   new URL(String(call[0]), 'http://test').searchParams.get(param);
@@ -182,7 +185,7 @@ describe('FilesFilePane', () => {
     const { rerender } = renderPane('a.ts');
     await waitFor(() => screen.getByTestId('monaco'));
 
-    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.ts" />);
+    rerender(<FilesFilePane machineId="machine-1" scope={BRANCH_SCOPE} path="b.ts" />);
     await waitFor(() => {
       const lastPath = requested(vi.mocked(fetchWithAuth).mock.calls.at(-1) ?? [], 'path');
       if (lastPath !== 'b.ts') throw new Error('new path not fetched yet');
@@ -209,7 +212,7 @@ describe('FilesFilePane', () => {
       .mockResolvedValueOnce(jsonResponse({ content: 'the file I clicked second', encoding: 'utf8', truncated: false }));
 
     const { rerender } = renderPane('slow.ts');
-    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="quick.ts" />);
+    rerender(<FilesFilePane machineId="machine-1" scope={BRANCH_SCOPE} path="quick.ts" />);
     await waitFor(() => screen.getByTestId('monaco'));
 
     // Only NOW does the abandoned first read resolve. Flush inside act() so any
@@ -252,7 +255,7 @@ describe('FilesFilePane', () => {
     const { rerender } = renderPane('assets/logo.png');
     await waitFor(() => screen.getByTestId('binary-file'));
 
-    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="src/a.ts" />);
+    rerender(<FilesFilePane machineId="machine-1" scope={BRANCH_SCOPE} path="src/a.ts" />);
     const monaco = await waitFor(() => screen.getByTestId('monaco'));
 
     assert({
@@ -340,7 +343,7 @@ describe('FilesFilePane', () => {
     const { rerender } = renderPane('a.ts');
     await waitFor(() => screen.getByText('contents of a.ts'));
 
-    rerender(<FilesFilePane machineId="machine-1" projectName="repo" branchName="main" path="b.py" />);
+    rerender(<FilesFilePane machineId="machine-1" scope={BRANCH_SCOPE} path="b.py" />);
     await waitFor(() => screen.getByText('Loading file…'));
 
     assert({
@@ -362,6 +365,53 @@ describe('FilesFilePane', () => {
       should: 'render a meaningful error instead of throwing',
       actual: error.textContent,
       expected: 'Malformed file read response',
+    });
+  });
+
+  test('root scope reads without projectName/branchName params', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(jsonResponse({ content: 'x', encoding: 'utf8', truncated: false }));
+    renderPane('README.md', { kind: 'root' });
+
+    await waitFor(() => screen.getByTestId('monaco'));
+    const call = vi.mocked(fetchWithAuth).mock.calls[0];
+
+    assert({
+      given: 'a pane mounted with root scope',
+      should: 'read with no projectName/branchName params',
+      actual: { projectName: requested(call, 'projectName'), branchName: requested(call, 'branchName') },
+      expected: { projectName: null, branchName: null },
+    });
+  });
+
+  test('a not_started machine renders its own absent copy', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      jsonResponse({ error: "This machine hasn't been started yet", reason: 'not_started' }, 404),
+    );
+    renderPane('README.md', { kind: 'root' });
+
+    const message = await waitFor(() => screen.getByText("This machine hasn't been started yet"));
+
+    assert({
+      given: 'a root scope whose machine has never been started',
+      should: 'render the not_started absent copy, distinct from not_found/vanished',
+      actual: message.textContent,
+      expected: "This machine hasn't been started yet",
+    });
+  });
+
+  test('a missing file in root scope reads as "no longer on the machine"', async () => {
+    vi.mocked(fetchWithAuth).mockResolvedValue(
+      jsonResponse({ error: 'File not found', reason: 'file_not_found' }, 404),
+    );
+    renderPane('deleted.txt', { kind: 'root' });
+
+    const message = await waitFor(() => screen.getByText('This file is no longer on the machine.'));
+
+    assert({
+      given: 'a file deleted from the machine root between listing and reading it',
+      should: 'use the root-scope copy, not the branch-scope "checkout" phrasing',
+      actual: message.textContent,
+      expected: 'This file is no longer on the machine.',
     });
   });
 });

@@ -2,21 +2,23 @@
 
 /**
  * FilesFilePane — the Files tab's main pane: fetches ONE selected file's content
- * from the machine files route (`mode=read`) and shows it in a read-only Monaco
- * (Machine page rebuild, Phase 3).
+ * from the machine files route (`mode=read`) and shows it in a read-only Monaco.
+ * Scoped by `FilesScope` (Machine Files Manager epic, Part A) — either the
+ * Machine's own root Sprite (`/workspace`) or a project/branch checkout within
+ * it — like its sibling {@link MachineFileTree}.
  *
- * Read-only by design — this tab views a live checkout, it does not edit it, so
- * Monaco is mounted with `readOnly` and there is no onChange/save path. Content
- * is fetched lazily: the pane only mounts once a file is actually clicked (the
- * tab renders a placeholder until then), and every settled state carries the
- * path it settled for, so the pane can never paint one file's content under
- * another's name. The route caps a single read at 2 MiB and reports `truncated`
- * when it clips a larger file; that surfaces as a banner so a partial view is
- * never mistaken for the whole file. The working tree is LIVE (an agent terminal
- * can rewrite the open file), and re-clicking the same row in the tree is a
- * no-op, so the header carries a reload.
+ * Read-only by design — this tab views a live filesystem, it does not edit it,
+ * so Monaco is mounted with `readOnly` and there is no onChange/save path.
+ * Content is fetched lazily: the pane only mounts once a file is actually
+ * clicked (the tab renders a placeholder until then), and every settled state
+ * carries the path it settled for, so the pane can never paint one file's
+ * content under another's name. The route caps a single read at 2 MiB and
+ * reports `truncated` when it clips a larger file; that surfaces as a banner so
+ * a partial view is never mistaken for the whole file. The working tree is LIVE
+ * (an agent terminal can rewrite the open file), and re-clicking the same row
+ * in the tree is a no-op, so the header carries a reload.
  *
- * BINARIES. A real working tree is full of them — images, fonts, archives,
+ * BINARIES. A real filesystem is full of them — images, fonts, archives,
  * `.node` addons, `__pycache__` — and the route decodes whatever it reads as
  * UTF-8, so a binary would land in Monaco as mojibake. Two guards, because
  * neither alone is enough:
@@ -44,6 +46,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Button } from '@/components/ui/button';
 import { PaneLoading, PaneNotice } from './tab-states';
 import { FILES_ABSENT_COPY, asAbsentReason, readErrorBody, type FilesAbsentReason } from './checkout-states';
+import { type FilesScope, filesScopeSearchParams } from './files-scope';
 
 // Monaco pulls the editor bundle + `window`, so it must never SSR — matches
 // every other MonacoEditor mount in the app (CodePageView, DocumentView, …).
@@ -51,9 +54,8 @@ const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), 
 
 interface FilesFilePaneProps {
   machineId: string;
-  projectName: string;
-  branchName: string;
-  /** Checkout-relative path of the file to show, e.g. `src/index.ts`. */
+  scope: FilesScope;
+  /** Path of the file to show, relative to the scope root, e.g. `src/index.ts`. */
   path: string;
 }
 
@@ -106,7 +108,7 @@ const looksBinary = (content: string): boolean => {
   return replacements >= MIN_REPLACEMENTS && replacements / sample.length > MAX_REPLACEMENT_RATIO;
 };
 
-export default function FilesFilePane({ machineId, projectName, branchName, path }: FilesFilePaneProps) {
+export default function FilesFilePane({ machineId, scope, path }: FilesFilePaneProps) {
   const [state, setState] = useState<FileState>({ status: 'loading' });
   // Bumped by Retry to re-run the read without changing the selected file.
   const [attempt, setAttempt] = useState(0);
@@ -127,16 +129,19 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
 
     const load = async () => {
       try {
-        const search = new URLSearchParams({ machineId, projectName, branchName, path, mode: 'read' });
+        const search = filesScopeSearchParams(machineId, scope);
+        search.set('path', path);
+        search.set('mode', 'read');
         const res = await fetchWithAuth(`/api/machines/files?${search.toString()}`);
         if (cancelled) return;
 
         if (!res.ok) {
           const { error, reason } = readErrorBody(await res.json().catch(() => null));
           if (cancelled) return;
-          // The route keeps "this branch has no checkout" (`not_found`/`vanished`)
-          // and "that one file is gone" (`file_not_found`) as distinct reasons, so
-          // we can tell the reader which actually happened instead of guessing.
+          // The route keeps "this scope isn't reachable" (`not_found`/`vanished`/
+          // `not_started`) and "that one file is gone" (`file_not_found`) as
+          // distinct reasons, so we can tell the reader which actually happened
+          // instead of guessing.
           const absent = asAbsentReason(reason);
           if (absent !== null) {
             setState({ status: 'absent', path, reason: absent });
@@ -144,7 +149,9 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
           }
           throw new Error(
             reason === 'file_not_found'
-              ? 'This file is no longer in the checkout.'
+              ? scope.kind === 'branch'
+                ? 'This file is no longer in the checkout.'
+                : 'This file is no longer on the machine.'
               : error ?? `Failed to read file (${res.status})`,
           );
         }
@@ -171,7 +178,12 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
     return () => {
       cancelled = true;
     };
-  }, [machineId, projectName, branchName, path, fileName, attempt]);
+    // `scope` is safe alongside `path` here even though it isn't part of the
+    // effect's cache-busting story: the pane only ever mounts while `path` is
+    // non-null, and FilesTab's Selection nulls `path` in the very same state
+    // update that changes `scope` — so a scope change can never fire this
+    // effect on its own; `path` becoming null unmounts the pane first.
+  }, [machineId, scope, path, fileName, attempt]);
 
   // The state of a DIFFERENT file is not this file's state — until the effect
   // catches up, we have nothing to show but the spinner. (See FileState.)
