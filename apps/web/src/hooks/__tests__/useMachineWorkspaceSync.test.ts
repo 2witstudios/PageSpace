@@ -29,7 +29,12 @@ vi.mock('@/hooks/usePageSocketRoom', () => ({
   usePageSocketRoom: vi.fn(),
 }));
 
-import { useMachineWorkspaceStore, selectMachine, workspacesOf } from '@/stores/machine-workspace/useMachineWorkspaceStore';
+import {
+  useMachineWorkspaceStore,
+  selectMachine,
+  sessionWorkspaceId,
+  workspacesOf,
+} from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import { useMachineWorkspaceSync, useSyncedWorkspaceActions } from '../useMachineWorkspaceSync';
 
 const MACHINE_ID = 'm1';
@@ -576,6 +581,70 @@ describe('useSyncedWorkspaceActions', () => {
     const patchCalls = mockFetchWithAuth.mock.calls.filter(([, opts]) => opts?.method === 'PATCH');
     expect(patchCalls).toHaveLength(0);
     expect(mockPost).not.toHaveBeenCalledWith('/api/machines/workspaces', expect.objectContaining({ id: workspace.id }));
+  });
+
+  // Regression (CodeRabbit): pushRemoval used to swallow a failed DELETE
+  // outright — the server row survived, and the next full hydrate resurrected
+  // the locally removed workspace. Unlike a layout PATCH, a removal has no
+  // "next push" to reconcile through, so the bounded retry IS the
+  // reconciliation.
+  it('removeWorkspace retries a transiently failed DELETE, and stops once it succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      useMachineWorkspaceStore.getState().ensureMachine('m-retry');
+      const id = useMachineWorkspaceStore.getState().createWorkspace('m-retry');
+      mockDel.mockRejectedValueOnce(new Error('network'));
+
+      const { result } = renderHook(() => useSyncedWorkspaceActions('m-retry'));
+      act(() => {
+        result.current.removeWorkspace(id);
+      });
+      expect(mockDel).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(mockDel).toHaveBeenCalledTimes(2);
+
+      // The second attempt succeeded — nothing further is scheduled.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(mockDel).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a pending removal retry is ABANDONED if the user re-materializes the same workspace id', async () => {
+    vi.useFakeTimers();
+    try {
+      useMachineWorkspaceStore.getState().ensureMachine('m-revive');
+      // A session-derived workspace: its id is DETERMINISTIC
+      // (`sessionWorkspaceId`), so re-opening the same session re-creates the
+      // SAME id — the case a stale retry would delete out from under the user.
+      useMachineWorkspaceStore.getState().openTerminal('m-revive', { name: 's1' });
+      const id = sessionWorkspaceId({ name: 's1' });
+      mockDel.mockRejectedValue(new Error('network'));
+
+      const { result } = renderHook(() => useSyncedWorkspaceActions('m-revive'));
+      act(() => {
+        result.current.removeWorkspace(id);
+      });
+      expect(mockDel).toHaveBeenCalledTimes(1);
+
+      // The user re-opens the session before the retry fires.
+      act(() => {
+        useMachineWorkspaceStore.getState().openTerminal('m-revive', { name: 's1' });
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(mockDel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renameWorkspace PATCHes name only — the layout it never touched is not sent", async () => {

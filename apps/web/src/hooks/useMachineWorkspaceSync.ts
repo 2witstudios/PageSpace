@@ -366,10 +366,29 @@ async function pushWorkspaceUpdate(machineId: string, workspaceId: string, chang
   }).catch(() => {});
 }
 
-function pushRemoval(machineId: string, workspaceId: string): void {
+/** Fire-and-forget DELETE with bounded retries. Removal is optimistic like
+ * every other push here (the local grid already updated), but unlike a layout
+ * PATCH there is no "next push" to reconcile a transient failure — so this IS
+ * the reconciliation. If every attempt fails, the server row survives and the
+ * next full hydrate resurrects the row locally: visible and annoying, but
+ * recoverable (remove it again) — whereas rolling the local removal back would
+ * restore a grid whose PTYs were already killed, a strictly worse dead-pane
+ * state. Each retry first checks the workspace is STILL locally removed:
+ * session-derived workspace ids are deterministic (`sessionWorkspaceId`), so
+ * the user re-opening that session re-materializes the SAME id, and a stale
+ * retry would delete the new incarnation out from under them. A 404 also lands
+ * in the catch (`del()` hides the status) when another browser already removed
+ * the row — the capped retries just expire against it harmlessly. */
+function pushRemoval(machineId: string, workspaceId: string, attempt = 0): void {
   del(
     `/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}&workspaceId=${encodeURIComponent(workspaceId)}`
-  ).catch(() => {});
+  ).catch(() => {
+    if (attempt >= 2) return;
+    setTimeout(() => {
+      const revived = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
+      if (!revived) pushRemoval(machineId, workspaceId, attempt + 1);
+    }, 1500 * (attempt + 1));
+  });
 }
 
 /**

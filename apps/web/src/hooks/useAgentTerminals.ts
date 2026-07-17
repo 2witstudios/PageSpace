@@ -71,7 +71,11 @@ export async function killAgentTerminal(
     const body: { error?: unknown } | null = await response.json().catch(() => null);
     throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to remove terminal');
   }
-  await mutate(`/api/machines/agent-terminals?${query}`);
+  // Fire-and-forget: the kill has already succeeded by this point, and a
+  // transient failure of the list REFETCH must not turn a completed teardown
+  // into a rejection — that would keep the remove-workspace dialog open (and
+  // fail closePaneAndKill's catch path) over a session that is already dead.
+  void mutate(`/api/machines/agent-terminals?${query}`).catch(() => {});
 }
 
 /**

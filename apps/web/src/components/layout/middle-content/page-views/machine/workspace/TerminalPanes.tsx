@@ -149,19 +149,31 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   const closePaneAndKill = useCallback(
     (paneId: string) => {
       const current = useMachineWorkspaceStore.getState().machines[machineId];
-      const machinePanes = current ? workspacesOf(current).flatMap(panesOf) : [];
-      const closing = machinePanes.find((candidate) => candidate.id === paneId)?.scope ?? null;
+      // The closing pane is resolved WITHIN its own workspace — a pane id is
+      // only unique within its grid (ids arrive from server layouts other
+      // clients minted, so nothing guarantees global uniqueness), and a
+      // machine-wide id lookup could match a same-id pane in another
+      // workspace and kill that pane's session instead.
+      const closingWorkspace = current?.workspaces[workspaceId];
+      const closing = closingWorkspace
+        ? (panesOf(closingWorkspace).find((candidate) => candidate.id === paneId)?.scope ?? null)
+        : null;
 
       // Compared by `sessionWorkspaceId` — the session's real identity is the
       // (project, branch, name) triple (that is `machine_agent_terminals`' unique
       // index), not the name alone, which two branches could legitimately share.
+      // "Another pane" is the (workspace, pane) TUPLE, for the same reason the
+      // lookup above is workspace-scoped.
       const boundElsewhere =
         closing !== null &&
-        machinePanes.some(
-          (candidate) =>
-            candidate.id !== paneId &&
-            candidate.scope !== null &&
-            sessionWorkspaceId(candidate.scope) === sessionWorkspaceId(closing),
+        current !== undefined &&
+        workspacesOf(current).some((candidateWorkspace) =>
+          panesOf(candidateWorkspace).some(
+            (candidate) =>
+              (candidateWorkspace.id !== workspaceId || candidate.id !== paneId) &&
+              candidate.scope !== null &&
+              sessionWorkspaceId(candidate.scope) === sessionWorkspaceId(closing),
+          ),
         );
 
       closePane(workspaceId, paneId);

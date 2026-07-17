@@ -130,6 +130,13 @@ const SHARED_SESSION_WORKSPACE = aWorkspace({
 let workspace: WorkspaceState | null = SPLIT_WORKSPACE;
 /** False = no machine entry at all: the frame before `ensureMachine` commits. */
 let machineEnsured = true;
+/** Additional NON-active workspaces on the machine, listed BEFORE the active
+ * one in the machine's order — the shape that trips up any machine-wide pane
+ * lookup that assumes pane ids are globally unique. */
+let extraWorkspaces: WorkspaceState[] = [];
+beforeEach(() => {
+  extraWorkspaces = [];
+});
 
 // Only the store HOOK is faked; selectActiveWorkspace / panesOf / autoSessionName
 // stay real, so these tests exercise the same active-workspace lookup the app does
@@ -143,7 +150,14 @@ vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', async () => {
       ? {}
       : {
           m1: workspace
-            ? { workspaces: { [WORKSPACE_ID]: workspace }, order: [WORKSPACE_ID], activeWorkspaceId: WORKSPACE_ID }
+            ? {
+                workspaces: Object.fromEntries([
+                  ...extraWorkspaces.map((extra) => [extra.id, extra] as const),
+                  [WORKSPACE_ID, workspace] as const,
+                ]),
+                order: [...extraWorkspaces.map((extra) => extra.id), WORKSPACE_ID],
+                activeWorkspaceId: WORKSPACE_ID,
+              }
             : { workspaces: {}, order: [], activeWorkspaceId: '' },
         },
     selectPane,
@@ -302,6 +316,38 @@ describe('TerminalPanes (close means close)', () => {
       should: 'still kill the closed one, at ITS checkout — comparing on name alone would silently skip it',
       actual: killAgentTerminal.mock.calls,
       expected: [['m1', { ...WORKSPACE_SCOPE, name: 'claude-x' }]],
+    });
+  });
+
+  // Regression (CodeRabbit): pane ids arrive from server layouts other clients
+  // minted, so nothing guarantees they are globally unique — they are only
+  // unique within their own grid. A machine-wide id lookup finds whichever
+  // same-id pane comes FIRST in the machine's order and kills THAT pane's
+  // session instead of the one the user closed.
+  test('a same-ID pane in ANOTHER workspace is never mistaken for the closing pane', async () => {
+    workspace = SOLO_WORKSPACE; // holds pane-1 → session "solo"
+    extraWorkspaces = [
+      {
+        id: 'ws-foreign',
+        name: 'Foreign',
+        scope: WORKSPACE_SCOPE,
+        columns: [
+          { id: 'col-foreign', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'foreign-session' } }] },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      },
+    ];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    assert({
+      given: "two workspaces each holding a pane with the SAME id, the foreign one first in the machine's order",
+      should: "kill the session of the pane in THIS workspace — resolving the pane machine-wide would kill the foreign workspace's session and leave the closed one running",
+      actual: killAgentTerminal.mock.calls,
+      expected: [['m1', { name: 'solo' }]],
     });
   });
 
