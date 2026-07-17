@@ -170,7 +170,7 @@ describe('/api/admin/broadcasts/[id]', () => {
         'bc_1',
         'cancelled',
         expect.objectContaining({ completedAt: expect.any(Date) }),
-        { unlessStatus: ['completed', 'failed', 'cancelled'] },
+        { unlessStatus: ['completed', 'cancelled'] },
       );
       expect(mockRepo.appendStepResult).toHaveBeenCalledWith(
         'bc_1',
@@ -188,8 +188,22 @@ describe('/api/admin/broadcasts/[id]', () => {
       expect(response.status).toBe(200);
       expect(body).toEqual({ id: 'bc_1', status: 'paused' });
       expect(mockRepo.updateStatus).toHaveBeenCalledWith('bc_1', 'paused', {}, {
-        unlessStatus: ['completed', 'failed', 'cancelled'],
+        unlessStatus: ['completed', 'cancelled'],
       });
+    });
+
+    it('cancels a FAILED broadcast — pg-boss may still be retrying it', async () => {
+      mockRepo.findById.mockResolvedValue({ ...baseBroadcast, status: 'failed' });
+      mockRepo.updateStatus.mockResolvedValue(1);
+
+      const response = await POST(postRequest({ action: 'cancel', reason: 'Stop the retries' }), context);
+      const body = await response.json();
+
+      // The worker writes 'failed' + rethrows so pg-boss retries; a 'failed'
+      // row is often a live send between attempts. Refusing to cancel it would
+      // let the next retry resume mailing after the operator said stop.
+      expect(response.status).toBe(200);
+      expect(body).toEqual({ id: 'bc_1', status: 'cancelled' });
     });
 
     it('returns 200 when the step-result note fails — the status write IS the intervention', async () => {

@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { withAdminAuth } from '@/lib/auth';
-import { broadcastCreateSchema } from '@/lib/broadcasts/schema';
+import { broadcastCreateSchema, type BroadcastCreateInput } from '@/lib/broadcasts/schema';
 import {
   BroadcastEnqueueUnconfirmedError,
   enqueueBroadcast,
 } from '@/lib/broadcast/enqueue';
+import { appendStepResultBestEffort } from '@/lib/broadcast/step-results';
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
 import { countAudience } from '@pagespace/lib/services/broadcast/audience';
 import {
@@ -28,12 +29,9 @@ import type { BroadcastAudienceDefinition } from '@pagespace/db/schema/email-bro
 
 /** Resolve compose/template content through the SAME code path the worker uses,
  *  so the preview is evidence about the email that will actually ship. */
-async function resolveContent(parsed: {
-  contentMode: 'compose' | 'template';
-  subject: string;
-  bodyMarkdown?: string;
-  templateId?: string;
-}) {
+async function resolveContent(
+  parsed: Pick<BroadcastCreateInput, 'contentMode' | 'subject' | 'bodyMarkdown' | 'templateId'>,
+) {
   return resolveBroadcastContent(
     {
       contentMode: parsed.contentMode,
@@ -52,24 +50,6 @@ async function resolveContent(parsed: {
         : null;
     },
   );
-}
-
-/** Best-effort progress-trail note. The trail is UI-facing evidence, not the
- *  audit record (auditRequest is) — its failure must never fail the request. */
-async function appendStepResultSafe(broadcastId: string, detail: string): Promise<void> {
-  try {
-    await broadcastRepository.appendStepResult(broadcastId, {
-      step: 'enqueue',
-      status: 'failed',
-      detail,
-      at: new Date().toISOString(),
-    });
-  } catch (error) {
-    loggers.api.warn('Broadcast step-result append failed', {
-      broadcastId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
 }
 
 export const POST = withAdminAuth(async (admin, request) => {
@@ -126,26 +106,38 @@ export const POST = withAdminAuth(async (admin, request) => {
       });
     }
 
-    // The worker drives the transactional engine unconditionally; until the
-    // Phase-2 engine exists, a live resend_broadcast send would silently go out
-    // transactionally — refuse rather than mis-send.
-    if (input.engine === 'resend_broadcast') {
-      return NextResponse.json(
-        { error: 'The resend_broadcast engine is not available yet. Use "transactional".' },
-        { status: 400 },
-      );
+    // Double-click and proxy-retry protection: each POST creates a FRESH row
+    // with a fresh singletonKey, so nothing downstream dedupes two creates —
+    // two rows mean the whole audience is mailed twice. An active broadcast
+    // with the same resolved subject is almost always the same intent, so
+    // refuse it unless the admin explicitly says the duplicate is deliberate.
+    if (!input.allowDuplicate) {
+      const active = await broadcastRepository.listByStatus([
+        'pending',
+        'queued',
+        'in_progress',
+        'paused',
+      ]);
+      const duplicate = active.find((b) => !b.dryRun && b.subject === content.subject);
+      if (duplicate) {
+        return NextResponse.json(
+          {
+            error: `A broadcast with this subject is already ${duplicate.status}. Pass allowDuplicate to send anyway.`,
+            duplicateOf: duplicate.id,
+          },
+          { status: 409 },
+        );
+      }
     }
 
+    // Cross-mode fields (a stale templateId on a compose send, a leftover body
+    // on a template send) were already dropped by the schema's transform.
     const broadcast = await broadcastRepository.create({
       subject: content.subject,
       engine: input.engine,
       contentMode: input.contentMode,
-      // Only the field the active mode reads is stored. The other one may hold
-      // stale form state (e.g. a template id kept after switching to compose),
-      // and persisting it would either break the insert on a deleted template
-      // FK or record a reference to a template this send never used.
-      templateId: input.contentMode === 'template' ? (input.templateId ?? null) : null,
-      bodyMarkdown: input.contentMode === 'compose' ? (input.bodyMarkdown ?? null) : null,
+      templateId: input.templateId ?? null,
+      bodyMarkdown: input.bodyMarkdown ?? null,
       audienceDefinition,
       dryRun: false,
       sendLimit: input.sendLimit ?? null,
@@ -186,7 +178,12 @@ export const POST = withAdminAuth(async (admin, request) => {
         // under a status that told the admin the send died, inviting a second
         // broadcast. Report accepted-but-unconfirmed and point at the status
         // page, where a landed job shows progress and a lost one stays pending.
-        await appendStepResultSafe(broadcast.id, `enqueue unconfirmed: ${msg}`);
+        await appendStepResultBestEffort(broadcast.id, {
+          step: 'enqueue',
+          status: 'failed',
+          detail: `enqueue unconfirmed: ${msg}`,
+          at: new Date().toISOString(),
+        });
         loggers.api.warn('Broadcast enqueue unconfirmed — job may exist', {
           broadcastId: broadcast.id,
           error: msg,

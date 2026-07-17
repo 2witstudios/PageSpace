@@ -86,12 +86,15 @@ describe('enqueueBroadcast', () => {
     await expect(enqueueBroadcast(params)).resolves.toEqual({ jobId: 'job_2' });
   });
 
-  it('converts an ambiguous 5xx into a definite refusal when the retry 4xxes', async () => {
+  it('a refusal AFTER an ambiguous attempt stays unconfirmed — the first job may be live', async () => {
+    // First POST: proxy 502 sent after the processor may have committed addJob.
+    // Retry: a 4xx proves only the RETRY created nothing. Downgrading to
+    // NotEnqueued would let the caller mark a sending broadcast 'failed'.
     fetchMock
       .mockResolvedValueOnce(jsonResponse(502, { error: 'bad gateway' }))
       .mockResolvedValueOnce(jsonResponse(400, { error: 'broadcastId is required' }));
 
-    await expect(enqueueBroadcast(params)).rejects.toBeInstanceOf(BroadcastNotEnqueuedError);
+    await expect(enqueueBroadcast(params)).rejects.toBeInstanceOf(BroadcastEnqueueUnconfirmedError);
   });
 
   it('throws Unconfirmed only when both attempts fail ambiguously', async () => {

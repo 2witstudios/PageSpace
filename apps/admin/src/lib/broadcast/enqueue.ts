@@ -119,6 +119,27 @@ async function postEnqueue(broadcastId: string, token: string): Promise<AttemptO
   return { kind: 'ok', jobId: json.jobId };
 }
 
+/**
+ * Map one attempt's outcome to a result, or null when it settles nothing.
+ *
+ * `refusalIsProof` is the whole subtlety: a refusal only proves "no job exists"
+ * while NO earlier attempt is unaccounted for. After an ambiguous attempt (say
+ * a proxy 502 sent after addJob committed), a 4xx on the retry proves only that
+ * the RETRY created nothing — the first attempt's job may be live, so treating
+ * that refusal as proof would let the caller mark a sending broadcast `failed`.
+ */
+function settle(
+  outcome: AttemptOutcome,
+  opts: { refusalIsProof: boolean },
+): EnqueueBroadcastResult | null {
+  if (outcome.kind === 'ok') return { jobId: outcome.jobId };
+  if (outcome.kind === 'deduped') return { jobId: null };
+  if (outcome.kind === 'refused' && opts.refusalIsProof) {
+    throw new BroadcastNotEnqueuedError(`Processor broadcast enqueue refused: ${outcome.detail}`);
+  }
+  return null;
+}
+
 export async function enqueueBroadcast(params: EnqueueBroadcastParams): Promise<EnqueueBroadcastResult> {
   // A minting failure happens before any request leaves the process — the one
   // failure that is unambiguous by construction.
@@ -131,23 +152,24 @@ export async function enqueueBroadcast(params: EnqueueBroadcastParams): Promise<
   }
 
   const first = await postEnqueue(params.broadcastId, token);
-  if (first.kind === 'ok') return { jobId: first.jobId };
-  if (first.kind === 'deduped') return { jobId: null };
-  if (first.kind === 'refused') {
-    throw new BroadcastNotEnqueuedError(`Processor broadcast enqueue refused: ${first.detail}`);
-  }
+  const settledFirst = settle(first, { refusalIsProof: true });
+  if (settledFirst) return settledFirst;
 
-  // Ambiguous → reconcile with one retry. The singletonKey makes this safe (a
-  // landed first attempt yields 409, not a second job), and every outcome but
-  // another transport failure converts the ambiguity into a definite answer.
+  // Ambiguous → reconcile with one retry: a landed first attempt normally
+  // yields 409, not a second job. The narrow window where it doesn't — the
+  // first job already ran to completion, releasing the singletonKey — is
+  // still safe end to end: a completed row makes the worker yield, a refused
+  // row just re-refuses, and a mid-send failure re-walks behind the
+  // per-recipient claim ledger, which is exactly the designed resume path.
   const second = await postEnqueue(params.broadcastId, token);
-  if (second.kind === 'ok') return { jobId: second.jobId };
-  if (second.kind === 'deduped') return { jobId: null };
-  if (second.kind === 'refused') {
-    throw new BroadcastNotEnqueuedError(`Processor broadcast enqueue refused: ${second.detail}`);
-  }
+  const settledSecond = settle(second, { refusalIsProof: false });
+  if (settledSecond) return settledSecond;
 
+  // Reaching here means neither attempt settled: `first` can only be ambiguous
+  // (ok/deduped returned, refused threw) and `second` ambiguous or refused.
+  const detailOf = (o: AttemptOutcome) =>
+    o.kind === 'refused' || o.kind === 'ambiguous' ? o.detail : o.kind;
   throw new BroadcastEnqueueUnconfirmedError(
-    `Processor broadcast enqueue unconfirmed: ${first.detail}; retry: ${second.detail}`,
+    `Processor broadcast enqueue unconfirmed: ${detailOf(first)}; retry: ${detailOf(second)}`,
   );
 }

@@ -124,6 +124,9 @@ describe('/api/admin/broadcasts', () => {
       expiresAt: new Date(Date.now() + 3600000),
     });
     adminCsrfToken = generateCSRFToken(mockSessionId);
+
+    // The live path consults the active-duplicate guard before creating.
+    mockRepo.listByStatus.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -357,12 +360,56 @@ describe('/api/admin/broadcasts', () => {
       expect(mockRepo.markQueued).not.toHaveBeenCalled();
     });
 
-    it('refuses a live send on the unshipped resend_broadcast engine', async () => {
+    it('refuses a live send on the unshipped resend_broadcast engine at the schema', async () => {
       const response = await POST(postRequest({ ...liveBody, engine: 'resend_broadcast' }));
+      const body = await response.json();
 
+      // Schema-level, so the composer form flags it at validation time too.
       expect(response.status).toBe(400);
+      expect(body.details.engine).toBeDefined();
       expect(mockRepo.create).not.toHaveBeenCalled();
       expect(mockEnqueue).not.toHaveBeenCalled();
+    });
+
+    it('allows a DRY RUN on the resend_broadcast engine — preview is engine-independent', async () => {
+      mockCountAudience.mockResolvedValue(1);
+
+      const response = await POST(
+        postRequest({ ...liveBody, engine: 'resend_broadcast', dryRun: true }),
+      );
+
+      expect(response.status).toBe(200);
+    });
+
+    it('409s a live create whose subject matches a still-active broadcast', async () => {
+      mockRepo.listByStatus.mockResolvedValue([
+        { id: 'bc_active', subject: 'Launch update', status: 'in_progress', dryRun: false } as never,
+      ]);
+
+      const response = await POST(postRequest(liveBody));
+      const body = await response.json();
+
+      // A double-clicked Send or proxy-retried POST creates a FRESH row with a
+      // fresh singletonKey — nothing downstream dedupes it, so the guard here
+      // is what stands between the audience and a double blast.
+      expect(response.status).toBe(409);
+      expect(body.duplicateOf).toBe('bc_active');
+      expect(mockRepo.create).not.toHaveBeenCalled();
+      expect(mockEnqueue).not.toHaveBeenCalled();
+    });
+
+    it('lets allowDuplicate deliberately bypass the active-duplicate guard', async () => {
+      mockRepo.listByStatus.mockResolvedValue([
+        { id: 'bc_active', subject: 'Launch update', status: 'in_progress', dryRun: false } as never,
+      ]);
+      mockRepo.create.mockResolvedValue({ id: 'bc_2' } as never);
+      mockEnqueue.mockResolvedValue({ jobId: 'job_2' });
+      mockRepo.markQueued.mockResolvedValue(1);
+
+      const response = await POST(postRequest({ ...liveBody, allowDuplicate: true }));
+
+      expect(response.status).toBe(202);
+      expect(mockRepo.create).toHaveBeenCalled();
     });
   });
 

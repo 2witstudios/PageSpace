@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { withAdminAuth } from '@/lib/auth';
 import { broadcastActionSchema } from '@/lib/broadcasts/schema';
+import { appendStepResultBestEffort } from '@/lib/broadcast/step-results';
 import { broadcastRepository } from '@pagespace/lib/repositories/broadcast-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -12,14 +13,21 @@ type RouteContext = { params: Promise<{ id: string }> };
  * GET  /api/admin/broadcasts/[id] — status/counts/stepResults for progress polling.
  * POST /api/admin/broadcasts/[id] — cancel or pause an active broadcast.
  *
- * Cancel/pause go through `updateStatus` with a terminal-state guard: the worker
- * checks the row's status mid-run (between pages and per recipient), so writing
+ * Cancel/pause go through `updateStatus` with a guard: the worker checks the
+ * row's status mid-run (between pages and per recipient), so writing
  * `cancelled`/`paused` here IS the intervention — but a broadcast that already
- * finished must not be dragged out of its terminal state, so the conditional
+ * finished must not be dragged out of its settled state, so the conditional
  * write refuses and this route reports the real status instead.
+ *
+ * `failed` is deliberately NOT in the blocked set. The worker writes `failed`
+ * and RETHROWS on per-recipient failures, which makes pg-boss retry — so a
+ * `failed` row is frequently a live send between attempts, and refusing to
+ * cancel it would let the next retry resume mailing after the operator said
+ * stop. Cancelling a row whose retries are actually exhausted is harmless:
+ * the operator's intent is recorded and `lastError` survives.
  */
 
-const TERMINAL_STATES: EmailBroadcastStatus[] = ['completed', 'failed', 'cancelled'];
+const INTERVENTION_BLOCKED_STATES: EmailBroadcastStatus[] = ['completed', 'cancelled'];
 
 export const GET = withAdminAuth<RouteContext>(async (_admin, _request, context) => {
   try {
@@ -85,11 +93,11 @@ export const POST = withAdminAuth<RouteContext>(async (admin, request, context) 
       id,
       targetStatus,
       action === 'cancel' ? { completedAt: new Date() } : {},
-      { unlessStatus: TERMINAL_STATES },
+      { unlessStatus: INTERVENTION_BLOCKED_STATES },
     );
 
     if (updated === 0) {
-      // The guard refused: the broadcast reached a terminal state first. Report
+      // The guard refused: the broadcast reached a settled state first. Report
       // the truth rather than pretend the intervention landed.
       const current = await broadcastRepository.findById(id);
       return NextResponse.json(
@@ -101,22 +109,14 @@ export const POST = withAdminAuth<RouteContext>(async (admin, request, context) 
     // The status write above IS the intervention — the worker yields to it
     // mid-run — and it has landed. The step note is UI-facing evidence, and the
     // durable record of who/why is the auditRequest below; so a note failure is
-    // logged, not surfaced. A 500 here would misreport a cancel that DID land,
-    // and the retry it invites would hit the no-op branch anyway.
-    try {
-      await broadcastRepository.appendStepResult(id, {
-        step: action,
-        status: 'ok',
-        detail: reason,
-        at: new Date().toISOString(),
-      });
-    } catch (error) {
-      loggers.api.warn('Broadcast intervention step-result append failed', {
-        broadcastId: id,
-        action,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // logged (inside the helper), not surfaced. A 500 here would misreport a
+    // cancel that DID land, and the retry it invites would hit the no-op branch.
+    await appendStepResultBestEffort(id, {
+      step: action,
+      status: 'ok',
+      detail: reason,
+      at: new Date().toISOString(),
+    });
 
     loggers.api.info('Admin broadcast intervention', {
       adminId: admin.id,
