@@ -246,7 +246,7 @@ describe('writeMachineFile', () => {
 });
 
 describe('moveMachinePath', () => {
-  it('runs the `test -e` guard then `mv -T -- <from> <to>` when the destination is free', async () => {
+  it('runs the `test -e -o -L` guard then `mv -T -- <from> <to>` when the destination is free', async () => {
     const { handle, calls } = makeExecRecorder((args) => {
       if (args.cmd === 'test') return { exitCode: 1, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -260,7 +260,7 @@ describe('moveMachinePath', () => {
 
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([
-      { cmd: 'test', args: ['-e', '/workspace/repo/b.txt'] },
+      { cmd: 'test', args: ['-e', '/workspace/repo/b.txt', '-o', '-L', '/workspace/repo/b.txt'] },
       { cmd: 'mv', args: ['-T', '--', '/workspace/repo/a.txt', '/workspace/repo/b.txt'] },
     ]);
   });
@@ -275,7 +275,32 @@ describe('moveMachinePath', () => {
     });
 
     expect(result).toEqual({ ok: false, reason: 'already_exists' });
-    expect(calls).toEqual([{ cmd: 'test', args: ['-e', '/workspace/repo/existing.txt'] }]);
+    expect(calls).toEqual([
+      { cmd: 'test', args: ['-e', '/workspace/repo/existing.txt', '-o', '-L', '/workspace/repo/existing.txt'] },
+    ]);
+    expect(calls.some((c) => c.cmd === 'mv')).toBe(false);
+  });
+
+  it('returns already_exists (not a clobber) when the destination is a dangling symlink', async () => {
+    // `test -e` alone follows symlinks and would report `false` for a symlink
+    // whose target is missing; only `-L` also matches it. Simulate a driver
+    // that faithfully implements that distinction: `-e` fails, `-e -o -L` (as
+    // this guard sends it) succeeds.
+    const { handle, calls } = makeExecRecorder((args) => {
+      if (args.cmd === 'test') {
+        const isDanglingSymlinkAware = args.args?.includes('-L');
+        return { exitCode: isDanglingSymlinkAware ? 0 : 1, stdout: '', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    const result = await moveMachinePath({
+      handle,
+      fromPath: '/workspace/repo/a.txt',
+      toPath: '/workspace/repo/dangling-link',
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'already_exists' });
     expect(calls.some((c) => c.cmd === 'mv')).toBe(false);
   });
 
@@ -315,7 +340,7 @@ describe('moveMachinePath', () => {
 });
 
 describe('copyMachinePath', () => {
-  it('runs the `test -e` guard then `cp -a -- <from> <to>` when the destination is free', async () => {
+  it('runs the `test -e -o -L` guard then `cp -a -- <from> <to>` when the destination is free', async () => {
     const { handle, calls } = makeExecRecorder((args) => {
       if (args.cmd === 'test') return { exitCode: 1, stdout: '', stderr: '' };
       return { exitCode: 0, stdout: '', stderr: '' };
@@ -329,7 +354,7 @@ describe('copyMachinePath', () => {
 
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([
-      { cmd: 'test', args: ['-e', '/workspace/repo/b.txt'] },
+      { cmd: 'test', args: ['-e', '/workspace/repo/b.txt', '-o', '-L', '/workspace/repo/b.txt'] },
       { cmd: 'cp', args: ['-a', '--', '/workspace/repo/a.txt', '/workspace/repo/b.txt'] },
     ]);
   });
@@ -344,7 +369,28 @@ describe('copyMachinePath', () => {
     });
 
     expect(result).toEqual({ ok: false, reason: 'already_exists' });
-    expect(calls).toEqual([{ cmd: 'test', args: ['-e', '/workspace/repo/existing.txt'] }]);
+    expect(calls).toEqual([
+      { cmd: 'test', args: ['-e', '/workspace/repo/existing.txt', '-o', '-L', '/workspace/repo/existing.txt'] },
+    ]);
+    expect(calls.some((c) => c.cmd === 'cp')).toBe(false);
+  });
+
+  it('returns already_exists (not a clobber) when the destination is a dangling symlink', async () => {
+    const { handle, calls } = makeExecRecorder((args) => {
+      if (args.cmd === 'test') {
+        const isDanglingSymlinkAware = args.args?.includes('-L');
+        return { exitCode: isDanglingSymlinkAware ? 0 : 1, stdout: '', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+
+    const result = await copyMachinePath({
+      handle,
+      fromPath: '/workspace/repo/a.txt',
+      toPath: '/workspace/repo/dangling-link',
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'already_exists' });
     expect(calls.some((c) => c.cmd === 'cp')).toBe(false);
   });
 

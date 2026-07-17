@@ -166,10 +166,16 @@ export async function writeMachineFile({
 }
 
 /**
- * `test -e <path>` (no `--`: `test` doesn't support it, and there is no
- * injection surface here — `path` is still a discrete argv element, never
- * shell-interpolated). Used by move/copy as a no-clobber guard on the
+ * `test -e <path> -o -L <path>` (no `--`: `test` doesn't support it, and there
+ * is no injection surface here — `path` is still a discrete argv element,
+ * never shell-interpolated). Used by move/copy as a no-clobber guard on the
  * destination before the real op runs.
+ *
+ * `-L` is required alongside `-e`: every `test` file operator except `-h`/`-L`
+ * follows symlinks, so `-e` alone reports `false` for a DANGLING symlink (one
+ * whose target is missing) even though the symlink itself is a real directory
+ * entry sitting at `path`. Without `-L`, the guard would miss that entry and
+ * let `mv`/`cp` silently clobber it.
  *
  * This is a benign TOCTOU: two execs, not one atomic op. Worst case, the
  * user's own sandbox process creates something at `toPath` in the gap between
@@ -178,7 +184,7 @@ export async function writeMachineFile({
  * once, upstream in the route.
  */
 async function machinePathExists(handle: MachineHandle, path: string): Promise<boolean> {
-  const run = await handle.exec({ cmd: 'test', args: ['-e', path] });
+  const run = await handle.exec({ cmd: 'test', args: ['-e', path, '-o', '-L', path] });
   return run.exitCode === 0;
 }
 
