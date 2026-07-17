@@ -83,8 +83,8 @@ describe('withAdvisoryLock', () => {
 
     expect(client.release).toHaveBeenCalledTimes(2);
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Destroy-release also failed'),
-      'my-lock',
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
       'Release called on a client which has already been released',
     );
     errorSpy.mockRestore();
@@ -107,8 +107,8 @@ describe('withAdvisoryLock', () => {
     });
 
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Destroy-release also failed'),
-      'my-lock',
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
       'released twice',
     );
     errorSpy.mockRestore();
@@ -117,7 +117,7 @@ describe('withAdvisoryLock', () => {
   // Lock keys can be derived from request-supplied ids, so the failure log must treat the key
   // as data: constant format string (%s), newlines stripped — a crafted key must not be able to
   // forge log lines or smuggle %-directives (CodeQL js/log-injection / js/tainted-format-string).
-  it('given a lock key containing newlines, should log it newline-stripped as a format argument, never interpolated into the format string', async () => {
+  it('given a lock key containing newlines, should log it JSON-escaped as a format argument, never interpolated into the format string', async () => {
     const client = makeClient({
       query: vi
         .fn()
@@ -131,7 +131,9 @@ describe('withAdvisoryLock', () => {
 
     const [format, keyArg] = errorSpy.mock.calls[0];
     expect(format).not.toContain('evil');
-    expect(keyArg).toBe('evil key %s');
+    // JSON.stringify escapes the newlines to literal \n/\r — a crafted key cannot start a new
+    // log line, and the constant format string means %s in the key is inert data.
+    expect(keyArg).toBe(JSON.stringify('evil\nkey\r%s'));
     errorSpy.mockRestore();
   });
 
@@ -162,7 +164,7 @@ describe('withAdvisoryLock', () => {
     // see the CodeQL note at the console.error call.
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Advisory unlock failed'),
-      'my-lock',
+      JSON.stringify('my-lock'),
       'unlock rejected as a plain string',
     );
     errorSpy.mockRestore();
@@ -195,6 +197,46 @@ describe('withAdvisoryLock', () => {
 
     expect(result).toEqual({ outcome: 'connection_error', error: connectError });
     expect(fn).not.toHaveBeenCalled();
+  });
+
+  // CodeRabbit (PR #2097): every exit must keep its promised RESOLVED outcome even when
+  // release() itself throws — not just the post-acquisition paths the earlier tests covered.
+  it('given release() throws on the lock-busy path, should still resolve lock_busy', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }),
+      release: vi.fn(() => { throw new Error('pool gone'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'unreachable')).resolves.toEqual({
+      outcome: 'lock_busy',
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'pool gone',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given release() throws on the try-lock-failure path, should still resolve connection_error', async () => {
+    const client = makeClient({
+      query: vi.fn().mockRejectedValueOnce(new Error('connection reset')),
+      release: vi.fn(() => { throw new Error('pool gone'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'unreachable');
+
+    expect(result).toMatchObject({ outcome: 'connection_error', error: expect.any(Error) });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'pool gone',
+    );
+    errorSpy.mockRestore();
   });
 
   it('given fn itself throws after acquiring, should still unlock cleanly (fn error does not poison the lock connection) and rethrow', async () => {

@@ -62,13 +62,35 @@ export type WithAdvisoryLockResult<T> =
     };
 
 /**
+ * Release the connection — destroying it when handed an error — swallowing any synchronous
+ * release failure (a double-release from a hook, a pool already shut down). Every exit of
+ * withAdvisoryLock funnels through this: a throwing release() must never replace the promised
+ * resolved outcome (acquired/lock_busy/connection_error) with a rejection. Logged plainly (not
+ * via @pagespace/lib's logger — packages/db must not depend on packages/lib). Never throws.
+ *
+ * The key is logged via JSON.stringify as a %s argument to a CONSTANT format string: lock keys
+ * can be derived from request-supplied ids (e.g. a per-conversation lock), so a raw key in the
+ * format position could smuggle %-directives, and unescaped newlines could forge log lines
+ * (CodeQL js/tainted-format-string, js/log-injection — PR #2097).
+ */
+function releaseQuietly(client: AdvisoryLockClient, lockKey: string, destroyWithError?: Error): void {
+  try {
+    client.release(destroyWithError);
+  } catch (releaseError) {
+    console.error(
+      '[withAdvisoryLock:%s] release() itself failed — connection already released or pool gone: %s',
+      JSON.stringify(lockKey),
+      releaseError instanceof Error ? releaseError.message : String(releaseError),
+    );
+  }
+}
+
+/**
  * Unlock and return the connection to the pool — or, when the unlock query itself fails,
  * destroy the connection instead. A session that failed to unlock may still hold the
  * session-level advisory lock; returned to the pool alive it would leak the lock permanently
  * (every future try-lock sees lock_busy forever). Postgres releases session advisory locks
- * when the backend dies, so destroying is the safe exit. Logged plainly (not via
- * @pagespace/lib's logger — packages/db must not depend on packages/lib) so a recurring
- * failure is operator-visible before the dedicated pool is starved. Never throws.
+ * when the backend dies, so destroying is the safe exit. Never throws.
  */
 async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string): Promise<void> {
   try {
@@ -76,29 +98,15 @@ async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string): Pr
     client.release();
   } catch (unlockError) {
     const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
-    // Constant format string with the key passed as a %s argument, newlines stripped: lock keys
-    // can be derived from request-supplied ids (e.g. a per-conversation lock), so interpolating
-    // one into the format-string position would let a crafted key smuggle %-directives or forge
-    // log lines (CodeQL js/tainted-format-string, js/log-injection — PR #2097).
     console.error(
       '[withAdvisoryLock:%s] Advisory unlock failed — destroying the connection so the session lock cannot leak into the pool: %s',
-      lockKey.replace(/[\r\n]/g, ' '),
+      JSON.stringify(lockKey),
       err.message,
     );
-    // This catch is also reached when the SUCCESS-path release() itself threw (e.g. a
-    // double-release from a hook, or a pool already shut down) — in that case this second
-    // release(err) throws synchronously too, and without the guard it would escape the catch
-    // and break the never-throws contract the caller's finally relies on (it would replace a
-    // successful fn() result with a rejection).
-    try {
-      client.release(err);
-    } catch (releaseError) {
-      console.error(
-        '[withAdvisoryLock:%s] Destroy-release also failed — connection already released or pool gone: %s',
-        lockKey.replace(/[\r\n]/g, ' '),
-        releaseError instanceof Error ? releaseError.message : String(releaseError),
-      );
-    }
+    // Also reached when the SUCCESS-path release() above threw — releaseQuietly keeps the
+    // second (destroy) release from escaping and breaking the never-throws contract the
+    // caller's finally relies on.
+    releaseQuietly(client, lockKey, err);
   }
 }
 
@@ -122,14 +130,16 @@ export async function withAdvisoryLock<T>(
   try {
     lockResult = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS acquired', [lockKey]);
   } catch (error) {
-    client.release(
-      new Error(`withAdvisoryLock(${lockKey}): try-lock query failed, connection left in an indeterminate state`),
+    releaseQuietly(
+      client,
+      lockKey,
+      new Error(`withAdvisoryLock(${JSON.stringify(lockKey)}): try-lock query failed, connection left in an indeterminate state`),
     );
     return { outcome: 'connection_error', error };
   }
 
   if (!lockResult.rows[0]?.acquired) {
-    client.release();
+    releaseQuietly(client, lockKey);
     return { outcome: 'lock_busy' };
   }
 
