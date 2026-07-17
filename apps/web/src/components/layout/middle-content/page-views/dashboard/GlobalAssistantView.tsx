@@ -92,11 +92,13 @@ import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useRenderedMessages, useConversationLoadState } from '@/hooks/useRenderedMessages';
+import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
+  loadOlderGlobalConversationMessages,
+  loadOlderAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
@@ -499,6 +501,18 @@ const GlobalAssistantView: React.FC = () => {
       await loadAgentConversationMessages(selectedAgent.id, conversationId);
     } else {
       await loadGlobalConversationMessages(conversationId);
+    }
+  }, [currentConversationId, selectedAgent]);
+
+  // "Load older" (epic leaf 6.6, scroll-to-top) — same agent/global branch as reload.
+  const { isLoadingOlder } = useConversationOlderPageState(currentConversationId);
+  const handleScrollNearTop = useCallback(() => {
+    const conversationId = currentConversationId;
+    if (!conversationId) return;
+    if (selectedAgent) {
+      void loadOlderAgentConversationMessages(selectedAgent.id, conversationId);
+    } else {
+      void loadOlderGlobalConversationMessages(conversationId);
     }
   }, [currentConversationId, selectedAgent]);
 
@@ -933,6 +947,8 @@ const GlobalAssistantView: React.FC = () => {
           setShowError(false);
           dismissError();
         }}
+        onScrollNearTop={handleScrollNearTop}
+        isLoadingOlder={isLoadingOlder}
         welcomeTitle={
           selectedAgent
             ? `Chat with ${selectedAgent.title}`

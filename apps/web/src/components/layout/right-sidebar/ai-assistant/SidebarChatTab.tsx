@@ -31,11 +31,13 @@ import { LocationContext } from '@/lib/ai/shared';
 import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
-import { useRenderedMessages, useConversationLoadState } from '@/hooks/useRenderedMessages';
+import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
+  loadOlderGlobalConversationMessages,
+  loadOlderAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
@@ -77,6 +79,10 @@ export interface SidebarMessagesContentProps {
   displayIsStreaming: boolean;
   /** Remote in-progress streams to render inline below the messages. */
   remoteStreams: PendingStream[];
+  /** Scroll-near-top handler (epic leaf 6.6) — fetches the next older page. */
+  onScrollNearTop?: () => void;
+  /** Whether an older page is currently loading. */
+  isLoadingOlder?: boolean;
 }
 
 export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
@@ -91,6 +97,8 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   lastUserMessageId,
   displayIsStreaming,
   remoteStreams,
+  onScrollNearTop,
+  isLoadingOlder,
 }) => {
   const scrollRef = useConversationScrollRef();
   const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD;
@@ -145,6 +153,8 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
           messages={messages}
           renderMessage={renderMessage}
           scrollRef={scrollRef}
+          onScrollNearTop={onScrollNearTop}
+          isLoadingOlder={isLoadingOlder}
           estimatedRowHeight={60}
           overscan={5}
           gap={6}
@@ -329,6 +339,18 @@ const SidebarChatTab: React.FC = () => {
       await loadAgentConversationMessages(selectedAgent.id, conversationId);
     } else {
       await loadGlobalConversationMessages(conversationId);
+    }
+  }, [currentConversationId, selectedAgent]);
+
+  // "Load older" (epic leaf 6.6, scroll-to-top) — same agent/global branch as reload.
+  const { isLoadingOlder } = useConversationOlderPageState(currentConversationId);
+  const handleScrollNearTop = useCallback(() => {
+    const conversationId = currentConversationId;
+    if (!conversationId) return;
+    if (selectedAgent) {
+      void loadOlderAgentConversationMessages(selectedAgent.id, conversationId);
+    } else {
+      void loadOlderGlobalConversationMessages(conversationId);
     }
   }, [currentConversationId, selectedAgent]);
 
@@ -950,6 +972,8 @@ const SidebarChatTab: React.FC = () => {
               lastUserMessageId={lastUserMessageId}
               displayIsStreaming={displayIsStreaming}
               remoteStreams={remoteStreams}
+              onScrollNearTop={handleScrollNearTop}
+              isLoadingOlder={isLoadingOlder}
             />
             {/* Scroll-to-bottom button - visible when user scrolls up */}
             <ConversationScrollButton className="z-10 bottom-8" />

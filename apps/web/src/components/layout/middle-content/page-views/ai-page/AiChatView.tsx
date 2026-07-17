@@ -29,7 +29,8 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
-import { useRenderedMessages } from '@/hooks/useRenderedMessages';
+import { useRenderedMessages, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
+import { loadOlderAgentConversationMessages } from '@/hooks/conversationMessagesLoaders';
 import { useActiveStream, useConversationActiveStream, getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
@@ -88,7 +89,10 @@ interface AiChatViewProps {
 }
 
 type ConversationListResponse = { conversations?: Array<{ id: string }> };
-type ConversationMessagesResponse = { messages: UIMessage[] };
+type ConversationMessagesResponse = {
+  messages: UIMessage[];
+  pagination?: { hasMore: boolean; nextCursor: string | null };
+};
 
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
 
@@ -242,13 +246,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     try {
       let serverMessages: UIMessage[];
+      // Only the network path below carries a pagination envelope (epic leaf 6.6) — the
+      // preloaded fast path (history-select, init prefetch) only ever passed the bare
+      // messages array through preloadedMessagesRef. "Load older" is unavailable until
+      // this conversation's next network reload in that case (best-effort, not a
+      // correctness gap: hasMoreOlder simply defaults false until then).
+      let pagination: { hasMore: boolean; nextCursor: string | null } | undefined;
 
       if (preloadedMessages !== undefined) {
         // Fast path: caller already did the fetch (history-select, init).
         serverMessages = preloadedMessages;
       } else {
         const res = await fetchWithAuth(
-          `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages`,
+          `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages?limit=50`,
         );
         // Stale check after await — a newer load of this conversation may have superseded this one.
         if (!isCurrent()) return;
@@ -265,14 +275,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           return;
         }
         if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
-        const data = await res.json();
+        const data = await res.json() as ConversationMessagesResponse;
         if (!isCurrent()) return;
-        serverMessages = (data as ConversationMessagesResponse).messages ?? [];
+        serverMessages = data.messages ?? [];
+        pagination = data.pagination;
       }
 
       if (!isCurrent()) return;
 
-      conversationMessagesActions.applyLoad(conversationId, generation, serverMessages);
+      conversationMessagesActions.applyLoad(conversationId, generation, serverMessages, pagination);
       if (isActiveLoad()) {
         // The CACHE always takes the load — that is what renders. The useChat array is a different
         // thing: transport-local bookkeeping, and the array `useOwnStreamMirror` reads to find its
@@ -567,6 +578,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // (see loadMessagesForConversation's docblock for why it is still kept in sync).
   const renderedMessages = useRenderedMessages(page.id, currentConversationId);
   const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+
+  // "Load older" (epic leaf 6.6, scroll-to-top): AiChatView's route IS the agent-conversation
+  // route (page.id is the agentId), so the shared agent-mode loader applies directly.
+  const { isLoadingOlder } = useConversationOlderPageState(currentConversationId);
+  const handleScrollNearTop = useCallback(() => {
+    if (!currentConversationId) return;
+    void loadOlderAgentConversationMessages(page.id, currentConversationId);
+  }, [page.id, currentConversationId]);
 
   // TRANSITIONAL (see useOwnStreamMirror) — copies this tab's own live assistant
   // reply from useChat's local state into usePendingStreamsStore so it renders via
@@ -1355,6 +1374,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               setShowError(false);
               dismissError();
             }}
+            onScrollNearTop={handleScrollNearTop}
+            isLoadingOlder={isLoadingOlder}
             welcomeTitle={`Chat with ${page.title}`}
             welcomeSubtitle={agentConfig?.systemPrompt ? 'Ask me anything!' : 'Start a conversation with the AI assistant'}
             onEdit={!isReadOnly ? handleEdit : undefined}

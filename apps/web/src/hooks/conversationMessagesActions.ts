@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
+import type { ConversationCacheEntry } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import type { AskUserAnswerPayload, AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
@@ -19,10 +20,33 @@ export const conversationMessagesActions = {
   /** True while `generation` is still the newest `startLoad` result for `conversationId` — false once a newer load has superseded it. */
   isLoadCurrent: (conversationId: string, generation: number): boolean =>
     useConversationMessagesStore.getState().isLoadCurrent(conversationId, generation),
-  applyLoad: (conversationId: string, generation: number, messages: UIMessage[]): void =>
-    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages),
+  applyLoad: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+  ): void =>
+    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages, pagination),
   failLoad: (conversationId: string, generation: number): void =>
     useConversationMessagesStore.getState().failLoad(conversationId, generation),
+  /** Imperative snapshot read of a conversation's cache entry (defaults when never seen). */
+  getEntry: (conversationId: string): ConversationCacheEntry =>
+    useConversationMessagesStore.getState().getEntry(conversationId),
+  /** Marks a "load older" fetch in flight (epic leaf 6.6) — inline indicator, no generation change. */
+  startLoadingOlder: (conversationId: string): void =>
+    useConversationMessagesStore.getState().startLoadingOlder(conversationId),
+  /** Prepends a dedup'd older page and advances olderCursor/hasMoreOlder; generation-gated. */
+  applyOlderPage: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    hasMoreOlder: boolean,
+    nextCursor: string | null,
+  ): void =>
+    useConversationMessagesStore.getState().applyOlderPage(conversationId, generation, messages, hasMoreOlder, nextCursor),
+  /** Clears isLoadingOlder on a failed "load older" fetch; leaves the cache otherwise intact. */
+  failLoadingOlder: (conversationId: string, generation: number): void =>
+    useConversationMessagesStore.getState().failLoadingOlder(conversationId, generation),
   addOptimisticSend: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().addOptimisticSend(conversationId, message),
   /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9). */

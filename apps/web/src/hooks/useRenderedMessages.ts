@@ -57,3 +57,17 @@ export const useConversationLoadState = (conversationId: string | null): Convers
       return { status, isLoading: status === 'loading', hasError: status === 'error' };
     }),
   );
+
+/**
+ * Facade — a conversation's "load older" state (epic leaf 6.6), for wiring
+ * ChatLayout/ChatMessagesArea's onScrollNearTop/isLoadingOlder props.
+ */
+export const useConversationOlderPageState = (
+  conversationId: string | null,
+): { isLoadingOlder: boolean; hasMoreOlder: boolean } =>
+  useConversationMessagesStore(
+    useShallow((state) => {
+      const entry = conversationId ? state.byConversationId[conversationId] : undefined;
+      return { isLoadingOlder: entry?.isLoadingOlder ?? false, hasMoreOlder: entry?.hasMoreOlder ?? false };
+    }),
+  );
