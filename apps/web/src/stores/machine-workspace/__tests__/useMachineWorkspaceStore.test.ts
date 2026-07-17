@@ -10,11 +10,20 @@ import {
   panesOf,
   type WorkspaceState,
 } from '../useMachineWorkspaceStore';
-import { workspacesOf, sessionWorkspaceId } from '../workspace-reducer';
+import { workspacesOf, sessionWorkspaceId, newWorkspace } from '../workspace-reducer';
 
 const store = () => useMachineWorkspaceStore.getState();
 const activeOf = (machineId: string) => selectActiveWorkspace(machineId)(store());
 const paneIds = (workspace: WorkspaceState | undefined) => (workspace ? panesOf(workspace).map((pane) => pane.id) : []);
+
+/** A machine with one workspace open — the state most of these tests want to
+ * start from. `ensureMachine` alone no longer gets you there: it creates the
+ * machine's ENTRY and nothing else, because zero workspaces is a legal state and
+ * fabricating a first one is exactly the bug this store used to have. */
+const seedMachine = (machineId: string) => {
+  store().ensureMachine(machineId);
+  return store().createWorkspace(machineId);
+};
 
 const BRANCH_SCOPE = { projectName: 'app', branchName: 'main' };
 const SESSION = { ...BRANCH_SCOPE, name: 'claude-a1b2c3' };
@@ -25,11 +34,27 @@ describe('useMachineWorkspaceStore', () => {
     useMachineWorkspaceStore.setState({ machines: {} });
   });
 
-  it('given a machine is ensured, should give it one workspace, active, holding one empty pane', () => {
+  it('given a machine is ensured, should give it an entry with NO workspaces', () => {
     store().ensureMachine('m1');
 
     assert({
       given: 'a Machine page mounting for the first time',
+      should:
+        'create the entry and open nothing — a machine with no terminals is a legal state, and fabricating a first workspace here is what made a removed row come straight back',
+      actual: {
+        hasEntry: selectMachine('m1')(store()) !== undefined,
+        workspaces: workspacesOf(selectMachine('m1')(store())).length,
+        active: selectMachine('m1')(store())?.activeWorkspaceId,
+      },
+      expected: { hasEntry: true, workspaces: 0, active: '' },
+    });
+  });
+
+  it('given a workspace created after ensureMachine, should auto-name it Workspace 1 with one empty pane', () => {
+    seedMachine('m1');
+
+    assert({
+      given: 'the user opening the first terminal on a fresh machine',
       should: 'open one auto-named workspace with a single empty pane — which is the agent picker',
       actual: {
         workspaces: workspacesOf(selectMachine('m1')(store())).length,
@@ -42,7 +67,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given ensureMachine twice, should not reset the workspaces it already has', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     store().splitRight('m1', activeOf('m1')!.id, activeOf('m1')!.activePaneId);
     const before = activeOf('m1');
 
@@ -56,12 +81,27 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
+  it('given ensureMachine over a machine the user emptied, should NOT re-create a workspace', () => {
+    const onlyId = seedMachine('m1');
+    store().removeWorkspace('m1', onlyId);
+
+    store().ensureMachine('m1');
+
+    assert({
+      given: 'a re-mount (tab switch, re-render) after the user removed the last view',
+      should:
+        'leave it empty — re-fabricating here would make the last row impossible to remove, since every mount would put it back',
+      actual: workspacesOf(selectMachine('m1')(store())).length,
+      expected: 0,
+    });
+  });
+
   // ---------------------------------------------------------------------
   // THE FIX: selecting a workspace switches the entire middle view.
   // ---------------------------------------------------------------------
 
   it('given a second workspace is selected, should switch the WHOLE middle view to its grid', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const first = activeOf('m1')!;
     // Give the first workspace a two-pane split, so the two grids differ.
     store().splitRight('m1', first.id, first.activePaneId);
@@ -93,7 +133,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given a split, should add the pane to the ACTIVE workspace only', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const firstId = activeOf('m1')!.id;
     const secondId = store().createWorkspace('m1');
 
@@ -111,8 +151,8 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given two machines, should keep their workspaces independent', () => {
-    store().ensureMachine('m1');
-    store().ensureMachine('m2');
+    seedMachine('m1');
+    seedMachine('m2');
     store().createWorkspace('m1');
 
     assert({
@@ -131,7 +171,7 @@ describe('useMachineWorkspaceStore', () => {
   // ---------------------------------------------------------------------
 
   it('given an existing session is opened, should switch the view to that session’s own workspace', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const firstId = activeOf('m1')!.id;
 
     store().openTerminal('m1', SESSION);
@@ -157,7 +197,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given a session re-opened after panes were split into its workspace, should restore that grid', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     store().openTerminal('m1', SESSION);
     const sessionWorkspace = activeOf('m1')!;
     store().splitRight('m1', sessionWorkspace.id, sessionWorkspace.activePaneId);
@@ -178,7 +218,7 @@ describe('useMachineWorkspaceStore', () => {
   // ---------------------------------------------------------------------
 
   it('given a spawn resolves, should bind the session and its starting prompt to the pane it was picked in', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     const paneId = workspace.activePaneId;
 
@@ -194,7 +234,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given the user switches workspace while a spawn is in flight, should still bind it to the pane it was picked in', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     const paneId = workspace.activePaneId;
 
@@ -217,7 +257,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given the pane is gone when the spawn resolves, should report the bind failed', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
 
     const bound = store().bindPaneTerminal('m1', workspace.id, 'closed-pane', SESSION);
@@ -232,7 +272,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given a prompt was typed into the PTY, should clear it so a re-mount does not retype it', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, SESSION, 'fix the build');
 
@@ -262,7 +302,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given a session whose pane was closed, should show it again when its row is clicked', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     store().openTerminal('m1', SESSION);
     const workspace = activeOf('m1')!;
     // The user splits, then closes the pane the session was opened in.
@@ -280,9 +320,26 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
-  it('given a persisted machine whose active workspace is missing, should repair it instead of rendering nothing', () => {
+  it('given a persisted machine whose active workspace is missing, should re-target the active id', () => {
     // What a bad rehydrate (or a future shape change) can leave behind: the key
     // exists, but the workspace it points at does not.
+    const workspace = { ...newWorkspace({ id: 'ws-real', name: 'W', scope: {}, firstPaneId: 'p1' }) };
+    useMachineWorkspaceStore.setState({
+      machines: { m1: { workspaces: { 'ws-real': workspace }, order: ['ws-real'], activeWorkspaceId: 'gone' } },
+    });
+
+    store().ensureMachine('m1');
+
+    assert({
+      given: 'a machine whose active workspace does not resolve, but which HAS workspaces',
+      should:
+        'point active at one that exists — a dangling id renders nothing, and there is no way for a user to clear this storage from inside the app',
+      actual: activeOf('m1')?.id,
+      expected: 'ws-real',
+    });
+  });
+
+  it('given a persisted machine with a dangling active id and NO workspaces, should settle on nothing active', () => {
     useMachineWorkspaceStore.setState({
       machines: { m1: { workspaces: {}, order: [], activeWorkspaceId: 'gone' } },
     });
@@ -290,30 +347,32 @@ describe('useMachineWorkspaceStore', () => {
     store().ensureMachine('m1');
 
     assert({
-      given: 'a machine whose active workspace does not resolve',
-      should:
-        'rebuild it — skipping on the mere presence of the key would leave the Machine page blank forever, with no way for a user to clear this storage from inside the app',
-      actual: { hasActive: activeOf('m1') !== undefined, panes: paneIds(activeOf('m1')).length },
-      expected: { hasActive: true, panes: 1 },
+      given: 'a machine whose active id dangles over an empty workspace list',
+      should: "repair to '' — the empty state renders for this, so there is nothing to fabricate",
+      actual: selectMachine('m1')(store())?.activeWorkspaceId,
+      expected: '',
     });
   });
 
-  it('given the last workspace, should refuse to remove it', () => {
-    store().ensureMachine('m1');
-    const onlyId = activeOf('m1')!.id;
+  it('given the last workspace, should remove it and leave nothing active', () => {
+    const onlyId = seedMachine('m1');
 
     store().removeWorkspace('m1', onlyId);
 
     assert({
       given: 'the only workspace a machine has',
-      should: 'keep it — the middle view has to render something',
-      actual: activeOf('m1')?.id,
-      expected: onlyId,
+      should:
+        'remove it — refusing here is what left an unremovable row in the sidebar that New terminal then duplicated',
+      actual: {
+        active: selectMachine('m1')(store())?.activeWorkspaceId,
+        count: workspacesOf(selectMachine('m1')(store())).length,
+      },
+      expected: { active: '', count: 0 },
     });
   });
 
   it('given a removed workspace, should show a neighbour', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const firstId = activeOf('m1')!.id;
     const secondId = store().createWorkspace('m1');
 
@@ -350,7 +409,7 @@ describe('useMachineWorkspaceStore', () => {
     );
 
     useMachineWorkspaceStore.persist.rehydrate();
-    store().ensureMachine('m1');
+    seedMachine('m1');
 
     assert({
       given: "a returning user whose stored workspaces were written by an older, incompatible version",
@@ -398,7 +457,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given a session SPAWNED into a workspace, should open it where it actually lives', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     // Split-and-pick: the agent was bound into a pane of THIS workspace, so it
     // has no workspace of its own.
@@ -420,7 +479,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given agents spawned into a workspace, should expose them as CHILD sessions, not sidebar rows', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     // One session opened from the sidebar (its own workspace), one spawned into it.
     store().openTerminal('m1', SESSION);
@@ -451,7 +510,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given the same state read twice, selectChildSessionIds should hand back the SAME set', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     store().bindPaneTerminal('m1', workspace.id, workspace.activePaneId, SESSION);
 
@@ -475,7 +534,7 @@ describe('useMachineWorkspaceStore', () => {
   // ---------------------------------------------------------------------
 
   it('given renameWorkspace, should rename only the named workspace', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
 
     store().renameWorkspace('m1', workspace.id, 'Renamed');
@@ -502,7 +561,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given hydrateFromServer for an already-open workspace, should preserve local focus', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const workspace = activeOf('m1')!;
     store().splitRight('m1', workspace.id, workspace.activePaneId);
     const afterSplit = activeOf('m1')!;
@@ -522,7 +581,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given applyServerUpsert for an unseen workspace id, should add it', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const existing = activeOf('m1')!;
 
     store().applyServerUpsert('m1', {
@@ -541,7 +600,7 @@ describe('useMachineWorkspaceStore', () => {
   });
 
   it('given applyServerDelete for the active workspace, should show a neighbour', () => {
-    store().ensureMachine('m1');
+    seedMachine('m1');
     const first = activeOf('m1')!;
     const secondId = store().createWorkspace('m1');
     store().setActiveWorkspace('m1', secondId);

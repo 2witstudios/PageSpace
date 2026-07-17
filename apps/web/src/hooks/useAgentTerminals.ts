@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import useSWR from 'swr';
+import useSWR, { mutate } from 'swr';
 import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import type { AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 
@@ -29,6 +29,53 @@ function buildQuery(machineId: string, projectName?: string | null, branchName?:
   if (projectName) params.set('projectName', projectName);
   if (branchName) params.set('branchName', branchName);
   return params.toString();
+}
+
+/**
+ * Kills a session addressed by its OWN (project, branch, name) scope — the
+ * session's real identity (`machine_agent_terminals`' unique index).
+ *
+ * The hook's `removeAgentTerminal` below DELETEs under whatever scope the hook
+ * instance was mounted with — right for undoing a spawn that same instance
+ * just made, wrong for killing an arbitrary pane's session: a pane's scope can
+ * differ from its workspace's (a restored server layout can hold panes bound
+ * at other checkouts), and DELETEing that pane's `name` under the WORKSPACE's
+ * scope would kill a different terminal that happens to share the name — or
+ * nothing — while the intended one lives on as an unclaimed session.
+ *
+ * A 404 is SUCCESS here, not a failure: it means the session — or the
+ * project/branch checkout that held it — is already gone server-side, which is
+ * this call's goal state. Treating it as an error made a workspace holding a
+ * stale pane permanently unremovable: the kill rejected, the confirm dialog
+ * stayed open, and retrying hit the same 404 forever — an unremovable listing,
+ * the exact bug class this surface exists to kill. Real failures (5xx,
+ * network) still throw: the agent may genuinely still be running (and
+ * billing), and silently dropping its only row would strand it. Reading the
+ * status needs `fetchWithAuth` directly — the `del()` helper throws a plain
+ * `Error` with no status attached (see `pushWorkspaceUpdate`'s doc in
+ * useMachineWorkspaceSync for the same choice).
+ *
+ * Revalidates the killed scope's list afterwards so any mounted hook on that
+ * scope (e.g. the sidebar's session rows) drops the dead row.
+ */
+export async function killAgentTerminal(
+  machineId: string,
+  scope: { projectName?: string | null; branchName?: string | null; name: string },
+): Promise<void> {
+  const query = buildQuery(machineId, scope.projectName, scope.branchName);
+  const response = await fetchWithAuth(
+    `/api/machines/agent-terminals?${query}&name=${encodeURIComponent(scope.name)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok && response.status !== 404) {
+    const body: { error?: unknown } | null = await response.json().catch(() => null);
+    throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to remove terminal');
+  }
+  // Fire-and-forget: the kill has already succeeded by this point, and a
+  // transient failure of the list REFETCH must not turn a completed teardown
+  // into a rejection — that would keep the remove-workspace dialog open (and
+  // fail closePaneAndKill's catch path) over a session that is already dead.
+  void mutate(`/api/machines/agent-terminals?${query}`).catch(() => {});
 }
 
 /**

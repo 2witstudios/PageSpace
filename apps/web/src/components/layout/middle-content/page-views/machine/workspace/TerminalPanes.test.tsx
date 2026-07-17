@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 import type { Socket } from 'socket.io-client';
+import { MACHINE_NODE_SCOPE } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 import type { OpenTerminalScope, WorkspaceState } from '@/stores/machine-workspace/useMachineWorkspaceStore';
 
 const mockUseMobile = vi.fn<() => boolean>();
@@ -39,6 +40,7 @@ const selectPane = vi.fn();
 const splitRight = vi.fn();
 const splitDown = vi.fn();
 const closePane = vi.fn();
+const createWorkspace = vi.fn(() => 'ws-new');
 const bindPaneTerminal = vi.fn<
   (machineId: string, workspaceId: string, paneId: string, scope: OpenTerminalScope, prompt?: string) => boolean
 >(() => true);
@@ -48,9 +50,16 @@ const dismissPicker = vi.fn();
 /** The spawn the picker performs — the only reason TerminalPanes touches the API. */
 const addAgentTerminal = vi.fn(async (name: string, agentType: string) => ({ name, agentType, resumed: false }));
 const removeAgentTerminal = vi.fn<(name: string) => Promise<void>>(async () => {});
+/** The close-kill path — addressed by the PANE's own scope, never through the
+ * workspace-scoped hook, whose scope can differ from the closing pane's. */
+const killAgentTerminal = vi.fn<
+  (machineId: string, scope: { projectName?: string; branchName?: string; name: string }) => Promise<void>
+>(async () => {});
 /** Records the scope the hook was asked for, so a spawn at the wrong checkout can't pass. */
 const useAgentTerminalsArgs = vi.fn<(machineId: string, projectName: string | null, branchName: string | null) => void>();
 vi.mock('@/hooks/useAgentTerminals', () => ({
+  killAgentTerminal: (machineId: string, scope: { projectName?: string; branchName?: string; name: string }) =>
+    killAgentTerminal(machineId, scope),
   useAgentTerminals: (machineId: string, projectName: string | null, branchName: string | null) => {
     useAgentTerminalsArgs(machineId, projectName, branchName);
     return {
@@ -105,8 +114,29 @@ const JUST_SPLIT_WORKSPACE = aWorkspace({
   pendingPickerPaneId: 'pane-1',
 });
 
-/** The workspace the middle view is showing. */
-let workspace: WorkspaceState = SPLIT_WORKSPACE;
+/** Two panes showing the SAME session — `openTerminal`'s doc records that this
+ * is legal, and it is what stops close-to-kill from being a plain `X`. */
+const SHARED_SESSION_WORKSPACE = aWorkspace({
+  columns: [
+    { id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'shared' } }] },
+    { id: 'col-2', panes: [{ id: 'pane-2', scope: { name: 'shared' } }] },
+  ],
+  activePaneId: 'pane-1',
+  pendingPickerPaneId: null,
+});
+
+/** The workspace the middle view is showing — `null` means the machine has an
+ * entry but zero workspaces, which is a legal state, not a broken one. */
+let workspace: WorkspaceState | null = SPLIT_WORKSPACE;
+/** False = no machine entry at all: the frame before `ensureMachine` commits. */
+let machineEnsured = true;
+/** Additional NON-active workspaces on the machine, listed BEFORE the active
+ * one in the machine's order — the shape that trips up any machine-wide pane
+ * lookup that assumes pane ids are globally unique. */
+let extraWorkspaces: WorkspaceState[] = [];
+beforeEach(() => {
+  extraWorkspaces = [];
+});
 
 // Only the store HOOK is faked; selectActiveWorkspace / panesOf / autoSessionName
 // stay real, so these tests exercise the same active-workspace lookup the app does
@@ -116,13 +146,25 @@ vi.mock('@/stores/machine-workspace/useMachineWorkspaceStore', async () => {
     '@/stores/machine-workspace/useMachineWorkspaceStore',
   );
   const fakeState = () => ({
-    machines: {
-      m1: { workspaces: { [WORKSPACE_ID]: workspace }, order: [WORKSPACE_ID], activeWorkspaceId: WORKSPACE_ID },
-    },
+    machines: !machineEnsured
+      ? {}
+      : {
+          m1: workspace
+            ? {
+                workspaces: Object.fromEntries([
+                  ...extraWorkspaces.map((extra) => [extra.id, extra] as const),
+                  [WORKSPACE_ID, workspace] as const,
+                ]),
+                order: [...extraWorkspaces.map((extra) => extra.id), WORKSPACE_ID],
+                activeWorkspaceId: WORKSPACE_ID,
+              }
+            : { workspaces: {}, order: [], activeWorkspaceId: '' },
+        },
     selectPane,
     splitRight,
     splitDown,
     closePane,
+    createWorkspace,
     bindPaneTerminal,
     clearPanePrompt,
     dismissPicker,
@@ -147,9 +189,187 @@ const socket = {} as Socket;
 const onDesktop = () => mockUseMobile.mockReturnValue(false);
 const onMobile = () => mockUseMobile.mockReturnValue(true);
 
+describe('TerminalPanes (no terminals open)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onDesktop();
+    machineEnsured = true;
+    workspace = SPLIT_WORKSPACE;
+  });
+
+  test('a machine with zero workspaces offers a New Terminal button', async () => {
+    workspace = null;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'a machine whose views the user removed — a legal, converged state',
+      should:
+        'say so and offer a way back; without something to render here the app had to keep a workspace alive purely so the grid had something to draw, which is what made the last row unremovable',
+      actual: {
+        notice: screen.queryByTestId('machine-no-terminals') !== null,
+        action: screen.queryByRole('button', { name: 'New Terminal' }) !== null,
+        panes: screen.queryAllByTestId('xterm').length,
+      },
+      expected: { notice: true, action: true, panes: 0 },
+    });
+  });
+
+  test('New Terminal creates a workspace at machine scope', async () => {
+    workspace = null;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'New Terminal' }));
+
+    assert({
+      given: "the empty state's only action",
+      should: 'create a machine-scoped workspace — the button has to actually open one',
+      actual: createWorkspace.mock.calls[0],
+      expected: ['m1', MACHINE_NODE_SCOPE],
+    });
+  });
+
+  test('a machine with no entry yet renders nothing — not the empty state', async () => {
+    machineEnsured = false;
+    workspace = null;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    assert({
+      given: 'the frame between first render and ensureMachine committing',
+      should:
+        'render nothing — flashing "No terminals open" for one frame on every machine open is a different (and wrong) claim about the world',
+      actual: screen.queryByTestId('machine-no-terminals') !== null,
+      expected: false,
+    });
+  });
+});
+
+describe('TerminalPanes (close means close)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onDesktop();
+    machineEnsured = true;
+    workspace = SPLIT_WORKSPACE;
+  });
+
+  test('closing a pane kills the session it held — addressed by the PANE\'s own scope, not the workspace\'s', async () => {
+    // The pane's session lives at MACHINE scope while its workspace is scoped
+    // to app/main — a shape a restored server layout can legitimately hold. A
+    // kill routed through the workspace-scoped hook would DELETE name "solo"
+    // under app/main: a different terminal (or nothing), leaving the one the
+    // user closed running as an unclaimed session.
+    workspace = SOLO_WORKSPACE;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    assert({
+      given: 'the close control on a pane holding a session whose scope differs from its workspace\'s',
+      should:
+        'kill the PTY at the pane\'s own (project, branch, name) — detaching instead is what MANUFACTURES the unclaimed rows that cannot be removed from the sidebar',
+      actual: {
+        kills: killAgentTerminal.mock.calls,
+        viaWorkspaceHook: removeAgentTerminal.mock.calls.length,
+      },
+      expected: {
+        kills: [['m1', { name: 'solo' }]],
+        viaWorkspaceHook: 0,
+      },
+    });
+  });
+
+  test('closing a pane whose session another pane still shows does NOT kill it', async () => {
+    workspace = SHARED_SESSION_WORKSPACE;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findAllByTestId('xterm');
+
+    await userEvent.click(screen.getAllByTitle('Close pane')[0]);
+
+    assert({
+      given: 'one of two panes showing the SAME session',
+      should:
+        'close the pane but leave the PTY alone — the other pane is still showing it, and pulling it out from under them would kill a terminal they are looking at',
+      actual: killAgentTerminal.mock.calls.length,
+      expected: 0,
+    });
+  });
+
+  test('a same-NAME session in a different checkout is a different session, and does not block the kill', async () => {
+    // A session's identity is the (project, branch, name) triple — that is
+    // `machine_agent_terminals`' unique index — so the same name under another
+    // branch is a DIFFERENT terminal and must not be mistaken for this one.
+    workspace = aWorkspace({
+      columns: [
+        { id: 'col-1', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'claude-x' } }] },
+        { id: 'col-2', panes: [{ id: 'pane-2', scope: { projectName: 'app', branchName: 'other', name: 'claude-x' } }] },
+      ],
+      activePaneId: 'pane-1',
+      pendingPickerPaneId: null,
+    });
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findAllByTestId('xterm');
+
+    await userEvent.click(screen.getAllByTitle('Close pane')[0]);
+
+    assert({
+      given: 'two panes whose sessions share a name but sit in different branches',
+      should: 'still kill the closed one, at ITS checkout — comparing on name alone would silently skip it',
+      actual: killAgentTerminal.mock.calls,
+      expected: [['m1', { ...WORKSPACE_SCOPE, name: 'claude-x' }]],
+    });
+  });
+
+  // Regression (CodeRabbit): pane ids arrive from server layouts other clients
+  // minted, so nothing guarantees they are globally unique — they are only
+  // unique within their own grid. A machine-wide id lookup finds whichever
+  // same-id pane comes FIRST in the machine's order and kills THAT pane's
+  // session instead of the one the user closed.
+  test('a same-ID pane in ANOTHER workspace is never mistaken for the closing pane', async () => {
+    workspace = SOLO_WORKSPACE; // holds pane-1 → session "solo"
+    extraWorkspaces = [
+      {
+        id: 'ws-foreign',
+        name: 'Foreign',
+        scope: WORKSPACE_SCOPE,
+        columns: [
+          { id: 'col-foreign', panes: [{ id: 'pane-1', scope: { ...WORKSPACE_SCOPE, name: 'foreign-session' } }] },
+        ],
+        activePaneId: 'pane-1',
+        pendingPickerPaneId: null,
+      },
+    ];
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+    await screen.findByTestId('xterm');
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    assert({
+      given: "two workspaces each holding a pane with the SAME id, the foreign one first in the machine's order",
+      should: "kill the session of the pane in THIS workspace — resolving the pane machine-wide would kill the foreign workspace's session and leave the closed one running",
+      actual: killAgentTerminal.mock.calls,
+      expected: [['m1', { name: 'solo' }]],
+    });
+  });
+
+  test('closing an EMPTY pane kills nothing', async () => {
+    workspace = EMPTY_WORKSPACE;
+    render(<TerminalPanes machineId="m1" socket={socket} />);
+
+    await userEvent.click(screen.getByTitle('Close pane'));
+
+    assert({
+      given: 'a pane holding the picker rather than a session',
+      should: 'have no PTY to kill',
+      actual: killAgentTerminal.mock.calls.length,
+      expected: 0,
+    });
+  });
+});
+
 describe('TerminalPanes (narrow-viewport degradation)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    machineEnsured = true;
     workspace = SPLIT_WORKSPACE;
   });
 
@@ -257,25 +477,24 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
     });
   });
 
-  test('a lone EMPTY pane on a phone renders no control chip at all', async () => {
+  test('a lone EMPTY pane on a phone can still be closed — that is how you remove the view', async () => {
     onMobile();
     workspace = EMPTY_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     assert({
-      given: 'the only pane on a narrow viewport, empty, where it can neither split nor detach anything',
+      given: 'the only pane on a narrow viewport, empty, where a split is not offered',
       should:
-        'render no control chip — the chip is opacity-100 on touch, so an empty bordered box would sit in the corner permanently',
+        'still offer close — closing the last pane removes the workspace, so this is the gesture that discards a view the user does not want; it used to be suppressed because the workspace had nowhere to go',
       actual: {
         split: screen.queryByTitle('Split right') !== null,
         close: screen.queryByTitle('Close pane') !== null,
-        chip: document.querySelector('.backdrop-blur-sm') !== null,
       },
-      expected: { split: false, close: false, chip: false },
+      expected: { split: false, close: true },
     });
   });
 
-  test('a lone pane HOLDING a terminal can still detach it, even on a phone', async () => {
+  test('a lone pane HOLDING a terminal can still close it, even on a phone', async () => {
     onMobile();
     workspace = SOLO_WORKSPACE;
     render(<TerminalPanes machineId="m1" socket={socket} />);
@@ -284,7 +503,7 @@ describe('TerminalPanes (narrow-viewport degradation)', () => {
     assert({
       given: 'a workspace whose only pane shows a session — one that may no longer exist server-side',
       should:
-        'offer close, which detaches the terminal and hands the pane back to the picker; without it that workspace is stuck forever on a terminal that will never connect again',
+        'offer close, which kills the session and takes the workspace with it; without it that workspace is stuck forever on a terminal that will never connect again',
       actual: {
         canClose: screen.queryByTitle('Close pane') !== null,
         canSplit: screen.queryByTitle('Split right') !== null,

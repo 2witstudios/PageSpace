@@ -52,6 +52,22 @@ const fetcher = (url: string) =>
     return res.json() as Promise<WorkspaceListResponse>;
   });
 
+/**
+ * Machines where this browser session already decided "nothing local to
+ * migrate — claim nothing" (the empty-payload branch below). MODULE-level, not
+ * a per-instance ref, because this hook is mounted more than once for the same
+ * machine (`DevelopmentSidebar` mounts it per machine row AND `MachineView`
+ * mounts it for the open machine) and the instances share one store: on an
+ * unbootstrapped machine whose server list is non-empty, instance 1's
+ * empty-payload hydrate writes the server's rows INTO the store, so instance
+ * 2's effect would then read a non-empty local list and POST a bootstrap claim
+ * that merely echoes the server's own rows back at it — burning the
+ * first-writer-wins claim on nothing, which permanently forecloses a legacy
+ * browser's real un-migrated history. Exactly what the empty-payload guard
+ * exists to prevent, so the decision has to be visible across instances.
+ */
+const declinedBootstraps = new Set<string>();
+
 /** Strips local-only pane state (`pendingPrompt`) before a layout crosses the
  * wire — the server's layout DTO has no such field, and a starting prompt not
  * yet typed into its PTY must never be persisted or broadcast to other browsers. */
@@ -83,9 +99,11 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
   const socket = useSocket();
   usePageSocketRoom(machineId ?? undefined);
 
-  // Guards against retrying the bootstrap POST on every SWR revalidation once
-  // this browser has already tried it for this machine — not against the
-  // cross-browser race, which the server's claim table (not this ref) resolves.
+  // Records that this browser has made its one bootstrap decision for this
+  // machine — either it POSTed a claim, or it had nothing local to migrate and
+  // deliberately declined to (the empty-payload branch below). Guards against
+  // re-deciding on every SWR revalidation — not against the cross-browser
+  // race, which the server's claim table (not this ref) resolves.
   const bootstrapAttempted = useRef(false);
 
   // `hydrateFromServer` is a FULL-LIST replace that deliberately drops any
@@ -121,7 +139,6 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     }
 
     if (bootstrapAttempted.current) return;
-    bootstrapAttempted.current = true;
 
     const local = useMachineWorkspaceStore.getState().machines[machineId];
     const payload = (local ? workspacesOf(local) : []).map((workspace) => ({
@@ -130,6 +147,44 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
       scope: workspace.scope,
       columns: toWireColumns(workspace.columns),
     }));
+
+    // Nothing local to seed — so claim nothing. Bootstrap is first-writer-wins
+    // (one row per machine, PK machineId): claiming with an empty list would
+    // burn the claim and permanently discard the un-migrated history of a
+    // browser that DOES have some. This matters now that `ensureMachine` no
+    // longer fabricates a Workspace 1: the Development sidebar mounts this hook
+    // per machine row, so merely rendering it would otherwise fire an empty
+    // claim at every machine in the drive before the user opens any of them.
+    //
+    // Must HYDRATE, not just skip the POST: the hydrate above is gated on
+    // `data.bootstrapped`, so returning without one would leave this browser
+    // showing an empty machine while the server holds real rows.
+    //
+    // And the hydrate must stay PROVISIONAL — it marks the bootstrap decision
+    // (`bootstrapAttempted`: nothing to migrate, ever), NOT `hydratedOnce`.
+    // Not claiming means another browser WITH history can still win the claim
+    // later, and its seeded list arrives only as a
+    // `machine-workspace:bootstrapped` broadcast — which `onBootstrapped`
+    // ignores once `hydratedOnce` is set. Marking this hydrate final would
+    // strand this browser on the unclaimed (usually empty) list until remount.
+    // Leaving `hydratedOnce` unset here is safe: this branch only runs when the
+    // local list is empty, so the full-list replace cannot wipe anything, and a
+    // later `bootstrapped: true` revalidation (a missed broadcast) re-enters
+    // the hydrate above instead of being gated out.
+    if (payload.length === 0 || declinedBootstraps.has(machineId)) {
+      bootstrapAttempted.current = true;
+      // Only the FIRST decliner applies the provisional hydrate. A later
+      // instance (or a later effect run) re-applying it with SWR's possibly
+      // STALE cached list would full-replace away workspaces that arrived over
+      // the socket since — the store is already current; leave it alone.
+      if (!declinedBootstraps.has(machineId)) {
+        declinedBootstraps.add(machineId);
+        hydrateFromServer(machineId, data.workspaces);
+      }
+      return;
+    }
+
+    bootstrapAttempted.current = true;
 
     post<BootstrapResponse>('/api/machines/workspaces/bootstrap', { machineId, workspaces: payload })
       .then((res) => {
@@ -311,10 +366,29 @@ async function pushWorkspaceUpdate(machineId: string, workspaceId: string, chang
   }).catch(() => {});
 }
 
-function pushRemoval(machineId: string, workspaceId: string): void {
+/** Fire-and-forget DELETE with bounded retries. Removal is optimistic like
+ * every other push here (the local grid already updated), but unlike a layout
+ * PATCH there is no "next push" to reconcile a transient failure — so this IS
+ * the reconciliation. If every attempt fails, the server row survives and the
+ * next full hydrate resurrects the row locally: visible and annoying, but
+ * recoverable (remove it again) — whereas rolling the local removal back would
+ * restore a grid whose PTYs were already killed, a strictly worse dead-pane
+ * state. Each retry first checks the workspace is STILL locally removed:
+ * session-derived workspace ids are deterministic (`sessionWorkspaceId`), so
+ * the user re-opening that session re-materializes the SAME id, and a stale
+ * retry would delete the new incarnation out from under them. A 404 also lands
+ * in the catch (`del()` hides the status) when another browser already removed
+ * the row — the capped retries just expire against it harmlessly. */
+function pushRemoval(machineId: string, workspaceId: string, attempt = 0): void {
   del(
     `/api/machines/workspaces?machineId=${encodeURIComponent(machineId)}&workspaceId=${encodeURIComponent(workspaceId)}`
-  ).catch(() => {});
+  ).catch(() => {
+    if (attempt >= 2) return;
+    setTimeout(() => {
+      const revived = useMachineWorkspaceStore.getState().machines[machineId]?.workspaces[workspaceId];
+      if (!revived) pushRemoval(machineId, workspaceId, attempt + 1);
+    }, 1500 * (attempt + 1));
+  });
 }
 
 /**
@@ -367,21 +441,15 @@ export function useSyncedWorkspaceActions(machineId: string) {
       splitDownLocal(machineId, workspaceId, fromPaneId);
       void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
+    /** Closing the last pane removes the whole workspace, and that case must
+     * DELETE, not PATCH: `pushWorkspaceUpdate` falls back to POST-create on a
+     * 404, so PATCHing a workspace this very call just removed would RE-CREATE
+     * it server-side and broadcast the resurrected row back to every browser —
+     * including the one whose user just closed it. */
     closePane(workspaceId: string, paneId: string): void {
-      closePaneLocal(machineId, workspaceId, paneId);
-      void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
-    },
-    /** Closes several panes of the SAME workspace as one push, not one PATCH per
-     * pane — e.g. emptying every running pane when removing the machine's only
-     * remaining workspace. `closePane` in a loop would fire N independent
-     * fire-and-forget PATCHes with no ordering guarantee: a slower EARLIER
-     * request resolving after a later one could leave the server's layout at
-     * an intermediate (still-bound-to-a-just-killed-agent) state instead of
-     * the final fully-emptied one. Applying every local close first, then
-     * pushing once, means the single PATCH always carries the final result. */
-    closePanes(workspaceId: string, paneIds: string[]): void {
-      paneIds.forEach((paneId) => closePaneLocal(machineId, workspaceId, paneId));
-      if (paneIds.length > 0) void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
+      const removedWorkspace = closePaneLocal(machineId, workspaceId, paneId);
+      if (removedWorkspace) pushRemoval(machineId, workspaceId);
+      else void pushWorkspaceUpdate(machineId, workspaceId, { columns: true });
     },
     bindPaneTerminal(workspaceId: string, paneId: string, scope: OpenTerminalScope, pendingPrompt?: string): boolean {
       const bound = bindPaneTerminalLocal(machineId, workspaceId, paneId, scope, pendingPrompt);

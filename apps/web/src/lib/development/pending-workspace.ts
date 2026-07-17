@@ -54,7 +54,10 @@ export function resolvePendingWorkspace(
   // user is en route. Holding is safe — see the note above on what clears it.
   if (pending.machineId !== selectedMachineId) return { type: 'wait' };
 
-  // On the machine, but its pane region hasn't mounted (and ensured a workspace set).
+  // On the machine, but its pane region hasn't mounted yet. Note `''` (a machine
+  // with no workspaces open) is NOT this case: that machine is mounted and has
+  // simply nothing active, so the intent falls through to `select` below and is
+  // held — harmlessly, per the note above — until the user opens a view.
   if (activeWorkspaceId === undefined) return { type: 'wait' };
 
   // Satisfied: the workspace is already the one on screen.
