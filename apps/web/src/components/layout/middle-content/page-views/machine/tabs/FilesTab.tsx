@@ -40,9 +40,17 @@
  * either — so `onPathRemoved`/`onPathRenamed` below clear or retarget `path`
  * to keep the pane honest. Everything else about those mutations (dialogs,
  * cache invalidation, request bodies) lives entirely inside the tree.
+ *
+ * UNSAVED DRAFTS: the pane reports its dirty state up (`onDirtyChange`), and
+ * the two USER-navigation paths that would drop it — clicking another file,
+ * switching scope — confirm first, with the same wording as the pane's own
+ * Reload confirm. `onPathRemoved`/`onPathRenamed` deliberately do NOT confirm:
+ * they react to a mutation the user already performed in the tree (or that an
+ * agent performed on the live filesystem), where blocking after the fact
+ * protects nothing.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileCode2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
@@ -85,24 +93,56 @@ export default function FilesTab({ machineId }: FilesTabProps) {
   // the initial scope, so files render immediately with no pick required.
   const [{ scope, path }, setSelection] = useState<Selection>({ scope: { kind: 'root' }, path: null });
 
-  const onSelectNode = useCallback((node: MachineTreeNode) => {
-    // Projects are expand-only groupings with no filesystem of their own —
-    // their chevron still works, but selecting one has no scope to switch to.
-    if (node.level === 'project') return;
-    const nextScope: FilesScope =
-      node.level === 'machine'
-        ? { kind: 'root' }
-        : { kind: 'branch', projectName: node.projectName, branchName: node.branchName };
-    setSelection((current) =>
-      filesScopeKey(current.scope) === filesScopeKey(nextScope)
-        ? current // re-picking the open scope keeps the open file
-        : { scope: nextScope, path: null },
-    );
+  // The pane reports whether it holds an unsaved draft (see FilesFilePane's
+  // `onDirtyChange`); the selection ref keeps the guards below stable (their
+  // useCallback([]) identity feeds ScopeFiles) while still reading the CURRENT
+  // selection. Plain-assignment refs, not state — the guards are event
+  // handlers, never render inputs.
+  const dirtyRef = useRef(false);
+  const selectionRef = useRef<Selection>({ scope, path });
+  selectionRef.current = { scope, path };
+  const onDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
   }, []);
 
-  const onSelectFile = useCallback((next: string) => {
-    setSelection((current) => ({ ...current, path: next }));
+  // Navigating away from a dirty draft (another file, another scope) is the
+  // discard path a person actually takes — the pane's Reload confirm alone
+  // would leave ordinary clicks as the one silent way to lose an edit. Same
+  // wording as the pane's Reload confirm, deliberately.
+  const confirmDiscardIfDirty = useCallback((): boolean => {
+    if (!dirtyRef.current) return true;
+    const discard = window.confirm('Discard unsaved changes to this file?');
+    if (discard) dirtyRef.current = false;
+    return discard;
   }, []);
+
+  const onSelectNode = useCallback(
+    (node: MachineTreeNode) => {
+      // Projects are expand-only groupings with no filesystem of their own —
+      // their chevron still works, but selecting one has no scope to switch to.
+      if (node.level === 'project') return;
+      const nextScope: FilesScope =
+        node.level === 'machine'
+          ? { kind: 'root' }
+          : { kind: 'branch', projectName: node.projectName, branchName: node.branchName };
+      // Re-picking the open scope keeps the open file (and any draft) — only a
+      // real switch drops `path`, so only a real switch needs the confirm.
+      if (filesScopeKey(selectionRef.current.scope) === filesScopeKey(nextScope)) return;
+      if (!confirmDiscardIfDirty()) return;
+      setSelection({ scope: nextScope, path: null });
+    },
+    [confirmDiscardIfDirty],
+  );
+
+  const onSelectFile = useCallback(
+    (next: string) => {
+      // Re-clicking the open file is a no-op, not a discard.
+      if (next === selectionRef.current.path) return;
+      if (!confirmDiscardIfDirty()) return;
+      setSelection((current) => ({ ...current, path: next }));
+    },
+    [confirmDiscardIfDirty],
+  );
 
   // A delete/rename in the tree only matters to the open file if it hit the
   // open path itself OR one of its ancestor directories — anything else
@@ -134,7 +174,7 @@ export default function FilesTab({ machineId }: FilesTabProps) {
           // refuses to render a state belonging to a different file. Keying by
           // scope would be dead code: a scope switch clears `path` in the same
           // update, so the pane unmounts anyway.
-          <FilesFilePane machineId={machineId} scope={scope} path={path} />
+          <FilesFilePane machineId={machineId} scope={scope} path={path} onDirtyChange={onDirtyChange} />
         ) : (
           <PaneNotice
             icon={<FileCode2 className="size-6 text-muted-foreground" />}

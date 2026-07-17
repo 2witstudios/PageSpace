@@ -70,6 +70,9 @@ vi.mock('../workspace/MachineFileTree', () => ({
         <button type="button" data-testid="file-tree" onClick={() => onSelectFile?.('src/index.ts')}>
           tree:{scopeName}
         </button>
+        <button type="button" data-testid="file-tree-other" onClick={() => onSelectFile?.('src/other.ts')}>
+          tree-other:{scopeName}
+        </button>
         <button type="button" data-testid="delete-open-file" onClick={() => onPathRemoved?.('src/index.ts')}>
           delete-open-file
         </button>
@@ -78,17 +81,26 @@ vi.mock('../workspace/MachineFileTree', () => ({
   },
 }));
 
-// Stub the main pane so FilesTab's composition (which file, which scope) is what's asserted.
+// Stub the main pane so FilesTab's composition (which file, which scope) is
+// what's asserted. `mark-dirty` drives the pane's onDirtyChange report the way
+// a real edit would, so the tab's discard-confirm guard can be exercised.
 vi.mock('./FilesFilePane', () => ({
   default: ({
     path,
     scope,
+    onDirtyChange,
   }: {
     path: string;
     scope: { kind: 'root' } | { kind: 'branch'; projectName: string; branchName: string };
+    onDirtyChange?: (dirty: boolean) => void;
   }) => (
-    <div data-testid="file-pane">
-      pane:{scope.kind === 'branch' ? scope.branchName : 'root'}:{path}
+    <div>
+      <div data-testid="file-pane">
+        pane:{scope.kind === 'branch' ? scope.branchName : 'root'}:{path}
+      </div>
+      <button type="button" data-testid="mark-dirty" onClick={() => onDirtyChange?.(true)}>
+        mark-dirty
+      </button>
     </div>
   ),
 }));
@@ -482,6 +494,108 @@ describe('FilesTab', () => {
         filePrompt: screen.queryByText('Select a file to view its contents.') !== null,
       },
       expected: { pane: null, filePrompt: true },
+    });
+  });
+
+  describe('unsaved-draft navigation guard', () => {
+    const openDirtyRootFile = async () => {
+      cannedFetch({
+        root: async () => jsonResponse({ entries: [] }),
+        main: async () => jsonResponse({ entries: [] }),
+      });
+      render(<FilesTab machineId="machine-1" />);
+      await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));
+      await waitFor(() => screen.getByTestId('file-pane'));
+      await userEvent.click(screen.getByTestId('mark-dirty'));
+    };
+
+    test('clicking another file with a dirty draft asks first, and a decline keeps the open file', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await openDirtyRootFile();
+
+      await userEvent.click(screen.getByTestId('file-tree-other'));
+
+      assert({
+        given: 'a dirty draft and a click on a different file, with the confirm declined',
+        should: 'ask before discarding and keep the original file open',
+        actual: {
+          asked: confirmSpy.mock.calls.length,
+          pane: screen.getByTestId('file-pane').textContent?.startsWith('pane:root:src/index.ts'),
+        },
+        expected: { asked: 1, pane: true },
+      });
+      confirmSpy.mockRestore();
+    });
+
+    test('accepting the confirm discards the draft and opens the clicked file', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openDirtyRootFile();
+
+      await userEvent.click(screen.getByTestId('file-tree-other'));
+
+      assert({
+        given: 'a dirty draft and a click on a different file, with the confirm accepted',
+        should: 'switch to the clicked file',
+        actual: screen.getByTestId('file-pane').textContent?.startsWith('pane:root:src/other.ts'),
+        expected: true,
+      });
+      confirmSpy.mockRestore();
+    });
+
+    test('switching scope with a dirty draft asks first, and a decline keeps scope and file', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await openDirtyRootFile();
+
+      await userEvent.click(screen.getByText('pick-main'));
+
+      assert({
+        given: 'a dirty draft and a branch pick, with the confirm declined',
+        should: 'stay on root scope with the file still open',
+        actual: {
+          asked: confirmSpy.mock.calls.length,
+          tree: screen.queryByText('tree:root') !== null,
+          pane: screen.getByTestId('file-pane').textContent?.startsWith('pane:root:src/index.ts'),
+        },
+        expected: { asked: 1, tree: true, pane: true },
+      });
+      confirmSpy.mockRestore();
+    });
+
+    test('re-clicking the already-open file never asks', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await openDirtyRootFile();
+
+      await userEvent.click(screen.getByTestId('file-tree'));
+
+      assert({
+        given: 'a dirty draft and a re-click on the same open file',
+        should: 'treat it as a no-op, not a discard',
+        actual: { asked: confirmSpy.mock.calls.length, pane: screen.queryByTestId('file-pane') !== null },
+        expected: { asked: 0, pane: true },
+      });
+      confirmSpy.mockRestore();
+    });
+
+    test('clean navigation never asks', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      cannedFetch({
+        root: async () => jsonResponse({ entries: [] }),
+        main: async () => jsonResponse({ entries: [] }),
+      });
+      render(<FilesTab machineId="machine-1" />);
+      await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));
+      await waitFor(() => screen.getByTestId('file-pane'));
+
+      await userEvent.click(screen.getByTestId('file-tree-other'));
+      await userEvent.click(screen.getByText('pick-main'));
+
+      assert({
+        given: 'navigation with no dirty draft',
+        should: 'never show a discard confirm',
+        actual: confirmSpy.mock.calls.length,
+        expected: 0,
+      });
+      confirmSpy.mockRestore();
     });
   });
 });

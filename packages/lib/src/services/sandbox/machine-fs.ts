@@ -140,9 +140,30 @@ export async function createMachineDirectory({
 }
 
 /**
- * Create or overwrite one file's bytes on a Machine's working tree. A thin
- * wrapper over `MachineHandle.writeFiles`, which has no stderr channel — it
- * either resolves or throws — so a throw is folded into `exec_failed`.
+ * `test -d <path>` (no `--`: `test` doesn't support it; `path` is a discrete
+ * argv element, never shell-interpolated — same documented exception as
+ * `machinePathExists` below).
+ */
+async function machineDirectoryExists(handle: MachineHandle, path: string): Promise<boolean> {
+  const run = await handle.exec({ cmd: 'test', args: ['-d', path] });
+  return run.exitCode === 0;
+}
+
+/**
+ * Create or overwrite one file's bytes on a Machine's working tree.
+ *
+ * The parent directory is preflighted (`test -d`) and a missing parent is
+ * `not_found`, NEVER silently created: `MachineHandle.writeFiles` is not a
+ * plain write — the Sprite implementation retries a failed write after
+ * `mkdir -p`-ing the file's parent, so without this guard a save against a
+ * path whose folder a live terminal just deleted would quietly resurrect the
+ * folder with only that file in it, instead of surfacing the route's
+ * documented 404. (Benign TOCTOU, same class as `machinePathExists`: the
+ * user's own sandbox can delete the parent between check and write, in which
+ * case the driver's self-heal wins — there is no cross-tenant boundary here.)
+ *
+ * `writeFiles` has no stderr channel — it either resolves or throws — so a
+ * throw is folded into `exec_failed`.
  */
 export async function writeMachineFile({
   handle,
@@ -153,6 +174,11 @@ export async function writeMachineFile({
   path: string;
   content: string | Uint8Array;
 }): Promise<MutateMachinePathResult> {
+  const lastSlash = path.lastIndexOf('/');
+  const parent = lastSlash > 0 ? path.slice(0, lastSlash) : '/';
+  if (!(await machineDirectoryExists(handle, parent))) {
+    return { ok: false, reason: 'not_found' };
+  }
   try {
     await handle.writeFiles([{ path, content }]);
     return { ok: true };
@@ -225,6 +251,57 @@ export async function copyMachinePath({
   if (run.exitCode !== 0) {
     return mapMutateExecFailure(run.stderr);
   }
+  return { ok: true };
+}
+
+export type MachineScopeCheckResult =
+  | { ok: true }
+  | { ok: false; reason: 'escapes'; /** Index into `paths` of the first escaping path. */ index: number }
+  | { ok: false; reason: 'exec_failed'; detail?: string };
+
+/**
+ * Verify — ON the machine — that each of `paths` still resolves inside
+ * `scopeRoot` once symlinks are followed.
+ *
+ * String confinement (`resolvePathWithinSync`) happens host-side and cannot
+ * see the Sprite's filesystem: `/workspace/link/x` passes it even when `link`
+ * is a symlink to `/etc`, and every later `readFile`/`mkdir`/`mv`/`cp` on the
+ * machine FOLLOWS that link. This closes the gap by resolving with the
+ * machine's own `realpath -m` (`-m` so a not-yet-existing final component —
+ * a file about to be created, a move destination — still resolves through its
+ * existing prefix) and re-checking containment against the RESOLVED scope
+ * root, which is resolved in the same exec so a symlinked root cannot skew
+ * the comparison.
+ *
+ * Fails CLOSED: any exec failure or unparseable output (e.g. a path containing
+ * a newline splits the line-per-path output) rejects rather than allows.
+ * Benign TOCTOU, same class as `machinePathExists`: the user's own sandbox can
+ * swap a symlink in after this check — no cross-tenant boundary exists inside
+ * one Sprite.
+ */
+export async function verifyMachinePathsWithinScope({
+  handle,
+  scopeRoot,
+  paths,
+}: {
+  handle: MachineHandle;
+  scopeRoot: string;
+  paths: string[];
+}): Promise<MachineScopeCheckResult> {
+  if (paths.length === 0) return { ok: true };
+  const run = await handle.exec({ cmd: 'realpath', args: ['-m', '--', scopeRoot, ...paths] });
+  if (run.exitCode !== 0) {
+    return { ok: false, reason: 'exec_failed', detail: run.stderr.trim() || undefined };
+  }
+  const lines = run.stdout.split('\n').filter((line) => line.length > 0);
+  if (lines.length !== paths.length + 1) {
+    return { ok: false, reason: 'exec_failed', detail: 'unexpected realpath output shape' };
+  }
+  const [resolvedRoot, ...resolved] = lines;
+  const index = resolved.findIndex(
+    (p) => p !== resolvedRoot && !p.startsWith(`${resolvedRoot}/`),
+  );
+  if (index !== -1) return { ok: false, reason: 'escapes', index };
   return { ok: true };
 }
 

@@ -498,6 +498,40 @@ describe('FilesFilePane', () => {
       });
     });
 
+    test('reports dirty transitions up through onDirtyChange, ending false on unmount', async () => {
+      vi.mocked(fetchWithAuth)
+        .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))
+        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+      const reports: boolean[] = [];
+      const { unmount } = render(
+        <FilesFilePane
+          machineId="machine-1"
+          scope={BRANCH_SCOPE}
+          path="src/index.ts"
+          onDirtyChange={(dirty) => reports.push(dirty)}
+        />,
+      );
+
+      await waitFor(() => screen.getByTestId('monaco'));
+      await editContent('after');
+      await waitFor(() => screen.getByTitle('Unsaved changes'));
+      await userEvent.click(screen.getByTitle('Save file (Cmd/Ctrl-S)'));
+      await waitFor(() => {
+        if (screen.queryByTitle('Unsaved changes') !== null) throw new Error('still dirty');
+      });
+      unmount();
+
+      assert({
+        given: 'an edit, a successful save, then an unmount',
+        should: 'report dirty=true on the edit, dirty=false after the save, and false again on unmount — the parent is never left thinking a gone pane holds an edit',
+        actual: {
+          sawDirty: reports.includes(true),
+          settledClean: reports[reports.length - 1],
+        },
+        expected: { sawDirty: true, settledClean: false },
+      });
+    });
+
     test('Save POSTs the edited content with scope fields and cleans the dirty state', async () => {
       vi.mocked(fetchWithAuth)
         .mockResolvedValueOnce(jsonResponse({ content: 'before', encoding: 'utf8', truncated: false }))

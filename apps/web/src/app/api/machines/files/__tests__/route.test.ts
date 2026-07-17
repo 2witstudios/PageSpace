@@ -56,6 +56,10 @@ type ListResult =
   | { ok: false; reason: 'not_found' | 'exec_failed'; detail?: string };
 type ReadResult = { ok: true; content: Buffer } | { ok: false; reason: 'not_found' };
 type MutateResult = { ok: true } | { ok: false; reason: 'not_found' | 'already_exists' | 'exec_failed'; detail?: string };
+type ScopeCheckResult =
+  | { ok: true }
+  | { ok: false; reason: 'escapes'; index: number }
+  | { ok: false; reason: 'exec_failed'; detail?: string };
 
 const listMachineDirectory = vi.fn(async (): Promise<ListResult> => ({ ok: true, entries: [] }));
 const readMachineFile = vi.fn(async (): Promise<ReadResult> => ({ ok: true, content: Buffer.from('hi', 'utf8') }));
@@ -64,6 +68,7 @@ const writeMachineFile = vi.fn(async (): Promise<MutateResult> => ({ ok: true })
 const moveMachinePath = vi.fn(async (): Promise<MutateResult> => ({ ok: true }));
 const copyMachinePath = vi.fn(async (): Promise<MutateResult> => ({ ok: true }));
 const deleteMachinePath = vi.fn(async (): Promise<MutateResult> => ({ ok: true }));
+const verifyMachinePathsWithinScope = vi.fn(async (): Promise<ScopeCheckResult> => ({ ok: true }));
 vi.mock('@pagespace/lib/services/sandbox/machine-fs', () => ({
   listMachineDirectory: (...args: unknown[]) => listMachineDirectory(...(args as [])),
   readMachineFile: (...args: unknown[]) => readMachineFile(...(args as [])),
@@ -72,6 +77,7 @@ vi.mock('@pagespace/lib/services/sandbox/machine-fs', () => ({
   moveMachinePath: (...args: unknown[]) => moveMachinePath(...(args as [])),
   copyMachinePath: (...args: unknown[]) => copyMachinePath(...(args as [])),
   deleteMachinePath: (...args: unknown[]) => deleteMachinePath(...(args as [])),
+  verifyMachinePathsWithinScope: (...args: unknown[]) => verifyMachinePathsWithinScope(...(args as [])),
 }));
 
 import { GET, POST, PATCH, DELETE } from '../route';
@@ -118,6 +124,93 @@ beforeEach(() => {
   moveMachinePath.mockResolvedValue({ ok: true });
   copyMachinePath.mockResolvedValue({ ok: true });
   deleteMachinePath.mockResolvedValue({ ok: true });
+  verifyMachinePathsWithinScope.mockResolvedValue({ ok: true });
+});
+
+describe('/api/machines/files machine-side symlink confinement', () => {
+  it('re-verifies the read path ON the machine and 400s an escape without reading', async () => {
+    verifyMachinePathsWithinScope.mockResolvedValue({ ok: false, reason: 'escapes', index: 0 });
+
+    const res = await GET(get({ mode: 'read', path: 'link/etc-passwd' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'path escapes the machine filesystem root' });
+    expect(verifyMachinePathsWithinScope).toHaveBeenCalledWith({
+      handle: { machineId: 'sbx-1' },
+      scopeRoot: '/workspace/repo',
+      paths: ['/workspace/repo/link/etc-passwd'],
+    });
+    expect(readMachineFile).not.toHaveBeenCalled();
+  });
+
+  it('skips the extra exec for a bare scope-root listing — no intermediate component to hijack', async () => {
+    const res = await GET(get({}));
+
+    expect(res.status).toBe(200);
+    expect(verifyMachinePathsWithinScope).not.toHaveBeenCalled();
+    expect(listMachineDirectory).toHaveBeenCalled();
+  });
+
+  it('verifies BOTH move operands in one call and names the escaping field', async () => {
+    verifyMachinePathsWithinScope.mockResolvedValue({ ok: false, reason: 'escapes', index: 1 });
+
+    const res = await PATCH(patch({ ...BRANCH_BODY, op: 'move', fromPath: 'a.txt', toPath: 'link/b.txt' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'toPath escapes the machine filesystem root' });
+    expect(verifyMachinePathsWithinScope).toHaveBeenCalledWith({
+      handle: { machineId: 'sbx-1' },
+      scopeRoot: '/workspace/repo',
+      paths: ['/workspace/repo/a.txt', '/workspace/repo/link/b.txt'],
+    });
+    expect(moveMachinePath).not.toHaveBeenCalled();
+  });
+
+  it('blocks a root-scope write through an escaping symlink without writing', async () => {
+    verifyMachinePathsWithinScope.mockResolvedValue({ ok: false, reason: 'escapes', index: 0 });
+
+    const res = await POST(post({ ...ROOT_BODY, path: 'link/x.txt', kind: 'file', content: 'x' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'path escapes the machine filesystem root' });
+    expect(verifyMachinePathsWithinScope).toHaveBeenCalledWith({
+      handle: { machineId: 'sbx-1' },
+      scopeRoot: '/workspace',
+      paths: ['/workspace/link/x.txt'],
+    });
+    expect(writeMachineFile).not.toHaveBeenCalled();
+  });
+
+  it('blocks delete through an escaping symlink without deleting', async () => {
+    verifyMachinePathsWithinScope.mockResolvedValue({ ok: false, reason: 'escapes', index: 0 });
+
+    const res = await DELETE(del({ ...BRANCH_BODY, path: 'link' }));
+
+    expect(res.status).toBe(400);
+    expect(deleteMachinePath).not.toHaveBeenCalled();
+  });
+
+  it('fails CLOSED as 502 when the machine-side check itself cannot run', async () => {
+    verifyMachinePathsWithinScope.mockResolvedValue({ ok: false, reason: 'exec_failed', detail: 'realpath: not found' });
+
+    const res = await GET(get({ mode: 'read', path: 'a.txt' }));
+
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.reason).toBe('exec_failed');
+    expect(readMachineFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/machines/files write parent-preflight contract', () => {
+  it('maps writeMachineFile not_found (parent deleted on the live machine) to the documented 404', async () => {
+    writeMachineFile.mockResolvedValue({ ok: false, reason: 'not_found' });
+
+    const res = await POST(post({ ...BRANCH_BODY, path: 'gone/x.txt', kind: 'file', content: 'x' }));
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'The parent folder could not be found', reason: 'not_found' });
+  });
 });
 
 describe('/api/machines/files path confinement', () => {

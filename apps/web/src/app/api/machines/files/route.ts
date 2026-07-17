@@ -61,6 +61,12 @@
  * Confined absolute paths are what reach the `machine-fs` primitives — NEVER
  * re-derived from the raw input once confined (PR #2039 TOCTOU lesson).
  *
+ * Confinement is TWO passes because string confinement alone cannot see the
+ * Sprite's symlinks: after the handle resolves, every non-root path is
+ * re-resolved ON the machine (`verifyMachinePathsWithinScope`, `realpath -m`)
+ * and rejected (400) if following links lands it outside the scope root — an
+ * in-scope symlink pointing at `/etc` cannot be used to read or write there.
+ *
  * Operates on the live filesystem only — no git ref (that is a separate
  * git-object service). Session-only (no MCP/agent tokens) — this is a
  * human/UI surface, so it does NOT route through the AI agent tool
@@ -82,11 +88,13 @@ import {
   moveMachinePath,
   copyMachinePath,
   deleteMachinePath,
+  verifyMachinePathsWithinScope,
   type MutateMachinePathResult,
 } from '@pagespace/lib/services/sandbox/machine-fs';
 import { BRANCH_REPO_PATH } from '@pagespace/lib/services/machines/machine-branches';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
+import type { MachineHandle } from '@pagespace/lib/services/sandbox/machine-host';
 import { canViewMachine, canEditMachine, resolveMachineFilesHandle } from '@/lib/machines/machine-files-runtime';
 import type { MachineFilesScope } from '@/lib/machines/machine-files-runtime';
 
@@ -183,6 +191,43 @@ function confineScopedPath(
     return { ok: false, error: NextResponse.json({ error: `${field} escapes the machine filesystem root` }, { status: 400 }) };
   }
   return { ok: true, value: confined };
+}
+
+/**
+ * Second confinement pass, ON the machine: string confinement above cannot see
+ * the Sprite's symlinks, so `/workspace/link/x` with `link → /etc` passes it
+ * and every later fs op on the machine would follow the link out of scope.
+ * `verifyMachinePathsWithinScope` re-resolves each path with the machine's own
+ * `realpath` and rejects any that escape once links are followed. Returns null
+ * when every path is in scope, else the response to send. `checks` pairs each
+ * confined absolute path with the request field it came from so the 400 names
+ * the offending field, same as the string-confinement 400s.
+ */
+async function requireMachinePathsWithinScope(
+  handle: MachineHandle,
+  scope: MachineFilesScope,
+  checks: ReadonlyArray<{ field: string; path: string }>,
+): Promise<NextResponse | null> {
+  // The scope root itself has no intermediate components to traverse — nothing
+  // a symlink could hijack — so a bare root listing skips the extra exec.
+  const toCheck = checks.filter((c) => c.path !== scopeRoot(scope));
+  if (toCheck.length === 0) return null;
+  const result = await verifyMachinePathsWithinScope({
+    handle,
+    scopeRoot: scopeRoot(scope),
+    paths: toCheck.map((c) => c.path),
+  });
+  if (result.ok) return null;
+  if (result.reason === 'escapes') {
+    return NextResponse.json(
+      { error: `${toCheck[result.index].field} escapes the machine filesystem root` },
+      { status: 400 },
+    );
+  }
+  return NextResponse.json(
+    { error: 'Failed to complete the operation on the machine', reason: 'exec_failed', detail: result.detail },
+    { status: 502 },
+  );
 }
 
 const RESOLVE_DENIAL_STATUS: Record<'not_found' | 'vanished' | 'not_started', number> = {
@@ -306,6 +351,9 @@ export async function GET(request: Request) {
   const resolved = await resolveMachineFilesHandle(scope);
   if (!resolved.ok) return resolveDenialResponse(resolved.reason);
 
+  const escape = await requireMachinePathsWithinScope(resolved.handle, scope, [{ field: 'path', path }]);
+  if (escape) return escape;
+
   if (mode === 'read') {
     const result = await readMachineFile({ handle: resolved.handle, path });
     if (!result.ok) {
@@ -415,6 +463,8 @@ export async function POST(request: Request) {
   if (kind.value === 'directory') {
     const resolved = await resolveMachineFilesHandle(scope);
     if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+    const escape = await requireMachinePathsWithinScope(resolved.handle, scope, [{ field: 'path', path }]);
+    if (escape) return escape;
     const result = await createMachineDirectory({ handle: resolved.handle, path });
     if (!result.ok) return mutateFailureResponse(result, 'The parent folder could not be found');
     auditWrite(request, auth.userId, machineId.value, { op: 'create_directory', path: rawPath.value });
@@ -429,6 +479,8 @@ export async function POST(request: Request) {
 
   const resolved = await resolveMachineFilesHandle(scope);
   if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  const escape = await requireMachinePathsWithinScope(resolved.handle, scope, [{ field: 'path', path }]);
+  if (escape) return escape;
   const result = await writeMachineFile({ handle: resolved.handle, path, content: decoded.content });
   if (!result.ok) return mutateFailureResponse(result, 'The parent folder could not be found');
   auditWrite(request, auth.userId, machineId.value, { op: 'write_file', path: rawPath.value });
@@ -472,6 +524,12 @@ export async function PATCH(request: Request) {
   const resolved = await resolveMachineFilesHandle(scope);
   if (!resolved.ok) return resolveDenialResponse(resolved.reason);
 
+  const escape = await requireMachinePathsWithinScope(resolved.handle, scope, [
+    { field: 'fromPath', path: fromPath.value },
+    { field: 'toPath', path: toPath.value },
+  ]);
+  if (escape) return escape;
+
   const notFoundMessage = `The item to ${op.value} could not be found`;
   const result =
     op.value === 'move'
@@ -511,6 +569,9 @@ export async function DELETE(request: Request) {
 
   const resolved = await resolveMachineFilesHandle(scope);
   if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+
+  const escape = await requireMachinePathsWithinScope(resolved.handle, scope, [{ field: 'path', path }]);
+  if (escape) return escape;
 
   const result = await deleteMachinePath({ handle: resolved.handle, path });
   if (!result.ok) return mutateFailureResponse(result, 'The item to delete could not be found');

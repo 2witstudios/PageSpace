@@ -66,6 +66,14 @@ interface FilesFilePaneProps {
   scope: FilesScope;
   /** Path of the file to show, relative to the scope root, e.g. `src/index.ts`. */
   path: string;
+  /**
+   * Reports whether the pane currently holds an unsaved draft. The parent uses
+   * this to guard its own navigation (file clicks, scope switches) behind the
+   * same discard-confirm the Reload button applies — without it, ordinary
+   * navigation would be the one path that silently drops an edit. Reported
+   * `false` again on unmount.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
@@ -121,7 +129,7 @@ const looksBinary = (content: string): boolean => {
 const filesScopeBodyFields = (scope: FilesScope): Record<string, string> =>
   scope.kind === 'branch' ? { projectName: scope.projectName, branchName: scope.branchName } : {};
 
-export default function FilesFilePane({ machineId, scope, path }: FilesFilePaneProps) {
+export default function FilesFilePane({ machineId, scope, path, onDirtyChange }: FilesFilePaneProps) {
   const [state, setState] = useState<FileState>({ status: 'loading' });
   // Bumped by Retry/Reload to re-run the read without changing the selected file.
   const [attempt, setAttempt] = useState(0);
@@ -217,6 +225,17 @@ export default function FilesFilePane({ machineId, scope, path }: FilesFilePaneP
   // read-only no matter what the banner already says.
   const editable = current.status === 'loaded' && !current.truncated;
   const dirty = editable && draft !== null;
+
+  // Mirror the dirty flag up to the parent so ITS navigation (file clicks,
+  // scope switches) can confirm before discarding — see the prop doc. The
+  // cleanup reports `false` so an unmount never strands the parent thinking a
+  // gone pane still holds an edit.
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => {
+      onDirtyChange?.(false);
+    };
+  }, [dirty, onDirtyChange]);
 
   // Registers for as long as the draft is dirty — repo rule (CLAUDE.md): this
   // is what stops an SWR revalidation or an auth-refresh interrupt from
