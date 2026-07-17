@@ -28,12 +28,12 @@
  *      binary. A flood of U+FFFD (bytes the server's decoder couldn't map) is
  *      the same conclusion by a different route.
  *
- * A checkout that has gone away is NOT an error here: the route's `reason` is
- * mapped through the shared {@link CHECKOUT_ABSENT_COPY}, so the pane says the
+ * A scope that has gone away is NOT an error here: the route's `reason` is
+ * mapped through the shared {@link FILES_ABSENT_COPY}, so the pane says the
  * same words the sidebar says, at the same moment, about the same fact. The
- * route keeps `not_found`/`vanished` (this branch has no checkout) distinct from
- * `file_not_found` (the checkout is fine; that one file is gone), so we can tell
- * the reader which of the two actually happened instead of guessing.
+ * route keeps `not_found`/`vanished`/`not_started` (this scope isn't reachable)
+ * distinct from `file_not_found` (the scope is fine; that one file is gone), so
+ * we can tell the reader which of the two actually happened instead of guessing.
  */
 
 import { useEffect, useState } from 'react';
@@ -43,7 +43,7 @@ import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/l
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Button } from '@/components/ui/button';
 import { PaneLoading, PaneNotice } from './tab-states';
-import { CHECKOUT_ABSENT_COPY, asAbsentReason, readErrorBody, type CheckoutAbsentReason } from './checkout-states';
+import { FILES_ABSENT_COPY, asAbsentReason, readErrorBody, type FilesAbsentReason } from './checkout-states';
 
 // Monaco pulls the editor bundle + `window`, so it must never SSR — matches
 // every other MonacoEditor mount in the app (CodePageView, DocumentView, …).
@@ -69,7 +69,7 @@ type FileState =
   | { status: 'loading' }
   | { status: 'loaded'; path: string; content: string; truncated: boolean }
   | { status: 'binary'; path: string }
-  | { status: 'absent'; path: string; reason: CheckoutAbsentReason }
+  | { status: 'absent'; path: string; reason: FilesAbsentReason }
   | { status: 'error'; path: string; message: string };
 
 const NUL_CHAR_CODE = 0;
@@ -219,8 +219,8 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
         {current.status === 'absent' && (
           <PaneNotice
             testId="checkout-absent-pane"
-            title={CHECKOUT_ABSENT_COPY[current.reason].title}
-            description={CHECKOUT_ABSENT_COPY[current.reason].description}
+            title={FILES_ABSENT_COPY[current.reason].title}
+            description={FILES_ABSENT_COPY[current.reason].description}
           />
         )}
         {current.status === 'error' && (
