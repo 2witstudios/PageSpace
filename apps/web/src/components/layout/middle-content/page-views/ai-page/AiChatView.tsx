@@ -1121,7 +1121,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     rollbackOptimisticSendOnFailure(
-      wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
       currentConversationId,
       userMessage.id,
     );
@@ -1158,7 +1158,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     rollbackOptimisticSendOnFailure(
-      wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
       currentConversationId,
       userMessage.id,
     );

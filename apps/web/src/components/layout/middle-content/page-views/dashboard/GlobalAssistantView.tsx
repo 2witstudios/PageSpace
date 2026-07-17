@@ -763,7 +763,7 @@ const GlobalAssistantView: React.FC = () => {
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     rollbackOptimisticSendOnFailure(
-      wrapSend(() => sendMessage(userMessage, { body: requestBody })),
+      () => wrapSend(() => sendMessage(userMessage, { body: requestBody })),
       currentConversationId,
       userMessage.id,
     );
@@ -782,7 +782,7 @@ const GlobalAssistantView: React.FC = () => {
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     rollbackOptimisticSendOnFailure(
-      wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
       currentConversationId,
       userMessage.id,
     );

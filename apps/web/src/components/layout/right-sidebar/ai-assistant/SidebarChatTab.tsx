@@ -737,7 +737,7 @@ const SidebarChatTab: React.FC = () => {
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     rollbackOptimisticSendOnFailure(
-      wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      () => wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
       currentConversationId,
       userMessage.id,
     );
@@ -767,7 +767,7 @@ const SidebarChatTab: React.FC = () => {
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
     rollbackOptimisticSendOnFailure(
-      wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      () => wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
       currentConversationId,
       userMessage.id,
     );
