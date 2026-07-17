@@ -34,13 +34,6 @@ export interface RenderedMessage {
  * non-colliding streams are ordered by `startedAt` among themselves and
  * rendered last.
  *
- * Doesn't reuse `mergeServerAndPending` for the streaming tail: that helper
- * is single-stream (one `pendingMessageId`), but this selector must support
- * N concurrent streams per conversation (own + remote + bootstrapped, per
- * the epic's `usePendingStreamsStore` reshape) — it bottoms out at the same
- * `synthesizeAssistantMessage` primitive `mergeServerAndPending` itself
- * delegates to, recomposed with a sort for the multi-stream case.
- *
  * `activeStreams` must already be filtered to this conversation by the
  * caller (`selectChannelRemoteStreams` + conversationId filter) — this
  * function does no channel/conversation filtering of its own.

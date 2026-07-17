@@ -1,10 +1,8 @@
 import { create } from 'zustand';
-import { UIMessage } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import {
   createAgentConversation,
-  fetchAgentConversationMessages,
   fetchMostRecentAgentConversation,
   conversationIdentityReducer,
   conversationIdFrom,
@@ -15,6 +13,8 @@ import { conversationState } from '@/lib/ai/core/conversation-state';
 import { getAgentId, getConversationId, setChatParams } from '@/lib/url-state';
 import { toast } from 'sonner';
 import { AgentInfo } from '@/types/agent';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { loadAgentConversationMessages } from '@/hooks/conversationMessagesLoaders';
 
 // Re-export AgentInfo for backward compatibility
 export type { AgentInfo } from '@/types/agent';
@@ -41,36 +41,7 @@ interface AgentState {
   identity: ConversationIdentityState;
   conversationId: string | null;
   isConversationLoading: boolean;
-  /**
-   * True while messages are being fetched for an ALREADY-known conversation
-   * (loadConversation), decoupled from identity resolution — loadConversation
-   * adopts its id synchronously (closing the create/select race), so
-   * isConversationLoading alone no longer covers this fetch window. Without
-   * this, a conversation switch could flash the previous conversation's
-   * messages under the new conversation's identity/header with no loading
-   * indicator.
-   */
-  isConversationMessagesLoading: boolean;
-  conversationMessages: UIMessage[];
   conversationAgentId: string | null; // Track which agent the conversation belongs to
-  /** Increments every time conversation state is set by loadConversation,
-   *  createNewConversation, or loadMostRecentConversation.
-   *  GlobalAssistantView watches this to re-apply messages via setAgentMessages
-   *  even when the conversation ID doesn't change (clicking the same conversation). */
-  conversationLoadSignal: number;
-
-  // Agent-mode streaming state, shared between GlobalAssistantView and the sidebar.
-  //
-  // BOTH CARRY AN AGENT ID, and that is the whole point.
-  //
-  // These used to be a bare `boolean` and a bare function. But the two surfaces that read
-  // this slot do NOT share an agent: GlobalAssistantView's agent comes from THIS store,
-  // while SidebarChatTab's comes from useSidebarAgentStore (independent, localStorage-
-  // persisted). And GlobalAssistantView never unmounts — CenterPanel only HIDES it — so
-  // after one dashboard visit the two are co-mounted on every page, with different agents.
-  //
-  // An identity-less slot therefore cross-wired them: a stream on the dashboard's agent B
-  // lit up the sidebar's Stop button for agent A, and clicking it aborted B while A's own
 
   // Sidebar tab state (for dashboard context only - GlobalAssistantView <-> RightPanel sync)
   activeTab: SidebarTab;
@@ -83,10 +54,8 @@ interface AgentState {
   // Conversation methods
   loadConversation: (conversationId: string) => Promise<void>;
   createNewConversation: () => Promise<string | null>;
-  setConversationMessages: (messages: UIMessage[]) => void;
   clearConversation: () => void;
   loadMostRecentConversation: () => Promise<void>;
-
 }
 
 const IDLE_IDENTITY: ConversationIdentityState = { status: 'idle' };
@@ -117,11 +86,8 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
   isInitialized: false,
   identity: IDLE_IDENTITY,
   conversationId: null,
-  conversationMessages: [],
   isConversationLoading: false,
-  isConversationMessagesLoading: false,
   conversationAgentId: null,
-  conversationLoadSignal: 0,
   activeTab: 'history', // Default for dashboard (no chat tab in dashboard context)
 
   /**
@@ -149,9 +115,7 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
         selectedAgent: agent,
         identity: IDLE_IDENTITY,
         conversationId: null,
-        conversationMessages: [],
         conversationAgentId: null,
-        isConversationMessagesLoading: false,
       });
     } else {
       set({ selectedAgent: agent });
@@ -243,30 +207,21 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
    * a history list), so identity adopts it synchronously — before the
    * messages fetch even starts — closing the race where a send fired right
    * after selecting a conversation could land under the previous one.
+   *
+   * Messages land in the shared conversation cache (PR 5B, leaf 5.3): the
+   * loader's `loadGeneration` gate replaces the local stale-result check, and
+   * the cache entry's `loadStatus` replaces isConversationMessagesLoading /
+   * the failure toast — surfaces render loading/error from the cache.
    */
   loadConversation: async (conversationId: string) => {
     const agent = get().selectedAgent;
     if (!agent) return;
 
     applyIdentity({ type: 'IDENTITY_SET', conversationId });
-    set({ conversationAgentId: agent.id, isConversationMessagesLoading: true });
+    set({ conversationAgentId: agent.id });
     setChatParams({ agentId: agent.id, conversationId }, 'push');
 
-    try {
-      const result = await fetchAgentConversationMessages(agent.id, conversationId, { limit: 50 });
-      // Drop a stale result if the user switched to a different conversation
-      // while this fetch was in flight.
-      if (conversationIdFrom(get().identity) !== conversationId) return;
-      set({
-        conversationMessages: result.messages,
-        conversationLoadSignal: get().conversationLoadSignal + 1,
-        isConversationMessagesLoading: false,
-      });
-    } catch (error) {
-      console.error('Failed to load conversation:', error);
-      toast.error('Failed to load conversation');
-      set({ isConversationMessagesLoading: false });
-    }
+    await loadAgentConversationMessages(agent.id, conversationId);
   },
 
   /**
@@ -282,12 +237,10 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
 
     const conversationId = createId();
     applyIdentity({ type: 'IDENTITY_SET', conversationId });
-    set({
-      conversationMessages: [],
-      conversationAgentId: agent.id,
-      conversationLoadSignal: get().conversationLoadSignal + 1,
-      isConversationMessagesLoading: false,
-    });
+    set({ conversationAgentId: agent.id });
+    // A just-minted id has no server rows — mark it loaded-empty in the cache
+    // so nothing fetches for it and no loading state shows.
+    conversationMessagesActions.seedConversation(conversationId);
 
     // Update URL for bookmarkability
     setChatParams({ agentId: agent.id, conversationId }, 'push');
@@ -303,22 +256,13 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
   },
 
   /**
-   * Update conversation messages (for optimistic UI updates)
-   */
-  setConversationMessages: (messages: UIMessage[]) => {
-    set({ conversationMessages: messages });
-  },
-
-  /**
    * Clear conversation state
    */
   clearConversation: () => {
     set({
       identity: IDLE_IDENTITY,
       conversationId: null,
-      conversationMessages: [],
       conversationAgentId: null,
-      isConversationMessagesLoading: false,
     });
   },
 
@@ -328,6 +272,12 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
    * have") — routed through RESOLVE_STARTED/RESOLVED/RESOLVE_FAILED so a
    * stale result here can never clobber an identity the user has since set
    * more recently via loadConversation/createNewConversation.
+   *
+   * Identity resolves BEFORE the messages load now (PR 5B): the load commits
+   * to the conversation-keyed cache, so it cannot land under the wrong
+   * conversation, and a messages fetch failure surfaces as the cache entry's
+   * 'error' state (retry affordance) instead of silently minting a fresh
+   * conversation over a real one.
    */
   loadMostRecentConversation: async () => {
     const agent = get().selectedAgent;
@@ -347,33 +297,25 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
 
       // If URL has conversation for THIS agent, load it
       if (conversationIdFromUrl && agentIdFromUrl === agent.id) {
-        const result = await fetchAgentConversationMessages(agent.id, conversationIdFromUrl, { limit: 50 });
         const resolved = applyIdentity({ type: 'RESOLVED', conversationId: conversationIdFromUrl });
         // A newer identity (set via loadConversation/createNewConversation
-        // while this was in flight) wins — don't apply these stale messages.
+        // while this was in flight) wins — don't adopt or load for the stale id.
         if (conversationIdFrom(resolved) !== conversationIdFromUrl) return;
-        set({
-          conversationMessages: result.messages,
-          conversationAgentId: agent.id,
-          conversationLoadSignal: get().conversationLoadSignal + 1,
-        });
+        set({ conversationAgentId: agent.id });
+        await loadAgentConversationMessages(agent.id, conversationIdFromUrl);
         return;
       }
 
       // Try to load most recent conversation
       const mostRecent = await fetchMostRecentAgentConversation(agent.id);
       if (mostRecent) {
-        const result = await fetchAgentConversationMessages(agent.id, mostRecent.id, { limit: 50 });
         const resolved = applyIdentity({ type: 'RESOLVED', conversationId: mostRecent.id });
         if (conversationIdFrom(resolved) !== mostRecent.id) return;
-        set({
-          conversationMessages: result.messages,
-          conversationAgentId: agent.id,
-          conversationLoadSignal: get().conversationLoadSignal + 1,
-        });
+        set({ conversationAgentId: agent.id });
 
         // Update URL (use 'replace' for auto-loading to avoid polluting history)
         setChatParams({ agentId: agent.id, conversationId: mostRecent.id }, 'replace');
+        await loadAgentConversationMessages(agent.id, mostRecent.id);
         return;
       }
 
@@ -399,20 +341,15 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
   };
 });
 
-// NO agentStreaming/agentStops SLOTS (PR 5A, leaf 5.5.7).
+// NO MESSAGE ARRAYS (PR 5B, leaf 5.3) — and no agentStreaming/agentStops slots (PR 5A, 5.5.7).
 //
-// This store used to hold "which agent is streaming" and "the stop control for that agent",
-// keyed by (agent, conversation). Both were projections of a fact usePendingStreamsStore already
-// records for every live stream — {messageId, conversationId, isOwn}, written on bootstrap AND
-// live stream_start — and both are now read there via `useConversationActiveStream(agentId,
-// conversationId)`.
+// `conversationMessages`/`conversationLoadSignal`/`isConversationMessagesLoading`/
+// `setConversationMessages` are gone: every loader above commits to
+// `useConversationMessagesStore` (the shared per-conversation cache), and surfaces render
+// `selectRenderedMessages(cacheEntry, activeStreams)` via the useRenderedMessages facade.
+// The load-signal existed so GlobalAssistantView could re-apply this store's array into
+// useChat without watching the array itself; with rendering per-conversation and
+// merge-at-render, there is no array to re-apply and no signal to watch.
 //
-// The identity apparatus that went with them (AgentStreamKey, agentStreamKey,
-// selectIsAgentStreaming, selectAgentStop) existed because a SLOT has to answer "whose stream is
-// this?" — the dashboard and sidebar are co-mounted and hold different agents, and an un-named
-// answer belonged to somebody else's stream. A pendingStreams entry carries agent (as pageId) AND
-// conversation AND messageId, which is strictly more identity than the key ever had, so the
-// question no longer needs asking.
-//
-// This store now keeps only what it is actually for: agent selection, conversation identity, and
-// the active tab.
+// This store now keeps only what it is actually for: agent selection, conversation identity,
+// and the active tab.

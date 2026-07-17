@@ -48,10 +48,6 @@ const mockAgent: AgentInfo = {
   enabledTools: ['search'],
 };
 
-const mockMessages = [
-  { id: 'msg-1', role: 'user', content: 'Hello' },
-  { id: 'msg-2', role: 'assistant', content: 'Hi!' },
-] as never[];
 
 // ============================================
 // Helper Functions
@@ -70,7 +66,9 @@ function simulateNavigationTransfer(
 }
 
 /**
- * Performs the transfer operation as done in RightPanel
+ * Performs the transfer operation as done in RightPanel.
+ * Agent + conversationId ONLY (PR 5B, leaf 5.3.3): the shared conversation cache
+ * already holds the conversation's messages — no messages payload travels here.
  */
 function performDashboardToSidebarTransfer(): void {
   const dashboardState = usePageAgentDashboardStore.getState();
@@ -78,7 +76,6 @@ function performDashboardToSidebarTransfer(): void {
     useSidebarAgentStore.getState().transferFromDashboard({
       agent: dashboardState.selectedAgent,
       conversationId: dashboardState.conversationId,
-      messages: dashboardState.conversationMessages,
     });
   }
 }
@@ -94,7 +91,6 @@ describe('RightPanel Navigation Transition', () => {
       selectedAgent: null,
       isInitialized: false,
       conversationId: null,
-      conversationMessages: [],
       isConversationLoading: false,
       conversationAgentId: null,
       activeTab: 'history',
@@ -103,7 +99,6 @@ describe('RightPanel Navigation Transition', () => {
     useSidebarAgentStore.setState({
       selectedAgent: null,
       conversationId: null,
-      initialMessages: [],
       isInitialized: false,
       agentIdForConversation: null,
       _loadingAgentId: null,
@@ -147,12 +142,11 @@ describe('RightPanel Navigation Transition', () => {
   // ============================================
 
   describe('Agent State Transfer', () => {
-    it('given agent selected on dashboard, should transfer to sidebar on navigation', () => {
+    it('given agent selected on dashboard, should transfer selection + conversation identity to sidebar on navigation', () => {
       // Set up dashboard state
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'dashboard-conv-123',
-        conversationMessages: mockMessages,
         conversationAgentId: mockAgent.id,
       });
 
@@ -162,11 +156,11 @@ describe('RightPanel Navigation Transition', () => {
       // Perform transfer
       performDashboardToSidebarTransfer();
 
-      // Verify sidebar received the state
+      // Verify sidebar received the state — messages live in the shared cache,
+      // keyed by this same conversationId, so identity is all that must travel.
       const sidebarState = useSidebarAgentStore.getState();
       expect(sidebarState.selectedAgent).toEqual(mockAgent);
       expect(sidebarState.conversationId).toBe('dashboard-conv-123');
-      expect(sidebarState.initialMessages).toEqual(mockMessages);
       expect(sidebarState.isInitialized).toBe(true);
     });
 
@@ -175,7 +169,6 @@ describe('RightPanel Navigation Transition', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: null,
         conversationId: null,
-        conversationMessages: [],
       });
 
       // Perform transfer (should be no-op)
@@ -187,11 +180,10 @@ describe('RightPanel Navigation Transition', () => {
       expect(sidebarState.conversationId).toBeNull();
     });
 
-    it('given agent with empty conversation, should transfer agent without messages', () => {
+    it('given agent with no conversation yet, should transfer the agent with null conversationId', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: null,
-        conversationMessages: [],
         conversationAgentId: mockAgent.id,
       });
 
@@ -200,28 +192,6 @@ describe('RightPanel Navigation Transition', () => {
       const sidebarState = useSidebarAgentStore.getState();
       expect(sidebarState.selectedAgent).toEqual(mockAgent);
       expect(sidebarState.conversationId).toBeNull();
-      expect(sidebarState.initialMessages).toEqual([]);
-    });
-
-    it('given streaming conversation on dashboard, should transfer current messages', () => {
-      // Simulate streaming - dashboard has partial message
-      const streamingMessages = [
-        { id: 'msg-1', role: 'user', content: 'Hello' },
-        { id: 'msg-2', role: 'assistant', content: 'I am currently...' },
-      ] as never[];
-
-      usePageAgentDashboardStore.setState({
-        selectedAgent: mockAgent,
-        conversationId: 'streaming-conv',
-        conversationMessages: streamingMessages,
-      });
-
-      performDashboardToSidebarTransfer();
-
-      const sidebarState = useSidebarAgentStore.getState();
-      expect(sidebarState.initialMessages).toEqual(streamingMessages);
-      // Access the raw object since we're using as never[]
-      expect((sidebarState.initialMessages[1] as unknown as { content: string }).content).toBe('I am currently...');
     });
   });
 
@@ -234,7 +204,6 @@ describe('RightPanel Navigation Transition', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
-        conversationMessages: mockMessages,
       });
 
       performDashboardToSidebarTransfer();
@@ -252,7 +221,6 @@ describe('RightPanel Navigation Transition', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
-        conversationMessages: [],
       });
 
       performDashboardToSidebarTransfer();
@@ -273,7 +241,6 @@ describe('RightPanel Navigation Transition', () => {
       useSidebarAgentStore.setState({
         selectedAgent: otherAgent,
         conversationId: 'old-conv',
-        initialMessages: [{ id: 'old-msg', role: 'user', content: 'Old' }] as never[],
         isInitialized: true,
         agentIdForConversation: otherAgent.id,
       });
@@ -282,7 +249,6 @@ describe('RightPanel Navigation Transition', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'new-conv',
-        conversationMessages: mockMessages,
       });
 
       performDashboardToSidebarTransfer();
@@ -303,7 +269,6 @@ describe('RightPanel Navigation Transition', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-1',
-        conversationMessages: mockMessages,
       });
 
       // Multiple transfers
@@ -332,31 +297,11 @@ describe('RightPanel Navigation Transition', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: fullAgent,
         conversationId: 'full-conv',
-        conversationMessages: mockMessages,
       });
 
       performDashboardToSidebarTransfer();
 
       expect(useSidebarAgentStore.getState().selectedAgent).toEqual(fullAgent);
-    });
-
-    it('given very long conversation history, should transfer all messages', () => {
-      const longHistory = Array.from({ length: 100 }, (_, i) => ({
-        id: `msg-${i}`,
-        role: i % 2 === 0 ? 'user' : 'assistant',
-        content: `Message ${i}`,
-        parts: [{ type: 'text', text: `Message ${i}` }],
-      })) as never[];
-
-      usePageAgentDashboardStore.setState({
-        selectedAgent: mockAgent,
-        conversationId: 'long-conv',
-        conversationMessages: longHistory,
-      });
-
-      performDashboardToSidebarTransfer();
-
-      expect(useSidebarAgentStore.getState().initialMessages).toHaveLength(100);
     });
   });
 });

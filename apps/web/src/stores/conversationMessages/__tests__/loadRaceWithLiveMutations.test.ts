@@ -60,7 +60,7 @@ describe('applyLoad reconciliation with concurrent live mutations', () => {
 
   it('given an edit lands while a load is in flight, should NOT be undone when the stale load resolves', () => {
     let store: ConversationMessagesById = {
-      c1: { messages: [msg('m1', 'original')], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] },
+      c1: { messages: [msg('m1', 'original')], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
     };
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;
@@ -83,6 +83,7 @@ describe('applyLoad reconciliation with concurrent live mutations', () => {
         optimisticSends: [],
         loadGeneration: 0,
         pendingMutationsSinceLoad: [],
+        loadStatus: 'loaded',
       },
     };
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
@@ -121,7 +122,7 @@ describe('applyLoad reconciliation with concurrent live mutations', () => {
 
   it('given multiple live mutations of different kinds land during one load, all should be reflected after the load resolves', () => {
     let store: ConversationMessagesById = {
-      c1: { messages: [msg('m1', 'v1'), msg('m2')], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] },
+      c1: { messages: [msg('m1', 'v1'), msg('m2')], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
     };
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;
@@ -165,7 +166,7 @@ describe('applyLoad reconciliation with concurrent live mutations', () => {
 
   it('given a delete broadcast arrives for an id that only exists in optimisticSends locally, should still exclude it once the load resolves (Codex finding #5)', () => {
     let store: ConversationMessagesById = {
-      c1: { messages: [], optimisticSends: [msg('opt1')], loadGeneration: 0, pendingMutationsSinceLoad: [] },
+      c1: { messages: [], optimisticSends: [msg('opt1')], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
     };
     const { byConversationId: afterStart, generation } = applyStartLoad(store, 'c1');
     store = afterStart;

@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { UIMessage } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { toast } from 'sonner';
 import { AgentInfo, isValidAgentInfo } from '@/types/agent';
 import {
   createAgentConversation,
-  fetchAgentConversationMessages,
   fetchMostRecentAgentConversation,
   conversationIdentityReducer,
   conversationIdFrom,
   isResolving,
   type ConversationIdentityState,
 } from '@/lib/ai/shared';
+import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
+import { loadAgentConversationMessages } from '@/hooks/conversationMessagesLoaders';
 
 /**
  * SidebarAgentInfo is now an alias for the shared AgentInfo type.
@@ -27,8 +27,12 @@ export type SidebarAgentInfo = AgentInfo;
 
 interface TransferFromDashboardPayload {
   agent: SidebarAgentInfo;
+  /**
+   * Agent + conversationId ONLY (PR 5B, leaf 5.3.3): the shared conversation
+   * cache already holds that conversation's messages — carrying a messages
+   * payload here was a hidden store-to-store message copy.
+   */
   conversationId: string | null;
-  messages: UIMessage[];
 }
 
 const IDLE_IDENTITY: ConversationIdentityState = { status: 'idle' };
@@ -42,15 +46,7 @@ interface SidebarAgentStoreState {
   // as plain fields (not getters) so existing selectors don't need to change.
   identity: ConversationIdentityState;
   conversationId: string | null;
-  initialMessages: UIMessage[];
   isInitialized: boolean;
-  /**
-   * True while messages are being fetched for an already-known conversation
-   * (loadConversation), decoupled from identity resolution — loadConversation
-   * adopts its id synchronously, so isInitialized alone no longer covers this
-   * fetch window.
-   */
-  isMessagesLoading: boolean;
   agentIdForConversation: string | null;
 
   // Internal state for race condition protection (not persisted)
@@ -59,9 +55,8 @@ interface SidebarAgentStoreState {
   // Actions
   selectAgent: (agent: SidebarAgentInfo | null) => void;
   applyIdentity: (action: Parameters<typeof conversationIdentityReducer>[1]) => ConversationIdentityState;
-  setMessagesLoading: (loading: boolean) => void;
-  setMessagesLoaded: (messages: UIMessage[], agentId: string) => void;
-  updateMessages: (messages: UIMessage[]) => void;
+  /** Record which agent the current conversation belongs to (messages live in the shared cache). */
+  markConversationLoaded: (agentId: string) => void;
   setLoadingAgentId: (agentId: string | null) => void;
   /** Transfer state from dashboard store for seamless navigation */
   transferFromDashboard: (payload: TransferFromDashboardPayload) => void;
@@ -74,9 +69,7 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
       selectedAgent: null,
       identity: IDLE_IDENTITY,
       conversationId: null,
-      initialMessages: [],
       isInitialized: false,
-      isMessagesLoading: false,
       agentIdForConversation: null,
       _loadingAgentId: null,
 
@@ -90,9 +83,7 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
               selectedAgent: agent,
               identity: IDLE_IDENTITY,
               conversationId: null,
-              initialMessages: [],
               isInitialized: false,
-              isMessagesLoading: false,
               agentIdForConversation: null,
             };
           }
@@ -119,16 +110,8 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
         return next;
       },
 
-      setMessagesLoading: (loading) => {
-        set({ isMessagesLoading: loading });
-      },
-
-      setMessagesLoaded: (messages, agentId) => {
-        set({ initialMessages: messages, agentIdForConversation: agentId, isMessagesLoading: false });
-      },
-
-      updateMessages: (messages) => {
-        set({ initialMessages: messages });
+      markConversationLoaded: (agentId) => {
+        set({ agentIdForConversation: agentId });
       },
 
       setLoadingAgentId: (agentId) => {
@@ -138,7 +121,9 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
       /**
        * Transfer state from dashboard store for seamless navigation.
        * Called when navigating from dashboard to a page while an agent is selected.
-       * This ensures the sidebar picks up the streaming conversation.
+       * Carries agent + conversationId only — the shared conversation cache already
+       * holds the messages, and the live stream renders from the pending-streams
+       * store either way (merge-at-render).
        */
       transferFromDashboard: (payload) => {
         set({
@@ -147,9 +132,7 @@ export const useSidebarAgentStore = create<SidebarAgentStoreState>()(
             ? { status: 'ready', conversationId: payload.conversationId }
             : IDLE_IDENTITY,
           conversationId: payload.conversationId,
-          initialMessages: payload.messages,
           isInitialized: true,
-          isMessagesLoading: false,
           agentIdForConversation: payload.agent.id,
           _loadingAgentId: null,
         });
@@ -199,38 +182,32 @@ export interface UseSidebarAgentStateReturn {
   selectedAgent: SidebarAgentInfo | null;
   /** Current conversation ID for the selected agent */
   conversationId: string | null;
-  /** Initial messages for the agent conversation */
-  initialMessages: UIMessage[];
   /** Whether the agent conversation is initialized */
   isInitialized: boolean;
-  /** True while messages for an already-known conversation are being fetched, decoupled from identity resolution */
-  isMessagesLoading: boolean;
   /** Select an agent (or null to return to Global Assistant) */
   selectAgent: (agent: SidebarAgentInfo | null) => void;
   /** Create a new conversation for the current agent */
   createNewConversation: () => Promise<string | null>;
-  /** Refresh the current agent conversation (reload messages from server) */
+  /** Refresh the current agent conversation (reload messages from server into the cache) */
   refreshConversation: () => Promise<void>;
   /** Load a specific conversation by ID */
   loadConversation: (conversationId: string) => Promise<void>;
-  /** Update messages (for optimistic UI updates) */
-  updateMessages: (messages: UIMessage[]) => void;
 }
 
 /**
  * Hook for managing sidebar agent selection state.
  * Uses Zustand store internally for shared state across components.
+ *
+ * Messages are NOT held here (PR 5B, leaf 5.3): every loader commits to the
+ * shared conversation cache (`loadAgentConversationMessages`), and surfaces
+ * render via the `useRenderedMessages`/`useConversationLoadState` facades.
  */
 export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   const selectedAgent = useSidebarAgentStore((state) => state.selectedAgent);
   const conversationId = useSidebarAgentStore((state) => state.conversationId);
-  const initialMessages = useSidebarAgentStore((state) => state.initialMessages);
   const isInitialized = useSidebarAgentStore((state) => state.isInitialized);
-  const isMessagesLoading = useSidebarAgentStore((state) => state.isMessagesLoading);
 
   const selectAgent = useSidebarAgentStore((state) => state.selectAgent);
-  const setMessagesLoaded = useSidebarAgentStore((state) => state.setMessagesLoaded);
-  const updateMessages = useSidebarAgentStore((state) => state.updateMessages);
 
   // Ref to track which agent we're currently loading (for race condition protection)
   const loadingAgentIdRef = useRef<string | null>(null);
@@ -267,16 +244,12 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
         if (loadingAgentIdRef.current !== currentAgentId) return;
 
         if (mostRecent) {
-          const result = await fetchAgentConversationMessages(selectedAgent.id, mostRecent.id, { limit: 50 });
-
-          // Abort if agent changed during fetch
-          if (loadingAgentIdRef.current !== currentAgentId) return;
-
           const resolved = useSidebarAgentStore.getState().applyIdentity({ type: 'RESOLVED', conversationId: mostRecent.id });
           // A newer identity (set via loadConversation/createNewConversation
-          // while this was in flight) wins — don't apply these stale messages.
+          // while this was in flight) wins — don't load for the stale id.
           if (conversationIdFrom(resolved) !== mostRecent.id) return;
-          useSidebarAgentStore.getState().setMessagesLoaded(result.messages, selectedAgent.id);
+          useSidebarAgentStore.getState().markConversationLoaded(selectedAgent.id);
+          await loadAgentConversationMessages(selectedAgent.id, mostRecent.id);
           return;
         }
       } catch (error) {
@@ -297,7 +270,8 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
       const newConversationId = createId();
       const resolved = useSidebarAgentStore.getState().applyIdentity({ type: 'IDENTITY_SET', conversationId: newConversationId });
       if (conversationIdFrom(resolved) !== newConversationId) return;
-      useSidebarAgentStore.getState().setMessagesLoaded([], selectedAgent.id);
+      useSidebarAgentStore.getState().markConversationLoaded(selectedAgent.id);
+      conversationMessagesActions.seedConversation(newConversationId);
 
       try {
         await createAgentConversation(selectedAgent.id, newConversationId);
@@ -323,7 +297,8 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
 
     const newConversationId = createId();
     useSidebarAgentStore.getState().applyIdentity({ type: 'IDENTITY_SET', conversationId: newConversationId });
-    useSidebarAgentStore.getState().setMessagesLoaded([], selectedAgent.id);
+    useSidebarAgentStore.getState().markConversationLoaded(selectedAgent.id);
+    conversationMessagesActions.seedConversation(newConversationId);
 
     try {
       await createAgentConversation(selectedAgent.id, newConversationId);
@@ -340,14 +315,8 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   const refreshConversation = useCallback(async (): Promise<void> => {
     const currentConversationId = useSidebarAgentStore.getState().conversationId;
     if (!selectedAgent || !currentConversationId) return;
-
-    try {
-      const result = await fetchAgentConversationMessages(selectedAgent.id, currentConversationId, { limit: 50 });
-      updateMessages(result.messages);
-    } catch (error) {
-      console.error('Failed to refresh agent conversation:', error);
-    }
-  }, [selectedAgent, updateMessages]);
+    await loadAgentConversationMessages(selectedAgent.id, currentConversationId);
+  }, [selectedAgent]);
 
   // ============================================
   // Action: Load Specific Conversation
@@ -355,25 +324,15 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   // The id is already known (it came from a history list) — adopt it
   // synchronously, before the messages fetch even starts, closing the race
   // where a send fired right after selecting a conversation could land under
-  // the previous one.
+  // the previous one. The cache loader's loadGeneration gate replaces the
+  // local stale-result check.
   const loadConversation = useCallback(async (targetConversationId: string): Promise<void> => {
     if (!selectedAgent) return;
 
     useSidebarAgentStore.getState().applyIdentity({ type: 'IDENTITY_SET', conversationId: targetConversationId });
-    useSidebarAgentStore.getState().setMessagesLoading(true);
-
-    try {
-      const result = await fetchAgentConversationMessages(selectedAgent.id, targetConversationId, { limit: 50 });
-      // Drop a stale result if the user switched to a different conversation
-      // while this fetch was in flight.
-      if (useSidebarAgentStore.getState().conversationId !== targetConversationId) return;
-      setMessagesLoaded(result.messages, selectedAgent.id);
-    } catch (error) {
-      console.error('Failed to load agent conversation:', error);
-      toast.error('Failed to load conversation');
-      useSidebarAgentStore.getState().setMessagesLoading(false);
-    }
-  }, [selectedAgent, setMessagesLoaded]);
+    useSidebarAgentStore.getState().markConversationLoaded(selectedAgent.id);
+    await loadAgentConversationMessages(selectedAgent.id, targetConversationId);
+  }, [selectedAgent]);
 
   // ============================================
   // Return hook interface
@@ -381,13 +340,10 @@ export function usePageAgentSidebarState(): UseSidebarAgentStateReturn {
   return {
     selectedAgent,
     conversationId,
-    initialMessages,
     isInitialized,
-    isMessagesLoading,
     selectAgent,
     createNewConversation,
     refreshConversation,
     loadConversation,
-    updateMessages,
   };
 }

@@ -156,6 +156,9 @@ vi.mock('@/lib/ai/shared', async (importOriginal) => ({
 import { GlobalChatProvider, useGlobalChatConversation } from '../GlobalChatContext';
 import { useStreamingRegistration } from '@/lib/ai/shared';
 import { markChannelConsuming, resetConsumingChannels } from '@/lib/ai/streams/consumingChannels';
+// REAL conversation cache (PR 5B): loads and remote events commit here, and what
+// lands in the cache is the behavior under test — refreshSignal is gone.
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 
 // --- Helpers ---
 
@@ -177,6 +180,16 @@ const Wrapper = ({ children }: { children: React.ReactNode }) => (
   <GlobalChatProvider>{children}</GlobalChatProvider>
 );
 
+/** Count DB message loads issued for a conversation — the observable behind every
+ *  "signal surfaces to re-fetch" assertion, now that producers reload the cache. */
+const messagesFetchCount = (conversationId: string) =>
+  mockFetchWithAuth.mock.calls.filter(
+    ([url]) => url === `/api/ai/global/${conversationId}/messages?limit=50&includeStreaming=1`,
+  ).length;
+
+const cacheEntry = (conversationId: string) =>
+  useConversationMessagesStore.getState().getEntry(conversationId);
+
 // --- Tests ---
 
 describe('GlobalChatProvider — socket reconnect refresh', () => {
@@ -189,6 +202,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     mockStreams.clear();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: mockConnectionStatus })
     );
@@ -214,7 +228,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     });
   };
 
-  it('given isInitialized=true and currentConversationId set, when socket reconnects (second connect), should increment refreshSignal exactly once', async () => {
+  it('given isInitialized=true and currentConversationId set, when socket reconnects (second connect), should reload the conversation cache exactly once', async () => {
     const { result, rerender } = renderProvider();
 
     await waitFor(() => expect(result.current.isInitialized).toBe(true));
@@ -223,30 +237,30 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     // First connect — sets the hasInitialConnect ref, no refresh
     setStatus('connected', rerender);
 
-    const signalAfterFirstConnect = result.current.refreshSignal;
+    const loadsAfterFirstConnect = messagesFetchCount(CONV_ID);
 
     // Disconnect then reconnect
     setStatus('disconnected', rerender);
     setStatus('connected', rerender);
 
     await waitFor(() => {
-      expect(result.current.refreshSignal).toBe(signalAfterFirstConnect + 1);
+      expect(messagesFetchCount(CONV_ID)).toBe(loadsAfterFirstConnect + 1);
     });
   });
 
-  it('given socket fires connected for the first time (initial load), should NOT increment refreshSignal', async () => {
+  it('given socket fires connected for the first time (initial load), should NOT reload the conversation cache', async () => {
     const { result, rerender } = renderProvider();
 
     await waitFor(() => expect(result.current.isInitialized).toBe(true));
 
-    const signalBefore = result.current.refreshSignal;
+    const loadsBefore = messagesFetchCount(CONV_ID);
 
     // First connect
     setStatus('connected', rerender);
 
     // Allow any potential cascading effects to settle
     await waitFor(() => expect(result.current.isInitialized).toBe(true));
-    expect(result.current.refreshSignal).toBe(signalBefore);
+    expect(messagesFetchCount(CONV_ID)).toBe(loadsBefore);
   });
 
   // NOTE: React testing-library's act() collapses isInitialized false→true into one render,
@@ -254,7 +268,7 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
   // Two fixes in GlobalChatContext guard against the loop: prevConnectionStatusRef (prevents
   // the effect re-firing when status hasn't changed) and isInitializedRef (prevents isInitialized
   // from being a reactive dep that re-triggers the effect after each refresh).
-  it('given refresh completes after reconnect (isInitialized cycles true→false→true), should NOT trigger a second refresh', async () => {
+  it('given refresh completes after reconnect, should NOT trigger a second refresh (no cascade)', async () => {
     const { result, rerender } = renderProvider();
 
     await waitFor(() => expect(result.current.isInitialized).toBe(true));
@@ -264,25 +278,19 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
     setStatus('connected', rerender);
     setStatus('disconnected', rerender);
 
-    const signalBeforeReconnect = result.current.refreshSignal;
+    const loadsBeforeReconnect = messagesFetchCount(CONV_ID);
 
-    // Reconnect — triggers the reconnect signal increment
+    // Reconnect — triggers exactly one cache reload
     setStatus('connected', rerender);
 
-    // Wait until the reconnect signal has fired (incremented by 1)
     await waitFor(() => {
-      expect(result.current.refreshSignal).toBeGreaterThan(signalBeforeReconnect);
+      expect(messagesFetchCount(CONV_ID)).toBe(loadsBeforeReconnect + 1);
     });
 
-    const signalAfterFirstRefresh = result.current.refreshSignal;
-
-    // Allow any cascade effects to settle
+    // Allow any cascade effects to settle — still exactly one
     await waitFor(() =>
-      expect(result.current.refreshSignal).toBe(signalAfterFirstRefresh)
+      expect(messagesFetchCount(CONV_ID)).toBe(loadsBeforeReconnect + 1)
     );
-
-    // No second increment should have occurred
-    expect(result.current.refreshSignal).toBe(signalAfterFirstRefresh);
   });
 
   it('given socket is already connected when currentConversationId changes (conversation switch), should NOT trigger a spurious refresh', async () => {
@@ -300,19 +308,20 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
       return defaultFetch(url);
     });
 
-    const signalBefore = result.current.refreshSignal;
+    const conv1LoadsBefore = messagesFetchCount(CONV_ID);
 
-    // Switch conversation while connected — should NOT trigger reconnect signal increment
+    // Switch conversation while connected — should NOT trigger a reconnect-style reload
     act(() => { result.current.loadConversation(CONV_ID_2); });
 
     // Wait for the load to complete
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID_2));
 
-    // refreshSignal must not have changed (no spurious reconnect-triggered increment)
-    expect(result.current.refreshSignal).toBe(signalBefore);
+    // The switch loads conv-2 once; conv-1 must not have been spuriously reloaded
+    expect(messagesFetchCount(CONV_ID)).toBe(conv1LoadsBefore);
+    expect(messagesFetchCount(CONV_ID_2)).toBe(1);
   });
 
-  it('given isInitialized=false when reconnect fires, should NOT increment refreshSignal', async () => {
+  it('given isInitialized=false when reconnect fires, should NOT reload anything', async () => {
     // Hang initialization so isInitialized stays false
     mockFetchWithAuth.mockImplementation(() => new Promise(() => {}));
 
@@ -320,16 +329,16 @@ describe('GlobalChatProvider — socket reconnect refresh', () => {
 
     expect(result.current.isInitialized).toBe(false);
 
-    const signalBefore = result.current.refreshSignal;
+    const loadsBefore = messagesFetchCount(CONV_ID);
 
     // First connect — sets hasInitialConnectRef to true
     setStatus('connected', rerender);
     setStatus('disconnected', rerender);
-    // Second connect — isInitialized still false, should not signal
+    // Second connect — isInitialized still false, should not reload
     setStatus('connected', rerender);
 
     await waitFor(() => {
-      expect(result.current.refreshSignal).toBe(signalBefore);
+      expect(messagesFetchCount(CONV_ID)).toBe(loadsBefore);
     });
   });
 });
@@ -341,6 +350,7 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     mockStreams.clear();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'disconnected' })
     );
@@ -375,17 +385,19 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
       await result.current.loadConversation('conv-2');
     });
     expect(result.current.currentConversationId).toBe('conv-2');
-    expect(result.current.initialMessages).toEqual([{ id: 'fresh-msg' }]);
+    expect(cacheEntry('conv-2').messages).toEqual([{ id: 'fresh-msg' }]);
 
-    // The stale init-triggered fetch for CONV_ID now resolves — it must not
-    // overwrite conv-2's identity or messages.
+    // The stale init-triggered fetch for CONV_ID now resolves — the cache is
+    // conversation-keyed, so it commits under ITS OWN id and can never overwrite
+    // conv-2's identity or entry.
     await act(async () => {
       resolveStaleMessages(okResponse({ messages: [{ id: 'stale-msg' }] }));
       await Promise.resolve();
     });
 
     expect(result.current.currentConversationId).toBe('conv-2');
-    expect(result.current.initialMessages).toEqual([{ id: 'fresh-msg' }]);
+    expect(cacheEntry('conv-2').messages).toEqual([{ id: 'fresh-msg' }]);
+    expect(cacheEntry(CONV_ID).messages).toEqual([{ id: 'stale-msg' }]);
   });
 
   it('given createNewConversation is called while init is still resolving, should adopt the new id synchronously', async () => {
@@ -409,9 +421,12 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     });
 
     expect(result.current.currentConversationId).toBe('brand-new-conv');
+    // Seeded loaded-empty in the cache: nothing to fetch for a just-created id.
+    expect(cacheEntry('brand-new-conv').loadStatus).toBe('loaded');
+    expect(cacheEntry('brand-new-conv').messages).toEqual([]);
   });
 
-  it('given loadConversation is called, should set isMessagesLoading true until its messages fetch resolves', async () => {
+  it("given loadConversation is called, the cache entry should read loading until its messages fetch resolves", async () => {
     let resolveMessages!: (value: unknown) => void;
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
@@ -430,17 +445,17 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
 
     // Identity is already 'conv-2' (ungates sends), but messages are still loading.
     expect(result.current.currentConversationId).toBe('conv-2');
-    expect(result.current.isMessagesLoading).toBe(true);
+    expect(cacheEntry('conv-2').loadStatus).toBe('loading');
 
     await act(async () => {
       resolveMessages(okResponse({ messages: [] }));
       await Promise.resolve();
     });
 
-    expect(result.current.isMessagesLoading).toBe(false);
+    await waitFor(() => expect(cacheEntry('conv-2').loadStatus).toBe('loaded'));
   });
 
-  it('given loadConversation\'s messages fetch returns a non-ok response, should clear initialMessages instead of leaving the previous conversation\'s messages visible', async () => {
+  it("given loadConversation's messages fetch returns a non-ok response, the new conversation's entry should read error with no messages — the previous conversation's messages stay in THEIR OWN entry and cannot render under the new one", async () => {
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url === '/api/ai/global/active') return okResponse({ id: CONV_ID });
       if (url === `/api/ai/global/${CONV_ID}/messages?limit=50&includeStreaming=1`) {
@@ -454,7 +469,7 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
 
     const { result } = renderProvider();
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
-    await waitFor(() => expect(result.current.initialMessages).toEqual([
+    await waitFor(() => expect(cacheEntry(CONV_ID).messages).toEqual([
       expect.objectContaining({ id: 'stale-msg' }),
     ]));
 
@@ -462,12 +477,15 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
       await result.current.loadConversation('conv-2');
     });
 
-    expect(result.current.initialMessages).toEqual([]);
+    // Per-conversation rendering: conv-2 shows its own (empty, errored) entry —
+    // never CONV_ID's messages — with a retry affordance from loadStatus.
+    expect(cacheEntry('conv-2').messages).toEqual([]);
+    expect(cacheEntry('conv-2').loadStatus).toBe('error');
   });
 
   // Leaf 5.2 (history-tab rejoin): a conversation opened from a streaming-badged history
   // entry has an in-flight 'streaming' placeholder row that a default fetch excludes — this
-  // opts in so mergeServerAndPending can recognize and replace it with the live stream.
+  // opts in so selectRenderedMessages can render the live stream in the placeholder's place.
   it("should always request includeStreaming=1 on the conversation's messages fetch", async () => {
     mockFetchWithAuth.mockImplementation(defaultFetch);
 
@@ -495,6 +513,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     mockStreams.clear();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'connected' })
     );
@@ -537,12 +556,12 @@ describe('GlobalChatProvider — global channel stream socket', () => {
   // durably persisted; the store entry was dropped because whatever parts we held were a
   // stale snapshot. Keying purely on "is there still a store entry?" would fall through
   // to "our useChat already has it" and silently lose the reply.
-  it('given the SSE join failed and the stream completes for the active conversation, should refresh to load the persisted reply', async () => {
+  it('given the SSE join failed and the stream completes for the active conversation, should reload the conversation cache to pick up the persisted reply', async () => {
     const { result } = renderProvider();
     await waitFor(() => expect(mockSocket._handlerCount('chat:stream_complete')).toBeGreaterThan(0));
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
 
-    const before = result.current.refreshSignal;
+    const before = messagesFetchCount(CONV_ID);
 
     // A remote stream arrives, and the SSE join rejects — the stream lives on another
     // web instance whose multicast registry we cannot reach.
@@ -569,7 +588,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
       });
     });
 
-    await waitFor(() => expect(result.current.refreshSignal).toBe(before + 1));
+    await waitFor(() => expect(messagesFetchCount(CONV_ID)).toBe(before + 1));
     errorSpy.mockRestore();
   });
 
@@ -611,7 +630,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
   });
 
   // AC3 — own bootstrap stream complete via SSE
-  it('given an own bootstrap stream resolves via SSE, should clear context streaming and increment refreshSignal', async () => {
+  it('given an own bootstrap stream resolves via SSE, should remove the store entry and reload the conversation cache', async () => {
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url.includes('/api/ai/chat/active-streams')) {
         return okResponse({
@@ -632,15 +651,16 @@ describe('GlobalChatProvider — global channel stream socket', () => {
 
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
 
-    const signalBefore = result.current.refreshSignal;
+    const loadsBefore = messagesFetchCount(CONV_ID);
 
     await act(async () => { resolveJoin(); });
 
     // The stream leaving the store is the end of the stream, for every reader (PR 5A).
     await waitFor(() => expect(mockRemoveStream).toHaveBeenCalledWith('msg-own'));
 
-    // refreshSignal increments so surfaces know to re-fetch messages
-    await waitFor(() => expect(result.current.refreshSignal).toBeGreaterThan(signalBefore));
+    // The persisted reply reaches the render path via a cache reload (this join
+    // delivered no parts, so there is nothing to commit directly).
+    await waitFor(() => expect(messagesFetchCount(CONV_ID)).toBeGreaterThan(loadsBefore));
   });
 
   // AC4 — live cross-tab stream_start
@@ -744,7 +764,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
   });
 
   // AC7 — live stream_complete cleanup
-  it('given chat:stream_complete for a tracked messageId, should abort SSE, removeStream and increment refreshSignal', async () => {
+  it('given chat:stream_complete for a tracked messageId, should abort SSE, removeStream and reload the conversation cache', async () => {
     let capturedSignal!: AbortSignal;
     mockConsumeStreamJoin.mockImplementationOnce(
       (_id: string, signal: AbortSignal) => {
@@ -769,7 +789,7 @@ describe('GlobalChatProvider — global channel stream socket', () => {
       });
     });
 
-    const signalBefore = result.current.refreshSignal;
+    const loadsBefore = messagesFetchCount(CONV_ID);
 
     act(() => {
       mockSocket._trigger('chat:stream_complete', {
@@ -787,38 +807,42 @@ describe('GlobalChatProvider — global channel stream socket', () => {
     expect(capturedSignal.aborted).toBe(true);
     expect(mockRemoveStream).toHaveBeenCalledWith('msg-live');
 
-    // Context signals surfaces to re-fetch rather than fetching itself
-    await waitFor(() => expect(result.current.refreshSignal).toBeGreaterThan(signalBefore));
+    // No parts ever arrived, so there is nothing to commit — the persisted reply
+    // reaches the render path via a cache reload.
+    await waitFor(() => expect(messagesFetchCount(CONV_ID)).toBeGreaterThan(loadsBefore));
   });
 
-  // cross-tab user_message — context signals surfaces to re-fetch
-  it('given chat:user_message from another browser session for the active conversation, should increment refreshSignal', async () => {
+  // cross-tab user_message — a TARGETED cache write, not a whole-conversation refetch
+  it('given chat:user_message from another browser session for the active conversation, should append it to the conversation cache directly', async () => {
     const { result } = renderProvider();
 
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
     await waitFor(() => expect(mockSocket._handlerCount('chat:user_message')).toBeGreaterThan(0));
 
-    const signalBefore = result.current.refreshSignal;
+    const loadsBefore = messagesFetchCount(CONV_ID);
+    const remoteUser = { id: 'msg-remote-user', role: 'user', parts: [{ type: 'text', text: 'remote prompt' }] };
 
     act(() => {
       mockSocket._trigger('chat:user_message', {
-        message: { id: 'msg-remote-user', role: 'user', parts: [{ type: 'text', text: 'remote prompt' }] },
+        message: remoteUser,
         pageId: GLOBAL_CHANNEL_ID,
         conversationId: CONV_ID,
         triggeredBy: { userId: USER_ID, displayName: 'Me-otherTab', browserSessionId: SESSION_ID_REMOTE },
       });
     });
 
-    await waitFor(() => expect(result.current.refreshSignal).toBeGreaterThan(signalBefore));
+    await waitFor(() => expect(cacheEntry(CONV_ID).messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'msg-remote-user' })]),
+    ));
+    // Direct write — no refetch round-trip.
+    expect(messagesFetchCount(CONV_ID)).toBe(loadsBefore);
   });
 
-  it('given chat:user_message for a different conversation, should NOT increment refreshSignal', async () => {
+  it('given chat:user_message for a different conversation, should NOT write the active conversation cache', async () => {
     const { result } = renderProvider();
 
     await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
     await waitFor(() => expect(mockSocket._handlerCount('chat:user_message')).toBeGreaterThan(0));
-
-    const signalBefore = result.current.refreshSignal;
 
     act(() => {
       mockSocket._trigger('chat:user_message', {
@@ -831,7 +855,8 @@ describe('GlobalChatProvider — global channel stream socket', () => {
 
     // Give effects a moment to run
     await waitFor(() => expect(result.current.isInitialized).toBe(true));
-    expect(result.current.refreshSignal).toBe(signalBefore);
+    expect(cacheEntry(CONV_ID).messages).toEqual([]);
+    expect(cacheEntry('conv-different').messages).toEqual([]);
   });
 
   // AC8 — unmount safety
@@ -906,8 +931,8 @@ describe('GlobalChatProvider — global channel stream socket', () => {
   });
 
   // Codex P1 follow-up — after a failed SSE join, stream_complete must not
-  // increment refreshSignal a second time (stream already removed from store)
-  it('given own SSE rejected then chat:stream_complete fires, should not increment refreshSignal', async () => {
+  // trigger a second reload (stream already removed from store, no conversationId routed)
+  it('given own SSE rejected then chat:stream_complete fires without a conversationId, should not reload again', async () => {
     mockFetchWithAuth.mockImplementation((url: string) => {
       if (url.includes('/api/ai/chat/active-streams')) {
         return okResponse({
@@ -938,7 +963,8 @@ describe('GlobalChatProvider — global channel stream socket', () => {
 
     // Stream has been removed from the store by the catch path
     await waitFor(() => expect(mockRemoveStream).toHaveBeenCalledWith('msg-own'));
-    const signalAfterCatch = result.current.refreshSignal;
+    await waitFor(() => expect(result.current.currentConversationId).toBe(CONV_ID));
+    const loadsAfterCatch = messagesFetchCount(CONV_ID);
 
     act(() => {
       mockSocket._trigger('chat:stream_complete', {
@@ -947,14 +973,14 @@ describe('GlobalChatProvider — global channel stream socket', () => {
       });
     });
 
-    // stream_complete is a no-op — stream was already removed from the store
-    expect(result.current.refreshSignal).toBe(signalAfterCatch);
+    // stream_complete is a no-op — no store entry and no conversationId to route a reload
+    expect(messagesFetchCount(CONV_ID)).toBe(loadsAfterCatch);
 
     errorSpy.mockRestore();
   });
 
   // Codex P2 — finalize must not run after teardown
-  it('given a stream resolves after unmount via aborted SSE, should not increment refreshSignal post-unmount', async () => {
+  it('given a stream resolves after unmount via aborted SSE, should not throw or side-effect post-unmount', async () => {
     let resolveJoin!: () => void;
     mockConsumeStreamJoin.mockImplementationOnce(
       (_id: string, _signal: AbortSignal) =>
@@ -1025,6 +1051,7 @@ describe('GlobalChatProvider — editing-store registration', () => {
     mockStreams.clear();
     // Module state — a real reload clears it; a test file must too.
     resetConsumingChannels();
+    useConversationMessagesStore.setState({ byConversationId: {} });
     mockUseSocketStore.mockImplementation((selector: (s: { connectionStatus: string }) => unknown) =>
       selector({ connectionStatus: 'connected' })
     );
