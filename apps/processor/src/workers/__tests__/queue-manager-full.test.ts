@@ -227,6 +227,23 @@ describe('QueueManager', () => {
       })).rejects.toThrow('Failed to queue job on ingest-file');
     });
 
+    it('gives email-broadcast a retry policy that outlasts the one-hour email rate limiter', async () => {
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' });
+
+      // sendEmail's per-recipient limiter blocks for an hour; the default 3×5s
+      // policy would exhaust every retry in seconds and strand rate-limited
+      // recipients as `failed` forever. Exponential backoff from 60s crosses
+      // the window.
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'email-broadcast',
+        { broadcastId: 'bcast-1' },
+        expect.objectContaining({ retryLimit: 10, retryDelay: 60, retryBackoff: true })
+      );
+    });
+
     it('sets higher priority for image-optimize queue', async () => {
       const qm = new QueueManager();
       await qm.initialize();

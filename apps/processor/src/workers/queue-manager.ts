@@ -294,15 +294,26 @@ export class QueueManager {
     if (!this.boss) throw new Error('Queue manager not initialized');
 
     // Set priority based on queue type
-    const priority = queue === 'image-optimize' ? 100 : 
-                    queue === 'text-extract' ? 50 : 
+    const priority = queue === 'image-optimize' ? 100 :
+                    queue === 'text-extract' ? 50 :
                     queue === 'ingest-file' ? 60 : 10;
+
+    // Retry policy. email-broadcast needs one that outlasts sendEmail's
+    // per-recipient rate limiter: that limiter blocks for a full HOUR, the
+    // worker surfaces blocked recipients as a terminal throw, and the default
+    // 3×5s policy would burn every retry within seconds — leaving those
+    // recipients recorded `failed` with no automatic retry ever reaching them.
+    // Exponential backoff from 60s (60+120+240+…+30720s over 10 retries) keeps
+    // retrying well past the one-hour window.
+    const retryPolicy: Pick<PgBoss.SendOptions, 'retryLimit' | 'retryDelay' | 'retryBackoff'> =
+      queue === 'email-broadcast'
+        ? { retryLimit: 10, retryDelay: 60, retryBackoff: true }
+        : { retryLimit: 3, retryDelay: 5 };
 
     const jobOptions = {
       ...options,
       priority,
-      retryLimit: 3,
-      retryDelay: 5
+      ...retryPolicy,
     };
     
     const jobId = await this.boss.send(queue, data, jobOptions);
