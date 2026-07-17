@@ -894,7 +894,9 @@ describe('AiChatView initializeChat', () => {
 
   test('given a conversation is selected from history, should fetch its messages directly via the load-on-select effect (not via useConversations.loadConversation)', async () => {
     const HISTORY_CONV_ID = 'history-selected-conv';
-    const HISTORY_MESSAGES_URL = `/api/ai/page-agents/${PAGE_ID}/conversations/${HISTORY_CONV_ID}/messages`;
+    // The load-on-select effect's network path (loadMessagesForConversation) appends
+    // ?limit=50 (epic leaf 6.6) — the preloaded-fast-path callers do not.
+    const HISTORY_MESSAGES_URL = `/api/ai/page-agents/${PAGE_ID}/conversations/${HISTORY_CONV_ID}/messages?limit=50`;
 
     mockFetchWithAuth.mockImplementation(async (url: string, opts?: { method?: string }) => {
       if (url === PERMISSIONS_URL) return makeOkResponse({ canEdit: true });
@@ -953,8 +955,9 @@ describe('AiChatView initializeChat', () => {
   test('given the user switches to a second history conversation before the first one\'s messages fetch resolves, should apply the second (latest) selection\'s messages even if the first one\'s fetch resolves last', async () => {
     const CONV_Y = 'history-conv-y';
     const CONV_Z = 'history-conv-z';
-    const MESSAGES_URL_Y = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_Y}/messages`;
-    const MESSAGES_URL_Z = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_Z}/messages`;
+    // The load-on-select effect's network path appends ?limit=50 (epic leaf 6.6).
+    const MESSAGES_URL_Y = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_Y}/messages?limit=50`;
+    const MESSAGES_URL_Z = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_Z}/messages?limit=50`;
 
     let resolveY!: (value: unknown) => void;
     const pendingY = new Promise((resolve) => { resolveY = resolve; });

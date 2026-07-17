@@ -61,13 +61,22 @@ export const useConversationLoadState = (conversationId: string | null): Convers
 /**
  * Facade — a conversation's "load older" state (epic leaf 6.6), for wiring
  * ChatLayout/ChatMessagesArea's onScrollNearTop/isLoadingOlder props.
+ *
+ * Two scalar-returning selectors, not one `useShallow`-wrapped object selector:
+ * the object form reproducibly triggered a `useSyncExternalStore` "Maximum update
+ * depth exceeded" render loop in this store/React/zustand combination even though
+ * the selected VALUES were stable across every call (confirmed by instrumenting
+ * the selector — see PR 6 gate investigation). Scalars need no equality function
+ * at all, sidestepping the loop entirely.
  */
 export const useConversationOlderPageState = (
   conversationId: string | null,
-): { isLoadingOlder: boolean; hasMoreOlder: boolean } =>
-  useConversationMessagesStore(
-    useShallow((state) => {
-      const entry = conversationId ? state.byConversationId[conversationId] : undefined;
-      return { isLoadingOlder: entry?.isLoadingOlder ?? false, hasMoreOlder: entry?.hasMoreOlder ?? false };
-    }),
+): { isLoadingOlder: boolean; hasMoreOlder: boolean } => {
+  const isLoadingOlder = useConversationMessagesStore((state) =>
+    conversationId ? (state.byConversationId[conversationId]?.isLoadingOlder ?? false) : false,
   );
+  const hasMoreOlder = useConversationMessagesStore((state) =>
+    conversationId ? (state.byConversationId[conversationId]?.hasMoreOlder ?? false) : false,
+  );
+  return { isLoadingOlder, hasMoreOlder };
+};
