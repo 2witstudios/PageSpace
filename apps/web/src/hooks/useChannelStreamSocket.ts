@@ -233,8 +233,17 @@ export function useChannelStreamSocket(
     };
     // Tracks which messageIds have had onStreamComplete called to prevent
     // double-firing when both the SSE done sentinel and chat:stream_complete
-    // arrive, and to gate post-error stream_complete events.
-    const processed = new Set<string>();
+    // arrive, and to gate post-error stream_complete events. Value is whether
+    // that fire was AUTHORITATIVE (the real chat:stream_complete socket event,
+    // which alone carries `aborted`) — a local-only finalize (SSE join resolve,
+    // poll-fallback noticing the row vanished) has no server-told answer to
+    // "aborted or complete?" and fires `aborted: undefined`, which downstream
+    // treats as best-effort 'complete'. If the authoritative event arrives
+    // AFTER that local finalize already fired, it must still be allowed
+    // through once — to upgrade a wrongly-'complete'-badged interrupted stream
+    // — rather than being silently dropped by this guard (PR 6 review,
+    // CodeRabbit). An authoritative fire is never itself upgraded again.
+    const processed = new Map<string, boolean>();
     // Bootstrap-discovered own-stream messageIds. Acts as both an "is-own"
     // lookup and a one-shot guard for onOwnStreamFinalize.
     const ownStreamIds = new Set<string>();
@@ -266,9 +275,14 @@ export function useChannelStreamSocket(
       conversationId?: string,
       info?: { joinFailed: boolean },
       aborted?: boolean,
+      isAuthoritative = false,
     ) => {
-      if (processed.has(messageId)) return;
-      processed.add(messageId);
+      const priorFire = processed.get(messageId);
+      // Already fired authoritatively — nothing upgrades that. Already fired
+      // non-authoritatively AND this fire isn't authoritative either — a duplicate,
+      // not an upgrade. Either way, no-op.
+      if (priorFire === true || (priorFire === false && !isAuthoritative)) return;
+      processed.set(messageId, isAuthoritative);
       onStreamCompleteRef.current?.(messageId, conversationId, info, aborted);
     };
 
@@ -583,7 +597,7 @@ export function useChannelStreamSocket(
       }
       joinDelivered.delete(payload.messageId);
       try {
-        fireComplete(payload.messageId, payload.conversationId, { joinFailed: didJoinFail }, payload.aborted);
+        fireComplete(payload.messageId, payload.conversationId, { joinFailed: didJoinFail }, payload.aborted, true);
       } finally {
         removeStream(payload.messageId);
         fireOwnFinalize(payload.messageId);

@@ -1023,7 +1023,39 @@ describe('useChannelStreamSocket', () => {
 
   // A2 — double onStreamComplete prevention
   describe('onStreamComplete deduplication', () => {
-    it('given SSE done sentinel resolves and chat:stream_complete also fires, should call onStreamComplete exactly once', async () => {
+    // PR 6 review (CodeRabbit): a purely local finalize (SSE done sentinel, or the
+    // poll-fallback noticing the row vanished) has no server-told answer to
+    // "aborted or complete?" — it fires `aborted: undefined`, which downstream treats as
+    // best-effort 'complete'. If the AUTHORITATIVE chat:stream_complete arrives afterward
+    // with the real `aborted` value, it must still reach the consumer once — to correct a
+    // wrongly-'complete'-badged interrupted stream — not be silently dropped by the
+    // dedup guard. A second, later call for the SAME messageId is therefore expected
+    // here, not a bug: it is the authoritative upgrade the dedup guard is designed to let
+    // through exactly once.
+    it('given SSE done sentinel resolves (no authoritative aborted info) and chat:stream_complete fires afterward WITH aborted:true, should call onStreamComplete twice — once locally (aborted undefined), once authoritatively (aborted true)', async () => {
+      let resolveJoin!: () => void;
+      mockConsumeStreamJoin.mockReturnValue(
+        new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
+      );
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      // SSE done resolves first — local-only finalize, no authoritative aborted info.
+      await act(async () => { resolveJoin(); });
+      expect(onStreamComplete).toHaveBeenCalledTimes(1);
+      expect(onStreamComplete.mock.calls[0][3]).toBeUndefined();
+
+      // The authoritative chat:stream_complete arrives afterward, revealing the stream
+      // was actually aborted — it must upgrade, not be dropped.
+      act(() => { mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, aborted: true }); });
+
+      expect(onStreamComplete).toHaveBeenCalledTimes(2);
+      expect(onStreamComplete.mock.calls[1][3]).toBe(true);
+    });
+
+    it('given SSE done sentinel resolves and chat:stream_complete also fires WITHOUT a differing aborted value, should still call onStreamComplete twice (local, then the authoritative confirmation)', async () => {
       let resolveJoin!: () => void;
       mockConsumeStreamJoin.mockReturnValue(
         new Promise<{ aborted: boolean }>((res) => { resolveJoin = () => res({ aborted: false }); }),
@@ -1036,10 +1068,25 @@ describe('useChannelStreamSocket', () => {
       // SSE done resolves first
       await act(async () => { resolveJoin(); });
 
-      // Then socket stream_complete also fires
+      // Then socket stream_complete also fires — this is the authoritative confirmation,
+      // still allowed through once even though it agrees with the local finalize.
       act(() => { mockSocket._trigger('chat:stream_complete', COMPLETE_PAYLOAD); });
 
+      expect(onStreamComplete).toHaveBeenCalledTimes(2);
+    });
+
+    it('given the authoritative chat:stream_complete fires TWICE for the same messageId, should call onStreamComplete only once (an authoritative fire is never itself upgraded again)', async () => {
+      mockConsumeStreamJoin.mockReturnValue(new Promise(() => {})); // never resolves naturally
+      const onStreamComplete = vi.fn();
+
+      renderHook(() => useChannelStreamSocket('page-a', { onStreamComplete }));
+      act(() => { mockSocket._trigger('chat:stream_start', START_PAYLOAD); });
+
+      act(() => { mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, aborted: true }); });
+      act(() => { mockSocket._trigger('chat:stream_complete', { ...COMPLETE_PAYLOAD, aborted: false }); });
+
       expect(onStreamComplete).toHaveBeenCalledTimes(1);
+      expect(onStreamComplete.mock.calls[0][3]).toBe(true);
     });
 
     it('given chat:stream_complete fires before SSE resolves, should call onStreamComplete exactly once', async () => {
