@@ -90,6 +90,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OS user can read, credential store included — no CLI feature changes that. The actual isolation
   boundary is a dedicated OS user, container, or VM that receives only a scoped token via
   `PAGESPACE_TOKEN`.
+- **Machine page Files tab** — browse, open, and edit files directly on a Machine's own root
+  filesystem or any branch checkout, with a PageTree-matched file tree (lazy-loaded directories,
+  sorted directories-first) and an editable pane with Monaco language detection, binary-file
+  detection, and Cmd/Ctrl-S save. Right-click or the "+" palette to create files/folders, rename,
+  move, copy, delete, upload (10 MiB cap), or download (50 MiB cap) — every mutation requires edit
+  access and is audited. A machine that hasn't been started yet shows an explicit "not started"
+  state instead of an empty tree.
 
 ### Changed
 
