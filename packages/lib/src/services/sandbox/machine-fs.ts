@@ -169,11 +169,22 @@ export async function writeMachineFile({
   handle,
   path,
   content,
+  noClobber = false,
 }: {
   handle: MachineHandle;
   path: string;
   content: string | Uint8Array;
+  /**
+   * `true` = CREATE semantics: an existing entry at `path` is `already_exists`,
+   * never silently overwritten (the "New File" flow). Default `false` =
+   * overwrite-is-save semantics (editor save, upload). Same `machinePathExists`
+   * guard — and the same benign same-tenant TOCTOU — as move/copy's no-clobber.
+   */
+  noClobber?: boolean;
 }): Promise<MutateMachinePathResult> {
+  if (noClobber && (await machinePathExists(handle, path))) {
+    return { ok: false, reason: 'already_exists' };
+  }
   const lastSlash = path.lastIndexOf('/');
   const parent = lastSlash > 0 ? path.slice(0, lastSlash) : '/';
   if (!(await machineDirectoryExists(handle, parent))) {
@@ -256,12 +267,18 @@ export async function copyMachinePath({
 
 export type MachineScopeCheckResult =
   | { ok: true }
-  | { ok: false; reason: 'escapes'; /** Index into `paths` of the first escaping path. */ index: number }
+  | {
+      ok: false;
+      reason: 'escapes';
+      /** Index into `paths` of the first escaping path, or -1 when the SCOPE ROOT itself resolves outside the boundary. */
+      index: number;
+    }
   | { ok: false; reason: 'exec_failed'; detail?: string };
 
 /**
  * Verify — ON the machine — that each of `paths` still resolves inside
- * `scopeRoot` once symlinks are followed.
+ * `scopeRoot`, AND that the scope root itself still resolves inside
+ * `boundaryRoot`, once symlinks are followed.
  *
  * String confinement (`resolvePathWithinSync`) happens host-side and cannot
  * see the Sprite's filesystem: `/workspace/link/x` passes it even when `link`
@@ -269,9 +286,18 @@ export type MachineScopeCheckResult =
  * machine FOLLOWS that link. This closes the gap by resolving with the
  * machine's own `realpath -m` (`-m` so a not-yet-existing final component —
  * a file about to be created, a move destination — still resolves through its
- * existing prefix) and re-checking containment against the RESOLVED scope
- * root, which is resolved in the same exec so a symlinked root cannot skew
- * the comparison.
+ * existing prefix) and re-checking containment against the RESOLVED roots.
+ *
+ * `boundaryRoot` is the OUTERMOST trust boundary and is what keeps a
+ * symlinked scope root from moving the goalposts: comparing paths against the
+ * resolved scope root alone would bless `/workspace/repo/passwd` when
+ * `/workspace/repo` itself has been replaced by a symlink to `/etc` — the
+ * paths "contain" perfectly, just in the wrong filesystem. Requiring the
+ * resolved scope root to sit inside the resolved boundary (`/workspace`, which
+ * the driver provisions as a real directory) closes that: a scope root that
+ * resolves outside the boundary rejects as an escape (`index: -1`, no single
+ * offending path). When `boundaryRoot === scopeRoot` (root scope) the extra
+ * check is trivially true.
  *
  * Fails CLOSED: any exec failure or unparseable output (e.g. a path containing
  * a newline splits the line-per-path output) rejects rather than allows.
@@ -281,26 +307,30 @@ export type MachineScopeCheckResult =
  */
 export async function verifyMachinePathsWithinScope({
   handle,
+  boundaryRoot,
   scopeRoot,
   paths,
 }: {
   handle: MachineHandle;
+  boundaryRoot: string;
   scopeRoot: string;
   paths: string[];
 }): Promise<MachineScopeCheckResult> {
   if (paths.length === 0) return { ok: true };
-  const run = await handle.exec({ cmd: 'realpath', args: ['-m', '--', scopeRoot, ...paths] });
+  const run = await handle.exec({ cmd: 'realpath', args: ['-m', '--', boundaryRoot, scopeRoot, ...paths] });
   if (run.exitCode !== 0) {
     return { ok: false, reason: 'exec_failed', detail: run.stderr.trim() || undefined };
   }
   const lines = run.stdout.split('\n').filter((line) => line.length > 0);
-  if (lines.length !== paths.length + 1) {
+  if (lines.length !== paths.length + 2) {
     return { ok: false, reason: 'exec_failed', detail: 'unexpected realpath output shape' };
   }
-  const [resolvedRoot, ...resolved] = lines;
-  const index = resolved.findIndex(
-    (p) => p !== resolvedRoot && !p.startsWith(`${resolvedRoot}/`),
-  );
+  const [resolvedBoundary, resolvedRoot, ...resolved] = lines;
+  const within = (child: string, parent: string) => child === parent || child.startsWith(`${parent}/`);
+  if (!within(resolvedRoot, resolvedBoundary)) {
+    return { ok: false, reason: 'escapes', index: -1 };
+  }
+  const index = resolved.findIndex((p) => !within(p, resolvedRoot));
   if (index !== -1) return { ok: false, reason: 'escapes', index };
   return { ok: true };
 }

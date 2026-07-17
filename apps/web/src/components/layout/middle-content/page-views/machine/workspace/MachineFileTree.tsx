@@ -411,9 +411,17 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
         if (pendingDialog.kind === 'create') {
           const { parentPath, entryKind } = pendingDialog;
           const path = joinPath(parentPath, name);
+          // `overwrite: false`: New File is CREATE, not save — a name that
+          // already exists must 409 like folders do, never silently truncate
+          // the existing file to the empty content this request carries.
           const result = await runMutation({
             method: 'POST',
-            body: JSON.stringify({ ...scopeBodyFields(machineId, scope), path, kind: entryKind }),
+            body: JSON.stringify({
+              ...scopeBodyFields(machineId, scope),
+              path,
+              kind: entryKind,
+              ...(entryKind === 'file' ? { overwrite: false } : {}),
+            }),
           });
           if (!result.ok) return;
           invalidate([parentPath]);

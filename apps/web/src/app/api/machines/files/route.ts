@@ -14,9 +14,12 @@
  *   mode=download       → raw bytes, `Content-Disposition: attachment`, for the file `path`
  *
  * POST   { machineId, projectName?, branchName?, path, kind: 'directory' }
- *        { machineId, projectName?, branchName?, path, kind: 'file', content?, encoding? }
- *   Creates a directory, or creates/overwrites a file (overwrite IS allowed —
- *   this is also how "save" works). `path` may not be `''` (the scope root).
+ *        { machineId, projectName?, branchName?, path, kind: 'file', content?, encoding?, overwrite? }
+ *   Creates a directory, or creates/overwrites a file (overwrite IS allowed by
+ *   default — this is also how "save" works). `overwrite: false` switches the
+ *   file arm to CREATE semantics: an existing entry at `path` is a 409, never
+ *   a silent truncation (the "New File" flow). `path` may not resolve to the
+ *   scope root.
  *
  * PATCH  { machineId, projectName?, branchName?, op: 'move' | 'copy', fromPath, toPath }
  *   Moves or copies a path within the same scope. Neither `fromPath` nor
@@ -199,15 +202,29 @@ function scopeRoot(scope: MachineFilesScope): string {
   return scope.scope === 'branch' ? BRANCH_REPO_PATH : SANDBOX_ROOT;
 }
 
-/** Confines one relative path field under the scope root. Returns the confined absolute path, or a 400 response naming `field`. */
+/**
+ * Confines one relative path field under the scope root. Returns the confined
+ * absolute path, or a 400 response naming `field`.
+ *
+ * `forbidRoot` (every mutating verb): reject when the CONFINED result is the
+ * scope root itself. The raw-input non-empty check alone cannot guarantee this
+ * — `resolvePathWithinSync` strips NUL bytes, so a NUL-only `path` (or
+ * anything else that sanitizes to empty) is non-empty on the wire yet resolves
+ * to the scope root, which would let a DELETE reach `rm -rf` on `/workspace`
+ * itself. The refusal must live at the confined level, not the raw level.
+ */
 function confineScopedPath(
   scope: MachineFilesScope,
   relativePath: string,
   field: string,
+  options?: { forbidRoot?: boolean },
 ): { ok: true; value: string } | { ok: false; error: NextResponse } {
   const confined = resolvePathWithinSync(scopeRoot(scope), relativePath);
   if (confined === null) {
     return { ok: false, error: NextResponse.json({ error: `${field} escapes the machine filesystem root` }, { status: 400 }) };
+  }
+  if (options?.forbidRoot && confined === scopeRoot(scope)) {
+    return { ok: false, error: NextResponse.json({ error: `${field} must not be the scope root` }, { status: 400 }) };
   }
   return { ok: true, value: confined };
 }
@@ -233,13 +250,20 @@ async function requireMachinePathsWithinScope(
   if (toCheck.length === 0) return null;
   const result = await verifyMachinePathsWithinScope({
     handle,
+    // SANDBOX_ROOT is the outermost trust boundary regardless of scope: a
+    // branch checkout root replaced by a symlink out of /workspace must reject
+    // as a whole, not re-anchor containment at the link's target.
+    boundaryRoot: SANDBOX_ROOT,
     scopeRoot: scopeRoot(scope),
     paths: toCheck.map((c) => c.path),
   });
   if (result.ok) return null;
   if (result.reason === 'escapes') {
+    // index -1 = the scope root itself escaped the boundary; there is no single
+    // offending field to name.
+    const label = result.index === -1 ? 'path' : toCheck[result.index].field;
     return NextResponse.json(
-      { error: `${toCheck[result.index].field} escapes the machine filesystem root` },
+      { error: `${label} escapes the machine filesystem root` },
       { status: 400 },
     );
   }
@@ -471,11 +495,12 @@ export async function POST(request: Request) {
   if (!scopeResult.ok) return scopeResult.error;
   const scope = scopeResult.scope;
 
-  // Empty rejected by `requireString` too — the scope root can never itself be
-  // the thing being created.
+  // `forbidRoot`, not just `requireString`: a NUL-only (or otherwise
+  // sanitized-to-empty) path is non-empty on the wire yet confines to the
+  // scope root — the root can never itself be the thing being created.
   const rawPath = requireString(body.path, 'path');
   if (!rawPath.ok) return rawPath.error;
-  const confinedPath = confineScopedPath(scope, rawPath.value, 'path');
+  const confinedPath = confineScopedPath(scope, rawPath.value, 'path', { forbidRoot: true });
   if (!confinedPath.ok) return confinedPath.error;
   const path = confinedPath.value;
 
@@ -499,11 +524,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'File is too large to upload', reason: 'too_large' }, { status: 413 });
   }
 
+  // `overwrite: false` = CREATE semantics (the "New File" flow): an existing
+  // entry is a 409, never a silent truncation. Absent/`true` keeps
+  // overwrite-is-save semantics for editor saves and uploads.
+  if (body.overwrite !== undefined && typeof body.overwrite !== 'boolean') {
+    return NextResponse.json({ error: 'overwrite must be a boolean' }, { status: 400 });
+  }
+
   const resolved = await resolveMachineFilesHandle(scope);
   if (!resolved.ok) return resolveDenialResponse(resolved.reason);
   const escape = await requireMachinePathsWithinScope(resolved.handle, scope, [{ field: 'path', path }]);
   if (escape) return escape;
-  const result = await writeMachineFile({ handle: resolved.handle, path, content: decoded.content });
+  const result = await writeMachineFile({
+    handle: resolved.handle,
+    path,
+    content: decoded.content,
+    noClobber: body.overwrite === false,
+  });
   if (!result.ok) return mutateFailureResponse(result, 'The parent folder could not be found');
   auditWrite(request, auth.userId, machineId.value, { op: 'write_file', path: rawPath.value });
   return NextResponse.json({ ok: true });
@@ -541,9 +578,9 @@ export async function PATCH(request: Request) {
   const rawToPath = requireString(body.toPath, 'toPath');
   if (!rawToPath.ok) return rawToPath.error;
 
-  const fromPath = confineScopedPath(scope, rawFromPath.value, 'fromPath');
+  const fromPath = confineScopedPath(scope, rawFromPath.value, 'fromPath', { forbidRoot: true });
   if (!fromPath.ok) return fromPath.error;
-  const toPath = confineScopedPath(scope, rawToPath.value, 'toPath');
+  const toPath = confineScopedPath(scope, rawToPath.value, 'toPath', { forbidRoot: true });
   if (!toPath.ok) return toPath.error;
 
   const resolved = await resolveMachineFilesHandle(scope);
@@ -588,10 +625,11 @@ export async function DELETE(request: Request) {
   if (!scopeResult.ok) return scopeResult.error;
   const scope = scopeResult.scope;
 
-  // Empty rejected by `requireString` too — the scope root is never deleted.
+  // `forbidRoot`, not just `requireString`: a NUL-only path is non-empty on
+  // the wire yet confines to the scope root — the scope root is never deleted.
   const rawPath = requireString(body.path, 'path');
   if (!rawPath.ok) return rawPath.error;
-  const confinedPath = confineScopedPath(scope, rawPath.value, 'path');
+  const confinedPath = confineScopedPath(scope, rawPath.value, 'path', { forbidRoot: true });
   if (!confinedPath.ok) return confinedPath.error;
   const path = confinedPath.value;
 

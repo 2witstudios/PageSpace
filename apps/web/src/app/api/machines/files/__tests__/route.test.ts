@@ -137,6 +137,7 @@ describe('/api/machines/files machine-side symlink confinement', () => {
     expect(await res.json()).toEqual({ error: 'path escapes the machine filesystem root' });
     expect(verifyMachinePathsWithinScope).toHaveBeenCalledWith({
       handle: { machineId: 'sbx-1' },
+      boundaryRoot: '/workspace',
       scopeRoot: '/workspace/repo',
       paths: ['/workspace/repo/link/etc-passwd'],
     });
@@ -160,6 +161,7 @@ describe('/api/machines/files machine-side symlink confinement', () => {
     expect(await res.json()).toEqual({ error: 'toPath escapes the machine filesystem root' });
     expect(verifyMachinePathsWithinScope).toHaveBeenCalledWith({
       handle: { machineId: 'sbx-1' },
+      boundaryRoot: '/workspace',
       scopeRoot: '/workspace/repo',
       paths: ['/workspace/repo/a.txt', '/workspace/repo/link/b.txt'],
     });
@@ -175,6 +177,7 @@ describe('/api/machines/files machine-side symlink confinement', () => {
     expect(await res.json()).toEqual({ error: 'path escapes the machine filesystem root' });
     expect(verifyMachinePathsWithinScope).toHaveBeenCalledWith({
       handle: { machineId: 'sbx-1' },
+      boundaryRoot: '/workspace',
       scopeRoot: '/workspace',
       paths: ['/workspace/link/x.txt'],
     });
@@ -198,6 +201,72 @@ describe('/api/machines/files machine-side symlink confinement', () => {
     expect(res.status).toBe(502);
     const body = await res.json();
     expect(body.reason).toBe('exec_failed');
+    expect(readMachineFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/machines/files confined-root refusal (NUL-only paths)', () => {
+  // `resolvePathWithinSync` strips NUL bytes, so `" "` is non-empty on
+  // the wire yet confines to the scope root — the raw non-empty check alone
+  // would let DELETE reach `rm -rf` on /workspace itself.
+  it('DELETE with a NUL-only path 400s instead of deleting the scope root', async () => {
+    const res = await DELETE(del({ ...BRANCH_BODY, path: ' ' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'path must not be the scope root' });
+    expect(deleteMachinePath).not.toHaveBeenCalled();
+  });
+
+  it('POST with a NUL-only path 400s instead of creating over the scope root', async () => {
+    const res = await POST(post({ ...ROOT_BODY, path: ' ', kind: 'directory' }));
+
+    expect(res.status).toBe(400);
+    expect(createMachineDirectory).not.toHaveBeenCalled();
+  });
+
+  it('PATCH with a NUL-only fromPath 400s naming the field', async () => {
+    const res = await PATCH(patch({ ...BRANCH_BODY, op: 'move', fromPath: ' ', toPath: 'b.txt' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'fromPath must not be the scope root' });
+    expect(moveMachinePath).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/machines/files create-vs-save overwrite semantics', () => {
+  it('overwrite:false reaches writeMachineFile as noClobber and an existing file 409s', async () => {
+    writeMachineFile.mockResolvedValue({ ok: false, reason: 'already_exists' });
+
+    const res = await POST(post({ ...BRANCH_BODY, path: 'exists.txt', kind: 'file', overwrite: false }));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'Something already has that name', reason: 'already_exists' });
+    expect(writeMachineFile).toHaveBeenCalledWith(expect.objectContaining({ noClobber: true }));
+  });
+
+  it('absent overwrite keeps save semantics (noClobber false)', async () => {
+    const res = await POST(post({ ...BRANCH_BODY, path: 'save.txt', kind: 'file', content: 'x' }));
+
+    expect(res.status).toBe(200);
+    expect(writeMachineFile).toHaveBeenCalledWith(expect.objectContaining({ noClobber: false }));
+  });
+
+  it('400s a non-boolean overwrite', async () => {
+    const res = await POST(post({ ...BRANCH_BODY, path: 'a.txt', kind: 'file', overwrite: 'nope' }));
+
+    expect(res.status).toBe(400);
+    expect(writeMachineFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/machines/files symlinked scope-root boundary', () => {
+  it('a scope root resolving outside the boundary (index -1) 400s without touching the filesystem', async () => {
+    verifyMachinePathsWithinScope.mockResolvedValue({ ok: false, reason: 'escapes', index: -1 });
+
+    const res = await GET(get({ mode: 'read', path: 'passwd' }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'path escapes the machine filesystem root' });
     expect(readMachineFile).not.toHaveBeenCalled();
   });
 });

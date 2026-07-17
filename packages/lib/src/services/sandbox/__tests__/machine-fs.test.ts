@@ -279,25 +279,65 @@ describe('writeMachineFile', () => {
     expect(result).toEqual({ ok: false, reason: 'not_found' });
     expect(wrote).toBe(false);
   });
+
+  it('noClobber: returns already_exists WITHOUT writing when something already sits at the path', async () => {
+    let wrote = false;
+    const { handle } = makeExecRecorder((args) =>
+      // The `test -e -o -L` existence guard answers "present"; `test -d` for
+      // the parent would too, but the guard runs first and short-circuits.
+      args.cmd === 'test' ? { exitCode: 0, stdout: '', stderr: '' } : { exitCode: 0, stdout: '', stderr: '' },
+    );
+    const writingHandle = makeHandle({
+      exec: handle.exec,
+      writeFiles: async () => {
+        wrote = true;
+      },
+    });
+
+    const result = await writeMachineFile({ handle: writingHandle, path: '/workspace/exists.txt', content: '', noClobber: true });
+
+    expect(result).toEqual({ ok: false, reason: 'already_exists' });
+    expect(wrote).toBe(false);
+  });
+
+  it('noClobber: proceeds to write when the path is free', async () => {
+    let wrote = false;
+    const { handle, calls } = makeExecRecorder((args) =>
+      args.args?.[0] === '-e' ? { exitCode: 1, stdout: '', stderr: '' } : { exitCode: 0, stdout: '', stderr: '' },
+    );
+    const writingHandle = makeHandle({
+      exec: handle.exec,
+      writeFiles: async () => {
+        wrote = true;
+      },
+    });
+
+    const result = await writeMachineFile({ handle: writingHandle, path: '/workspace/new.txt', content: 'x', noClobber: true });
+
+    expect(result).toEqual({ ok: true });
+    expect(wrote).toBe(true);
+    expect(calls[0]).toEqual({ cmd: 'test', args: ['-e', '/workspace/new.txt', '-o', '-L', '/workspace/new.txt'] });
+  });
 });
 
 describe('verifyMachinePathsWithinScope', () => {
-  it('resolves the scope root and every path in ONE `realpath -m --` exec, in order', async () => {
+  it('resolves boundary, scope root, and every path in ONE `realpath -m --` exec, in order', async () => {
     const { handle, calls } = makeExecRecorder(() => ({
       exitCode: 0,
-      stdout: '/workspace\n/workspace/a\n/workspace/b/c\n',
+      stdout: '/workspace\n/workspace/repo\n/workspace/repo/a\n/workspace/repo/b/c\n',
       stderr: '',
     }));
 
     const result = await verifyMachinePathsWithinScope({
       handle,
-      scopeRoot: '/workspace',
-      paths: ['/workspace/a', '/workspace/b/c'],
+      boundaryRoot: '/workspace',
+      scopeRoot: '/workspace/repo',
+      paths: ['/workspace/repo/a', '/workspace/repo/b/c'],
     });
 
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([
-      { cmd: 'realpath', args: ['-m', '--', '/workspace', '/workspace/a', '/workspace/b/c'] },
+      { cmd: 'realpath', args: ['-m', '--', '/workspace', '/workspace/repo', '/workspace/repo/a', '/workspace/repo/b/c'] },
     ]);
   });
 
@@ -305,13 +345,14 @@ describe('verifyMachinePathsWithinScope', () => {
     const handle = makeHandle({
       exec: async () => ({
         exitCode: 0,
-        stdout: '/workspace\n/workspace/ok\n/etc/passwd\n',
+        stdout: '/workspace\n/workspace\n/workspace/ok\n/etc/passwd\n',
         stderr: '',
       }),
     });
 
     const result = await verifyMachinePathsWithinScope({
       handle,
+      boundaryRoot: '/workspace',
       scopeRoot: '/workspace',
       paths: ['/workspace/ok', '/workspace/link/passwd'],
     });
@@ -319,13 +360,54 @@ describe('verifyMachinePathsWithinScope', () => {
     expect(result).toEqual({ ok: false, reason: 'escapes', index: 1 });
   });
 
-  it('does NOT treat a sibling with the root as a prefix (`/workspace-evil`) as in scope', async () => {
+  it('rejects the whole request (index -1) when the SCOPE ROOT itself resolves outside the boundary', async () => {
+    // /workspace/repo has been replaced with a symlink to /etc: every path
+    // "contains" perfectly under the resolved root — in the wrong filesystem.
     const handle = makeHandle({
-      exec: async () => ({ exitCode: 0, stdout: '/workspace\n/workspace-evil/x\n', stderr: '' }),
+      exec: async () => ({
+        exitCode: 0,
+        stdout: '/workspace\n/etc\n/etc/passwd\n',
+        stderr: '',
+      }),
     });
 
     const result = await verifyMachinePathsWithinScope({
       handle,
+      boundaryRoot: '/workspace',
+      scopeRoot: '/workspace/repo',
+      paths: ['/workspace/repo/passwd'],
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'escapes', index: -1 });
+  });
+
+  it('accepts a scope root that resolves to a symlinked location still INSIDE the boundary', async () => {
+    const handle = makeHandle({
+      exec: async () => ({
+        exitCode: 0,
+        stdout: '/workspace\n/workspace/actual-repo\n/workspace/actual-repo/x\n',
+        stderr: '',
+      }),
+    });
+
+    const result = await verifyMachinePathsWithinScope({
+      handle,
+      boundaryRoot: '/workspace',
+      scopeRoot: '/workspace/repo',
+      paths: ['/workspace/repo/x'],
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('does NOT treat a sibling with the root as a prefix (`/workspace-evil`) as in scope', async () => {
+    const handle = makeHandle({
+      exec: async () => ({ exitCode: 0, stdout: '/workspace\n/workspace\n/workspace-evil/x\n', stderr: '' }),
+    });
+
+    const result = await verifyMachinePathsWithinScope({
+      handle,
+      boundaryRoot: '/workspace',
       scopeRoot: '/workspace',
       paths: ['/workspace/link/x'],
     });
@@ -335,31 +417,14 @@ describe('verifyMachinePathsWithinScope', () => {
 
   it('accepts a path that resolves to exactly the scope root', async () => {
     const handle = makeHandle({
-      exec: async () => ({ exitCode: 0, stdout: '/workspace\n/workspace\n', stderr: '' }),
+      exec: async () => ({ exitCode: 0, stdout: '/workspace\n/workspace\n/workspace\n', stderr: '' }),
     });
 
     const result = await verifyMachinePathsWithinScope({
       handle,
+      boundaryRoot: '/workspace',
       scopeRoot: '/workspace',
       paths: ['/workspace/link-to-root'],
-    });
-
-    expect(result).toEqual({ ok: true });
-  });
-
-  it('compares against the RESOLVED root, so a symlinked scope root cannot skew containment', async () => {
-    const handle = makeHandle({
-      exec: async () => ({
-        exitCode: 0,
-        stdout: '/mnt/real-workspace\n/mnt/real-workspace/repo/x\n',
-        stderr: '',
-      }),
-    });
-
-    const result = await verifyMachinePathsWithinScope({
-      handle,
-      scopeRoot: '/workspace',
-      paths: ['/workspace/repo/x'],
     });
 
     expect(result).toEqual({ ok: true });
@@ -370,17 +435,27 @@ describe('verifyMachinePathsWithinScope', () => {
       exec: async () => ({ exitCode: 1, stdout: '', stderr: 'realpath: not found' }),
     });
 
-    const result = await verifyMachinePathsWithinScope({ handle, scopeRoot: '/workspace', paths: ['/workspace/a'] });
+    const result = await verifyMachinePathsWithinScope({
+      handle,
+      boundaryRoot: '/workspace',
+      scopeRoot: '/workspace',
+      paths: ['/workspace/a'],
+    });
 
     expect(result).toEqual({ ok: false, reason: 'exec_failed', detail: 'realpath: not found' });
   });
 
   it('fails CLOSED as exec_failed when the output line count does not match (e.g. a newline in a path)', async () => {
     const handle = makeHandle({
-      exec: async () => ({ exitCode: 0, stdout: '/workspace\n/workspace/a\n/workspace/b\n', stderr: '' }),
+      exec: async () => ({ exitCode: 0, stdout: '/workspace\n/workspace\n/workspace/a\n/workspace/b\n', stderr: '' }),
     });
 
-    const result = await verifyMachinePathsWithinScope({ handle, scopeRoot: '/workspace', paths: ['/workspace/a'] });
+    const result = await verifyMachinePathsWithinScope({
+      handle,
+      boundaryRoot: '/workspace',
+      scopeRoot: '/workspace',
+      paths: ['/workspace/a'],
+    });
 
     expect(result).toEqual({ ok: false, reason: 'exec_failed', detail: 'unexpected realpath output shape' });
   });
@@ -388,7 +463,12 @@ describe('verifyMachinePathsWithinScope', () => {
   it('short-circuits ok with zero execs for an empty path list', async () => {
     const { handle, calls } = makeExecRecorder(() => ({ exitCode: 0, stdout: '', stderr: '' }));
 
-    const result = await verifyMachinePathsWithinScope({ handle, scopeRoot: '/workspace', paths: [] });
+    const result = await verifyMachinePathsWithinScope({
+      handle,
+      boundaryRoot: '/workspace',
+      scopeRoot: '/workspace',
+      paths: [],
+    });
 
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([]);

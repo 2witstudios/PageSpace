@@ -826,6 +826,29 @@ describe('MachineFileTree', () => {
       });
     });
 
+    test('New File sends overwrite:false so an existing name 409s instead of truncating the file', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      renderTree({ scope: { kind: 'root' } });
+      await expandFolder('src');
+      await waitFor(() => screen.getByText('index.ts'));
+
+      fireEvent.contextMenu(screen.getByText('src'));
+      await userEvent.click(await waitFor(() => screen.getByText('New File')));
+      await userEvent.type(screen.getByLabelText('Name'), 'notes.txt');
+      await userEvent.click(screen.getByText('Save'));
+
+      await waitFor(() => {
+        if (calls.length < 1) throw new Error('create not posted yet');
+      });
+      assert({
+        given: 'a file created through the New File dialog',
+        should: 'POST with overwrite:false — create semantics, never silent truncation of an existing file',
+        actual: (calls[0].body as Record<string, unknown>).overwrite,
+        expected: false,
+      });
+    });
+
     test('a file whose read fails is skipped with its own toast and the rest of the batch still uploads', async () => {
       const calls: MutationCall[] = [];
       cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
