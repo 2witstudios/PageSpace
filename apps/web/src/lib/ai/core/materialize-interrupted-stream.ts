@@ -5,9 +5,12 @@ import { chatMessages } from '@pagespace/db/schema/core';
 import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { broadcastAiStreamComplete } from '@/lib/websocket';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 /**
@@ -80,6 +83,49 @@ export interface MaterializableStreamRow {
  * misreporting bug (a log that attests to nothing) this module's sibling functions already
  * guard against.
  */
+/**
+ * Best-effort mirror of the finalize path's mention notifications for a page-chat reply this
+ * sweep just materialized. The normal path (saveMessageToDatabase, message-utils.ts) fires
+ * `notifyMentionedUsers` for an assistant save when the route's gate passes — the page has a
+ * driveId, a user triggered the generation, and the conversation is explicitly shared. A dead
+ * stream's materialization is the same terminal assistant write arriving by a different door,
+ * so it re-derives that exact gate here (the route's in-memory `page` / `isConversationShared`
+ * are gone with the dead process): page lookup for driveId + title (title doubles as the
+ * mentioner name, same as the route's `mentionerName: page.title`), conversation lookup for
+ * `isShared` — a missing row fails closed as private, matching the route's own comment.
+ *
+ * Best-effort by design: a failure here (lookup or notify) is warned, never propagated — the
+ * reply itself was already durably materialized, and a notification must never un-succeed that.
+ * Global-assistant rows never reach this (a global conversation has no page mention surface,
+ * and the global save path has no mentionNotify seam either).
+ */
+const notifyMentionsBestEffort = async (row: MaterializableStreamRow, content: string): Promise<void> => {
+  try {
+    // The same readers the live paths use (never re-derived selects, per the reuse rail):
+    // pageRepository.findById excludes trashed pages by default, so a page trashed between
+    // stream death and this reap can't page drive members about content they can no longer
+    // open; getConversation is the route's own source of isConversationShared.
+    const page = await pageRepository.findById(row.channelId);
+    if (!page) return;
+
+    const conversation = await conversationRepository.getConversation(row.conversationId);
+    if (conversation?.isShared !== true) return;
+
+    await notifyMentionedUsers({
+      content,
+      pageId: row.channelId,
+      driveId: page.driveId,
+      triggeredByUserId: row.userId,
+      mentionerNameOverride: page.title,
+    });
+  } catch (error) {
+    loggers.ai.warn('materializeInterruptedStream: mention notification failed (best-effort)', {
+      messageId: row.messageId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
+};
+
 export const materializeInterruptedStream = async (row: MaterializableStreamRow): Promise<boolean> => {
   const now = new Date();
 
@@ -129,7 +175,7 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
           setWhere: eq(messages.status, 'streaming'),
         });
     } else {
-      await db
+      const written = await db
         .insert(chatMessages)
         .values({
           id: row.messageId,
@@ -158,7 +204,22 @@ export const materializeInterruptedStream = async (row: MaterializableStreamRow)
             status: 'interrupted',
           },
           setWhere: eq(chatMessages.status, 'streaming'),
-        });
+        })
+        // `.returning` reports whether the CAS actually landed. When it returns nothing, the
+        // row already left 'streaming' via one of the route's own terminal writes (execute-end,
+        // onFinish, or its outer-catch cleanup) — and the route guarantees whichever of those
+        // lands first carries this exact notification behind the same gate (`mentionNotifyFor`
+        // + its once-flag, route.ts; Codex P2 on PR #2097) — so notifying again here would
+        // double-page the mentioned user for one reply.
+        .returning({ id: chatMessages.id });
+
+      // Same gate order as saveMessageToDatabase: assistant role is implicit here, and the
+      // content.trim() check keeps an empty recovered reply (no parts survived) from paying for
+      // two gate lookups that can never produce a mention. Fire-and-forget, like the finalize
+      // path's own `void notifyMentionedUsers` — the helper never rejects (it catches and warns).
+      if (written.length > 0 && payload.content.trim()) {
+        void notifyMentionsBestEffort(row, payload.content);
+      }
     }
   } catch (error) {
     loggers.ai.warn('materializeInterruptedStream: message upsert failed', {

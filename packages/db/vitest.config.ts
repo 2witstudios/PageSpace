@@ -34,10 +34,20 @@ export default defineConfig({
         '**/node_modules/**',
       ],
       thresholds: {
+        // The /* ratchet:start */.../* ratchet:end */ markers are load-bearing:
+        // ../../scripts/coverage-ratchet.mjs rewrites only the four scalars between
+        // them. Without the markers its plain-regex fallback would stop at the
+        // per-glob sub-object's first `}` below and corrupt this block. Do not
+        // remove/move the markers, and do not add new scalar thresholds inside them.
+        /* ratchet:start */
         lines: 77,
         branches: 94,
         functions: 0,
         statements: 77,
+        /* ratchet:end */
+        // Advisory-lock primitive (Server Stream Durability epic, R.4 remediation):
+        // the lock/unlock/destroy decision paths are gated at 100% branch.
+        'src/advisory-lock.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
       },
     },
   },

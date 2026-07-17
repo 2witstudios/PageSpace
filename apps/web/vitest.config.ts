@@ -67,6 +67,11 @@ export default defineConfig({
         // #2022 never-overwrite-complete guard — gated at 100% branch per the epic's own
         // constraints.
         'src/lib/ai/core/materialize-interrupted-stream.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Server Stream Durability PR 5 (R.4 remediation): checkpoint shaping and the
+        // join-404 poll fallback are pure/leaf decision modules gated at 100% branch,
+        // same as materialize-interrupted-stream above.
+        'src/lib/ai/core/checkpoint-serialize.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        'src/lib/ai/core/stream-join-poll-fallback.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/useConversationMessagesStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/usePendingStreamsStore.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/stores/conversationMessages/*.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
