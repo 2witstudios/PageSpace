@@ -56,6 +56,25 @@ describe('synthesizeAssistantMessage', () => {
     expect('createdAt' in msg).toBe(false);
   });
 
+  // Epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): a live-open tab whose stream is
+  // interrupted (crash reap, or an ordinary Stop) must badge it immediately, not
+  // only after the next reload — mirrors createdAt's "set when known, omit
+  // otherwise" convention.
+  it('given status "interrupted", should attach it to the synthesized message', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [{ type: 'text' as const, text: 'hi' }], undefined, 'interrupted');
+    expect(msg.status).toBe('interrupted');
+  });
+
+  it('given status "complete", should attach it to the synthesized message', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [], undefined, 'complete');
+    expect(msg.status).toBe('complete');
+  });
+
+  it('given no status, should omit it entirely (not set it to undefined) — a live-streaming synthesis has no terminal status yet', () => {
+    const msg = synthesizeAssistantMessage('msg-1', []);
+    expect('status' in msg).toBe(false);
+  });
+
   it('given the same input twice, should produce structurally equal messages but referentially independent parts arrays', () => {
     const parts = [{ type: 'text' as const, text: 'hi' }];
     const a = synthesizeAssistantMessage('msg-1', parts);
