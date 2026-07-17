@@ -8,6 +8,7 @@ import { applyConversationEdit } from '@/stores/conversationMessages/applyConver
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
+import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 
@@ -87,8 +88,20 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   applyServerSnapshot: (conversationId, messages) => {
     set((state) => {
+      // The snapshot was FETCHED before this call (unlike startLoad's contract, where
+      // the fetch starts after), so live mutations recorded while it was in flight are
+      // NEWER than the snapshot — replay them onto it instead of letting the generation
+      // bump clear them, or an older recovery snapshot resurrects a message another tab
+      // just deleted (CodeRabbit P2, PR #2098).
+      const pendingSinceFetch = state.byConversationId[conversationId]?.pendingMutationsSinceLoad ?? [];
       const { byConversationId, generation } = applyStartLoad(state.byConversationId, conversationId);
-      return { byConversationId: applyLoad(byConversationId, { conversationId, generation, messages }) };
+      return {
+        byConversationId: applyLoad(byConversationId, {
+          conversationId,
+          generation,
+          messages: replayPendingMutations(messages, pendingSinceFetch),
+        }),
+      };
     });
   },
 

@@ -38,6 +38,27 @@ describe('useConversationMessagesStore', () => {
     expect(getEntry('c1').messages).toEqual([msg('snapshot')]);
   });
 
+  it('given a live delete recorded while the snapshot fetch was in flight, applyServerSnapshot must not resurrect the deleted message', () => {
+    // The snapshot was FETCHED before this call, so a mutation recorded in the
+    // window between fetch and commit is newer than the snapshot — it must be
+    // replayed onto it, not cleared by the generation bump (CodeRabbit P2, PR #2098).
+    const { startLoad, applyLoad, applyDelete, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    applyLoad('c1', gen, [msg('m1'), msg('m2')]);
+    // tryRecover's fetch is in flight; another tab deletes m2 (recorded as a pending mutation).
+    applyDelete('c1', 'm2');
+    // The recovery snapshot resolves — it still contains m2.
+    applyServerSnapshot('c1', [msg('m1'), msg('m2')]);
+    expect(getEntry('c1').messages).toEqual([msg('m1')]);
+  });
+
+  it('given a live remote append recorded while the snapshot fetch was in flight, applyServerSnapshot must keep it', () => {
+    const { applyRemoteUserMessage, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    applyRemoteUserMessage('c1', msg('live-append'));
+    applyServerSnapshot('c1', [msg('m1')]);
+    expect(getEntry('c1').messages).toEqual([msg('m1'), msg('live-append')]);
+  });
+
   it('given applyServerSnapshot containing an optimistic send id, should reconcile it out of optimisticSends', () => {
     const { addOptimisticSend, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
     addOptimisticSend('c1', msg('opt1'));
