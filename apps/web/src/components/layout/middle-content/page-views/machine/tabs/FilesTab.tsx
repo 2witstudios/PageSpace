@@ -37,10 +37,10 @@ import FilesFilePane from './FilesFilePane';
 import TabSidebar from './TabSidebar';
 import { PaneNotice, SidebarLoading, SidebarNotice } from './tab-states';
 import {
-  CHECKOUT_ABSENT_COPY,
+  FILES_ABSENT_COPY,
   asAbsentReason,
   readErrorBody,
-  type CheckoutAbsentReason,
+  type FilesAbsentReason,
 } from './checkout-states';
 
 interface FilesTabProps {
@@ -153,7 +153,7 @@ export default function FilesTab({ machineId }: FilesTabProps) {
 type CheckoutState =
   | { status: 'loading' }
   | { status: 'ready' }
-  | { status: 'absent'; reason: CheckoutAbsentReason }
+  | { status: 'absent'; reason: FilesAbsentReason }
   | { status: 'error'; message: string };
 
 /**
@@ -239,7 +239,7 @@ function BranchFiles({
   const retry = () => setAttempt((a) => a + 1);
 
   if (state.status === 'absent') {
-    const copy = CHECKOUT_ABSENT_COPY[state.reason];
+    const copy = FILES_ABSENT_COPY[state.reason];
     return (
       <SidebarNotice
         testId="checkout-absent"
