@@ -565,7 +565,7 @@ export function BroadcastComposer() {
                 <AlertTitle>Already sending</AlertTitle>
                 <AlertDescription className="space-y-2">
                   <p>
-                    A broadcast with this subject is already in flight.{" "}
+                    {sendError ?? "A broadcast with this subject is already in flight."}{" "}
                     <Link href={`/broadcasts/${duplicateOf}`} className="underline">View it</Link>.
                   </p>
                   <label className="flex items-center gap-2">
@@ -611,7 +611,7 @@ export function BroadcastComposer() {
           </span>
         }
         confirmLabel="Send now"
-        reasonLabel="Confirmation note — why are you sending this now?"
+        requireReason={false}
         typedConfirmation={{
           expected: String(preview?.audienceCount ?? 0),
           label: `Type the recipient count (${preview?.audienceCount ?? 0}) to confirm`,

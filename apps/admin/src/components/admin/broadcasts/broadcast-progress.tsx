@@ -11,12 +11,7 @@ import { ConfirmActionDialog, type ConfirmActionValues } from "@/components/admi
 import { useAdminQuery } from "@/hooks/use-admin-query";
 import { post } from "@/lib/auth/auth-fetch";
 import { num } from "@/lib/format";
-import { isTerminalStatus, type BroadcastDetail } from "@/components/admin/broadcasts/types";
-
-// 'failed' is active, not settled — the worker rethrows on a retryable
-// failure so pg-boss can resume the same row, and the API's cancel guard
-// (INTERVENTION_BLOCKED_STATES) never blocks cancelling it for that reason.
-const ACTIVE_STATUSES = ["pending", "queued", "in_progress", "paused", "failed"];
+import { isPollingSettled, isTerminalStatus, type BroadcastDetail } from "@/components/admin/broadcasts/types";
 
 const STEP_ICON = {
   ok: CheckCircle2,
@@ -39,7 +34,7 @@ export function BroadcastProgress({ broadcastId }: { broadcastId: string }) {
   );
 
   useEffect(() => {
-    if (data && isTerminalStatus(data.status) && refreshInterval !== 0) {
+    if (data && isPollingSettled(data.status, data.blockedReason) && refreshInterval !== 0) {
       setRefreshInterval(0);
     }
   }, [data, refreshInterval]);
@@ -58,7 +53,7 @@ export function BroadcastProgress({ broadcastId }: { broadcastId: string }) {
     }
   }
 
-  const canCancel = !!data && ACTIVE_STATUSES.includes(data.status);
+  const canCancel = !!data && !isTerminalStatus(data.status);
 
   return (
     <div className="space-y-6">
