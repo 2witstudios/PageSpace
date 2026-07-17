@@ -1,4 +1,4 @@
-import type { TerminalSessionMap, TerminalSession } from './terminal-session-map';
+import type { TerminalSessionMap, TerminalSession, TerminalViewer } from './terminal-session-map';
 import { DETACHED_IDLE_MS, appendScrollback, broadcastOutput, broadcastClosed } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
@@ -342,9 +342,13 @@ function teardownAgentTerminalSession(
  * different scopes need it: a pane's own socket handler on disconnect, and the
  * session's re-auth interval evicting a viewer who attached on a DIFFERENT
  * socket. The eviction leaves that other socket's `activeConnectionIds` entry
- * stale, which is harmless: `onInput`/`onResize` also require the `bySocket`
- * binding this removes, so a revoked viewer's keystrokes no-op, and their
- * eventual disconnect finds no session and cleans the set.
+ * stale, which is harmless for the PTY: `onInput`/`onResize` also require the
+ * `bySocket` binding this removes, so a revoked viewer's keystrokes no-op, and
+ * their eventual disconnect finds no session and cleans the set. One residue
+ * remains (shared with the pre-#2093 whole-session teardown): a later connect
+ * on that same socket REUSING the evicted connectionId hits the
+ * "already in use" guard until the pane disconnects — the real client never
+ * does this (a fresh UUID per mount, and a dead pane refuses to re-bind).
  */
 function removeViewer(
   billing: SandboxBillingDeps | undefined,
@@ -392,6 +396,32 @@ function removeViewer(
     endAgentTerminalSession(billing, sessionMap, session, sessionKey);
     loggers.realtime.info('Agent terminal session reaped (idle)', { sessionKey, sandboxId: session.sandboxId });
   }, DETACHED_IDLE_MS);
+}
+
+/**
+ * Kick ONE viewer off a live session — the re-auth tick's move when that
+ * viewer's access was revoked while the PTY keeps running for everyone else.
+ * Notify-then-remove, as one operation, so no future eviction site can remove
+ * a viewer and forget to tell their pane why output just stopped.
+ *
+ * The notification is `agent-terminal:error` with a reason, NOT
+ * `agent-terminal:closed`: closed means "the process exited", and for an
+ * eviction that is false — the agent is still running and other panes still
+ * show it live. The client treats both the same way mechanically (pane goes
+ * dead, editing lock released), so the only difference is that the user reads
+ * the truth ("access revoked") instead of a phantom crash ("exited with code
+ * -2") for a process that did not exit.
+ */
+function evictViewer(
+  billing: SandboxBillingDeps | undefined,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  viewerKey: string,
+  viewer: TerminalViewer,
+  reason: string,
+): void {
+  viewer.emitError(reason);
+  removeViewer(billing, sessionMap, session, viewerKey);
 }
 
 /**
@@ -795,6 +825,19 @@ export function buildAgentTerminalHandlers({
   }
 
   /**
+   * The one place a viewer entry is built — the create path registers the
+   * creator through this too, so the wire contract (two event names, two
+   * payload shapes, the connectionId tag the client routes panes by) is
+   * spelled exactly once and joiner panes can never drift from creator panes.
+   */
+  const makeViewer = (connectionId: string, userId: string): TerminalViewer => ({
+    userId,
+    emitOutput: (data) => socket.emit('agent-terminal:output', { data, connectionId }),
+    emitClosed: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
+    emitError: (message) => socket.emit('agent-terminal:error', { message, connectionId }),
+  });
+
+  /**
    * JOIN this connection to an ALREADY-RUNNING session and hand the viewer its
    * buffered scrollback: cancel any pending idle reap, add a viewer entry for
    * this socket+pane, and add its socket binding. Reserves nothing and touches
@@ -807,21 +850,29 @@ export function buildAgentTerminalHandlers({
    * and a cold-path racer that lost a double-mount (see `onConnect`) — both are
    * "someone else's PTY is already live under this key; join it".
    */
-  function attachToLiveSession(session: TerminalSession, sessionKey: string, connectionId: string, viewerUserId: string) {
+  function attachToLiveSession(session: TerminalSession, connectionId: string, viewerUserId: string) {
+    // Registration first, and all three tracking structures in one
+    // uninterrupted block: the registry entry, its socket binding, and this
+    // socket's connection set are pure Map/Set writes that cannot throw, so
+    // the viewer is either fully tracked or not tracked at all. The fallible
+    // calls (the shell resume, the task-hold tick) come AFTER — if one of
+    // them throws, every tracking entry exists and an ordinary disconnect
+    // still collects this viewer. The reverse order would leave a GHOST: a
+    // registry entry in no tracking set, which nothing can ever remove, so
+    // `viewers.size` never returns to zero and the last-viewer transition —
+    // the reap, the slot release, the billing settle behind it — never fires
+    // for the life of the process.
+    session.viewers.set(socketKey(connectionId), makeViewer(connectionId, viewerUserId));
+    sessionMap.addBinding(session.sessionKey, socketKey(connectionId));
+    activeConnectionIds.add(connectionId);
     if (session.idleTimer !== undefined) {
       clearTimeout(session.idleTimer);
       session.idleTimer = undefined;
     }
     // The most recent attacher — the identity the re-auth tick falls back to
     // while the session is detached. Attached viewers are each checked
-    // individually off the registry entry added here.
+    // individually off the registry entry added above.
     session.lastViewerUserId = viewerUserId;
-    session.viewers.set(socketKey(connectionId), {
-      userId: viewerUserId,
-      connectionId,
-      emitOutput: (data) => socket.emit('agent-terminal:output', { data, connectionId }),
-      emitClosed: (exitCode) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
-    });
     // A viewer is here: let the shell reattach lazily if its watchdog went quiet
     // while detached (sprites-shell.ts's `setViewerAttached`) — a no-op when a
     // live viewer already has the connection up, since output is already flowing.
@@ -847,8 +898,6 @@ export function buildAgentTerminalHandlers({
       lastActivityAt: latestActivityAt(session),
       activityObservable: true,
     });
-    sessionMap.addBinding(sessionKey, socketKey(connectionId));
-    activeConnectionIds.add(connectionId);
     // `resumed` says the agent was ALREADY DOING THINGS before this connect, so a
     // client holding a starting prompt must not type it. Asking `hasOutput` rather
     // than "is the scrollback non-empty": one chunk over the scrollback cap is
@@ -900,7 +949,7 @@ export function buildAgentTerminalHandlers({
       // away from whoever has it (a live pane, or a pending reap) on behalf of a
       // socket that no longer exists — see `abandoned`.
       if (abandoned(connectionId)) return;
-      attachToLiveSession(plan.session, sessionKey, connectionId, userId);
+      attachToLiveSession(plan.session, connectionId, userId);
       return;
     }
 
@@ -922,7 +971,7 @@ export function buildAgentTerminalHandlers({
         // Same as the reattach path: a pane that has left must not take the session
         // the creator is watching. The creator settles its own abandonment.
         if (abandoned(connectionId)) return;
-        attachToLiveSession(created, sessionKey, connectionId, userId);
+        attachToLiveSession(created, connectionId, userId);
         return;
       }
       // That create failed and installed nothing — see if another is in flight,
@@ -1049,17 +1098,7 @@ export function buildAgentTerminalHandlers({
         // The creator is viewer #1, registered in the literal — BEFORE
         // `openShell` — so output arriving between the shell opening and
         // `setNew` still reaches their pane (`onOutput` reads `viewers` live).
-        viewers: new Map([
-          [
-            socketKey(connectionId),
-            {
-              userId,
-              connectionId,
-              emitOutput: (data: string) => socket.emit('agent-terminal:output', { data, connectionId }),
-              emitClosed: (exitCode: number) => socket.emit('agent-terminal:closed', { exitCode, connectionId }),
-            },
-          ],
-        ]),
+        viewers: new Map([[socketKey(connectionId), makeViewer(connectionId, userId)]]),
         scrollback: [],
         hasOutput: false,
         // The launch itself is the session's first activity: an agent booted
@@ -1216,73 +1255,97 @@ export function buildAgentTerminalHandlers({
       // revoked would keep receiving output because someone else, still
       // authorized, was the one being checked. So every attached viewer is
       // checked (once per DISTINCT userId — two panes of one user are one DB
-      // check) and a failing viewer is evicted INDIVIDUALLY: their pane gets the
-      // same `closed`/-2 a whole-session teardown sends, their registry entry and
-      // socket binding go, and everyone else streams on uninterrupted. Their
-      // socket's own `activeConnectionIds` entry goes stale, which is harmless —
-      // see `removeViewer`.
+      // check) and a failing viewer is evicted INDIVIDUALLY (`evictViewer`):
+      // their pane learns why, their registry entry and socket binding go, and
+      // everyone else streams on uninterrupted. Their socket's own
+      // `activeConnectionIds` entry goes stale, which is harmless — see
+      // `removeViewer`. While DETACHED the tick keeps running DB-only checks
+      // against the LAST attacher — whoever was watching when the session went
+      // dark — because the PTY/agent process a detached session leaves running
+      // is not idle just because its viewers left, and a revoked user's
+      // still-running process must not get to keep executing, unsupervised,
+      // until the 30-min idle reap. (Skipping the check while detached would
+      // also buy nothing toward Sprite pause/billing — an open exec session
+      // already counts as Sprite activity on its own, per
+      // docs.sprites.dev/concepts/lifecycle.) And when the eviction loop
+      // empties the viewer set and the last attacher is among the revoked, the
+      // session is torn down IMMEDIATELY — same latency as the pre-#2093
+      // whole-session teardown, no one-tick grace for an unsupervised revoked
+      // process.
       //
-      // A `checkAuth` that THROWS (a transient DB blip) evicts nobody this tick —
-      // deliberately fail-open, as this tick has always been: revocation is a
-      // verdict, not an error, and a blip must not kick live viewers.
+      // A `checkAuth` that THROWS (a transient DB blip) revokes nobody this
+      // tick — deliberately fail-open, in BOTH the attached and detached
+      // shapes: revocation is a verdict, not an error, and a blip must not
+      // kick live viewers or kill a detached session. (An uncaught throw here
+      // would be worse than a wrong verdict: an async interval callback's
+      // rejection is unhandled, and this process installs no unhandledRejection
+      // hook, so one DB blip would take down every session on the replica.)
+      //
+      // `reauthing` mirrors `startSettleHeartbeat`'s `settling` guard: an
+      // async interval body can outlive its own cadence when the DB is slow,
+      // and overlapping ticks would stack redundant per-user auth queries onto
+      // the very DB that is already struggling.
+      let reauthing = false;
       const reAuthInterval = setInterval(async () => {
         const liveSession = sessionMap.getByKey(sessionKey);
         if (!liveSession) { clearInterval(reAuthInterval); return; }
-        const attachedViewers = [...liveSession.viewers.entries()];
+        if (reauthing) return;
+        reauthing = true;
+        try {
+          const attachedViewers = [...liveSession.viewers.entries()];
+          const userIds = attachedViewers.length > 0
+            ? [...new Set(attachedViewers.map(([, viewer]) => viewer.userId))]
+            : [liveSession.lastViewerUserId];
 
-        if (attachedViewers.length === 0) {
-          // Keeps ticking DB-only checks while DETACHED too, deliberately: the
-          // PTY/agent process a detached session leaves running is not idle
-          // just because its viewers left, and a revoked user's still-running
-          // process must not get to keep executing, unsupervised, until the
-          // 30-min idle reap. Skipping the check while detached would also buy
-          // nothing toward Sprite pause/billing — an open exec session already
-          // counts as Sprite activity on its own (docs.sprites.dev/concepts/
-          // lifecycle), independent of this tick's cadence. The identity checked
-          // is the LAST attacher — whoever was watching when the session went
-          // dark. Note the ≤60s grace this implies: when re-auth evicts the last
-          // viewer, `removeViewer` records them as the last attacher, so the
-          // NEXT detached tick fails for them and tears the session down —
-          // unless a still-authorized viewer rejoins first, which legitimately
-          // saves it.
-          const result = await checkAuth({ userId: liveSession.lastViewerUserId, machineId, projectName, branchName, name });
-          // Re-check liveness after the await: another actor (heartbeat insolvency,
-          // PTY exit, idle reap) may have torn the session down while checkAuth ran —
-          // acting on the stale reference would double kill/broadcast.
-          if (sessionMap.getByKey(sessionKey) !== liveSession) {
-            clearInterval(reAuthInterval);
-            return;
-          }
-          if (!result.ok) {
-            teardownAgentTerminalSession(billing, sessionMap, liveSession, sessionKey, -2);
-          }
-          return;
-        }
-
-        const userIds = [...new Set(attachedViewers.map(([, viewer]) => viewer.userId))];
-        const verdicts = new Map(
+          const revoked = new Set<string>();
           await Promise.all(
             userIds.map(async (uid) => {
               try {
                 const result = await checkAuth({ userId: uid, machineId, projectName, branchName, name });
-                return [uid, result.ok] as const;
-              } catch {
-                return [uid, true] as const; // fail-open — see above
+                if (!result.ok) revoked.add(uid);
+              } catch (error) {
+                // Fail-open — see above. Absent from `revoked` can only ever
+                // mean "not revoked", so an error needs no sentinel encoding.
+                loggers.realtime.warn('Agent terminal re-auth check failed; keeping viewer this tick', {
+                  sessionKey,
+                  error: error instanceof Error ? error.message : String(error),
+                });
               }
             }),
-          ),
-        );
-        if (sessionMap.getByKey(sessionKey) !== liveSession) {
-          clearInterval(reAuthInterval);
-          return;
-        }
-        for (const [viewerKey, viewer] of attachedViewers) {
-          if (verdicts.get(viewer.userId) !== false) continue;
-          // Still the SAME viewer entry? It may have detached during the await —
-          // and a same-key rejoin is a fresh object, checked next tick.
-          if (liveSession.viewers.get(viewerKey) !== viewer) continue;
-          viewer.emitClosed(-2);
-          removeViewer(billing, sessionMap, liveSession, viewerKey);
+          );
+
+          // Re-check liveness after the await: another actor (heartbeat
+          // insolvency, PTY exit, idle reap) may have torn the session down
+          // while checkAuth ran — acting on the stale reference would double
+          // kill/broadcast.
+          if (sessionMap.getByKey(sessionKey) !== liveSession) {
+            clearInterval(reAuthInterval);
+            return;
+          }
+
+          for (const [viewerKey, viewer] of attachedViewers) {
+            if (!revoked.has(viewer.userId)) continue;
+            // Still the SAME viewer entry? It may have detached during the await —
+            // and a same-key rejoin is a fresh object, checked next tick.
+            if (liveSession.viewers.get(viewerKey) !== viewer) continue;
+            evictViewer(billing, sessionMap, liveSession, viewerKey, viewer, 'Machine access revoked');
+          }
+
+          // Whole-session teardown ONLY with nobody watching: re-derived from
+          // the live registry, not the pre-await snapshot, because an
+          // authorized viewer can join DURING the checkAuth round-trip
+          // (attachToLiveSession runs synchronously off another socket's
+          // event) — the session object is unchanged so the identity guard
+          // above cannot see them, and killing the PTY under a fully
+          // authorized, just-joined pane would be exactly the takeover-era
+          // harm this PR removes. If viewers exist now, they were either
+          // checked this tick (and the revoked ones evicted) or they joined
+          // mid-check and are checked next tick.
+          if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerUserId)) {
+            teardownAgentTerminalSession(billing, sessionMap, liveSession, sessionKey, -2);
+          }
+        } finally {
+          reauthing = false;
         }
       }, 60_000);
 

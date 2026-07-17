@@ -9,8 +9,8 @@ import {
   type TerminalViewer,
 } from '../terminal-session-map';
 
-function fakeViewer(connectionId = 'conn1', userId = 'user1'): TerminalViewer {
-  return { userId, connectionId, emitOutput: vi.fn(), emitClosed: vi.fn() };
+function fakeViewer(userId = 'user1'): TerminalViewer {
+  return { userId, emitOutput: vi.fn(), emitClosed: vi.fn(), emitError: vi.fn() };
 }
 
 function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
@@ -235,10 +235,10 @@ describe('cold-create serialization (trackCreate / pendingCreate)', () => {
 describe('broadcastOutput / broadcastClosed', () => {
   it('given N viewers, broadcastOutput fans the chunk out to every one of them', () => {
     const session = fakeSession();
-    const a = fakeViewer('conn-a', 'user1');
-    const b = fakeViewer('conn-b', 'user2');
-    session.viewers.set('sockA conn-a', a);
-    session.viewers.set('sockB conn-b', b);
+    const a = fakeViewer('user1');
+    const b = fakeViewer('user2');
+    session.viewers.set('sockA conn-a', a);
+    session.viewers.set('sockB conn-b', b);
 
     broadcastOutput(session, 'hello');
 
@@ -248,10 +248,10 @@ describe('broadcastOutput / broadcastClosed', () => {
 
   it('given N viewers, broadcastClosed fans the exit out to every one of them', () => {
     const session = fakeSession();
-    const a = fakeViewer('conn-a', 'user1');
-    const b = fakeViewer('conn-b', 'user2');
-    session.viewers.set('sockA conn-a', a);
-    session.viewers.set('sockB conn-b', b);
+    const a = fakeViewer('user1');
+    const b = fakeViewer('user2');
+    session.viewers.set('sockA conn-a', a);
+    session.viewers.set('sockB conn-b', b);
 
     broadcastClosed(session, 0);
 

@@ -891,8 +891,9 @@ describe('buildAgentTerminalHandlers', () => {
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
-      // user2's pane got the same closed/-2 a whole-session teardown sends…
-      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock2' });
+      // user2's pane is told the truth — an eviction, not a phantom process
+      // exit (the PTY is still running for user1)…
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:error', { message: 'Machine access revoked', connectionId: 'sock2' });
       // …but the session is alive and user1 is untouched.
       expect(shell.kill).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
@@ -907,22 +908,87 @@ describe('buildAgentTerminalHandlers', () => {
       expect(shell.write).not.toHaveBeenCalledWith('rm -rf /\n');
     });
 
-    it('given the SOLE viewer loses access, should evict them at the first tick and tear the session down at the next (detached, last attacher revoked)', async () => {
+    it('given the SOLE viewer loses access, should evict them AND tear the session down in the same tick — no grace for an unsupervised revoked process', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
-      // First tick: evicted, not killed — the session goes detached with the reap armed…
-      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock1' });
-      expect(shell.kill).not.toHaveBeenCalled();
-      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
-
-      // …second tick: the detached check fails for the revoked last attacher and tears it down.
-      await vi.advanceTimersByTimeAsync(60_000);
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:error', { message: 'Machine access revoked', connectionId: 'sock1' });
       expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+
+    it('given a DETACHED session whose checkAuth THROWS, should keep the session alive (fail-open in both tick shapes — no unhandled rejection)', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect(); // detach — the tick now checks lastViewerUserId
+
+      checkAuth.mockRejectedValue(new Error('db blip'));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given an authorized viewer who joins WHILE the detached tick\'s checkAuth is in flight, should not tear the session down under them', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload); // user1 creates
+      onDisconnect(); // detached; lastViewerUserId = user1
+
+      // The detached tick's checkAuth(user1) hangs in flight…
+      const verdict = deferred<{ ok: false; reason: string }>();
+      checkAuth.mockImplementationOnce(() => verdict.promise);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // …and an authorized user2 joins DURING that round-trip.
+      checkAuth.mockResolvedValue(makeAuthSuccess());
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+
+      // The in-flight check now resolves REVOKED for user1 (who is long gone).
+      verdict.resolve({ ok: false, reason: 'permission_revoked' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The session must survive: an authorized viewer is watching it NOW.
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      socket2.emit.mockClear();
+      const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      onOutput('survived the race');
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'survived the race', connectionId: 'sock2' });
+    });
+
+    it('given a checkAuth slower than the tick cadence, should not stack overlapping re-auth rounds (re-entry guard)', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      checkAuth.mockClear();
+      checkAuth.mockImplementation(() => new Promise(() => {})); // never resolves
+      await vi.advanceTimersByTimeAsync(180_000); // three cadences
+
+      expect(checkAuth).toHaveBeenCalledTimes(1);
+    });
+
+    it('given the shell resume THROWS during an attach, the joiner is still fully tracked — a later disconnect collects them and the reap still fires (no ghost viewer)', async () => {
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+      onDisconnect(); // detached, reap armed
+
+      // The reattach's shell resume blows up mid-attach.
+      shell.setViewerAttached.mockImplementationOnce(() => { throw new Error('resume failed'); });
+      await expect(onConnect({ ...validPayload, connectionId: 'pane-2' })).rejects.toThrow('resume failed');
+
+      // Registration happened BEFORE the fallible call, so the viewer is
+      // tracked and removable — the failure cannot pin viewers.size >= 1
+      // (which would disarm the last-viewer reap for the process lifetime).
+      expect(sessionMap.getBySocket(viewer('pane-2'))).toBeDefined();
+      onDisconnect({ connectionId: 'pane-2' });
+      expect(sessionMap.getBySocket(viewer('pane-2'))).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+      expect(shell.kill).toHaveBeenCalledWith('idle-reap');
     });
 
     it('given the same user in TWO panes, should checkAuth once per distinct userId per tick, not once per pane', async () => {

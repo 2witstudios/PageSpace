@@ -32,8 +32,8 @@ function makeSession(): { session: TerminalSession; emitted: string[]; emittedB:
     lastViewerUserId: 'user1',
     releaseSlot: () => {},
     viewers: new Map([
-      ['sockA conn-a', { userId: 'user1', connectionId: 'conn-a', emitOutput: (data: string) => emitted.push(data), emitClosed: () => {} }],
-      ['sockB conn-b', { userId: 'user2', connectionId: 'conn-b', emitOutput: (data: string) => emittedB.push(data), emitClosed: () => {} }],
+      ['sockA conn-a', { userId: 'user1', emitOutput: (data: string) => emitted.push(data), emitClosed: () => {}, emitError: () => {} }],
+      ['sockB conn-b', { userId: 'user2', emitOutput: (data: string) => emittedB.push(data), emitClosed: () => {}, emitError: () => {} }],
     ]),
     scrollback: [],
     scrollbackBytes: 0,
