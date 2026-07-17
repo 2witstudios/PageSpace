@@ -1,34 +1,56 @@
 "use client";
 
 /**
- * FilesTab — the Machine page's Files tab: a read-only viewer over a branch
- * checkout's working tree (Machine page rebuild, Phase 3).
+ * FilesTab — the Machine page's Files tab: a file-system viewer that defaults
+ * to the Machine's own root Sprite filesystem (`/workspace`), with a project's
+ * branch checkout browsable as an additional, opt-in scope (Machine Files
+ * Manager epic, Part A).
  *
  * Composes the pieces the earlier phases landed: an inner page-scoped sidebar
  * (plain border-border chrome, deliberately NOT one of the app's liquid-glass
  * sidebars — same shell as {@link TerminalTab}) holding a BARE {@link MachineTree}
- * as the branch picker, then a {@link MachineFileTree} over the picked branch's
- * checkout; and a main pane with a read-only Monaco showing the selected file.
+ * as the scope picker, then a {@link MachineFileTree} over whichever scope is
+ * selected; and a main pane with a read-only Monaco showing the selected file.
  *
- * A checkout only exists on a branch-terminal's OWN Sprite once that branch has
- * been cloned, and nothing in `machine_branches` tracks clone state (the store
- * row carries only a `sandboxId`) — so "is there a checkout?" is answered by the
- * live filesystem, not the DB. The files route already gives a clean, typed
- * signal for it: branch resolution failures come back as `reason: 'not_found'`
- * (no tracking row, or the repo dir isn't there) or `reason: 'vanished'` (the row
- * is there but its Sprite is gone). {@link BranchFiles} probes the checkout root
- * once per branch and turns both into an explicit empty state rather than letting
- * MachineFileTree render them as a raw error row. An `exec_failed` is NOT folded
- * in: a broken exec is a real error and stays one.
+ * A branch checkout only exists on a branch-terminal's OWN Sprite once that
+ * branch has been cloned, and nothing in `machine_branches` tracks clone state
+ * (the store row carries only a `sandboxId`) — so "is there a checkout?" is
+ * answered by the live filesystem, not the DB. Root scope has an absence of
+ * its own kind: a Machine whose Terminal was never opened has no Sprite at
+ * all yet. The files route gives a clean, typed signal for all three cases:
+ * branch resolution failures come back as `reason: 'not_found'` (no tracking
+ * row, or the repo dir isn't there) or `reason: 'vanished'` (the row is there
+ * but its Sprite is gone); root resolution failure is `reason: 'not_started'`
+ * (no Sprite has ever been provisioned). {@link ScopeFiles} probes the scope
+ * root once per scope and turns all three into an explicit empty state rather
+ * than letting MachineFileTree render them as a raw error row. An
+ * `exec_failed` is NOT folded in: a broken exec is a real error and stays one.
  *
- * Selection (branch + open file) is ONE piece of state, and both children are
- * keyed by it. A path only means something inside the checkout it came from, so
- * a branch switch drops the open file in the same update — and the key makes the
- * switch a remount, which is what stops a stale `ready` from flashing the file
- * tree at the new branch and firing a listing that gets thrown away.
+ * Selection (scope + open file) is ONE piece of state, and both children are
+ * keyed by it. A path only means something inside the scope it came from, so
+ * a scope switch drops the open file in the same update — and the key makes
+ * the switch a remount, which is what stops a stale `ready` from flashing the
+ * file tree at the new scope and firing a listing that gets thrown away. Root
+ * is the initial scope, so the Machine's own files render immediately with no
+ * pick required; picking a branch is additive, unchanged browsing on top of
+ * that default.
+ *
+ * `MachineFileTree`'s own create/rename/delete operations (task 11) can hit
+ * the open file — deleting it, deleting an ancestor directory, or renaming
+ * either — so `onPathRemoved`/`onPathRenamed` below clear or retarget `path`
+ * to keep the pane honest. Everything else about those mutations (dialogs,
+ * cache invalidation, request bodies) lives entirely inside the tree.
+ *
+ * UNSAVED DRAFTS: the pane reports its dirty state up (`onDirtyChange`), and
+ * the two USER-navigation paths that would drop it — clicking another file,
+ * switching scope — confirm first, with the same wording as the pane's own
+ * Reload confirm. `onPathRemoved`/`onPathRenamed` deliberately do NOT confirm:
+ * they react to a mutation the user already performed in the tree (or that an
+ * agent performed on the live filesystem), where blocking after the fact
+ * protects nothing.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { FileCode2 } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import MachineTree, { type MachineTreeNode } from '../workspace/MachineTree';
@@ -36,11 +58,12 @@ import MachineFileTree from '../workspace/MachineFileTree';
 import FilesFilePane from './FilesFilePane';
 import TabSidebar from './TabSidebar';
 import { PaneNotice, SidebarLoading, SidebarNotice } from './tab-states';
+import { type FilesScope, filesScopeKey, filesScopeSearchParams } from './files-scope';
 import {
-  CHECKOUT_ABSENT_COPY,
+  FILES_ABSENT_COPY,
   asAbsentReason,
   readErrorBody,
-  type CheckoutAbsentReason,
+  type FilesAbsentReason,
 } from './checkout-states';
 
 interface FilesTabProps {
@@ -48,66 +71,119 @@ interface FilesTabProps {
   machineId: string;
 }
 
-/** The branch whose checkout the tab is browsing, and the file open from it. */
+/** The scope the tab is browsing, and the file open from it. */
 interface Selection {
-  branch: { projectName: string; branchName: string } | null;
-  /** Checkout-relative path, only ever meaningful within `branch`. */
+  scope: FilesScope;
+  /** Scope-relative path, only ever meaningful within `scope`. */
   path: string | null;
 }
 
-/**
- * Identity of a branch's checkout — also the React key that scopes per-branch
- * state. JSON-encoded rather than joined on a separator so that no project /
- * branch name pair can collide (a branch name may legally contain `/`).
- */
-const branchKey = (branch: NonNullable<Selection['branch']>): string =>
-  JSON.stringify([branch.projectName, branch.branchName]);
+const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
+
+/** The `MachineTree` node that corresponds to a scope, for the selection highlight. */
+const selectedNodeFor = (scope: FilesScope): MachineTreeNode =>
+  scope.kind === 'root'
+    ? MACHINE_NODE
+    : { level: 'branch', projectName: scope.projectName, branchName: scope.branchName };
 
 export default function FilesTab({ machineId }: FilesTabProps) {
-  // Branch and path move as ONE value: a path only means something inside the
-  // checkout it came from, so switching branches must drop the open file in the
-  // same update — never as a second, separately-scheduled setState.
-  const [{ branch, path }, setSelection] = useState<Selection>({ branch: null, path: null });
+  // Scope and path move as ONE value: a path only means something inside the
+  // scope it came from, so switching scopes must drop the open file in the
+  // same update — never as a second, separately-scheduled setState. Root is
+  // the initial scope, so files render immediately with no pick required.
+  const [{ scope, path }, setSelection] = useState<Selection>({ scope: { kind: 'root' }, path: null });
 
-  const onSelectNode = useCallback((node: MachineTreeNode) => {
-    // Only a branch has a checkout to browse. Machine/Project rows stay
-    // expand-only (their chevron still works) — selecting one would have no
-    // file tree to show.
-    if (node.level !== 'branch') return;
+  // The pane reports whether it holds an unsaved draft (see FilesFilePane's
+  // `onDirtyChange`); the selection ref keeps the guards below stable (their
+  // useCallback([]) identity feeds ScopeFiles) while still reading the CURRENT
+  // selection. Plain-assignment refs, not state — the guards are event
+  // handlers, never render inputs.
+  const dirtyRef = useRef(false);
+  const selectionRef = useRef<Selection>({ scope, path });
+  selectionRef.current = { scope, path };
+  const onDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
+  }, []);
+
+  // Navigating away from a dirty draft (another file, another scope) is the
+  // discard path a person actually takes — the pane's Reload confirm alone
+  // would leave ordinary clicks as the one silent way to lose an edit. Same
+  // wording as the pane's Reload confirm, deliberately.
+  const confirmDiscardIfDirty = useCallback((): boolean => {
+    if (!dirtyRef.current) return true;
+    const discard = window.confirm('Discard unsaved changes to this file?');
+    if (discard) dirtyRef.current = false;
+    return discard;
+  }, []);
+
+  const onSelectNode = useCallback(
+    (node: MachineTreeNode) => {
+      // Projects are expand-only groupings with no filesystem of their own —
+      // their chevron still works, but selecting one has no scope to switch to.
+      if (node.level === 'project') return;
+      const nextScope: FilesScope =
+        node.level === 'machine'
+          ? { kind: 'root' }
+          : { kind: 'branch', projectName: node.projectName, branchName: node.branchName };
+      // Re-picking the open scope keeps the open file (and any draft) — only a
+      // real switch drops `path`, so only a real switch needs the confirm.
+      if (filesScopeKey(selectionRef.current.scope) === filesScopeKey(nextScope)) return;
+      if (!confirmDiscardIfDirty()) return;
+      setSelection({ scope: nextScope, path: null });
+    },
+    [confirmDiscardIfDirty],
+  );
+
+  // Returns whether the navigation was ACCEPTED — a declined dirty-discard
+  // confirm keeps the current file, and the caller (the sheet-closing wrapper
+  // below) must not close over a click that changed nothing. A re-click on the
+  // open file counts as accepted: the file the user asked for IS showing.
+  const onSelectFile = useCallback(
+    (next: string): boolean => {
+      if (next === selectionRef.current.path) return true;
+      if (!confirmDiscardIfDirty()) return false;
+      setSelection((current) => ({ ...current, path: next }));
+      return true;
+    },
+    [confirmDiscardIfDirty],
+  );
+
+  // A delete/rename in the tree only matters to the open file if it hit the
+  // open path itself OR one of its ancestor directories — anything else
+  // leaves the pane alone.
+  const onPathRemoved = useCallback((removed: string) => {
     setSelection((current) =>
-      current.branch?.projectName === node.projectName && current.branch.branchName === node.branchName
-        ? current // re-picking the open branch keeps the open file
-        : { branch: { projectName: node.projectName, branchName: node.branchName }, path: null },
+      current.path !== null && (current.path === removed || current.path.startsWith(`${removed}/`))
+        ? { ...current, path: null }
+        : current,
     );
   }, []);
 
-  const onSelectFile = useCallback((next: string) => {
-    setSelection((current) => ({ ...current, path: next }));
+  const onPathRenamed = useCallback((from: string, to: string) => {
+    setSelection((current) => {
+      if (current.path === null) return current;
+      if (current.path === from) return { ...current, path: to };
+      if (current.path.startsWith(`${from}/`)) return { ...current, path: `${to}${current.path.slice(from.length)}` };
+      return current;
+    });
   }, []);
 
   return (
     <TabSidebar
       title="Files"
       pane={
-        branch && path ? (
+        path ? (
           // Deliberately UNKEYED. Keying by path would tear down and recreate
           // Monaco on every file click; the pane doesn't need it, because it
           // refuses to render a state belonging to a different file. Keying by
-          // branch would be dead code: a branch switch clears `path` in the same
+          // scope would be dead code: a scope switch clears `path` in the same
           // update, so the pane unmounts anyway.
-          <FilesFilePane
-            machineId={machineId}
-            projectName={branch.projectName}
-            branchName={branch.branchName}
-            path={path}
-          />
+          <FilesFilePane machineId={machineId} scope={scope} path={path} onDirtyChange={onDirtyChange} />
         ) : (
           <PaneNotice
             icon={<FileCode2 className="size-6 text-muted-foreground" />}
-            title={branch ? 'No file open' : 'No branch selected'}
-            description={
-              branch ? 'Select a file to view its contents.' : 'Select a branch to browse its checkout.'
-            }
+            title="No file open"
+            description="Select a file to view its contents."
           />
         )
       }
@@ -117,91 +193,104 @@ export default function FilesTab({ machineId }: FilesTabProps) {
           {/* Picking a BRANCH must not close the sheet on mobile — the file the
               user is actually after is one level further in, in the tree that
               picking the branch just revealed. Only opening a file closes it. */}
-          <MachineTree machineId={machineId} onSelectNode={onSelectNode} />
-          {branch && (
-            <div className="border-t border-border">
+          <MachineTree
+            machineId={machineId}
+            onSelectNode={onSelectNode}
+            isNodeSelectable={(n) => n.level !== 'project'}
+            selectedNode={selectedNodeFor(scope)}
+          />
+          <div className="border-t border-border">
+            {scope.kind === 'branch' && (
               <div className="flex min-w-0 items-center gap-1 px-2 pt-2 text-xs text-muted-foreground">
-                <span className="truncate" title={`${branch.projectName} / ${branch.branchName}`}>
-                  {branch.projectName} / {branch.branchName}
+                <span className="truncate" title={`${scope.projectName} / ${scope.branchName}`}>
+                  {scope.projectName} / {scope.branchName}
                 </span>
               </div>
-              {/* Keyed on the branch so a switch REMOUNTS the probe. Without it,
-                  BranchFiles would render one frame still holding the previous
-                  branch's `ready` state, mounting the file tree against the new
-                  branch — a whole root listing fetched and thrown away before
-                  the probe effect resets it. */}
-              <BranchFiles
-                key={branchKey(branch)}
-                machineId={machineId}
-                projectName={branch.projectName}
-                branchName={branch.branchName}
-                onSelectFile={(next) => {
-                  onSelectFile(next);
-                  close();
-                }}
-                selectedPath={path}
-              />
-            </div>
-          )}
+            )}
+            {/* Keyed on the scope so a switch REMOUNTS the probe. Without it,
+                ScopeFiles would render one frame still holding the previous
+                scope's `ready` state, mounting the file tree against the new
+                scope — a whole root listing fetched and thrown away before the
+                probe effect resets it. This applies to root exactly as much as
+                to a branch switch: never special-case root as unkeyed. */}
+            <ScopeFiles
+              key={filesScopeKey(scope)}
+              machineId={machineId}
+              scope={scope}
+              onSelectFile={(next) => {
+                // Close the mobile sheet only when navigation actually
+                // happened — a declined dirty-discard confirm keeps the
+                // current file, and yanking the sheet away on top of that
+                // would look like the click was obeyed.
+                if (onSelectFile(next)) close();
+              }}
+              selectedPath={path}
+              onPathRemoved={onPathRemoved}
+              onPathRenamed={onPathRenamed}
+            />
+          </div>
         </>
       )}
     </TabSidebar>
   );
 }
 
-/** Whether the branch's checkout exists on its Sprite yet — see the module doc. */
-type CheckoutState =
+/** Whether the scope's filesystem is reachable yet — see the module doc. */
+type ScopeState =
   | { status: 'loading' }
   | { status: 'ready' }
-  | { status: 'absent'; reason: CheckoutAbsentReason }
+  | { status: 'absent'; reason: FilesAbsentReason }
   | { status: 'error'; message: string };
 
 /**
- * Probes the checkout root once per branch and, only once it answers `ready`,
+ * Probes the scope root once per scope and, only once it answers `ready`,
  * mounts the file tree.
  *
  * COST, stated plainly: the probe is exactly the listing MachineFileTree makes
- * for the root anyway, so a ready branch pays for two root listings — one here,
- * one in the tree. That buys the distinction the tab exists to make: "this
- * branch was never cloned" is a state of the world and belongs in the sidebar as
- * an empty state, not as a red error row buried inside a file tree. The
- * duplicate is bounded — once per branch selection, never per directory, and
- * FilesTab keys us by branch so it cannot fire on a re-render.
+ * for the root anyway, so a ready scope pays for two root listings — one
+ * here, one in the tree. That buys the distinction the tab exists to make:
+ * "this scope isn't reachable yet" is a state of the world and belongs in the
+ * sidebar as an empty state, not as a red error row buried inside a file
+ * tree. The duplicate is bounded — once per scope selection, never per
+ * directory, and FilesTab keys us by scope so it cannot fire on a re-render.
  *
- * It is not free, and it is not the only design: MachineFileTree is mounted here
- * and nowhere else, so it could instead report a root-level absence back to us
- * (an `onRootUnavailable(reason)` prop) and the probe would disappear entirely.
- * That is the better end state and a small refactor; it is deliberately not being
- * done in the same PR that changes this route's contract.
+ * It is not free, and it is not the only design: MachineFileTree is mounted
+ * here and nowhere else, so it could instead report a root-level absence back
+ * to us (an `onRootUnavailable(reason)` prop) and the probe would disappear
+ * entirely. That is the better end state and a small refactor; it is
+ * deliberately not being done in the same PR that changes this route's
+ * contract.
  */
-function BranchFiles({
+function ScopeFiles({
   machineId,
-  projectName,
-  branchName,
+  scope,
   onSelectFile,
   selectedPath,
+  onPathRemoved,
+  onPathRenamed,
 }: {
   machineId: string;
-  projectName: string;
-  branchName: string;
+  scope: FilesScope;
   onSelectFile: (path: string) => void;
   selectedPath: string | null;
+  onPathRemoved: (path: string) => void;
+  onPathRenamed: (from: string, to: string) => void;
 }) {
-  const [state, setState] = useState<CheckoutState>({ status: 'loading' });
-  // Bumped by Retry — re-runs the probe without changing the branch identity.
+  const [state, setState] = useState<ScopeState>({ status: 'loading' });
+  // Bumped by Retry — re-runs the probe without changing the scope identity.
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     // Retry makes an in-flight probe's answer stale — this flag, flipped by the
-    // cleanup, keeps it from landing on the newer one. (A branch switch can't
-    // race us at all: FilesTab keys this component by branch, so a switch is a
+    // cleanup, keeps it from landing on the newer one. (A scope switch can't
+    // race us at all: FilesTab keys this component by scope, so a switch is a
     // remount, not a re-render.)
     let cancelled = false;
     setState({ status: 'loading' });
 
     const probe = async () => {
       try {
-        const search = new URLSearchParams({ machineId, projectName, branchName });
+        const search = filesScopeSearchParams(machineId, scope);
         const res = await fetchWithAuth(`/api/machines/files?${search.toString()}`);
         if (cancelled) return;
         if (res.ok) {
@@ -210,19 +299,19 @@ function BranchFiles({
         }
         const { error, reason } = readErrorBody(await res.json().catch(() => null));
         if (cancelled) return;
-        // `not_found`/`vanished` mean the checkout isn't there — a state of the
-        // world, not a failure. Anything else (403, `exec_failed`, …) IS a
-        // failure and must stay visible as one rather than be dressed up as an
-        // empty state.
+        // `not_found`/`vanished`/`not_started` mean the scope isn't reachable —
+        // a state of the world, not a failure. Anything else (403,
+        // `exec_failed`, …) IS a failure and must stay visible as one rather
+        // than be dressed up as an empty state.
         const absent = asAbsentReason(reason);
         if (absent !== null) {
           setState({ status: 'absent', reason: absent });
           return;
         }
-        setState({ status: 'error', message: error ?? `Failed to open checkout (${res.status})` });
+        setState({ status: 'error', message: error ?? `Failed to open files (${res.status})` });
       } catch (err) {
         if (cancelled) return;
-        setState({ status: 'error', message: err instanceof Error ? err.message : 'Failed to open checkout' });
+        setState({ status: 'error', message: err instanceof Error ? err.message : 'Failed to open files' });
       }
     };
 
@@ -230,16 +319,16 @@ function BranchFiles({
     return () => {
       cancelled = true;
     };
-  }, [machineId, projectName, branchName, attempt]);
+  }, [machineId, scope, attempt]);
 
   if (state.status === 'loading') {
-    return <SidebarLoading message="Opening checkout…" />;
+    return <SidebarLoading message={scope.kind === 'branch' ? 'Opening checkout…' : 'Opening files…'} />;
   }
 
   const retry = () => setAttempt((a) => a + 1);
 
   if (state.status === 'absent') {
-    const copy = CHECKOUT_ABSENT_COPY[state.reason];
+    const copy = FILES_ABSENT_COPY[state.reason];
     return (
       <SidebarNotice
         testId="checkout-absent"
@@ -266,10 +355,11 @@ function BranchFiles({
   return (
     <MachineFileTree
       machineId={machineId}
-      projectName={projectName}
-      branchName={branchName}
+      scope={scope}
       onSelectFile={onSelectFile}
       selectedPath={selectedPath}
+      onPathRemoved={onPathRemoved}
+      onPathRenamed={onPathRenamed}
     />
   );
 }
