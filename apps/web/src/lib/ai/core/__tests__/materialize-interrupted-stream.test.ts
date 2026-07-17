@@ -5,17 +5,27 @@ const {
   mockInsert,
   mockInsertValues,
   mockOnConflictDoUpdate,
+  mockReturning,
   mockUpdateSet,
   mockUpdateWhere,
+  mockSelect,
+  mockSelectFrom,
+  mockSelectWhere,
   mockBroadcastAiStreamComplete,
+  mockNotifyMentionedUsers,
   mockLoggerWarn,
 } = vi.hoisted(() => ({
   mockInsert: vi.fn(),
   mockInsertValues: vi.fn(),
   mockOnConflictDoUpdate: vi.fn(),
+  mockReturning: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockSelect: vi.fn(),
+  mockSelectFrom: vi.fn(),
+  mockSelectWhere: vi.fn(),
   mockBroadcastAiStreamComplete: vi.fn(),
+  mockNotifyMentionedUsers: vi.fn(),
   mockLoggerWarn: vi.fn(),
 }));
 
@@ -23,6 +33,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     update: vi.fn(() => ({ set: mockUpdateSet })),
+    select: mockSelect,
   },
 }));
 
@@ -45,12 +56,21 @@ vi.mock('@pagespace/db/schema/core', () => ({
     id: 'chat_messages.id',
     status: 'chat_messages.status',
   },
+  pages: {
+    id: 'pages.id',
+    driveId: 'pages.driveId',
+    title: 'pages.title',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
   messages: {
     id: 'messages.id',
     status: 'messages.status',
+  },
+  conversations: {
+    id: 'conversations.id',
+    isShared: 'conversations.isShared',
   },
 }));
 
@@ -60,6 +80,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@/lib/websocket', () => ({
   broadcastAiStreamComplete: mockBroadcastAiStreamComplete,
+}));
+
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({
+  notifyMentionedUsers: mockNotifyMentionedUsers,
 }));
 
 import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
@@ -429,5 +453,170 @@ describe('materializeInterruptedStream — never throws', () => {
     mockBroadcastAiStreamComplete.mockRejectedValue(new Error('socket down'));
 
     await expect(materializeInterruptedStream(pageRow())).resolves.toBe(false);
+  });
+});
+
+// D task st3pyh9q4zwnmae00j195o97: an interrupted reply that @mentions a user must produce the
+// same mention notification the normal finalize path produces (message-utils.ts's
+// saveMessageToDatabase fires notifyMentionedUsers for assistant saves when the route's gate —
+// page.driveId present, a triggering user, conversation explicitly shared — passes). Before this
+// fix, a reply that died mid-stream and was materialized here never notified anyone, so an
+// @mention in a recovered reply silently vanished.
+describe('materializeInterruptedStream — mention notifications (best-effort, mirrors the finalize path)', () => {
+  const MENTION_CONTENT = 'Hey @[Alice](alice-id:user), here is what I found so far';
+
+  // The mention-notify path needs the page-chat upsert chain to report whether it actually
+  // wrote (`.returning`), plus the page/conversation lookups the route-level gate reads.
+  beforeEach(() => {
+    mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
+    mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
+    mockSelect.mockReturnValue({ from: mockSelectFrom });
+    mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
+    mockSelectWhere.mockResolvedValue([]);
+    mockNotifyMentionedUsers.mockResolvedValue(undefined);
+  });
+
+  // Stands in for the two gate lookups, in the order the implementation runs them: the page
+  // (driveId + title, mirroring `page?.driveId` and `mentionerName: page.title`) and then the
+  // conversation (`isShared`, mirroring `isConversationShared`).
+  const gateLookups = ({
+    page = [{ driveId: 'drive-1', title: 'Research Agent' }],
+    conversation = [{ isShared: true }],
+  }: {
+    page?: Array<{ driveId: string; title: string }>;
+    conversation?: Array<{ isShared: boolean }>;
+  } = {}) => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere.mockResolvedValueOnce(page).mockResolvedValueOnce(conversation);
+  };
+
+  // The notification is fire-and-forget (like the finalize path's own `void notifyMentionedUsers`)
+  // — drain the microtask/timer queue before asserting on it.
+  const flushNotify = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('given a materialized page-chat reply in a shared conversation, fires notifyMentionedUsers exactly once with the finalize path\'s own argument shape', async () => {
+    gateLookups();
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).toHaveBeenCalledTimes(1);
+    assert({
+      given: 'an interrupted materialization whose reply @mentions a user',
+      should: 'notify with the same shape the normal finalize path sends (content, pageId, driveId, stream owner as triggeredBy, page title as mentioner)',
+      actual: mockNotifyMentionedUsers.mock.calls[0][0],
+      expected: {
+        content: MENTION_CONTENT,
+        pageId: 'page-abc123',
+        driveId: 'drive-1',
+        triggeredByUserId: 'user-a',
+        mentionerNameOverride: 'Research Agent',
+      },
+    });
+  });
+
+  it('given a global-assistant row, never notifies and never even runs the page/conversation lookups (global conversations have no page mention surface)', async () => {
+    await materializeInterruptedStream(globalRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it('given the compare-and-swap upsert wrote nothing (the row already left streaming via its own onFinish, which already notified), does not notify again', async () => {
+    gateLookups();
+    mockReturning.mockResolvedValue([]);
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+  });
+
+  it('given the message write itself failed, does not notify (nothing was materialized)', async () => {
+    gateLookups();
+    mockReturning.mockRejectedValue(new Error('db down'));
+
+    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(false);
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+  });
+
+  it('given an empty recovered reply (no parts survived), does not notify — mirrors the finalize path\'s content.trim() gate', async () => {
+    gateLookups();
+
+    await materializeInterruptedStream(pageRow({ parts: [] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+    expect(mockSelect).not.toHaveBeenCalled();
+  });
+
+  it('given the page row is gone (deleted between death and reap), does not notify — mirrors the route\'s page?.driveId gate', async () => {
+    gateLookups({ page: [] });
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+  });
+
+  it('given the conversation row is missing, fails closed and does not notify — same as the route treating a missing row as private', async () => {
+    gateLookups({ conversation: [] });
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+  });
+
+  it('given the conversation is not shared, does not notify — a private conversation\'s reply must not page other drive members', async () => {
+    gateLookups({ conversation: [{ isShared: false }] });
+
+    await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+  });
+
+  it('given the gate lookup rejects, warns (best-effort, operator-visible) and the materialization result is unaffected', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere.mockRejectedValue(new Error('lookup down'));
+
+    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
+    await flushNotify();
+
+    expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining('mention notification failed'),
+      expect.objectContaining({ error: 'lookup down' }),
+    );
+  });
+
+  it('given the gate lookup rejects with a non-Error value, still warns without throwing', async () => {
+    mockSelectWhere.mockReset();
+    mockSelectWhere.mockRejectedValue('a rejected string, not an Error instance');
+
+    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
+    await flushNotify();
+
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining('mention notification failed'),
+      expect.objectContaining({ error: 'unknown' }),
+    );
+  });
+
+  it('given notifyMentionedUsers itself rejects, warns and the materialization result is unaffected', async () => {
+    gateLookups();
+    mockNotifyMentionedUsers.mockRejectedValue(new Error('notify boom'));
+
+    await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
+    await flushNotify();
+
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining('mention notification failed'),
+      expect.objectContaining({ error: 'notify boom' }),
+    );
   });
 });
