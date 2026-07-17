@@ -592,4 +592,375 @@ describe('MachineFileTree', () => {
       });
     });
   });
+
+  describe('move / copy / upload / download operations', () => {
+    test('Move posts a PATCH with the entered destination, re-lists both parents, and drops the moved directory\'s own stale cache', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      const onPathRenamed = vi.fn();
+      renderTree({ onPathRenamed });
+
+      await expandFolder('src');
+      await expandFolder('components');
+      await waitFor(() => screen.getByText('Button.tsx'));
+      const srcFetchesBefore = listCallsFor('src');
+      const rootFetchesBefore = listCallsFor('');
+      const componentsFetchesBefore = listCallsFor('src/components');
+
+      fireEvent.contextMenu(screen.getByText('components'));
+      await userEvent.click(await waitFor(() => screen.getByText('Move…')));
+      const input = (await waitFor(() => screen.getByLabelText('Destination path'))) as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'components');
+      await userEvent.click(screen.getByRole('button', { name: 'Move' }));
+
+      await waitFor(() => {
+        if (onPathRenamed.mock.calls.length === 0) throw new Error('onPathRenamed not called yet');
+      });
+
+      assert({
+        given: "Move chosen from the 'src/components' directory's context menu, destination entered as 'components' (root)",
+        should:
+          "PATCH op:'move' with the exact entered toPath, re-list both the source and destination parent once, drop the moved directory's own stale cache (same mechanism as rename), and report the move via onPathRenamed",
+        actual: {
+          mutation: calls[0],
+          srcRelistCount: listCallsFor('src') - srcFetchesBefore,
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+          componentsStaleCacheDropped: listCallsFor('src/components') - componentsFetchesBefore,
+          renamedArgs: onPathRenamed.mock.calls[0],
+        },
+        expected: {
+          mutation: {
+            method: 'PATCH',
+            body: {
+              machineId: 'machine-1',
+              projectName: 'my-repo',
+              branchName: 'main',
+              op: 'move',
+              fromPath: 'src/components',
+              toPath: 'components',
+            },
+          },
+          srcRelistCount: 1,
+          rootRelistCount: 1,
+          componentsStaleCacheDropped: 1,
+          renamedArgs: ['src/components', 'components'],
+        },
+      });
+    });
+
+    test('Copy posts a PATCH with the entered destination, re-lists both parents, and never touches the open-file selection', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      const onPathRenamed = vi.fn();
+      renderTree({ onPathRenamed });
+
+      await expandFolder('src');
+      await waitFor(() => screen.getByText('index.ts'));
+      const srcFetchesBefore = listCallsFor('src');
+      const rootFetchesBefore = listCallsFor('');
+
+      fireEvent.contextMenu(screen.getByText('index.ts'));
+      await userEvent.click(await waitFor(() => screen.getByText('Copy…')));
+      const input = (await waitFor(() => screen.getByLabelText('Destination path'))) as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'index-copy.ts');
+      await userEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+      await waitFor(() => {
+        if (listCallsFor('') <= rootFetchesBefore) throw new Error('destination parent not relisted yet');
+      });
+
+      // 'src/index.ts' is a FILE — it never had a cache entry of its own (only
+      // directory listings are cached), so "no source cache drop of the old
+      // path" is provable simply by there being nothing at that key to begin
+      // with, unlike Move's directory case above.
+      assert({
+        given: "Copy chosen from 'src/index.ts'’s context menu, destination entered as 'index-copy.ts' (root)",
+        should:
+          "PATCH op:'copy' with the exact entered toPath, re-list both the source and destination parent once, and never call onPathRenamed (copy doesn't touch the open file)",
+        actual: {
+          mutation: calls[0],
+          srcRelistCount: listCallsFor('src') - srcFetchesBefore,
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+          renamedCalls: onPathRenamed.mock.calls.length,
+        },
+        expected: {
+          mutation: {
+            method: 'PATCH',
+            body: {
+              machineId: 'machine-1',
+              projectName: 'my-repo',
+              branchName: 'main',
+              op: 'copy',
+              fromPath: 'src/index.ts',
+              toPath: 'index-copy.ts',
+            },
+          },
+          srcRelistCount: 1,
+          rootRelistCount: 1,
+          renamedCalls: 0,
+        },
+      });
+    });
+
+    test('a 409 from a move toasts a friendly message and issues no re-list of either parent', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ error: 'already_exists' }, 409));
+      renderTree();
+
+      await expandFolder('src');
+      await waitFor(() => screen.getByText('index.ts'));
+      const srcFetchesBefore = listCallsFor('src');
+      const rootFetchesBefore = listCallsFor('');
+
+      fireEvent.contextMenu(screen.getByText('index.ts'));
+      await userEvent.click(await waitFor(() => screen.getByText('Move…')));
+      const input = (await waitFor(() => screen.getByLabelText('Destination path'))) as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'zeta.md');
+      await userEvent.click(screen.getByRole('button', { name: 'Move' }));
+
+      await waitFor(() => {
+        if (toastMocks.error.mock.calls.length === 0) throw new Error('toast not fired yet');
+      });
+
+      assert({
+        given: 'a move whose destination already has something there (409)',
+        should: 'toast the friendly "already has that name" message and issue no re-list of either parent',
+        actual: {
+          toastMessage: toastMocks.error.mock.calls[0]?.[0],
+          srcRelistCount: listCallsFor('src') - srcFetchesBefore,
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+        },
+        expected: {
+          toastMessage: 'Something already has that name',
+          srcRelistCount: 0,
+          rootRelistCount: 0,
+        },
+      });
+    });
+
+    test('a 404 from a move (source vanished) toasts the route\'s own error and re-lists only the now-stale source parent', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ error: 'The item to move could not be found', reason: 'not_found' }, 404));
+      renderTree();
+
+      await expandFolder('src');
+      await waitFor(() => screen.getByText('index.ts'));
+      const srcFetchesBefore = listCallsFor('src');
+      const rootFetchesBefore = listCallsFor('');
+
+      fireEvent.contextMenu(screen.getByText('index.ts'));
+      await userEvent.click(await waitFor(() => screen.getByText('Move…')));
+      const input = (await waitFor(() => screen.getByLabelText('Destination path'))) as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'moved.ts');
+      await userEvent.click(screen.getByRole('button', { name: 'Move' }));
+
+      await waitFor(() => {
+        if (listCallsFor('src') <= srcFetchesBefore) throw new Error('src not relisted yet');
+      });
+
+      assert({
+        given: "a move whose source has vanished out from under it (404 'not_found')",
+        should: "toast the route's own error and re-list only the stale source parent, never the destination parent",
+        actual: {
+          toastMessage: toastMocks.error.mock.calls[0]?.[0],
+          srcRelistCount: listCallsFor('src') - srcFetchesBefore,
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+        },
+        expected: {
+          toastMessage: 'The item to move could not be found',
+          srcRelistCount: 1,
+          rootRelistCount: 0,
+        },
+      });
+    });
+
+    test('Upload files… posts each selected file sequentially as base64 and re-lists the target directory exactly once', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      renderTree({ scope: { kind: 'root' } });
+
+      await waitFor(() => screen.getByText('README.md'));
+      const rootFetchesBefore = listCallsFor('');
+
+      const fileA = new File(['hello'], 'a.txt', { type: 'text/plain' });
+      const fileB = new File(['world'], 'b.txt', { type: 'text/plain' });
+      const input = screen.getByTestId('file-tree-upload-input') as HTMLInputElement;
+
+      await userEvent.click(screen.getByTitle('Upload files'));
+      await userEvent.upload(input, [fileA, fileB]);
+
+      await waitFor(() => {
+        if (calls.length < 2) throw new Error('both uploads not posted yet');
+      });
+      await waitFor(() => {
+        if (listCallsFor('') <= rootFetchesBefore) throw new Error('target dir not relisted yet');
+      });
+
+      assert({
+        given: 'two files selected via "Upload files…" at the scope root',
+        should: 'POST each sequentially as base64-encoded content at the root, then re-list the root exactly once for the whole batch',
+        actual: {
+          uploads: calls.map((c) => {
+            const body = c.body as Record<string, unknown>;
+            return {
+              method: c.method,
+              path: body.path,
+              kind: body.kind,
+              encoding: body.encoding,
+              content: Buffer.from(body.content as string, 'base64').toString('utf8'),
+            };
+          }),
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+        },
+        expected: {
+          uploads: [
+            { method: 'POST', path: 'a.txt', kind: 'file', encoding: 'base64', content: 'hello' },
+            { method: 'POST', path: 'b.txt', kind: 'file', encoding: 'base64', content: 'world' },
+          ],
+          rootRelistCount: 1,
+        },
+      });
+    });
+
+    test('a file over the 10 MiB client cap is skipped with a toast and never POSTed, without blocking the rest of the batch', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      renderTree({ scope: { kind: 'root' } });
+
+      await waitFor(() => screen.getByText('README.md'));
+      const rootFetchesBefore = listCallsFor('');
+
+      const bigFile = new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'big.bin', { type: 'application/octet-stream' });
+      const okFile = new File(['ok'], 'ok.txt', { type: 'text/plain' });
+      const input = screen.getByTestId('file-tree-upload-input') as HTMLInputElement;
+
+      await userEvent.click(screen.getByTitle('Upload files'));
+      await userEvent.upload(input, [bigFile, okFile]);
+
+      await waitFor(() => {
+        if (toastMocks.error.mock.calls.length === 0) throw new Error('toast not fired yet');
+      });
+      await waitFor(() => {
+        if (calls.length === 0) throw new Error('ok.txt not posted yet');
+      });
+
+      assert({
+        given: 'a batch with one file over the 10 MiB client cap and one comfortably under it',
+        should: 'toast the oversized file by name, skip POSTing it entirely, but still upload the other file and re-list once',
+        actual: {
+          toastMessage: toastMocks.error.mock.calls[0]?.[0],
+          postedPaths: calls.map((c) => (c.body as Record<string, unknown>).path),
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+        },
+        expected: {
+          toastMessage: 'big.bin: File is too large to upload',
+          postedPaths: ['ok.txt'],
+          rootRelistCount: 1,
+        },
+      });
+    });
+
+    test('Download fetches mode=download for the full path, then clicks an object-URL anchor named by the file\'s own basename', async () => {
+      const downloadRequests: string[] = [];
+      vi.mocked(fetchWithAuth).mockImplementation(async (...args: unknown[]) => {
+        const url = String(args[0]);
+        const init = (args[1] ?? {}) as RequestInit;
+        const method = typeof init.method === 'string' ? init.method : 'GET';
+        const parsed = new URL(url, 'http://test');
+        if (method === 'GET' && parsed.searchParams.get('mode') === 'download') {
+          downloadRequests.push(parsed.searchParams.get('path') ?? '');
+          return new Response(new Blob(['contents']), { status: 200 });
+        }
+        const path = requestedPath(url);
+        const entries = FAKE_FS[path];
+        if (!entries) return jsonResponse({ error: 'not_found' }, 404);
+        return jsonResponse({ entries });
+      });
+
+      // jsdom doesn't implement the Blob-URL/anchor-click machinery at all —
+      // stub it in so the component's real download path (blob → object URL →
+      // programmatic anchor click) is exercised and observable.
+      if (typeof URL.createObjectURL !== 'function') {
+        (URL as unknown as { createObjectURL: () => void }).createObjectURL = () => undefined;
+      }
+      if (typeof URL.revokeObjectURL !== 'function') {
+        (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => undefined;
+      }
+      const createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+      const revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+      const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+
+      try {
+        renderTree();
+        await expandFolder('src');
+        await expandFolder('components');
+        await waitFor(() => screen.getByText('Button.tsx'));
+
+        fireEvent.contextMenu(screen.getByText('Button.tsx'));
+        await userEvent.click(await waitFor(() => screen.getByText('Download')));
+
+        await waitFor(() => {
+          if (clickSpy.mock.calls.length === 0) throw new Error('anchor not clicked yet');
+        });
+
+        const anchor = clickSpy.mock.instances[0] as unknown as HTMLAnchorElement;
+
+        assert({
+          given: "Download chosen from 'Button.tsx'’s context menu, nested under src/components",
+          should:
+            "fetch mode=download for the full checkout-relative path, then click a same-tab object-URL anchor named by the file's own basename (not the full path)",
+          actual: {
+            downloadRequests,
+            objectUrlCreated: createObjectURLSpy.mock.calls.length,
+            objectUrlRevoked: revokeObjectURLSpy.mock.calls.length,
+            anchorDownloadName: anchor.download,
+          },
+          expected: {
+            downloadRequests: ['src/components/Button.tsx'],
+            objectUrlCreated: 1,
+            objectUrlRevoked: 1,
+            anchorDownloadName: 'Button.tsx',
+          },
+        });
+      } finally {
+        createObjectURLSpy.mockRestore();
+        revokeObjectURLSpy.mockRestore();
+        clickSpy.mockRestore();
+      }
+    });
+
+    test('a failed download toasts the route\'s own error', async () => {
+      vi.mocked(fetchWithAuth).mockImplementation(async (...args: unknown[]) => {
+        const url = String(args[0]);
+        const parsed = new URL(url, 'http://test');
+        if (parsed.searchParams.get('mode') === 'download') {
+          return jsonResponse({ error: 'File is too large to download', reason: 'too_large' }, 413);
+        }
+        const path = requestedPath(url);
+        const entries = FAKE_FS[path];
+        if (!entries) return jsonResponse({ error: 'not_found' }, 404);
+        return jsonResponse({ entries });
+      });
+      renderTree();
+
+      await waitFor(() => screen.getByText('README.md'));
+      fireEvent.contextMenu(screen.getByText('README.md'));
+      await userEvent.click(await waitFor(() => screen.getByText('Download')));
+
+      await waitFor(() => {
+        if (toastMocks.error.mock.calls.length === 0) throw new Error('toast not fired yet');
+      });
+
+      assert({
+        given: 'a download request that comes back 413 too_large',
+        should: "toast the route's own error message",
+        actual: toastMocks.error.mock.calls[0]?.[0],
+        expected: 'File is too large to download',
+      });
+    });
+  });
 });

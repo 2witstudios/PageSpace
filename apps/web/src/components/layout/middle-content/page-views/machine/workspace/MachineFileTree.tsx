@@ -35,38 +35,70 @@
  *
  * MANAGEMENT OPERATIONS (task 11): directory rows get a right-click menu with
  * New File / New Folder / Rename / Delete; file rows get Rename / Delete; the
- * header gets New File / New Folder targeting the scope root. Move / Copy /
- * Upload menu entries are deliberately NOT here yet — the `ContextMenuSeparator`
- * before Rename is where tasks 12/13 slot them in, and Download slots into the
- * file row's menu above Rename. One shared `FileNameDialog` (a local
- * name-input dialog — the app's page-entity `RenameDialog` doesn't apply to
- * filesystem paths) serves both create and rename; delete uses a local
- * `AlertDialog` confirm naming the scope-relative path. All three mutations POST/
- * PATCH/DELETE `/api/machines/files` with the scope fields in the JSON body
- * (mirroring `filesScopeSearchParams`'s pairing rule, but this file doesn't
- * import that helper — `files-scope.ts` is out of scope for this task). On
- * success, the affected path(s) are dropped from `cacheRef` (see `invalidate`)
- * so the existing fetch-on-render effect re-lists whatever's visible, and a
- * delete/rename of the currently-open file bubbles up via `onPathRemoved` /
- * `onPathRenamed` so `FilesTab` can clear or retarget the pane. Failures never
- * become a red tree row for a mutation (rows are for LISTING errors only) — a
- * mutation failure is always a `sonner` toast.
+ * header gets New File / New Folder targeting the scope root. One shared
+ * `FileNameDialog` (a local name-input dialog — the app's page-entity
+ * `RenameDialog` doesn't apply to filesystem paths) serves both create and
+ * rename; delete uses a local `AlertDialog` confirm naming the scope-relative
+ * path.
+ *
+ * MOVE / COPY (task 12): directory AND file rows also get Move… / Copy…,
+ * sharing one `DestinationPathDialog` (`open` picks Move vs Copy by which was
+ * clicked). Both PATCH `op: 'move' | 'copy'` with `fromPath`/`toPath`, where
+ * `toPath` is exactly what the dialog's input holds — see its module doc for
+ * the full-path-including-name semantic. Both invalidate the source AND
+ * destination parent directories; move additionally invalidates `fromPath`
+ * itself (dropping any cached descendant listings, same as rename) and calls
+ * `onPathRenamed` — copy touches nothing at the source, so it calls neither.
+ * A 404 (`not_found`, source vanished) additionally re-lists the source
+ * parent on its own, since that parent's cached listing is now stale even
+ * though the mutation failed.
+ *
+ * UPLOAD / DOWNLOAD (task 13): a hidden `<input type="file" multiple>`
+ * (`fileInputRef`) is triggered from the header (targeting the scope root) or
+ * a directory's "Upload here" menu item (targeting that directory);
+ * `uploadTargetRef` carries which, since one shared input serves every
+ * trigger. Each selected file is read client-side via `FileReader` into
+ * base64 and POSTed `kind: 'file', encoding: 'base64'` SEQUENTIALLY (awaited
+ * one at a time, not `Promise.all` — concurrent writes into the same
+ * directory would race the eventual single re-list); a file over the
+ * server's 10 MiB cap is skipped client-side with its own toast rather than
+ * making a doomed request. One re-list of the target directory happens after
+ * the whole batch, not per file. Download (file rows only) fetches
+ * `mode=download` and turns the response into a blob → object-URL →
+ * programmatic anchor click, because a bare `<a href>` cannot carry the
+ * `fetchWithAuth` auth header.
+ *
+ * All mutations POST/PATCH/DELETE `/api/machines/files` with the scope fields
+ * in the JSON body (mirroring `filesScopeSearchParams`'s pairing rule, but
+ * this file doesn't import that helper — `files-scope.ts` is out of scope for
+ * this file's tasks). On success, the affected path(s) are dropped from
+ * `cacheRef` (see `invalidate`) so the existing fetch-on-render effect
+ * re-lists whatever's visible, and a delete/rename/move of the currently-open
+ * file bubbles up via `onPathRemoved` / `onPathRenamed` so `FilesTab` can
+ * clear or retarget the pane. Failures never become a red tree row for a
+ * mutation (rows are for LISTING errors only) — a mutation failure is always
+ * a `sonner` toast, optionally prefixed with a file name (see `runMutation`'s
+ * `toastPrefix`) so a per-file upload failure names which file it was.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { MachineDirectoryEntry } from '@pagespace/lib/services/sandbox/machine-fs';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   ChevronRight,
+  Copy,
+  Download,
   File as FileIcon,
   FilePlus,
   Folder,
   FolderOpen,
   FolderPlus,
+  Move,
   Pencil,
   RefreshCw,
   Trash2,
+  Upload,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -91,6 +123,7 @@ import { SidebarLoading, SidebarNotice } from '../tabs/tab-states';
 import { readErrorBody } from '../tabs/checkout-states';
 import { type FilesScope, filesScopeKey, filesScopeSearchParams } from '../tabs/files-scope';
 import FileNameDialog from './FileNameDialog';
+import DestinationPathDialog from './DestinationPathDialog';
 
 export interface MachineFileTreeProps {
   machineId: string;
@@ -113,13 +146,16 @@ type DirectoryState =
 type EntryKind = 'file' | 'directory';
 
 /**
- * One dialog slot shared by New File / New Folder / Rename / Delete — only
- * ever one of these is open at a time, so a single piece of state (rather than
- * one boolean per op) is enough and can't get two dialogs open together.
+ * One dialog slot shared by New File / New Folder / Rename / Move / Copy /
+ * Delete — only ever one of these is open at a time, so a single piece of
+ * state (rather than one boolean per op) is enough and can't get two dialogs
+ * open together.
  */
 type PendingDialog =
   | { kind: 'create'; parentPath: string; entryKind: EntryKind }
   | { kind: 'rename'; path: string; parentPath: string; currentName: string; entryKind: EntryKind }
+  | { kind: 'move'; path: string; entryKind: EntryKind }
+  | { kind: 'copy'; path: string; entryKind: EntryKind }
   | { kind: 'delete'; path: string; entryKind: EntryKind }
   | null;
 
@@ -133,7 +169,10 @@ interface TreeContext {
   selectedPath: string | null;
   openCreateDialog: (parentPath: string, entryKind: EntryKind) => void;
   openRenameDialog: (path: string, entryKind: EntryKind) => void;
+  openMoveCopyDialog: (path: string, entryKind: EntryKind, op: 'move' | 'copy') => void;
   openDeleteDialog: (path: string, entryKind: EntryKind) => void;
+  triggerUpload: (targetPath: string) => void;
+  downloadFile: (path: string) => void;
 }
 
 /** Directories first, then files, each alphabetical — the universal file-explorer ordering. */
@@ -172,31 +211,67 @@ const scopeBodyFields = (machineId: string, scope: FilesScope): Record<string, s
     : { machineId };
 
 /**
+ * Mirrors the route's own upload cap (`MAX_UPLOAD_BYTES` in
+ * `api/machines/files/route.ts`) so an oversized file is rejected here,
+ * before a doomed request and its base64 encoding work happen at all. The
+ * server enforces its own cap independently — this is a UX shortcut, not the
+ * source of truth.
+ */
+const MAX_CLIENT_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+/** Reads a File client-side into base64 (no data-URL prefix) for the route's `encoding: 'base64'` upload body. */
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('Failed to read file'));
+        return;
+      }
+      // `readAsDataURL` yields `data:<mime>;base64,<data>` — only the part
+      // after the comma is the base64 payload the route expects.
+      const commaIndex = result.indexOf(',');
+      resolve(commaIndex === -1 ? result : result.slice(commaIndex + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+type MutationOutcome = { ok: true } | { ok: false; status: number };
+
+/**
  * POSTs/PATCHes/DELETEs a mutation and turns any failure into the app's toast
  * convention — 403 and 409 get fixed, friendly copy; anything else falls back
- * to the route's own human-readable `error`. Returns whether it succeeded so
- * the caller can decide what to do next (invalidate cache, close a dialog);
- * never throws.
+ * to the route's own human-readable `error`. `toastPrefix` (used by upload,
+ * which fires many of these in one batch) names which file/item a toast is
+ * about — e.g. `"report.pdf: File is too large to upload"` — so a failure
+ * deep in a multi-file batch is still traceable to its cause. Returns the
+ * outcome, including the HTTP status on failure, so a caller can react to a
+ * SPECIFIC failure (e.g. move/copy re-listing the source parent only on a 404)
+ * without re-deriving it from the toast text; never throws.
  */
-async function runMutation(init: RequestInit): Promise<boolean> {
+async function runMutation(init: RequestInit, options?: { toastPrefix?: string }): Promise<MutationOutcome> {
+  const prefix = options?.toastPrefix ? `${options.toastPrefix}: ` : '';
   try {
     const res = await fetchWithAuth('/api/machines/files', {
       ...init,
       headers: { 'Content-Type': 'application/json', ...init.headers },
     });
-    if (res.ok) return true;
+    if (res.ok) return { ok: true };
     const body: unknown = await res.json().catch(() => null);
     if (res.status === 403) {
-      toast.error("You don't have edit access to this machine");
+      toast.error(`${prefix}You don't have edit access to this machine`);
     } else if (res.status === 409) {
-      toast.error('Something already has that name');
+      toast.error(`${prefix}Something already has that name`);
     } else {
-      toast.error(readErrorMessage(body) ?? `Request failed (${res.status})`);
+      toast.error(`${prefix}${readErrorMessage(body) ?? `Request failed (${res.status})`}`);
     }
-    return false;
+    return { ok: false, status: res.status };
   } catch (err) {
-    toast.error(err instanceof Error ? err.message : 'Request failed');
-    return false;
+    toast.error(`${prefix}${err instanceof Error ? err.message : 'Request failed'}`);
+    return { ok: false, status: 0 };
   }
 }
 
@@ -308,6 +383,10 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
     setPendingDialog({ kind: 'rename', path, parentPath: parentOf(path), currentName: basenameOf(path), entryKind });
   }, []);
 
+  const openMoveCopyDialog = useCallback((path: string, entryKind: EntryKind, op: 'move' | 'copy') => {
+    setPendingDialog(op === 'move' ? { kind: 'move', path, entryKind } : { kind: 'copy', path, entryKind });
+  }, []);
+
   const openDeleteDialog = useCallback((path: string, entryKind: EntryKind) => {
     setPendingDialog({ kind: 'delete', path, entryKind });
   }, []);
@@ -316,29 +395,63 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
 
   const handleCreateOrRenameSubmit = useCallback(
     async (name: string) => {
-      if (pendingDialog === null || pendingDialog.kind === 'delete') return;
+      if (pendingDialog === null || pendingDialog.kind === 'delete' || pendingDialog.kind === 'move' || pendingDialog.kind === 'copy') return;
       setSubmitting(true);
       try {
         if (pendingDialog.kind === 'create') {
           const { parentPath, entryKind } = pendingDialog;
           const path = joinPath(parentPath, name);
-          const ok = await runMutation({
+          const result = await runMutation({
             method: 'POST',
             body: JSON.stringify({ ...scopeBodyFields(machineId, scope), path, kind: entryKind }),
           });
-          if (!ok) return;
+          if (!result.ok) return;
           invalidate([parentPath]);
         } else {
           const { path: fromPath, parentPath } = pendingDialog;
           const toPath = joinPath(parentPath, name);
-          const ok = await runMutation({
+          const result = await runMutation({
             method: 'PATCH',
             body: JSON.stringify({ ...scopeBodyFields(machineId, scope), op: 'move', fromPath, toPath }),
           });
-          if (!ok) return;
+          if (!result.ok) return;
           invalidate([parentPath, fromPath]);
           onPathRenamed?.(fromPath, toPath);
         }
+        setPendingDialog(null);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [pendingDialog, machineId, scope, invalidate, onPathRenamed],
+  );
+
+  const handleMoveCopySubmit = useCallback(
+    async (toPathRaw: string) => {
+      if (pendingDialog === null || (pendingDialog.kind !== 'move' && pendingDialog.kind !== 'copy')) return;
+      const op = pendingDialog.kind;
+      const fromPath = pendingDialog.path;
+      const toPath = toPathRaw;
+      setSubmitting(true);
+      try {
+        const result = await runMutation({
+          method: 'PATCH',
+          body: JSON.stringify({ ...scopeBodyFields(machineId, scope), op, fromPath, toPath }),
+        });
+        if (!result.ok) {
+          // The source's parent listing is now stale if the source itself
+          // vanished out from under us — re-list it even though the mutation
+          // failed, same as the route contract's `error` toast (already fired
+          // by `runMutation`) documents.
+          if (result.status === 404) invalidate([parentOf(fromPath)]);
+          return;
+        }
+        // Both ops touch the destination's parent; only a MOVE also empties the
+        // source's parent of this entry and invalidates any cached descendant
+        // listings under the old path (mirrors rename's cache-drop). Copy
+        // leaves the source untouched, so it drops neither.
+        invalidate(op === 'move' ? [parentOf(fromPath), parentOf(toPath), fromPath] : [parentOf(fromPath), parentOf(toPath)]);
+        if (op === 'move') onPathRenamed?.(fromPath, toPath);
         setPendingDialog(null);
       } finally {
         setSubmitting(false);
@@ -352,11 +465,11 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
     const { path } = pendingDialog;
     setSubmitting(true);
     try {
-      const ok = await runMutation({
+      const result = await runMutation({
         method: 'DELETE',
         body: JSON.stringify({ ...scopeBodyFields(machineId, scope), path }),
       });
-      if (!ok) return;
+      if (!result.ok) return;
       invalidate([parentOf(path), path]);
       onPathRemoved?.(path);
       setPendingDialog(null);
@@ -364,6 +477,88 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
       setSubmitting(false);
     }
   }, [pendingDialog, machineId, scope, invalidate, onPathRemoved]);
+
+  // One shared hidden input serves every upload trigger (header + every
+  // directory's "Upload here"); `uploadTargetRef` carries which directory the
+  // NEXT file selection targets, set synchronously right before the input is
+  // clicked (a ref, not state — no render needs to observe it).
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetRef = useRef<string>('');
+  const [uploading, setUploading] = useState(false);
+
+  const triggerUpload = useCallback((targetPath: string) => {
+    uploadTargetRef.current = targetPath;
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleUploadInputChange = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const fileList = e.target.files;
+      const targetPath = uploadTargetRef.current;
+      // Reset immediately so selecting the exact same file(s) again still
+      // fires a change event.
+      e.target.value = '';
+      if (fileList === null || fileList.length === 0) return;
+      setUploading(true);
+      try {
+        // Sequential, not concurrent — these all write into the same
+        // directory and share one re-list at the end; racing the writes would
+        // buy nothing and could reorder failures confusingly.
+        for (const file of Array.from(fileList)) {
+          if (file.size > MAX_CLIENT_UPLOAD_BYTES) {
+            toast.error(`${file.name}: File is too large to upload`);
+            continue;
+          }
+          const content = await readFileAsBase64(file);
+          const path = joinPath(targetPath, file.name);
+          await runMutation(
+            {
+              method: 'POST',
+              body: JSON.stringify({ ...scopeBodyFields(machineId, scope), path, kind: 'file', encoding: 'base64', content }),
+            },
+            { toastPrefix: file.name },
+          );
+        }
+        invalidate([targetPath]);
+      } finally {
+        setUploading(false);
+      }
+    },
+    [machineId, scope, invalidate],
+  );
+
+  const downloadFile = useCallback(
+    (path: string) => {
+      void (async () => {
+        try {
+          const search = filesScopeSearchParams(machineId, scope);
+          search.set('path', path);
+          search.set('mode', 'download');
+          const res = await fetchWithAuth(`/api/machines/files?${search.toString()}`);
+          if (!res.ok) {
+            const body: unknown = await res.json().catch(() => null);
+            toast.error(readErrorMessage(body) ?? `Failed to download file (${res.status})`);
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          // A bare `<a href>` cannot carry the `fetchWithAuth` auth header —
+          // the blob + object-URL round-trip is what makes an authed download
+          // possible from a click the browser treats as same-origin-anonymous.
+          const anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = basenameOf(path);
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : 'Failed to download file');
+        }
+      })();
+    },
+    [machineId, scope],
+  );
 
   const ctx: TreeContext = {
     directories,
@@ -374,7 +569,10 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
     selectedPath: selectedPath ?? null,
     openCreateDialog,
     openRenameDialog,
+    openMoveCopyDialog,
     openDeleteDialog,
+    triggerUpload,
+    downloadFile,
   };
 
   return (
@@ -407,6 +605,17 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
             variant="ghost"
             size="icon"
             className="size-5"
+            title="Upload files"
+            disabled={uploading}
+            onClick={() => triggerUpload('')}
+          >
+            <Upload className="size-3" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-5"
             title="Refresh files"
             onClick={refresh}
           >
@@ -414,6 +623,18 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
           </Button>
         </div>
       </div>
+      {/* Shared by every upload trigger (header + each directory's "Upload
+          here"); `uploadTargetRef` carries which directory a given click
+          targets. Hidden rather than `sr-only` — it must stay out of layout
+          and never receive focus/tab order of its own. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        data-testid="file-tree-upload-input"
+        onChange={(e) => void handleUploadInputChange(e)}
+      />
       <DirectoryChildren path="" depth={0} ctx={ctx} />
 
       <FileNameDialog
@@ -429,6 +650,16 @@ function FileTreeRoot({ machineId, scope, onSelectFile, selectedPath, onPathRemo
         submitting={submitting}
         onCancel={closeDialog}
         onSubmit={handleCreateOrRenameSubmit}
+      />
+      <DestinationPathDialog
+        open={pendingDialog?.kind === 'move' || pendingDialog?.kind === 'copy'}
+        title={pendingDialog?.kind === 'copy' ? 'Copy' : 'Move'}
+        initialPath={
+          pendingDialog?.kind === 'move' || pendingDialog?.kind === 'copy' ? parentOf(pendingDialog.path) : ''
+        }
+        submitting={submitting}
+        onCancel={closeDialog}
+        onSubmit={handleMoveCopySubmit}
       />
       <AlertDialog open={pendingDialog?.kind === 'delete'} onOpenChange={(next) => { if (!next) closeDialog(); }}>
         <AlertDialogContent>
@@ -559,7 +790,19 @@ function DirectoryNode({
             <span>New Folder</span>
           </ContextMenuItem>
           <ContextMenuSeparator />
-          {/* Move to... / Copy to... / Upload here land here — tasks 12/13. */}
+          <ContextMenuItem onSelect={() => ctx.triggerUpload(path)}>
+            <Upload className="mr-2 h-4 w-4" />
+            <span>Upload here</span>
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => ctx.openMoveCopyDialog(path, 'directory', 'move')}>
+            <Move className="mr-2 h-4 w-4" />
+            <span>Move…</span>
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => ctx.openMoveCopyDialog(path, 'directory', 'copy')}>
+            <Copy className="mr-2 h-4 w-4" />
+            <span>Copy…</span>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => ctx.openRenameDialog(path, 'directory')}>
             <Pencil className="mr-2 h-4 w-4" />
             <span>Rename</span>
@@ -611,7 +854,19 @@ function FileNode({
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
-        {/* Download lands here — task 13. */}
+        <ContextMenuItem onSelect={() => ctx.downloadFile(path)}>
+          <Download className="mr-2 h-4 w-4" />
+          <span>Download</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => ctx.openMoveCopyDialog(path, 'file', 'move')}>
+          <Move className="mr-2 h-4 w-4" />
+          <span>Move…</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => ctx.openMoveCopyDialog(path, 'file', 'copy')}>
+          <Copy className="mr-2 h-4 w-4" />
+          <span>Copy…</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => ctx.openRenameDialog(path, 'file')}>
           <Pencil className="mr-2 h-4 w-4" />
           <span>Rename</span>
