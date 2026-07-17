@@ -83,6 +83,12 @@ export interface SidebarMessagesContentProps {
   onScrollNearTop?: () => void;
   /** Whether an older page is currently loading. */
   isLoadingOlder?: boolean;
+  /** Whether more (older) pages exist for this conversation — forces virtualization even
+   *  under SIDEBAR_VIRTUALIZATION_THRESHOLD, since only the virtualized branch wires
+   *  onScrollNearTop/isLoadingOlder (PR 6 review, CodeRabbit: the regular/non-virtualized
+   *  branch had no near-top detection at all, so "load older" was unreachable below the
+   *  threshold no matter how much older history existed). */
+  hasMoreOlder?: boolean;
 }
 
 export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
@@ -99,9 +105,14 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   remoteStreams,
   onScrollNearTop,
   isLoadingOlder,
+  hasMoreOlder,
 }) => {
   const scrollRef = useConversationScrollRef();
-  const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD;
+  // Also virtualize whenever an older page remains, regardless of the count threshold —
+  // the regular branch below has no scroll listener of its own, so "load older" would
+  // otherwise be unreachable for a conversation with more history than the cache
+  // currently holds but fewer than SIDEBAR_VIRTUALIZATION_THRESHOLD rendered messages.
+  const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD || hasMoreOlder === true;
   // Streams whose messageId already landed in `messages` are filtered out so
   // we don't render the same message twice during the brief window between
   // server-confirm and store-removal.
@@ -343,7 +354,7 @@ const SidebarChatTab: React.FC = () => {
   }, [currentConversationId, selectedAgent]);
 
   // "Load older" (epic leaf 6.6, scroll-to-top) — same agent/global branch as reload.
-  const { isLoadingOlder } = useConversationOlderPageState(currentConversationId);
+  const { isLoadingOlder, hasMoreOlder } = useConversationOlderPageState(currentConversationId);
   const handleScrollNearTop = useCallback(() => {
     const conversationId = currentConversationId;
     if (!conversationId) return;
@@ -983,6 +994,7 @@ const SidebarChatTab: React.FC = () => {
               remoteStreams={remoteStreams}
               onScrollNearTop={handleScrollNearTop}
               isLoadingOlder={isLoadingOlder}
+              hasMoreOlder={hasMoreOlder}
             />
             {/* Scroll-to-bottom button - visible when user scrolls up */}
             <ConversationScrollButton className="z-10 bottom-8" />
