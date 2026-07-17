@@ -26,15 +26,15 @@ vi.mock('@/lib/auth', () => ({
 
 type HandleResult =
   | { ok: true; handle: { machineId: string } }
-  | { ok: false; reason: 'not_found' | 'vanished' };
+  | { ok: false; reason: 'not_found' | 'vanished' | 'not_started' };
 
 const canViewMachine = vi.fn(async () => true);
-const resolveBranchMachineHandle = vi.fn(
+const resolveMachineFilesHandle = vi.fn(
   async (): Promise<HandleResult> => ({ ok: true, handle: { machineId: 'sbx-1' } }),
 );
 vi.mock('@/lib/machines/machine-files-runtime', () => ({
   canViewMachine: (...args: unknown[]) => canViewMachine(...(args as [])),
-  resolveBranchMachineHandle: (...args: unknown[]) => resolveBranchMachineHandle(...(args as [])),
+  resolveMachineFilesHandle: (...args: unknown[]) => resolveMachineFilesHandle(...(args as [])),
 }));
 
 // Mirrors the real machine-fs result unions, so a test can drive the FAILURE
@@ -62,7 +62,7 @@ function get(query: Record<string, string>): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   canViewMachine.mockResolvedValue(true);
-  resolveBranchMachineHandle.mockResolvedValue({ ok: true, handle: { machineId: 'sbx-1' } });
+  resolveMachineFilesHandle.mockResolvedValue({ ok: true, handle: { machineId: 'sbx-1' } });
   listMachineDirectory.mockResolvedValue({ ok: true, entries: [] });
   readMachineFile.mockResolvedValue({ ok: true, content: Buffer.from('hi', 'utf8') });
 });
@@ -142,18 +142,18 @@ describe('/api/machines/files request contract', () => {
     canViewMachine.mockResolvedValue(false);
     const res = await GET(get({ path: 'src' }));
     expect(res.status).toBe(403);
-    expect(resolveBranchMachineHandle).not.toHaveBeenCalled();
+    expect(resolveMachineFilesHandle).not.toHaveBeenCalled();
     expect(listMachineDirectory).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the branch machine has no tracking row', async () => {
-    resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'not_found' });
+    resolveMachineFilesHandle.mockResolvedValue({ ok: false, reason: 'not_found' });
     const res = await GET(get({ path: 'src' }));
     expect(res.status).toBe(404);
   });
 
   it('returns 503 when the branch Sprite has vanished', async () => {
-    resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'vanished' });
+    resolveMachineFilesHandle.mockResolvedValue({ ok: false, reason: 'vanished' });
     const res = await GET(get({ path: 'src' }));
     expect(res.status).toBe(503);
   });
@@ -162,7 +162,7 @@ describe('/api/machines/files request contract', () => {
   // tab's file tree), so it must read as a sentence to a person — never as the
   // internal token, and never as a bare `exec_failed`.
   it('never puts an internal token in the user-facing `error`', async () => {
-    resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'vanished' });
+    resolveMachineFilesHandle.mockResolvedValue({ ok: false, reason: 'vanished' });
     const body = await (await GET(get({ path: 'src' }))).json();
     expect(body.reason).toBe('vanished'); // machine-readable fact: unchanged
     expect(body.error).toBe('This branch checkout is unavailable');
@@ -214,8 +214,101 @@ describe('/api/machines/files request contract', () => {
     const fileMiss = await (await GET(get({ path: 'src/gone.ts', mode: 'read' }))).json();
     expect(fileMiss.reason).toBe('file_not_found');
 
-    resolveBranchMachineHandle.mockResolvedValue({ ok: false, reason: 'not_found' });
+    resolveMachineFilesHandle.mockResolvedValue({ ok: false, reason: 'not_found' });
     const checkoutMiss = await (await GET(get({ path: 'src/gone.ts', mode: 'read' }))).json();
     expect(checkoutMiss.reason).toBe('not_found');
+  });
+
+  it('resolves branch scope with the right dispatcher shape', async () => {
+    const res = await GET(get({ path: 'src' }));
+    expect(res.status).toBe(200);
+    expect(resolveMachineFilesHandle).toHaveBeenCalledWith({
+      scope: 'branch',
+      machineId: 't1',
+      projectName: 'p1',
+      branchName: 'b1',
+    });
+  });
+});
+
+// Root scope omits projectName/branchName entirely — `get` (above) always
+// supplies both, so these tests build the query directly.
+function getRoot(query: Record<string, string> = {}): Request {
+  const params = new URLSearchParams({ machineId: 't1', ...query });
+  return new Request(`http://localhost/api/machines/files?${params.toString()}`);
+}
+
+describe('/api/machines/files root scope', () => {
+  it('resolves root scope when projectName/branchName are absent', async () => {
+    const res = await GET(getRoot());
+    expect(res.status).toBe(200);
+    expect(resolveMachineFilesHandle).toHaveBeenCalledWith({ scope: 'root', machineId: 't1' });
+    expect(listMachineDirectory).toHaveBeenCalledWith(expect.objectContaining({ path: '/workspace' }));
+  });
+
+  it('confines a relative path under /workspace (SANDBOX_ROOT), not the branch checkout root', async () => {
+    const res = await GET(getRoot({ path: 'repo/src' }));
+    expect(res.status).toBe(200);
+    expect(listMachineDirectory).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/workspace/repo/src' }),
+    );
+  });
+
+  it('rejects a `..` traversal in root scope without touching the filesystem', async () => {
+    const res = await GET(getRoot({ path: '../etc' }));
+    expect(res.status).toBe(400);
+    expect(listMachineDirectory).not.toHaveBeenCalled();
+  });
+
+  it('rejects an absolute path in root scope without touching the filesystem', async () => {
+    const res = await GET(getRoot({ mode: 'read', path: '/etc/passwd' }));
+    expect(res.status).toBe(400);
+    expect(readMachineFile).not.toHaveBeenCalled();
+  });
+
+  it('maps a null root handle to 404 not_started with no internal token in `error`', async () => {
+    resolveMachineFilesHandle.mockResolvedValue({ ok: false, reason: 'not_started' });
+    const res = await GET(getRoot());
+    const body = await res.json();
+    expect(res.status).toBe(404);
+    expect(body.reason).toBe('not_started');
+    expect(body.error).toBe("This machine hasn't been started yet");
+    expect(body.error).not.toMatch(/not_started/);
+  });
+
+  it('400s when only projectName is present (root/branch pair broken)', async () => {
+    const res = await GET(getRoot({ projectName: 'p1' }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'projectName and branchName must be provided together' });
+    expect(resolveMachineFilesHandle).not.toHaveBeenCalled();
+  });
+
+  it('400s when only branchName is present (root/branch pair broken)', async () => {
+    const res = await GET(getRoot({ branchName: 'b1' }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'projectName and branchName must be provided together' });
+    expect(resolveMachineFilesHandle).not.toHaveBeenCalled();
+  });
+
+  it('400s when only projectName is present as an empty string', async () => {
+    const res = await GET(getRoot({ projectName: '', branchName: 'b1' }));
+    expect(res.status).toBe(400);
+    expect(resolveMachineFilesHandle).not.toHaveBeenCalled();
+  });
+
+  it('400s when only branchName is present as an empty string', async () => {
+    const res = await GET(getRoot({ projectName: 'p1', branchName: '' }));
+    expect(res.status).toBe(400);
+    expect(resolveMachineFilesHandle).not.toHaveBeenCalled();
+  });
+
+  // The branch arm's "empty relativePath => not_found" remap encodes "never
+  // cloned" — a BRANCH-only fact. A live root Sprite's /workspace always
+  // exists, so root scope must never emit that remap, even at the root path.
+  it("does not leak the branch arm's root-missing remap into root scope", async () => {
+    listMachineDirectory.mockResolvedValue({ ok: false, reason: 'not_found' });
+    const body = await (await GET(getRoot())).json();
+    expect(body.reason).toBe('dir_not_found');
+    expect(body.error).toBe('This folder is no longer on the machine');
   });
 });
