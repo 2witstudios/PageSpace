@@ -76,4 +76,9 @@ describe('selectAnswerableAskUserToolCallIds', () => {
   it('given an empty rendered list, should answer nothing', () => {
     expect(selectAnswerableAskUserToolCallIds({ ...base, renderedMessages: [] })).toEqual(new Set());
   });
+
+  it('given the last assistant message has no parts field at all (undefined), should answer nothing without throwing', () => {
+    const rendered = [confirmed({ id: 'a1', role: 'assistant' } as UIMessage)];
+    expect(selectAnswerableAskUserToolCallIds({ ...base, renderedMessages: rendered })).toEqual(new Set());
+  });
 });

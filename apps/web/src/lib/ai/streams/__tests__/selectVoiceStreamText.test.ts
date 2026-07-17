@@ -29,6 +29,11 @@ describe('selectVoiceStreamText', () => {
     expect(selectVoiceStreamText([streaming(msg)])).toBe('foobar');
   });
 
+  it('given the streaming row has no parts field at all (undefined), should return an empty string without throwing', () => {
+    const msg = { id: 'a1', role: 'assistant' } as UIMessage;
+    expect(selectVoiceStreamText([streaming(msg)])).toBe('');
+  });
+
   it('given non-text parts on the streaming row, should ignore them', () => {
     const msg = {
       id: 'a1',

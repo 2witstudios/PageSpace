@@ -169,6 +169,32 @@ describe('useConversationMessagesStore', () => {
     expect(isLoadCurrent('c1', gen2)).toBe(true);
   });
 
+  it('given removeOptimisticSendOnFailure for a tracked optimistic send, should remove it from optimisticSends', () => {
+    const { addOptimisticSend, removeOptimisticSendOnFailure, getEntry } = useConversationMessagesStore.getState();
+    addOptimisticSend('c1', msg('opt1'));
+    removeOptimisticSendOnFailure('c1', 'opt1');
+    expect(getEntry('c1').optimisticSends).toEqual([]);
+  });
+
+  it('given applyAskUserAnswer then revertAskUserAnswer for the same tool call, should patch to output-available then back to input-available with output dropped', () => {
+    const { startLoad, applyLoad, applyAskUserAnswer, revertAskUserAnswer, getEntry } = useConversationMessagesStore.getState();
+    const gen = startLoad('c1');
+    const askUserMessage: UIMessage = {
+      id: 'm1',
+      role: 'assistant',
+      parts: [{ type: 'tool-ask_user', toolCallId: 'tc1', state: 'input-available', input: { questions: [] } } as UIMessage['parts'][number]],
+    };
+    applyLoad('c1', gen, [askUserMessage]);
+
+    applyAskUserAnswer('c1', { messageId: 'm1', toolCallId: 'tc1', output: { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] } });
+    expect(getEntry('c1').messages[0].parts[0]).toMatchObject({ state: 'output-available' });
+
+    revertAskUserAnswer('c1', { messageId: 'm1', toolCallId: 'tc1' });
+    const revertedPart = getEntry('c1').messages[0].parts[0] as Record<string, unknown>;
+    expect(revertedPart.state).toBe('input-available');
+    expect(revertedPart.output).toBeUndefined();
+  });
+
   it('given applyConfirmedMessage for a new id, should append it; for an existing id, should replace its content in place', () => {
     const { startLoad, applyLoad, applyConfirmedMessage, getEntry } = useConversationMessagesStore.getState();
     const gen = startLoad('c1');

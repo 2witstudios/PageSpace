@@ -62,6 +62,16 @@ describe('applyAskUserAnswer', () => {
     expect(result[0].parts[0]).toEqual({ type: 'text', text: 'hello' });
   });
 
+  it('given a matching message with no parts array at all (undefined), should return the input reference unchanged', () => {
+    const messages = [{ id: 'a1', role: 'assistant' } as UIMessage];
+    const result = applyAskUserAnswer(messages, {
+      messageId: 'a1',
+      toolCallId: 'tc1',
+      output: { answers: [] },
+    });
+    expect(result).toBe(messages);
+  });
+
   it('given multiple messages, should leave sibling messages untouched (reference equality)', () => {
     const other = assistantMessage('a2', [askUserPart('tc2', 'input-available')]);
     const messages = [assistantMessage('a1', [askUserPart('tc1', 'input-available')]), other];
