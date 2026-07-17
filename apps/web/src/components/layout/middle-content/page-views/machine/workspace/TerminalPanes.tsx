@@ -253,10 +253,11 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
   // out on the next wide render.
   //
   // The inactive panes are HIDDEN, not unmounted. Unmounting an XtermTerminal
-  // emits `agent-terminal:disconnect`, which nulls the session's `closedFn` and
-  // arms the idle reap — so an agent that finished while its pane was off-screen
-  // would lose its final output and exit code, and coming back to that pane would
-  // cold-start a fresh PTY instead of showing the completed run.
+  // emits `agent-terminal:disconnect`, which removes this pane's viewer entry —
+  // and when it was the last viewer, arms the idle reap — so an agent that
+  // finished while its pane was off-screen would lose its final output and exit
+  // code, and coming back to that pane would cold-start a fresh PTY instead of
+  // showing the completed run.
   //
   // `invisible` (visibility:hidden), NOT `hidden` (display:none). Every pane here
   // is stacked at inset-0, so a hidden one still has the container's real size —

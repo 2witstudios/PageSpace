@@ -23,7 +23,7 @@
  */
 
 import type { TerminalSessionMap } from './terminal-session-map';
-import { appendScrollback } from './terminal-session-map';
+import { appendScrollback, broadcastOutput } from './terminal-session-map';
 import { truncateToBytes } from '@pagespace/lib/services/sandbox/output-limit';
 
 /** Cap on the output preview injected into the feed — a live PTY pane, not a log viewer. */
@@ -167,7 +167,7 @@ export async function handleTerminalActivityRequest(
   // hold deleted between steps (agent-terminal-handler's hold heartbeat
   // reads this via latestActivityAt).
   session.lastOutputAt = Date.now();
-  session.outputFn(text);
+  broadcastOutput(session, text);
 
   return { status: 200, body: { success: true, delivered: true } };
 }

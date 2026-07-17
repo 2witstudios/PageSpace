@@ -1,18 +1,29 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createTerminalSessionMap, appendScrollback, MAX_SCROLLBACK_BYTES, type TerminalSession } from '../terminal-session-map';
+import {
+  createTerminalSessionMap,
+  appendScrollback,
+  broadcastOutput,
+  broadcastClosed,
+  MAX_SCROLLBACK_BYTES,
+  type TerminalSession,
+  type TerminalViewer,
+} from '../terminal-session-map';
+
+function fakeViewer(userId = 'user1'): TerminalViewer {
+  return { userId, emitOutput: vi.fn(), emitClosed: vi.fn(), emitError: vi.fn() };
+}
 
 function fakeSession(sessionKey = 'key1', sandboxId = 'sbx1'): TerminalSession {
   return {
-    command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn(), setViewerAttached: vi.fn() },
+    command: { write: vi.fn(), kill: vi.fn(), resize: vi.fn(), setViewerAttached: vi.fn(), isQuiesced: () => false },
     sandboxId,
     sessionKey,
+    lastViewerUserId: 'user1',
     releaseSlot: vi.fn(),
-    outputFn: vi.fn(),
-    closedFn: vi.fn(),
+    viewers: new Map(),
     scrollback: [],
     scrollbackBytes: 0,
     hasOutput: false,
-    viewerAttached: true,
     resumedAtCreate: false,
     reAuthInterval: undefined,
     idleTimer: undefined,
@@ -57,29 +68,39 @@ describe('createTerminalSessionMap', () => {
     });
   });
 
-  describe('reattach', () => {
-    it('given reattach with a new socketId, getBySocket returns session for the new socket', () => {
+  describe('addBinding', () => {
+    it('given addBinding with a new socketId, getBySocket returns session for the new socket', () => {
       const map = createTerminalSessionMap();
       const session = fakeSession();
       map.setNew('key1', 'sock1', session);
-      map.reattach('key1', 'sock2');
+      map.addBinding('key1', 'sock2');
       expect(map.getBySocket('sock2')).toBe(session);
     });
 
-    it('given reattach, getBySocket for the old socketId returns undefined', () => {
+    it('given addBinding, the FIRST socket keeps resolving too — joining never steals the incumbent binding (#2093)', () => {
       const map = createTerminalSessionMap();
       const session = fakeSession();
       map.setNew('key1', 'sock1', session);
-      map.reattach('key1', 'sock2');
-      expect(map.getBySocket('sock1')).toBeUndefined();
+      map.addBinding('key1', 'sock2');
+      expect(map.getBySocket('sock1')).toBe(session);
     });
 
-    it('given reattach, getByKey still returns the same session', () => {
+    it('given addBinding, getByKey still returns the same session', () => {
       const map = createTerminalSessionMap();
       const session = fakeSession();
       map.setNew('key1', 'sock1', session);
-      map.reattach('key1', 'sock2');
+      map.addBinding('key1', 'sock2');
       expect(map.getByKey('key1')).toBe(session);
+    });
+
+    it('given two bindings and detach of one, the other still resolves', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.addBinding('key1', 'sock2');
+      map.detach('sock1');
+      expect(map.getBySocket('sock1')).toBeUndefined();
+      expect(map.getBySocket('sock2')).toBe(session);
     });
   });
 
@@ -124,6 +145,16 @@ describe('createTerminalSessionMap', () => {
     it('given deleteByKey on unknown key, should be a no-op', () => {
       const map = createTerminalSessionMap();
       expect(() => map.deleteByKey('nope')).not.toThrow();
+    });
+
+    it('given TWO bindings for one key, deleteByKey clears BOTH — a dangling survivor would resolve a detached viewer to a future session reusing the key (#2093)', () => {
+      const map = createTerminalSessionMap();
+      const session = fakeSession();
+      map.setNew('key1', 'sock1', session);
+      map.addBinding('key1', 'sock2');
+      map.deleteByKey('key1');
+      expect(map.getBySocket('sock1')).toBeUndefined();
+      expect(map.getBySocket('sock2')).toBeUndefined();
     });
 
     it('given two sessions, deleteByKey for one should not affect the other', () => {
@@ -198,6 +229,42 @@ describe('cold-create serialization (trackCreate / pendingCreate)', () => {
     // The stale first create's settle must not clear the SECOND's claim, or a
     // third connect would race the create that is genuinely still in flight.
     expect(map.pendingCreate('k1')).toBe(second);
+  });
+});
+
+describe('broadcastOutput / broadcastClosed', () => {
+  it('given N viewers, broadcastOutput fans the chunk out to every one of them', () => {
+    const session = fakeSession();
+    const a = fakeViewer('user1');
+    const b = fakeViewer('user2');
+    session.viewers.set('sockA conn-a', a);
+    session.viewers.set('sockB conn-b', b);
+
+    broadcastOutput(session, 'hello');
+
+    expect(a.emitOutput).toHaveBeenCalledWith('hello');
+    expect(b.emitOutput).toHaveBeenCalledWith('hello');
+  });
+
+  it('given N viewers, broadcastClosed fans the exit out to every one of them', () => {
+    const session = fakeSession();
+    const a = fakeViewer('user1');
+    const b = fakeViewer('user2');
+    session.viewers.set('sockA conn-a', a);
+    session.viewers.set('sockB conn-b', b);
+
+    broadcastClosed(session, 0);
+
+    expect(a.emitClosed).toHaveBeenCalledWith(0);
+    expect(b.emitClosed).toHaveBeenCalledWith(0);
+  });
+
+  it('given zero viewers, broadcasting is a no-op — a detached session emits to nobody', () => {
+    const session = fakeSession();
+    expect(() => {
+      broadcastOutput(session, 'into the void');
+      broadcastClosed(session, 1);
+    }).not.toThrow();
   });
 });
 

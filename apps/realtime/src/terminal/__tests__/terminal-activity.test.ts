@@ -22,19 +22,23 @@ function makePayload(over: Partial<TerminalActivityPayload> = {}): TerminalActiv
   };
 }
 
-function makeSession(): { session: TerminalSession; emitted: string[] } {
+function makeSession(): { session: TerminalSession; emitted: string[]; emittedB: string[] } {
   const emitted: string[] = [];
+  const emittedB: string[] = [];
   const session = {
     command: {} as TerminalSession['command'],
     sandboxId: 'sbx-1',
     sessionKey: 'key-1',
+    lastViewerUserId: 'user1',
     releaseSlot: () => {},
-    outputFn: (data: string) => emitted.push(data),
-    closedFn: () => {},
+    viewers: new Map([
+      ['sockA conn-a', { userId: 'user1', emitOutput: (data: string) => emitted.push(data), emitClosed: () => {}, emitError: () => {} }],
+      ['sockB conn-b', { userId: 'user2', emitOutput: (data: string) => emittedB.push(data), emitClosed: () => {}, emitError: () => {} }],
+    ]),
     scrollback: [],
     scrollbackBytes: 0,
   } as TerminalSession;
-  return { session, emitted };
+  return { session, emitted, emittedB };
 }
 
 describe('parseTerminalActivityRequest', () => {
@@ -197,8 +201,8 @@ describe('handleTerminalActivityRequest', () => {
     expect(result).toEqual({ status: 200, body: { success: true, delivered: false } });
   });
 
-  it('given a live session, should inject the formatted line into its scrollback and output feed', async () => {
-    const { session, emitted } = makeSession();
+  it('given a live session, should inject the formatted line into its scrollback and EVERY attached viewer\'s feed (#2093)', async () => {
+    const { session, emitted, emittedB } = makeSession();
     const deps = makeDeps({
       sessionMap: { getByKey: (key) => (key === 't1:d1:terminal-page-1' ? session : undefined) },
     });
@@ -208,6 +212,7 @@ describe('handleTerminalActivityRequest', () => {
     expect(result).toEqual({ status: 200, body: { success: true, delivered: true } });
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toContain('Agent Bob ran:');
+    expect(emittedB).toEqual(emitted);
     expect(session.scrollback).toEqual(emitted);
   });
 

@@ -4,27 +4,60 @@ import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox
 export const MAX_SCROLLBACK_BYTES = 64 * 1024;
 export const DETACHED_IDLE_MS = 30 * 60 * 1000;
 
+/**
+ * One attached viewer of a session — a (socket, pane) pair. A session holds a
+ * SET of these (issue #2093): attach is a join, not a takeover, so any number
+ * of browsers can watch the same PTY. The emit callbacks close over that
+ * viewer's own socket AND its client-minted connectionId — every payload they
+ * emit is stamped with that connectionId, which is how the client routes
+ * events to the right pane (several panes multiplex one socket).
+ *
+ * `emitClosed` says the PROCESS ended (the pane prints an exit code);
+ * `emitError` says something happened to THIS VIEWER (the pane prints the
+ * message). An eviction — access revoked while the PTY keeps running for
+ * everyone else — must use `emitError`: telling that one pane the process
+ * exited would be false, and its user's next move (reopen, file a crash
+ * report) would be built on it.
+ */
+export type TerminalViewer = {
+  userId: string;
+  emitOutput(data: string): void;
+  emitClosed(exitCode: number): void;
+  emitError(message: string): void;
+};
+
 export type TerminalSession = {
   command: PtyShell;
   sandboxId: string;
   sessionKey: string;
   /**
-   * The user CURRENTLY attached to this session — the creator, or whoever last
-   * reattached. A session outlives its creator's connection, so this is the
-   * identity the 60s re-auth tick must re-check: checking the creator would leave
-   * a reattached viewer whose access was revoked still driving the PTY.
+   * The MOST RECENT attacher — the creator, or whoever last joined, updated to
+   * the departing viewer when the last one leaves. While viewers are attached
+   * the 60s re-auth tick checks every one of them individually; this field is
+   * the identity it checks while the session is DETACHED, so a revoked user's
+   * still-running process cannot keep executing, unsupervised, until the
+   * 30-min idle reap.
    */
-  viewerUserId: string;
+  lastViewerUserId: string;
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   sessionId?: string;
   /**
-   * Is a viewer currently attached? Set true on create/reattach, false on
-   * detach — one of the two "work is in progress" signals the Sprites Tasks
-   * API hold (leaf 5-1) keys on. Kept explicit rather than inferred from
-   * `idleTimer === undefined` so the hold heartbeat reads a stated fact, not
-   * a coincidence of the reap machinery.
+   * Every attached viewer, keyed by the handler's namespaced socketKey
+   * (`${socket.id}\u0000${connectionId}`) — the SAME string the map's
+   * `bySocket` uses, so removing a viewer and removing its binding always
+   * share a key. INVARIANT: a viewer entry, its `bySocket` binding, and its
+   * handler-side `activeConnectionIds` membership are installed in one
+   * uninterrupted (throw-free) block and removed together (`removeViewer` /
+   * `disconnectConnection`) — a viewer registered without its tracking
+   * entries would be a ghost no disconnect can ever remove, pinning the
+   * last-viewer detach transition (and the PTY, slot, and billing behind it)
+   * for the life of the process. Attached-ness is derived:
+   * `viewers.size > 0`. Output is fanned out to every entry
+   * (`broadcastOutput`); ALL attached authorized viewers may type (a
+   * deliberate tmux-style decision — issue #2093 — there is no
+   * driver/write-lock).
    */
-  viewerAttached: boolean;
+  viewers: Map<string, TerminalViewer>;
   /** When the PTY last produced output — half of the hold's activity signal. */
   lastOutputAt?: number;
   /**
@@ -44,8 +77,6 @@ export type TerminalSession = {
   settleInterval?: ReturnType<typeof setInterval>;
   idleTimer?: ReturnType<typeof setTimeout>;
   releaseSlot(): void;
-  outputFn: (data: string) => void;
-  closedFn: (exitCode: number) => void;
   scrollback: string[];
   scrollbackBytes: number;
   /**
@@ -96,11 +127,30 @@ export function appendScrollback(
   }
 }
 
+/**
+ * Fan a PTY output chunk out to every attached viewer, each tagged with its own
+ * connectionId (inside `emitOutput`). Zero viewers -> zero emits — a detached
+ * session's output goes only to the scrollback, exactly as before.
+ */
+export function broadcastOutput(session: Pick<TerminalSession, 'viewers'>, data: string): void {
+  for (const viewer of session.viewers.values()) viewer.emitOutput(data);
+}
+
+/** Fan a PTY exit out to every attached viewer. Zero viewers -> zero emits. */
+export function broadcastClosed(session: Pick<TerminalSession, 'viewers'>, exitCode: number): void {
+  for (const viewer of session.viewers.values()) viewer.emitClosed(exitCode);
+}
+
 export type TerminalSessionMap = {
   getBySocket(socketId: string): TerminalSession | undefined;
   getByKey(sessionKey: string): TerminalSession | undefined;
   setNew(sessionKey: string, socketId: string, session: TerminalSession): void;
-  reattach(sessionKey: string, newSocketId: string): void;
+  /**
+   * Bind one more socket to a live session's key. `bySocket` is many-to-one
+   * (issue #2093): every attached viewer holds its own binding, and joining
+   * never disturbs the bindings of the viewers already watching.
+   */
+  addBinding(sessionKey: string, socketId: string): void;
   detach(socketId: string): void;
   deleteByKey(sessionKey: string): void;
   /**
@@ -158,18 +208,18 @@ export function createTerminalSessionMap(): TerminalSessionMap {
       byKey.set(sessionKey, session);
       bySocket.set(socketId, sessionKey);
     },
-    reattach(sessionKey, newSocketId) {
-      for (const [sid, key] of bySocket) {
-        if (key === sessionKey) { bySocket.delete(sid); break; }
-      }
-      bySocket.set(newSocketId, sessionKey);
+    addBinding(sessionKey, socketId) {
+      bySocket.set(socketId, sessionKey);
     },
     detach(socketId) {
       bySocket.delete(socketId);
     },
     deleteByKey(sessionKey) {
+      // ALL bindings, not just the first: N viewers hold N bySocket entries,
+      // and a survivor left dangling would resolve a detached viewer's later
+      // input to a future session reusing this key.
       for (const [sid, key] of bySocket) {
-        if (key === sessionKey) { bySocket.delete(sid); break; }
+        if (key === sessionKey) bySocket.delete(sid);
       }
       byKey.delete(sessionKey);
     },
