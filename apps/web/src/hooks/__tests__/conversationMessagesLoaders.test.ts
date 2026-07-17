@@ -68,6 +68,14 @@ describe('conversationMessagesLoaders', () => {
     expect(useConversationMessagesStore.getState().getEntry('c1').messages).toEqual([msg('m1')]);
   });
 
+  it('given an ok response with no messages field at all, should commit an empty list rather than throw', async () => {
+    mockedFetch.mockResolvedValue(okResponse({}));
+    await loadGlobalConversationMessages('c1');
+    const entry = useConversationMessagesStore.getState().getEntry('c1');
+    expect(entry.messages).toEqual([]);
+    expect(entry.loadStatus).toBe('loaded');
+  });
+
   it('given a successful agent load, should commit messages and mark the entry loaded', async () => {
     mockedFetch.mockResolvedValue(okResponse({ messages: [msg('a1')] }));
     await loadAgentConversationMessages('agent-1', 'c1');
@@ -104,6 +112,41 @@ describe('conversationMessagesLoaders', () => {
 
     const first = loadGlobalConversationMessages('c1');
     const second = loadGlobalConversationMessages('c1');
+    await second;
+    resolveFirst(okResponse({ messages: [msg('stale')] }));
+    await first;
+
+    const entry = useConversationMessagesStore.getState().getEntry('c1');
+    expect(entry.messages).toEqual([msg('fresh')]);
+    expect(entry.loadStatus).toBe('loaded');
+  });
+
+  it('given a load superseded between the response arriving and its body resolving, the stale body should be dropped', async () => {
+    let resolveBody!: (v: unknown) => void;
+    mockedFetch
+      .mockImplementationOnce(async () =>
+        ({ ok: true, status: 200, json: () => new Promise((resolve) => { resolveBody = resolve; }) }) as Response)
+      .mockImplementationOnce(async () => okResponse({ messages: [msg('fresh')] }));
+
+    const first = loadGlobalConversationMessages('c1');
+    // The response headers have landed for the first load; before its BODY resolves,
+    // a newer load starts and completes.
+    await new Promise((r) => setTimeout(r, 0));
+    await loadGlobalConversationMessages('c1');
+    resolveBody({ messages: [msg('stale')] });
+    await first;
+
+    expect(useConversationMessagesStore.getState().getEntry('c1').messages).toEqual([msg('fresh')]);
+  });
+
+  it('given a slow AGENT load superseded by a newer one, the stale result should be dropped', async () => {
+    let resolveFirst!: (r: Response) => void;
+    mockedFetch
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(async () => okResponse({ messages: [msg('fresh')] }));
+
+    const first = loadAgentConversationMessages('agent-1', 'c1');
+    const second = loadAgentConversationMessages('agent-1', 'c1');
     await second;
     resolveFirst(okResponse({ messages: [msg('stale')] }));
     await first;

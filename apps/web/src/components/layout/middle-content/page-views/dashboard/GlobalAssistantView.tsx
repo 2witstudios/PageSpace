@@ -407,15 +407,11 @@ const GlobalAssistantView: React.FC = () => {
 
   const stop = useStopStream({ activeStream, pendingSendConversationId, rawStop });
 
-  // INTERIM (PR 5A → deleted in PR 5B). The six #2061 clobber guards still gate the old
-  // fetch-and-setMessages writers, and they ask "is MY OWN local stream producing content for the
-  // conversation about to be loaded/refreshed" — narrower than effectiveIsStreaming, which folds
-  // in streams this surface merely shows a Stop button for.
-  //
-  // Re-derived from the selectors rather than the deleted hold-refs: each `*ActiveStream` is
-  // already scoped to its own channel AND conversation, so `isOwn === true` is exactly that
-  // question — with none of the "is this the mode-selected chat" ambiguity the refs had. The
-  // guards themselves die in PR 5B, when merge-at-render makes them unnecessary.
+  // "Is MY OWN stream live for the conversation on screen", per chat. The #2061 clobber
+  // guards that used to consume these died with PR 5B (merge-at-render made them
+  // unnecessary); what remains is the resume handler's "had a turn in flight" record —
+  // conversation-scoped, so a stream still running against a conversation the user left
+  // cannot trigger a regenerate for the one they are now looking at.
   const isOwnAgentStreamForCurrentConversation = agentActiveStream?.isOwn === true;
   const isOwnGlobalStreamForCurrentConversation = globalActiveStream?.isOwn === true;
   // For guarding TRANSPORT-ARRAY writes, the store entry is not enough: it is absent for the whole

@@ -381,10 +381,10 @@ const SidebarChatTab: React.FC = () => {
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
-  // INTERIM (PR 5A → deleted in PR 5B): the three #2061 clobber guards below still ask "is MY OWN
-  // stream producing content for the conversation I'm about to load/refresh" — narrower than
-  // displayIsStreaming, which also covers streams this surface merely shows a Stop button for.
-  // `activeStream` is already conversation-scoped, so `isOwn === true` is exactly that question.
+  // "Is MY OWN stream live for the conversation on screen". The #2061 clobber guards that
+  // consumed this died with PR 5B (merge-at-render); what remains is the resume handler's
+  // "had a turn in flight" record — conversation-scoped, so a stream still running against
+  // a conversation the user left cannot trigger a regenerate for the one on screen.
   const isOwnStreamForCurrentConversation = activeStream?.isOwn === true;
 
   const remoteStreamingUser = !displayIsStreaming
