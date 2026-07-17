@@ -841,57 +841,114 @@ describe('buildAgentTerminalHandlers', () => {
       expect(auth.releaseSlot).toHaveBeenCalledTimes(1); // slot not double-released
     });
 
-    it('given a session reattached by a DIFFERENT user, should re-auth the CURRENT viewer, not the creator', async () => {
-      // A session outlives its creator's connection. If re-auth kept checking the
-      // creator — who of course remains authorized — a viewer who reattached and
-      // then had their access revoked would keep receiving PTY output, and could
-      // keep typing, indefinitely.
+    it('given two users attached, should re-auth EVERY attached viewer — checking any single identity would let a revoked co-viewer keep streaming (#2093)', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload); // user1 creates
 
-      // user2 reattaches on their own socket.
+      // user2 JOINS on their own socket; user1 stays attached.
       const socket2 = makeSocket('sock2', 'user2');
       const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
       await handlers2.onConnect(validPayload);
-      expect(sessionMap.getByKey('branch1:agent:cli')).toMatchObject({ viewerUserId: 'user2' });
 
       checkAuth.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
 
-      // The tick must ask about user2 — the one actually driving the PTY.
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
+    });
+
+    it('given the creator has left and a DIFFERENT user is watching, should re-auth the remaining viewer, not the creator', async () => {
+      // A session outlives its creator's connection. If re-auth kept checking the
+      // creator — who of course remains authorized — a viewer who joined and
+      // then had their access revoked would keep receiving PTY output, and could
+      // keep typing, indefinitely.
+      const { onConnect, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload); // user1 creates
+
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload); // user2 joins
+      onDisconnect(); // user1's socket leaves — user2 is the sole viewer
+
+      checkAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+
       expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
       expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
     });
 
-    it('given the reattached viewer loses access, should tear the session down at the next re-auth tick', async () => {
+    it('given one of two attached users loses access, should evict ONLY that viewer — the other keeps streaming and the PTY survives (#2093)', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload); // user1 creates
 
       const socket2 = makeSocket('sock2', 'user2');
       const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
-      await handlers2.onConnect(validPayload); // user2 takes over the PTY
+      await handlers2.onConnect(validPayload); // user2 joins
 
-      // user2's access is revoked; user1 would still pass.
+      // user2's access is revoked; user1 still passes.
       checkAuth.mockImplementation(async ({ userId }: { userId: string }) =>
         userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
-      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+      // user2's pane got the same closed/-2 a whole-session teardown sends…
       expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock2' });
+      // …but the session is alive and user1 is untouched.
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      socket.emit.mockClear();
+      socket2.emit.mockClear();
+      const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      onOutput('still streaming');
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'still streaming', connectionId: 'sock1' });
+      expect(socket2.emit).not.toHaveBeenCalled();
+      // The revoked viewer's keystrokes no-op: eviction removed their binding.
+      handlers2.onInput({ data: 'rm -rf /\n', connectionId: 'sock2' });
+      expect(shell.write).not.toHaveBeenCalledWith('rm -rf /\n');
     });
 
-    it('given re-auth fires and checkAuth now fails, should kill shell, remove session, and emit agent-terminal:closed with exitCode -2', async () => {
+    it('given the SOLE viewer loses access, should evict them at the first tick and tear the session down at the next (detached, last attacher revoked)', async () => {
       const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
       await onConnect(validPayload);
 
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
       await vi.advanceTimersByTimeAsync(60_000);
 
+      // First tick: evicted, not killed — the session goes detached with the reap armed…
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock1' });
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+
+      // …second tick: the detached check fails for the revoked last attacher and tears it down.
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
-      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: -2, connectionId: 'sock1' });
+    });
+
+    it('given the same user in TWO panes, should checkAuth once per distinct userId per tick, not once per pane', async () => {
+      checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' })) as unknown as ReturnType<typeof vi.fn> &
+        AgentTerminalCheckAuthFn;
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect({ ...validPayload, connectionId: 'pane-a' });
+      await onConnect({ ...validPayload, connectionId: 'pane-b' }); // same user, same session, second pane
+
+      checkAuth.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(checkAuth).toHaveBeenCalledTimes(1);
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+    });
+
+    it('given checkAuth THROWS for an attached viewer, should evict nobody this tick (fail-open — a DB blip is not a revocation)', async () => {
+      const { onConnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await onConnect(validPayload);
+
+      checkAuth.mockRejectedValue(new Error('db blip'));
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
     });
   });
 
@@ -1045,25 +1102,35 @@ describe('buildAgentTerminalHandlers', () => {
       expect(sessionMap.getBySocket(viewer('victim-pane'))).toBeDefined(); // still alive — the attacker's disconnect was a no-op
     });
 
-    it('given two connects on the SAME socket resolving to the SAME sessionKey, the second reattach steals the first connectionId\'s socket mapping — onInput/onResize/onDisconnect for the now-dangling first connectionId should no-op rather than throw', async () => {
+    it('given two connects on the SAME socket resolving to the SAME sessionKey, the second JOINS — both panes stay bound, both receive output, and both can type (#2093)', async () => {
       // Both connects resolve to the identical (scope, name) sessionKey — e.g.
-      // the client reconnected a pane without ever disconnecting the old one
-      // first. sessionMap.reattach() steals 'pane-a's socket mapping when
-      // 'pane-b' reattaches, but this handler's own activeConnectionIds set
-      // still remembers 'pane-a' — every entry point must tolerate that.
+      // two panes of the same terminal in one browser. Attach is a join, not a
+      // takeover: 'pane-b' arriving must not steal 'pane-a's mapping.
       checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ sessionKey: 'branch1:agent:cli' })) as unknown as ReturnType<typeof vi.fn> &
         AgentTerminalCheckAuthFn;
-      const { onConnect, onInput, onResize, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      const { onConnect, onInput, onDisconnect } = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
 
       await onConnect({ ...validPayload, connectionId: 'pane-a' });
       await onConnect({ ...validPayload, connectionId: 'pane-b' });
-      expect(sessionMap.getBySocket(viewer('pane-a'))).toBeUndefined(); // stolen by the pane-b reattach
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toBeDefined();
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toBeDefined();
 
-      expect(() => onInput({ data: 'ls\n', connectionId: 'pane-a' })).not.toThrow();
-      expect(() => onResize({ cols: 80, rows: 24, connectionId: 'pane-a' })).not.toThrow();
-      expect(() => onDisconnect({ connectionId: 'pane-a' })).not.toThrow();
+      // Output reaches BOTH panes, each tagged with its own connectionId.
+      const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      onOutput('shared');
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'shared', connectionId: 'pane-a' });
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'shared', connectionId: 'pane-b' });
 
-      // The real (pane-b) session is untouched by any of the pane-a no-ops.
+      // Both panes' input reaches the one PTY (deliberate free-for-all).
+      onInput({ data: 'ls\n', connectionId: 'pane-a' });
+      onInput({ data: 'pwd\n', connectionId: 'pane-b' });
+      expect(shell.write).toHaveBeenCalledWith('ls\n');
+      expect(shell.write).toHaveBeenCalledWith('pwd\n');
+
+      // Closing one pane leaves the other's viewer intact.
+      onDisconnect({ connectionId: 'pane-a' });
+      expect(sessionMap.getBySocket(viewer('pane-a'))).toBeUndefined();
+      expect(sessionMap.getBySocket(viewer('pane-b'))).toBeDefined();
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
     });
   });
@@ -1108,6 +1175,129 @@ describe('buildAgentTerminalHandlers', () => {
 
       expect(shell.kill).toHaveBeenCalledWith('idle-reap');
       expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+  });
+
+  describe('multi-viewer fan-out — attach is a join, not a takeover (#2093)', () => {
+    /** Creator on `socket`, then a second user joins on their own socket. */
+    async function connectTwoViewers() {
+      const handlers1 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await handlers1.onConnect(validPayload);
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+      const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      return { handlers1, handlers2, socket2, onOutput };
+    }
+
+    it('given two sockets attached to one PTY, output reaches BOTH, each tagged with its own connectionId — the incumbent is never silenced', async () => {
+      const { socket2, onOutput } = await connectTwoViewers();
+
+      onOutput('hello both');
+
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'hello both', connectionId: 'sock1' });
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'hello both', connectionId: 'sock2' });
+    });
+
+    it('given a joiner, they get the buffered scrollback and the incumbent gets NO duplicate replay', async () => {
+      const handlers1 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket, persistStreamSessionId });
+      await handlers1.onConnect(validPayload);
+      const onOutput = openShell.mock.calls[0][0].onOutput as (data: string) => void;
+      onOutput('history line');
+
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildAgentTerminalHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistStreamSessionId });
+      await handlers2.onConnect(validPayload);
+
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:ready', {
+        scrollback: 'history line',
+        resumed: true,
+        connectionId: 'sock2',
+      });
+      // The incumbent saw exactly one ready — its own, at create.
+      const incumbentReadies = socket.emit.mock.calls.filter(([event]) => event === 'agent-terminal:ready');
+      expect(incumbentReadies).toHaveLength(1);
+    });
+
+    it('given one of two viewers detaches, the other keeps streaming and NO detach transition fires — no watchdog quiet, no idle reap', async () => {
+      const { handlers1, socket2, onOutput } = await connectTwoViewers();
+
+      handlers1.onDisconnect();
+
+      expect(shell.setViewerAttached).not.toHaveBeenCalledWith(false);
+      onOutput('for the survivor');
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:output', { data: 'for the survivor', connectionId: 'sock2' });
+
+      // The reap must not be armed while anyone is still watching.
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeDefined();
+    });
+
+    it('given the LAST viewer detaches, the detach transition fires and the idle reap kills the session once', async () => {
+      const { handlers1, handlers2 } = await connectTwoViewers();
+
+      handlers1.onDisconnect();
+      handlers2.onDisconnect();
+
+      expect(shell.setViewerAttached).toHaveBeenCalledWith(false);
+      await vi.advanceTimersByTimeAsync(DETACHED_IDLE_MS);
+      expect(shell.kill).toHaveBeenCalledTimes(1);
+      expect(shell.kill).toHaveBeenCalledWith('idle-reap');
+      expect(sessionMap.getByKey('branch1:agent:cli')).toBeUndefined();
+    });
+
+    it('given the PTY exits, every attached viewer receives agent-terminal:closed', async () => {
+      const { socket2 } = await connectTwoViewers();
+
+      const onExit = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+      onExit(0);
+
+      expect(socket.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: 0, connectionId: 'sock1' });
+      expect(socket2.emit).toHaveBeenCalledWith('agent-terminal:closed', { exitCode: 0, connectionId: 'sock2' });
+    });
+
+    it('given two viewers on separate sockets, BOTH can type into the one PTY (deliberate tmux-style free-for-all)', async () => {
+      const { handlers1, handlers2 } = await connectTwoViewers();
+
+      handlers1.onInput({ data: 'from user1\n', connectionId: 'sock1' });
+      handlers2.onInput({ data: 'from user2\n', connectionId: 'sock2' });
+
+      expect(shell.write).toHaveBeenCalledWith('from user1\n');
+      expect(shell.write).toHaveBeenCalledWith('from user2\n');
+    });
+
+    it('billing is per-session wall-clock: an identical timeline settles IDENTICAL seconds for 1 viewer and for 2 (#2093 regression)', async () => {
+      async function runTimeline(viewerCount: 1 | 2): Promise<{ gateCalls: number; trackUsageCalls: Array<Record<string, unknown>> }> {
+        const localMap = createTerminalSessionMap();
+        const localShell = makeShell();
+        const localOpenShell = vi.fn().mockReturnValue(localShell) as unknown as ReturnType<typeof vi.fn> & OpenShellFn;
+        const localCheckAuth = vi.fn().mockResolvedValue(makeAuthSuccess()) as unknown as ReturnType<typeof vi.fn> & AgentTerminalCheckAuthFn;
+        const billing = makeBilling();
+
+        const h1 = buildAgentTerminalHandlers({ sessionMap: localMap, openShell: localOpenShell, checkAuth: localCheckAuth, socket: makeSocket('sockA', 'user1'), persistStreamSessionId, billing });
+        await h1.onConnect(validPayload);
+        if (viewerCount === 2) {
+          const h2 = buildAgentTerminalHandlers({ sessionMap: localMap, openShell: localOpenShell, checkAuth: localCheckAuth, socket: makeSocket('sockB', 'user2'), persistStreamSessionId, billing });
+          await h2.onConnect(validPayload);
+        }
+
+        await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+        const onExit = localOpenShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExit(0);
+
+        return {
+          gateCalls: billing.gate.mock.calls.length,
+          trackUsageCalls: billing.trackUsage.mock.calls.map(([args]: [Record<string, unknown>]) => args),
+        };
+      }
+
+      const solo = await runTimeline(1);
+      const pair = await runTimeline(2);
+
+      expect(solo.gateCalls).toBe(1);
+      expect(pair.gateCalls).toBe(1); // the joiner never gates or places a hold
+      expect(pair.trackUsageCalls).toEqual(solo.trackUsageCalls); // same windows, same seconds, same count
     });
   });
 
@@ -1627,7 +1817,9 @@ describe('buildAgentTerminalHandlers', () => {
       await onConnect(validPayload);
 
       checkAuth.mockResolvedValue({ ok: false, reason: 'permission_revoked' });
-      await vi.advanceTimersByTimeAsync(60_000);
+      // Two ticks: the first evicts the sole viewer (session goes detached),
+      // the second fails the detached check and tears the session down.
+      await vi.advanceTimersByTimeAsync(120_000);
 
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       expect(billing.releaseHold).not.toHaveBeenCalled();

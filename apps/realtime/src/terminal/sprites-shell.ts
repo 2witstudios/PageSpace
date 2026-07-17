@@ -276,12 +276,12 @@ export type WatchdogAction = 'reattach' | 'attach-quiet' | 'detach-quiet' | 'fat
  * `reattach`/`fatal` case would just repeat a decision that has already been
  * made.
  *
- * `viewersAttached` is boolean, not a count: `terminal-session-map.ts`'s
- * `reattach` STEALS the previous socket entry on every new attach, so at most
- * one viewer can ever be bound to a session at a time — there is no refcount
- * anywhere in this architecture for a number to represent. A multi-viewer
- * feature would need that map reworked long before this signature could mean
- * anything other than boolean.
+ * `viewersAttached` is boolean, deliberately, even though a session holds a
+ * SET of viewers (issue #2093 — `terminal-session-map.ts`'s `bySocket` is
+ * many-to-one and every attached viewer has its own registry entry): the shell
+ * only needs to answer "does at least one live viewer exist". The handler
+ * derives it from `viewers.size > 0`, flipping it true on any join and false
+ * only when the LAST viewer leaves.
  *
  * `attach-quiet` is the same trade, one step further in: an ATTACHED viewer
  * whose session has been idle past `TASK_HOLD_AGENT_IDLE_MS` (no output, no
