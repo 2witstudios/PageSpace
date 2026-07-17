@@ -38,6 +38,15 @@ const patchCallsTo = (url: string) =>
     ([calledUrl, options]) => calledUrl === url && (options as RequestInit | undefined)?.method === 'PATCH',
   );
 
+// `killAgentTerminal` DELETEs via `fetchWithAuth` directly (not the `del()`
+// helper) so it can read the real HTTP status — a 404 is its success state.
+// Workspace-removal kills therefore show up here; unclaimed-row removal still
+// goes through the hook's `removeAgentTerminal`, i.e. the `del` mock.
+const killCalls = () =>
+  vi.mocked(fetchWithAuth).mock.calls.filter(
+    ([, options]) => (options as RequestInit | undefined)?.method === 'DELETE',
+  );
+
 const MACHINE_NODE: MachineTreeNode = { level: 'machine' };
 const PROJECT_NODE: MachineTreeNode = { level: 'project', projectName: 'app' };
 
@@ -244,7 +253,7 @@ describe('WorkspaceLeaves', () => {
         given: 'a workspace holding one running pane, with a sibling workspace also present, remove confirmed',
         should: 'DELETE that agent_terminal server-side, then drop the local workspace entirely (its sibling survives)',
         actual: {
-          deletedRunningAgent: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=claude-a1b2c3')),
+          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=claude-a1b2c3')),
           remainingWorkspaces: Object.keys(selectMachine('m1')(store())!.workspaces).length,
         },
         expected: { deletedRunningAgent: true, remainingWorkspaces: rows.length - 1 },
@@ -275,7 +284,7 @@ describe('WorkspaceLeaves', () => {
         should:
           'stop the agent server-side and drop the workspace — this used to EMPTY it in place instead, which left an un-removable row that New terminal then duplicated',
         actual: {
-          deletedRunningAgent: vi.mocked(del).mock.calls.some(([url]) => String(url).includes('name=claude-solo')),
+          deletedRunningAgent: killCalls().some(([url]) => String(url).includes('name=claude-solo')),
           workspaceCount: Object.keys(machine.workspaces).length,
           active: machine.activeWorkspaceId,
         },
@@ -307,7 +316,7 @@ describe('WorkspaceLeaves', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
 
     await waitFor(() => {
-      const killUrl = String(vi.mocked(del).mock.calls.find(([url]) => String(url).includes('name=wanderer'))?.[0] ?? '');
+      const killUrl = String(killCalls().find(([url]) => String(url).includes('name=wanderer'))?.[0] ?? '');
       assert({
         given: 'a machine-scope workspace holding a pane bound at app/main, remove confirmed',
         should: 'DELETE the session under the pane\'s own project and branch — the node scope would address a different terminal',
@@ -343,7 +352,7 @@ describe('WorkspaceLeaves', () => {
     assert({
       given: 'two workspaces whose panes show the SAME session, the first removed',
       should: 'drop the workspace but leave the PTY alone — the surviving workspace is still showing it',
-      actual: vi.mocked(del).mock.calls.filter(([url]) => String(url).includes('name=shared')).length,
+      actual: killCalls().filter(([url]) => String(url).includes('name=shared')).length,
       expected: 0,
     });
   });
@@ -368,8 +377,40 @@ describe('WorkspaceLeaves', () => {
       assert({
         given: 'one session shown in both panes of the workspace being removed',
         should: 'DELETE it exactly once — the second call would 404 and surface a spurious failure toast',
-        actual: vi.mocked(del).mock.calls.filter(([url]) => String(url).includes('name=twice')).length,
+        actual: killCalls().filter(([url]) => String(url).includes('name=twice')).length,
         expected: 1,
+      });
+    });
+  });
+
+  // A 404 on the kill means the session is already gone — this call's GOAL
+  // state. Treating it as a failure made the workspace permanently
+  // unremovable: the kill rejected, the confirm dialog stayed open, and every
+  // retry hit the same 404 — an unremovable listing, the exact bug class this
+  // PR exists to kill.
+  test('removing a workspace whose pane\'s session is already gone server-side still removes it', async () => {
+    vi.mocked(fetchWithAuth).mockImplementation(async (_url, options) =>
+      (options as RequestInit | undefined)?.method === 'DELETE'
+        ? new Response(JSON.stringify({ error: 'not_found' }), { status: 404 })
+        : new Response(JSON.stringify({ agentTerminals: [] }), { status: 200 }),
+    );
+    seedMachine('m1');
+    const workspaceId = selectMachine('m1')(store())!.activeWorkspaceId;
+    const workspace = selectMachine('m1')(store())!.workspaces[workspaceId];
+    store().bindPaneTerminal('m1', workspaceId, workspace.activePaneId, { name: 'ghost' });
+
+    renderLeaves(<WorkspaceLeaves machineId="m1" node={MACHINE_NODE} onSelectWorkspace={vi.fn()} />);
+
+    const row = (await screen.findByText('Workspace 1')).closest('.group') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: /Remove workspace/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => {
+      assert({
+        given: 'a workspace whose only pane references a session the server no longer has, remove confirmed',
+        should: 'treat the 404 kill as already-done and remove the workspace — not keep the dialog open on a retry loop that can never succeed',
+        actual: Object.keys(selectMachine('m1')(store())!.workspaces).length,
+        expected: 0,
       });
     });
   });

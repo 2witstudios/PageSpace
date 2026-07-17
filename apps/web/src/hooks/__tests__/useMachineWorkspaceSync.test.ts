@@ -188,6 +188,36 @@ describe('useMachineWorkspaceSync', () => {
     expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-theirs', 'ws-migrated']);
   });
 
+  // Regression: this hook is mounted more than once for the same machine
+  // (DevelopmentSidebar mounts it per machine row AND MachineView for the open
+  // machine), and the instances share one store. On an unclaimed machine with
+  // server rows, instance 1's empty-payload hydrate writes those rows into the
+  // store — so instance 2's effect reads a NON-empty local list and, without
+  // the module-level decline registry, would POST a bootstrap claim that
+  // merely echoes the server's own rows: burning first-writer-wins on nothing
+  // and permanently foreclosing a legacy browser's real history migration.
+  it('given TWO mounted instances and an unclaimed machine with server rows, neither claims the bootstrap with an echo of those rows', async () => {
+    mockFetchWithAuth.mockResolvedValue(
+      jsonResponse({
+        bootstrapped: false,
+        workspaces: [
+          { id: 'ws-theirs', name: 'Theirs', scope: {}, columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: null }] }] },
+        ],
+      }),
+    );
+
+    renderHook(() => {
+      useMachineWorkspaceSync('m-dual-mount');
+      useMachineWorkspaceSync('m-dual-mount');
+    });
+
+    await waitFor(() => {
+      const machine = selectMachine('m-dual-mount')(useMachineWorkspaceStore.getState());
+      expect(workspacesOf(machine).map((w) => w.id)).toEqual(['ws-theirs']);
+    });
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
   it('given a machine-workspace:created event for a DIFFERENT machine, ignores it', async () => {
     renderHook(() => useMachineWorkspaceSync('m-filter'));
     await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());

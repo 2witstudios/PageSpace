@@ -43,6 +43,18 @@ function buildQuery(machineId: string, projectName?: string | null, branchName?:
  * scope would kill a different terminal that happens to share the name — or
  * nothing — while the intended one lives on as an unclaimed session.
  *
+ * A 404 is SUCCESS here, not a failure: it means the session — or the
+ * project/branch checkout that held it — is already gone server-side, which is
+ * this call's goal state. Treating it as an error made a workspace holding a
+ * stale pane permanently unremovable: the kill rejected, the confirm dialog
+ * stayed open, and retrying hit the same 404 forever — an unremovable listing,
+ * the exact bug class this surface exists to kill. Real failures (5xx,
+ * network) still throw: the agent may genuinely still be running (and
+ * billing), and silently dropping its only row would strand it. Reading the
+ * status needs `fetchWithAuth` directly — the `del()` helper throws a plain
+ * `Error` with no status attached (see `pushWorkspaceUpdate`'s doc in
+ * useMachineWorkspaceSync for the same choice).
+ *
  * Revalidates the killed scope's list afterwards so any mounted hook on that
  * scope (e.g. the sidebar's session rows) drops the dead row.
  */
@@ -51,7 +63,14 @@ export async function killAgentTerminal(
   scope: { projectName?: string | null; branchName?: string | null; name: string },
 ): Promise<void> {
   const query = buildQuery(machineId, scope.projectName, scope.branchName);
-  await del(`/api/machines/agent-terminals?${query}&name=${encodeURIComponent(scope.name)}`);
+  const response = await fetchWithAuth(
+    `/api/machines/agent-terminals?${query}&name=${encodeURIComponent(scope.name)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok && response.status !== 404) {
+    const body: { error?: unknown } | null = await response.json().catch(() => null);
+    throw new Error(typeof body?.error === 'string' ? body.error : 'Failed to remove terminal');
+  }
   await mutate(`/api/machines/agent-terminals?${query}`);
 }
 

@@ -52,6 +52,22 @@ const fetcher = (url: string) =>
     return res.json() as Promise<WorkspaceListResponse>;
   });
 
+/**
+ * Machines where this browser session already decided "nothing local to
+ * migrate — claim nothing" (the empty-payload branch below). MODULE-level, not
+ * a per-instance ref, because this hook is mounted more than once for the same
+ * machine (`DevelopmentSidebar` mounts it per machine row AND `MachineView`
+ * mounts it for the open machine) and the instances share one store: on an
+ * unbootstrapped machine whose server list is non-empty, instance 1's
+ * empty-payload hydrate writes the server's rows INTO the store, so instance
+ * 2's effect would then read a non-empty local list and POST a bootstrap claim
+ * that merely echoes the server's own rows back at it — burning the
+ * first-writer-wins claim on nothing, which permanently forecloses a legacy
+ * browser's real un-migrated history. Exactly what the empty-payload guard
+ * exists to prevent, so the decision has to be visible across instances.
+ */
+const declinedBootstraps = new Set<string>();
+
 /** Strips local-only pane state (`pendingPrompt`) before a layout crosses the
  * wire — the server's layout DTO has no such field, and a starting prompt not
  * yet typed into its PTY must never be persisted or broadcast to other browsers. */
@@ -155,9 +171,16 @@ export function useMachineWorkspaceSync(machineId: string | null): void {
     // local list is empty, so the full-list replace cannot wipe anything, and a
     // later `bootstrapped: true` revalidation (a missed broadcast) re-enters
     // the hydrate above instead of being gated out.
-    if (payload.length === 0) {
+    if (payload.length === 0 || declinedBootstraps.has(machineId)) {
       bootstrapAttempted.current = true;
-      hydrateFromServer(machineId, data.workspaces);
+      // Only the FIRST decliner applies the provisional hydrate. A later
+      // instance (or a later effect run) re-applying it with SWR's possibly
+      // STALE cached list would full-replace away workspaces that arrived over
+      // the socket since — the store is already current; leave it alone.
+      if (!declinedBootstraps.has(machineId)) {
+        declinedBootstraps.add(machineId);
+        hydrateFromServer(machineId, data.workspaces);
+      }
       return;
     }
 
