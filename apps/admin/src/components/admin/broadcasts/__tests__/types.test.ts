@@ -2,9 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { isTerminalStatus } from '../types';
 
 describe('isTerminalStatus', () => {
-  it('treats completed, failed, and cancelled as terminal — polling stops here', () => {
+  it('treats completed and cancelled as terminal — polling stops here', () => {
     expect(isTerminalStatus('completed')).toBe(true);
-    expect(isTerminalStatus('failed')).toBe(true);
     expect(isTerminalStatus('cancelled')).toBe(true);
   });
 
@@ -14,5 +13,9 @@ describe('isTerminalStatus', () => {
     expect(isTerminalStatus('queued')).toBe(false);
     expect(isTerminalStatus('in_progress')).toBe(false);
     expect(isTerminalStatus('paused')).toBe(false);
+  });
+
+  it('treats failed as NON-terminal — the worker rethrows on a retryable failure so pg-boss can resume the row, which can later reach in_progress or completed', () => {
+    expect(isTerminalStatus('failed')).toBe(false);
   });
 });

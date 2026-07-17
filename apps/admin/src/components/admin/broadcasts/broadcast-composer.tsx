@@ -23,6 +23,7 @@ import {
   EMPTY_COMPOSER_FORM,
   PLAN_TIERS,
   buildCreatePayload,
+  formatServerFailureMessage,
   formSnapshot,
   isPreviewStale,
   type ComposerFormState,
@@ -30,7 +31,6 @@ import {
 import type {
   BroadcastCreateAcceptedResponse,
   BroadcastCreateConflictResponse,
-  BroadcastCreateFailedResponse,
   BroadcastDryRunResponse,
   BroadcastTemplatesResponse,
   BroadcastValidationErrorResponse,
@@ -210,8 +210,7 @@ export function BroadcastComposer() {
         setDuplicateOf(conflict.duplicateOf);
         setSendError(conflict.error);
       } else if (status === 500) {
-        const failed = json as BroadcastCreateFailedResponse;
-        setSendError(`${failed.error} — broadcast ${failed.broadcastId} was marked failed; retrying is safe.`);
+        setSendError(formatServerFailureMessage(json as { error?: string; broadcastId?: string } | null, status));
       } else {
         const err = json as BroadcastValidationErrorResponse | null;
         setSendError(err?.error ?? `Send failed (${status})`);

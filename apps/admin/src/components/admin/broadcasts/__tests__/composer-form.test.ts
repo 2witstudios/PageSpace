@@ -4,6 +4,7 @@ import {
   EMPTY_COMPOSER_FORM,
   buildAudienceDefinition,
   buildCreatePayload,
+  formatServerFailureMessage,
   formSnapshot,
   isPreviewStale,
   type ComposerFormState,
@@ -110,5 +111,29 @@ describe('isPreviewStale', () => {
     const snapshot = formSnapshot(form);
     const edited: ComposerFormState = { ...form, engine: 'resend_broadcast' };
     expect(isPreviewStale(snapshot, edited)).toBe(true);
+  });
+});
+
+describe('formatServerFailureMessage', () => {
+  it('includes the broadcastId + "retrying is safe" only when the server actually returned one', () => {
+    const msg = formatServerFailureMessage({ error: 'Failed to enqueue broadcast job', broadcastId: 'b_1' }, 500);
+    expect(msg).toBe('Failed to enqueue broadcast job — broadcast b_1 was marked failed; retrying is safe.');
+  });
+
+  it('does not claim a row was marked failed when the outer catch returned no broadcastId', () => {
+    // The route's outer catch (e.g. broadcastRepository.create itself throwing,
+    // before any row exists) returns just { error } — no broadcastId.
+    const msg = formatServerFailureMessage({ error: 'Failed to create broadcast' }, 500);
+    expect(msg).toBe('Failed to create broadcast');
+    expect(msg).not.toContain('undefined');
+    expect(msg).not.toContain('retrying is safe');
+  });
+
+  it('falls back to a generic message when the body is unparseable', () => {
+    expect(formatServerFailureMessage(null, 500)).toBe('Send failed (500)');
+  });
+
+  it('falls back to a generic message when the body has no error field', () => {
+    expect(formatServerFailureMessage({ broadcastId: 'b_1' }, 500)).toBe('Send failed (500)');
   });
 });

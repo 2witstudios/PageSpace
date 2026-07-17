@@ -92,3 +92,21 @@ export function isPreviewStale(previewSnapshot: string | null, currentForm: Comp
   if (previewSnapshot === null) return false;
   return previewSnapshot !== formSnapshot(currentForm);
 }
+
+/**
+ * A 500 from POST /api/admin/broadcasts is not guaranteed to carry a
+ * `broadcastId` — the route's outer catch (a failure before any row exists,
+ * e.g. `broadcastRepository.create` itself throwing) returns just
+ * `{ error }`. Only the enqueue-specific catch, after the row is written and
+ * marked failed, includes `broadcastId`. Claiming a row was "marked failed;
+ * retrying is safe" when no row exists would be both wrong and misleading
+ * about whether anything durable happened.
+ */
+export function formatServerFailureMessage(
+  json: { error?: string; broadcastId?: string } | null,
+  status: number,
+): string {
+  if (!json?.error) return `Send failed (${status})`;
+  if (json.broadcastId) return `${json.error} — broadcast ${json.broadcastId} was marked failed; retrying is safe.`;
+  return json.error;
+}

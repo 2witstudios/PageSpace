@@ -10,8 +10,17 @@ export type BroadcastStatus =
   | 'failed'
   | 'cancelled';
 
-/** True once a broadcast has reached a settled state — polling stops here. */
-export const TERMINAL_STATUSES: readonly BroadcastStatus[] = ['completed', 'failed', 'cancelled'];
+/**
+ * True once a broadcast has reached a settled state — polling stops here.
+ *
+ * `failed` is deliberately EXCLUDED: the worker writes `failed` and rethrows
+ * on a retryable per-recipient/provider failure so pg-boss retries the job,
+ * meaning a `failed` row can resume sending and later reach `in_progress` or
+ * `completed`. Mirrors `INTERVENTION_BLOCKED_STATES` in
+ * `app/api/admin/broadcasts/[id]/route.ts`, which likewise never blocks a
+ * cancel on `failed` for the same reason.
+ */
+export const TERMINAL_STATUSES: readonly BroadcastStatus[] = ['completed', 'cancelled'];
 
 export function isTerminalStatus(status: BroadcastStatus): boolean {
   return (TERMINAL_STATUSES as readonly string[]).includes(status);

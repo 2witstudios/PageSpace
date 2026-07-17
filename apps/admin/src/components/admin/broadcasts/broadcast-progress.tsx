@@ -13,7 +13,10 @@ import { post } from "@/lib/auth/auth-fetch";
 import { num } from "@/lib/format";
 import { isTerminalStatus, type BroadcastDetail } from "@/components/admin/broadcasts/types";
 
-const ACTIVE_STATUSES = ["pending", "queued", "in_progress", "paused"];
+// 'failed' is active, not settled — the worker rethrows on a retryable
+// failure so pg-boss can resume the same row, and the API's cancel guard
+// (INTERVENTION_BLOCKED_STATES) never blocks cancelling it for that reason.
+const ACTIVE_STATUSES = ["pending", "queued", "in_progress", "paused", "failed"];
 
 const STEP_ICON = {
   ok: CheckCircle2,
