@@ -14,10 +14,31 @@ export interface AIErrorCause {
   retryable: boolean;
 }
 
-/** Narrows an Error's `.cause` (unknown by the DOM lib types) to a real AIErrorCause. */
-export const isAIErrorCause = (value: unknown): value is AIErrorCause =>
-  typeof value === 'object' &&
-  value !== null &&
-  'code' in value &&
-  'retryable' in value &&
-  'message' in value;
+const AI_ERROR_CODES: ReadonlySet<AIErrorCause['code']> = new Set([
+  'auth',
+  'out_of_credits',
+  'too_many_in_flight',
+  'daily_cap_exceeded',
+  'rate_limit',
+  'unknown',
+]);
+
+/**
+ * Narrows an Error's `.cause` (unknown by the DOM lib types) to a real
+ * AIErrorCause. Validates the full shape, not just key presence — an arbitrary
+ * `.cause` (a third-party lib, a future code path this epic doesn't own) with
+ * a wrong-typed field would otherwise be trusted downstream, potentially
+ * crashing React while rendering `message` or showing the wrong billing CTA
+ * (PR 6 review, CodeRabbit).
+ */
+export const isAIErrorCause = (value: unknown): value is AIErrorCause => {
+  if (typeof value !== 'object' || value === null) return false;
+  const cause = value as Record<string, unknown>;
+  return (
+    typeof cause.code === 'string' &&
+    AI_ERROR_CODES.has(cause.code as AIErrorCause['code']) &&
+    typeof cause.retryable === 'boolean' &&
+    typeof cause.message === 'string' &&
+    (cause.httpStatus === null || Number.isInteger(cause.httpStatus))
+  );
+};

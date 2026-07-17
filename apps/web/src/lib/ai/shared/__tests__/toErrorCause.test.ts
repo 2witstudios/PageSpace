@@ -75,4 +75,24 @@ describe('toErrorCause', () => {
     const cause = toErrorCause(402, { error: 'out_of_credits' });
     expect(cause.message).not.toMatch(/[{}]/);
   });
+
+  // PR 6 review (CodeRabbit, security): body.message is only trusted for KNOWN_CODES —
+  // that shape comes exclusively from our own credit-gate-response.ts. Every
+  // status-classified fallback branch (401/429-generic/5xx/default) can be fed by an
+  // arbitrary upstream provider error, so it must never surface body.message verbatim.
+  it('given a 5xx status with an unrecognized code, should ignore an arbitrary server message and use the local default', () => {
+    const cause = toErrorCause(503, { error: 'upstream_boom', message: '<script>internal stack trace leaked here</script>' });
+    expect(cause.message).not.toContain('internal stack trace');
+    expect(cause.message).toMatch(/wrong/i);
+  });
+
+  it('given a 401 with an arbitrary server message, should ignore it and use the local auth default', () => {
+    const cause = toErrorCause(401, { message: 'some provider-specific internal detail' });
+    expect(cause.message).not.toBe('some provider-specific internal detail');
+  });
+
+  it('given a 429 with an unrecognized code and an arbitrary server message, should ignore it and use the local rate_limit default', () => {
+    const cause = toErrorCause(429, { error: 'unrecognized', message: 'raw upstream body' });
+    expect(cause.message).not.toBe('raw upstream body');
+  });
 });
