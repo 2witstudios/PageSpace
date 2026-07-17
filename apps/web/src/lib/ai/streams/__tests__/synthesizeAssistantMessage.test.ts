@@ -75,6 +75,23 @@ describe('synthesizeAssistantMessage', () => {
     expect('status' in msg).toBe(false);
   });
 
+  it('given BOTH a valid startedAt AND a status together, should attach createdAt and status in the same call', () => {
+    const msg = synthesizeAssistantMessage(
+      'msg-1',
+      [{ type: 'text' as const, text: 'hi' }],
+      '2024-01-01T00:00:00.000Z',
+      'complete',
+    );
+    expect(msg.createdAt).toEqual(new Date('2024-01-01T00:00:00.000Z'));
+    expect(msg.status).toBe('complete');
+  });
+
+  it('given an unparseable startedAt AND a status together, should omit createdAt but still attach status', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [], 'not-a-date', 'interrupted');
+    expect('createdAt' in msg).toBe(false);
+    expect(msg.status).toBe('interrupted');
+  });
+
   it('given the same input twice, should produce structurally equal messages but referentially independent parts arrays', () => {
     const parts = [{ type: 'text' as const, text: 'hi' }];
     const a = synthesizeAssistantMessage('msg-1', parts);
