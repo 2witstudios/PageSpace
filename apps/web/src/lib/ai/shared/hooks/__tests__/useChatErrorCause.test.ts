@@ -43,20 +43,63 @@ describe('useChatErrorCause', () => {
 
   it('given a request sent against conversation A fails after the user switched to conversation B, should key the cause under A (originConversationId), not B (current conversationId)', () => {
     const error = causeError('server exploded');
+    type Props = { conversationId: string; originConversationId: string; error: Error | undefined };
+    const initialProps: Props = { conversationId: 'conv-a', originConversationId: 'conv-a', error: undefined };
     const { result, rerender } = renderHook(
-      (props: { conversationId: string; originConversationId: string }) =>
-        useChatErrorCause(props.conversationId, error, vi.fn(), props.originConversationId),
-      { initialProps: { conversationId: 'conv-a', originConversationId: 'conv-a' } },
+      (props: Props) => useChatErrorCause(props.conversationId, props.error, vi.fn(), props.originConversationId),
+      { initialProps },
     );
 
-    // User switches to conv-b WHILE conv-a's request is still in flight — conversationId
+    // User switches to conv-b BEFORE conv-a's request actually fails — conversationId
     // (current) moves, but originConversationId (where the send was actually issued) stays.
-    rerender({ conversationId: 'conv-b', originConversationId: 'conv-a' });
+    rerender({ conversationId: 'conv-b', originConversationId: 'conv-a', error: undefined });
+    // NOW the late failure arrives — this is the real race: error and the conversation
+    // switch land on different renders, not the same one.
+    rerender({ conversationId: 'conv-b', originConversationId: 'conv-a', error });
 
     expect(useChatErrorStore.getState().byConversationId['conv-a']?.message).toBe('server exploded');
     expect(useChatErrorStore.getState().byConversationId['conv-b']).toBeUndefined();
     // Reading from conv-b (current) must not see conv-a's error.
     expect(result.current.cause).toBeNull();
+  });
+
+  // PR 6 review (CodeRabbit, Major): prevErrorRef must remember the ORIGIN an error was
+  // recorded under, not just the error object — otherwise clearing after the fact clears
+  // whatever conversation is CURRENT at clear-time, not the one the error actually belongs
+  // to, permanently orphaning the real entry.
+  it('given originConversationId changes to a NEW conversation while the SAME unresolved error is still pending, clearing that error should clear the ORIGINAL conversation, not the new current one', () => {
+    const error = causeError('slow failure');
+    type Props = { originConversationId: string; error: Error | undefined };
+    const initialProps: Props = { originConversationId: 'conv-a', error };
+    const { rerender } = renderHook(
+      (props: Props) => useChatErrorCause('conv-a', props.error, vi.fn(), props.originConversationId),
+      { initialProps },
+    );
+    expect(useChatErrorStore.getState().byConversationId['conv-a']?.message).toBe('slow failure');
+
+    // A fresh send starts in a different conversation while the old error object is still
+    // sitting unresolved on this same useChat instance.
+    rerender({ originConversationId: 'conv-b', error });
+    // The error now clears (superseded).
+    rerender({ originConversationId: 'conv-b', error: undefined });
+
+    // Must clear conv-a (where the error actually lived), not conv-b (which never had one).
+    expect(useChatErrorStore.getState().byConversationId['conv-a']).toBeUndefined();
+  });
+
+  it('given an error first observed with originConversationId null, then re-observed (same object) once an origin becomes available, should still record it (not permanently skip it)', () => {
+    const error = causeError('needs an origin');
+    type Props = { originConversationId: string | null };
+    const initialProps: Props = { originConversationId: null };
+    const { rerender } = renderHook(
+      (props: Props) => useChatErrorCause('conv-a', error, vi.fn(), props.originConversationId),
+      { initialProps },
+    );
+    expect(useChatErrorStore.getState().byConversationId['conv-a']).toBeUndefined();
+
+    rerender({ originConversationId: 'conv-a' });
+
+    expect(useChatErrorStore.getState().byConversationId['conv-a']?.message).toBe('needs an origin');
   });
 
   it('given the same error object reference across renders, should not re-invoke setError (no redundant store writes)', () => {

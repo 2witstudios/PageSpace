@@ -29,22 +29,32 @@ export function useChatErrorCause(
   clearTransportError: () => void,
   originConversationId: string | null,
 ): UseChatErrorCauseResult {
-  const prevErrorRef = useRef<Error | undefined>(undefined);
+  // Remembers which origin THIS error was actually recorded under — not just the error
+  // object. `originConversationId` (a prop) can legitimately change to a NEW conversation
+  // while `error` is still the same not-yet-cleared object (a fresh send started elsewhere
+  // while the old failure hasn't cleared yet); reading the current prop instead of the
+  // recorded origin in the `!error` branch below would clear the WRONG (new) conversation's
+  // entry and leave the actual stale error stuck forever (PR 6 review, CodeRabbit).
+  const prevErrorRef = useRef<{ error: Error; originConversationId: string } | null>(null);
 
   useEffect(() => {
     if (!error) {
       // The transport error cleared — a retry or a fresh send superseded it. The stored
       // cause must clear too, or the banner keeps rendering the old failure indefinitely
       // (PR 6 review, Codex): dismiss() was previously the only thing that ever cleared it.
-      if (prevErrorRef.current && originConversationId) {
-        useChatErrorStore.getState().clearError(originConversationId);
+      if (prevErrorRef.current) {
+        useChatErrorStore.getState().clearError(prevErrorRef.current.originConversationId);
       }
-      prevErrorRef.current = undefined;
+      prevErrorRef.current = null;
       return;
     }
-    if (error === prevErrorRef.current) return;
-    prevErrorRef.current = error;
+    // Checked BEFORE recording into prevErrorRef: an error first observed with no known
+    // origin yet must NOT be marked "already handled" — otherwise once an origin becomes
+    // available on a later render of the SAME error object, the dedup check below would
+    // skip it forever and it would never actually reach the store.
     if (!originConversationId) return;
+    if (error === prevErrorRef.current?.error) return;
+    prevErrorRef.current = { error, originConversationId };
     const cause = isAIErrorCause(error.cause) ? error.cause : parseLegacyErrorMessage(error.message);
     useChatErrorStore.getState().setError(originConversationId, cause);
   }, [error, originConversationId]);

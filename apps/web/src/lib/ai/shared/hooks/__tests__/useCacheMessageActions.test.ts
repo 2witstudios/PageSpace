@@ -5,7 +5,11 @@ import { useCacheMessageActions } from '../useCacheMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 
-let handleRetryBaseResolve: (() => void) | undefined;
+// vi.mock factories are hoisted above module-scope declarations — a plain `let` here would
+// throw a TDZ ReferenceError at transform time. vi.hoisted lifts this state alongside the mock.
+const mockState = vi.hoisted(() => ({
+  handleRetryBaseResolve: undefined as (() => void) | undefined,
+}));
 
 vi.mock('../useMessageActions', () => ({
   useMessageActions: () => ({
@@ -14,7 +18,7 @@ vi.mock('../useMessageActions', () => ({
     // A real regenerate's underlying Promise resolves only once the new stream finishes
     // (ai SDK makeRequest reads the response to completion) — held open here so the test
     // can assert applyDelete already ran BEFORE this resolves (PR 6 review, CodeRabbit).
-    handleRetry: vi.fn(() => new Promise<void>((resolve) => { handleRetryBaseResolve = resolve; })),
+    handleRetry: vi.fn(() => new Promise<void>((resolve) => { mockState.handleRetryBaseResolve = resolve; })),
   }),
 }));
 
@@ -23,7 +27,7 @@ const assistantMsg = (id: string): UIMessage => ({ id, role: 'assistant', parts:
 
 describe('useCacheMessageActions handleRetry', () => {
   beforeEach(() => {
-    handleRetryBaseResolve = undefined;
+    mockState.handleRetryBaseResolve = undefined;
   });
 
   it('given a retry, should apply the cache deletes BEFORE handleRetryBase (regenerate) settles, not after', async () => {
@@ -53,7 +57,7 @@ describe('useCacheMessageActions handleRetry', () => {
     // already have happened, not be waiting on it.
     expect(applyDeleteSpy).toHaveBeenCalledWith('conv-1', 'a1');
 
-    handleRetryBaseResolve?.();
+    mockState.handleRetryBaseResolve?.();
     await act(async () => {
       await retryPromise;
     });
