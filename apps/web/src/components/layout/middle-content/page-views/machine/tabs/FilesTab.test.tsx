@@ -55,18 +55,25 @@ vi.mock('../workspace/MachineFileTree', () => ({
   default: function MachineFileTreeStub({
     scope,
     onSelectFile,
+    onPathRemoved,
   }: {
     scope: { kind: 'root' } | { kind: 'branch'; projectName: string; branchName: string };
     onSelectFile?: (path: string) => void;
+    onPathRemoved?: (path: string) => void;
   }) {
     const scopeName = scope.kind === 'branch' ? scope.branchName : 'root';
     useEffect(() => {
       treeListings.push(scopeName);
     }, [scopeName]);
     return (
-      <button type="button" data-testid="file-tree" onClick={() => onSelectFile?.('src/index.ts')}>
-        tree:{scopeName}
-      </button>
+      <div>
+        <button type="button" data-testid="file-tree" onClick={() => onSelectFile?.('src/index.ts')}>
+          tree:{scopeName}
+        </button>
+        <button type="button" data-testid="delete-open-file" onClick={() => onPathRemoved?.('src/index.ts')}>
+          delete-open-file
+        </button>
+      </div>
     );
   },
 }));
@@ -423,6 +430,31 @@ describe('FilesTab', () => {
       should: 'render the file pane scoped to that branch and path',
       actual: pane.textContent,
       expected: 'pane:main:src/index.ts',
+    });
+  });
+
+  test('deleting the open file clears the pane', async () => {
+    cannedFetch({
+      root: async () => jsonResponse({ entries: [] }),
+      main: async () => jsonResponse({ entries: [] }),
+    });
+    render(<FilesTab machineId="machine-1" />);
+    await waitFor(() => screen.getByText('tree:root'));
+
+    await userEvent.click(screen.getByText('pick-main'));
+    await userEvent.click(await waitFor(() => screen.getByTestId('file-tree')));
+    await waitFor(() => screen.getByTestId('file-pane'));
+
+    await userEvent.click(screen.getByTestId('delete-open-file'));
+
+    assert({
+      given: 'the currently open file deleted from the tree',
+      should: 'clear the open file and fall back to the pick-a-file prompt',
+      actual: {
+        pane: screen.queryByTestId('file-pane'),
+        filePrompt: screen.queryByText('Select a file to view its contents.') !== null,
+      },
+      expected: { pane: null, filePrompt: true },
     });
   });
 

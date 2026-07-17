@@ -34,6 +34,12 @@
  * is the initial scope, so the Machine's own files render immediately with no
  * pick required; picking a branch is additive, unchanged browsing on top of
  * that default.
+ *
+ * `MachineFileTree`'s own create/rename/delete operations (task 11) can hit
+ * the open file — deleting it, deleting an ancestor directory, or renaming
+ * either — so `onPathRemoved`/`onPathRenamed` below clear or retarget `path`
+ * to keep the pane honest. Everything else about those mutations (dialogs,
+ * cache invalidation, request bodies) lives entirely inside the tree.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -98,6 +104,26 @@ export default function FilesTab({ machineId }: FilesTabProps) {
     setSelection((current) => ({ ...current, path: next }));
   }, []);
 
+  // A delete/rename in the tree only matters to the open file if it hit the
+  // open path itself OR one of its ancestor directories — anything else
+  // leaves the pane alone.
+  const onPathRemoved = useCallback((removed: string) => {
+    setSelection((current) =>
+      current.path !== null && (current.path === removed || current.path.startsWith(`${removed}/`))
+        ? { ...current, path: null }
+        : current,
+    );
+  }, []);
+
+  const onPathRenamed = useCallback((from: string, to: string) => {
+    setSelection((current) => {
+      if (current.path === null) return current;
+      if (current.path === from) return { ...current, path: to };
+      if (current.path.startsWith(`${from}/`)) return { ...current, path: `${to}${current.path.slice(from.length)}` };
+      return current;
+    });
+  }, []);
+
   return (
     <TabSidebar
       title="Files"
@@ -152,6 +178,8 @@ export default function FilesTab({ machineId }: FilesTabProps) {
                 close();
               }}
               selectedPath={path}
+              onPathRemoved={onPathRemoved}
+              onPathRenamed={onPathRenamed}
             />
           </div>
         </>
@@ -191,11 +219,15 @@ function ScopeFiles({
   scope,
   onSelectFile,
   selectedPath,
+  onPathRemoved,
+  onPathRenamed,
 }: {
   machineId: string;
   scope: FilesScope;
   onSelectFile: (path: string) => void;
   selectedPath: string | null;
+  onPathRemoved: (path: string) => void;
+  onPathRenamed: (from: string, to: string) => void;
 }) {
   const [state, setState] = useState<ScopeState>({ status: 'loading' });
   // Bumped by Retry — re-runs the probe without changing the scope identity.
@@ -273,5 +305,14 @@ function ScopeFiles({
     );
   }
 
-  return <MachineFileTree machineId={machineId} scope={scope} onSelectFile={onSelectFile} selectedPath={selectedPath} />;
+  return (
+    <MachineFileTree
+      machineId={machineId}
+      scope={scope}
+      onSelectFile={onSelectFile}
+      selectedPath={selectedPath}
+      onPathRemoved={onPathRemoved}
+      onPathRenamed={onPathRenamed}
+    />
+  );
 }

@@ -1,10 +1,15 @@
 import { describe, test, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
 
 vi.mock('@/lib/auth/auth-fetch', () => ({
   fetchWithAuth: vi.fn(),
+}));
+
+const toastMocks = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: toastMocks,
 }));
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -56,10 +61,46 @@ const cannedFetch = (overrides: Record<string, () => Promise<Response>> = {}) =>
     return jsonResponse({ entries });
   });
 
+// Excludes mutation calls: a POST/PATCH/DELETE to `/api/machines/files` has no
+// `path` query param at all, so it would otherwise be miscounted as a listing
+// of the root ('').
 const listCallsFor = (path: string): number =>
-  vi.mocked(fetchWithAuth).mock.calls.filter((call) => requestedPath(String(call[0])) === path).length;
+  vi.mocked(fetchWithAuth).mock.calls.filter((call) => {
+    const init = (call[1] ?? {}) as RequestInit | undefined;
+    const method = typeof init?.method === 'string' ? init.method : 'GET';
+    return method === 'GET' && requestedPath(String(call[0])) === path;
+  }).length;
 
 const BRANCH_SCOPE: FilesScope = { kind: 'branch', projectName: 'my-repo', branchName: 'main' };
+
+/** One recorded mutation (POST/PATCH/DELETE) call, with its body already parsed. */
+interface MutationCall {
+  method: string | undefined;
+  body: unknown;
+}
+
+/**
+ * Serves listings from FAKE_FS same as `cannedFetch`, but routes any
+ * non-GET call to `mutationResponse` and records it — used by the
+ * context-menu/mutation tests below, which need to inspect the request the
+ * tree issued rather than only what it rendered afterwards.
+ */
+const cannedFetchWithMutation = (
+  mutationCalls: MutationCall[],
+  mutationResponse: () => Response | Promise<Response>,
+) =>
+  vi.mocked(fetchWithAuth).mockImplementation(async (...args: unknown[]) => {
+    const init = (args[1] ?? {}) as RequestInit;
+    const method = typeof init.method === 'string' ? init.method : undefined;
+    if (method && method !== 'GET') {
+      mutationCalls.push({ method, body: init.body ? JSON.parse(String(init.body)) : undefined });
+      return mutationResponse();
+    }
+    const path = requestedPath(String(args[0]));
+    const entries = FAKE_FS[path];
+    if (!entries) return jsonResponse({ error: 'not_found' }, 404);
+    return jsonResponse({ entries });
+  });
 
 const renderTree = (props: Partial<Parameters<typeof MachineFileTree>[0]> = {}) =>
   render(<MachineFileTree machineId="machine-1" scope={BRANCH_SCOPE} {...props} />);
@@ -78,6 +119,8 @@ const rowLabels = (): (string | null)[] =>
 describe('MachineFileTree', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    toastMocks.error.mockClear();
+    toastMocks.success.mockClear();
     cannedFetch();
   });
 
@@ -364,6 +407,189 @@ describe('MachineFileTree', () => {
       should: 'render an explicit empty row instead of nothing',
       actual: empty.textContent,
       expected: 'Empty folder',
+    });
+  });
+
+  describe('context menu operations', () => {
+    test('New Folder via a directory context menu POSTs a scoped, confined path and re-lists the parent once', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      renderTree();
+
+      await expandFolder('src');
+      await waitFor(() => screen.getByText('index.ts'));
+      const srcFetchesBefore = listCallsFor('src');
+
+      fireEvent.contextMenu(screen.getByText('src'));
+      await userEvent.click(await waitFor(() => screen.getByText('New Folder')));
+      await userEvent.type(screen.getByLabelText('Name'), 'newdir');
+      await userEvent.click(screen.getByText('Save'));
+
+      await waitFor(() => {
+        if (listCallsFor('src') <= srcFetchesBefore) throw new Error('src not relisted yet');
+      });
+
+      assert({
+        given: "New Folder chosen from the 'src' directory's context menu, named 'newdir'",
+        should: "POST the confined child path with the branch scope fields, then re-list 'src' exactly once",
+        actual: {
+          mutation: calls[0],
+          srcRelistCount: listCallsFor('src') - srcFetchesBefore,
+        },
+        expected: {
+          mutation: {
+            method: 'POST',
+            body: {
+              machineId: 'machine-1',
+              projectName: 'my-repo',
+              branchName: 'main',
+              path: 'src/newdir',
+              kind: 'directory',
+            },
+          },
+          srcRelistCount: 1,
+        },
+      });
+    });
+
+    test('Rename posts a same-parent PATCH move and drops the renamed directory\'s stale descendant cache', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      renderTree();
+
+      await expandFolder('src');
+      await expandFolder('components');
+      await waitFor(() => screen.getByText('Button.tsx'));
+      const componentsFetchesBefore = listCallsFor('src/components');
+
+      fireEvent.contextMenu(screen.getByText('components'));
+      await userEvent.click(await waitFor(() => screen.getByText('Rename')));
+      const input = await waitFor(() => screen.getByLabelText('Name')) as HTMLInputElement;
+      await userEvent.clear(input);
+      await userEvent.type(input, 'ui');
+      await userEvent.click(screen.getByText('Save'));
+
+      // 'components' stays expanded across the rename, so dropping its cache
+      // entry alone (without a manual toggle) is what proves the descendant
+      // cache was actually invalidated, not just the parent.
+      await waitFor(() => {
+        if (listCallsFor('src/components') <= componentsFetchesBefore) {
+          throw new Error('renamed directory\'s stale cache not dropped yet');
+        }
+      });
+
+      assert({
+        given: "Rename chosen from the 'components' directory's context menu, renamed to 'ui'",
+        should: 'PATCH a move with fromPath/toPath in the same parent, and refetch the old path once (stale cache dropped)',
+        actual: {
+          mutation: calls[0],
+          staleCacheDropped: listCallsFor('src/components') - componentsFetchesBefore,
+        },
+        expected: {
+          mutation: {
+            method: 'PATCH',
+            body: {
+              machineId: 'machine-1',
+              projectName: 'my-repo',
+              branchName: 'main',
+              op: 'move',
+              fromPath: 'src/components',
+              toPath: 'src/ui',
+            },
+          },
+          staleCacheDropped: 1,
+        },
+      });
+    });
+
+    test('Delete confirm fires DELETE and re-lists the parent', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      renderTree();
+
+      await expandFolder('src');
+      await waitFor(() => screen.getByText('index.ts'));
+      const srcFetchesBefore = listCallsFor('src');
+
+      fireEvent.contextMenu(screen.getByText('index.ts'));
+      await userEvent.click(await waitFor(() => screen.getByText('Delete')));
+      await waitFor(() => screen.getByText('Delete "src/index.ts"?', { exact: false }));
+      await userEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+      await waitFor(() => {
+        if (listCallsFor('src') <= srcFetchesBefore) throw new Error('src not relisted yet');
+      });
+
+      assert({
+        given: "Delete confirmed from 'src/index.ts'’s context menu",
+        should: 'DELETE the scoped path and re-list its parent once',
+        actual: {
+          mutation: calls[0],
+          srcRelistCount: listCallsFor('src') - srcFetchesBefore,
+        },
+        expected: {
+          mutation: {
+            method: 'DELETE',
+            body: { machineId: 'machine-1', projectName: 'my-repo', branchName: 'main', path: 'src/index.ts' },
+          },
+          srcRelistCount: 1,
+        },
+      });
+    });
+
+    test('a 409 from a mutation toasts a friendly message and never re-lists or renders a row error', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ error: 'already_exists' }, 409));
+      renderTree();
+      await waitFor(() => screen.getByText('README.md'));
+      const rootFetchesBefore = listCallsFor('');
+
+      await userEvent.click(screen.getByTitle('New file'));
+      await userEvent.type(screen.getByLabelText('Name'), 'zeta.md');
+      await userEvent.click(screen.getByText('Save'));
+
+      await waitFor(() => {
+        if (toastMocks.error.mock.calls.length === 0) throw new Error('toast not fired yet');
+      });
+
+      assert({
+        given: 'a create-file mutation that comes back 409',
+        should: 'toast a friendly "already has that name" message, issue no re-list, and never render a red tree row',
+        actual: {
+          toastMessage: toastMocks.error.mock.calls[0]?.[0],
+          rootRelistCount: listCallsFor('') - rootFetchesBefore,
+          rowError: screen.queryByTestId('file-tree-error'),
+        },
+        expected: {
+          toastMessage: 'Something already has that name',
+          rootRelistCount: 0,
+          rowError: null,
+        },
+      });
+    });
+
+    test('deleting the currently open file reports it via onPathRemoved', async () => {
+      const calls: MutationCall[] = [];
+      cannedFetchWithMutation(calls, () => jsonResponse({ ok: true }));
+      const onPathRemoved = vi.fn();
+      renderTree({ scope: { kind: 'root' }, selectedPath: 'README.md', onPathRemoved });
+
+      await waitFor(() => screen.getByText('README.md'));
+
+      fireEvent.contextMenu(screen.getByText('README.md'));
+      await userEvent.click(await waitFor(() => screen.getByText('Delete')));
+      await userEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Delete' })));
+
+      await waitFor(() => {
+        if (onPathRemoved.mock.calls.length === 0) throw new Error('onPathRemoved not called yet');
+      });
+
+      assert({
+        given: 'the currently open file (selectedPath) deleted via its context menu',
+        should: 'report the deleted path through onPathRemoved so the parent can clear it',
+        actual: onPathRemoved.mock.calls[0]?.[0],
+        expected: 'README.md',
+      });
     });
   });
 });
