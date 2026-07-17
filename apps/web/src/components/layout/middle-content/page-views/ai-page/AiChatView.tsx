@@ -25,10 +25,8 @@ import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegra
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 
-import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { isCapacitorApp } from '@/hooks/useCapacitor';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
+import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
 import { useRenderedMessages } from '@/hooks/useRenderedMessages';
@@ -58,6 +56,7 @@ import {
   isResolving,
   useChatTransport,
   useSendHandoff,
+  useResumeBootstrap,
   useAskUserAnswering,
   buildChatConfig,
   AgentConfig,
@@ -1202,37 +1201,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     await loadMessagesForConversation(currentConversationId);
   }, [currentConversationId, loadMessagesForConversation]);
 
+  // Gate on USER editing only, evaluated at fire time (callback form). The old gate was
+  // `!isEditingActive()`, i.e. isAnyActive(), which is true whenever an 'ai-streaming' session
+  // exists — and this component registers one while streaming. So the hook early-returned in
+  // exactly the case it was written for. Worse, a boolean captured at render is stale on iOS,
+  // which freezes JS while backgrounded — the captured value was always the streaming one.
   const resumeEnabled = useCallback(
-    () => currentConversationIdRef.current !== null && !useEditingStore.getState().isAnyEditing(),
+    () => canResumeRecovery(currentConversationIdRef.current, useEditingStore.getState().isAnyEditing()),
     [],
   );
 
-  // App state recovery - re-attach/refetch AI stream when returning from background.
-  // On native (Capacitor): if streaming, stop the local fetch, rejoin any still-live
-  // server stream, then refetch to recover a stream that finished while backgrounded.
-  // On web: never interrupt a live fetch on tab-switch (the fetch stays alive).
-  // Known limitation (pre-existing): if the user switched conversation while backgrounded,
-  // onStreamComplete's conversationId guard suppresses the append; the message is still
-  // persisted and appears on navigating back to the conversation.
-  useAppStateRecovery({
-    onResume: useCallback(async () => {
-      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
-      if (action === 'noop') return;
-      if (action === 'rejoin-and-refresh') {
-        // chatStop is local-only; it does NOT signal the server (the existing effectiveStop
-        // does that separately via abortActiveStreamByMessageId). We only need to clear the
-        // local useChat streaming state so rejoin can attach cleanly.
-        chatStop();
-        rejoinActiveStreams();
-      }
-      await handlePullUpRefresh();
-    }, [effectiveIsStreaming, chatStop, rejoinActiveStreams, handlePullUpRefresh]),
-    // Gate on USER editing only, and evaluate it at fire time (callback form).
-    // The old gate was `!isEditingActive()`, i.e. isAnyActive(), which is true
-    // whenever an 'ai-streaming' session exists — and this component registers one
-    // while streaming. So the hook early-returned in exactly the case it was
-    // written for. Worse, a boolean is captured at render, and iOS freezes JS
-    // while backgrounded, so the captured value was always the streaming one.
+  // App-resume = the same path as mount/socket-reconnect (epic leaf 6.2): re-bootstrap active
+  // streams, reload the conversation into the cache, and settle a frozen local transport.
+  // Nothing renders from the local fetch under store-first rendering, so there is no
+  // native/web or was-i-streaming choreography left to make — this subsumes
+  // resolveResumeAction (deleted) and #2065.
+  useResumeBootstrap({
+    rejoin: rejoinActiveStreams,
+    reload: handlePullUpRefresh,
+    stop: chatStop,
+    isOwnStreamLive: useCallback(() => ownStreamLiveRef.current, []),
     enabled: resumeEnabled,
   });
 

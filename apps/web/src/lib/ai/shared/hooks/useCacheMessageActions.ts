@@ -24,7 +24,7 @@ import { useCallback, useMemo } from 'react';
 import type { UIMessage } from 'ai';
 import { useMessageActions } from './useMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import { getAssistantMessagesAfterLastUser } from '@/lib/ai/streams/getAssistantMessagesAfterLastUser';
+import { planRetry } from '@/lib/ai/streams/planRetry';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 
@@ -98,6 +98,12 @@ export function useCacheMessageActions({
   }, [handleDeleteBase, conversationId]);
 
   const handleRetry = useCallback(async () => {
+    // planRetry is the guard: it plans nothing (no ids, no lastUserMessage) while a
+    // stream is live anywhere in the rendered list, so an in-flight run can never be
+    // deleted out from under itself. No user turn to retry from is the same no-op.
+    const { assistantIdsToDelete, lastUserMessage } = planRetry(renderedMessages);
+    if (!lastUserMessage) return;
+
     // regenerate() indexes into useChat's OWN local array (crashes if empty, throws
     // "not found" on an unknown id). Post-cutover nothing keeps that array in sync
     // with loaded history — the loads write the cache — so a Retry on a conversation
@@ -108,14 +114,10 @@ export function useCacheMessageActions({
     if (!isOwnSendLive) {
       setMessages(stableMessages);
     }
-    // Same computation the base handleRetry runs (against the same stableMessages
-    // source) to decide which rows to DELETE server-side — computed BEFORE the base
-    // call so we know what to remove from the cache once those deletes have gone out.
-    const toRemove = getAssistantMessagesAfterLastUser(stableMessages).map((m) => m.id);
     await handleRetryBase();
     if (!conversationId) return;
-    for (const id of toRemove) conversationMessagesActions.applyDelete(conversationId, id);
-  }, [handleRetryBase, stableMessages, conversationId, isOwnSendLive, setMessages]);
+    for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
+  }, [renderedMessages, handleRetryBase, stableMessages, conversationId, isOwnSendLive, setMessages]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };
 }
