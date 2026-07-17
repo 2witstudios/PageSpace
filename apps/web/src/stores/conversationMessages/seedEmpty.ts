@@ -56,6 +56,12 @@ export interface ConversationCacheEntry {
   loadGeneration: number;
   pendingMutationsSinceLoad: PendingMutation[];
   loadStatus: ConversationLoadStatus;
+  /** Cursor for the NEXT "load older" page (epic leaf 6.6) — the initial load's `pagination.nextCursor`. */
+  olderCursor: string | null;
+  /** Whether an older page exists to load — the initial/older load's `pagination.hasMore`. */
+  hasMoreOlder: boolean;
+  /** True while a "load older" fetch is in flight — inline scroll indicator only, no error-banner takeover. */
+  isLoadingOlder: boolean;
 }
 
 export type ConversationMessagesById = Record<string, ConversationCacheEntry>;
@@ -67,4 +73,7 @@ export const seedEmpty = (): ConversationCacheEntry => ({
   loadGeneration: 0,
   pendingMutationsSinceLoad: [],
   loadStatus: 'idle',
+  olderCursor: null,
+  hasMoreOlder: false,
+  isLoadingOlder: false,
 });

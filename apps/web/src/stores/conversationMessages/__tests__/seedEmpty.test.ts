@@ -9,6 +9,9 @@ describe('seedEmpty', () => {
       loadGeneration: 0,
       pendingMutationsSinceLoad: [],
       loadStatus: 'idle',
+      olderCursor: null,
+      hasMoreOlder: false,
+      isLoadingOlder: false,
     });
   });
 

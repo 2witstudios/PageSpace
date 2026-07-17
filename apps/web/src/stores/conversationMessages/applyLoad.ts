@@ -6,6 +6,8 @@ export interface ApplyLoadEvent {
   conversationId: string;
   generation: number;
   messages: UIMessage[];
+  /** The load's pagination envelope (epic leaf 6.6) — seeds hasMoreOlder/olderCursor for "load older". */
+  pagination?: { hasMore: boolean; nextCursor: string | null };
 }
 
 /**
@@ -48,6 +50,8 @@ export const applyLoad = (
       optimisticSends,
       pendingMutationsSinceLoad: [],
       loadStatus: 'loaded',
+      hasMoreOlder: event.pagination?.hasMore ?? false,
+      olderCursor: event.pagination?.nextCursor ?? null,
     },
   };
 };

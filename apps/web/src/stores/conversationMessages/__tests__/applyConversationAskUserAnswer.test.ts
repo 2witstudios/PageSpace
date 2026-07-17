@@ -16,7 +16,7 @@ const assistantMsg = (id: string, toolCallId: string, state: string): UIMessage 
 describe('applyConversationAskUserAnswer', () => {
   it('given a matching message in a tracked conversation, should patch the tool part to output-available', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
+      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyConversationAskUserAnswer(initial, {
       conversationId: 'c1',
@@ -35,8 +35,8 @@ describe('applyConversationAskUserAnswer', () => {
 
   it('given other conversations tracked, should not touch them', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
-      other: { messages: [assistantMsg('a2', 'tc2', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
+      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
+      other: { messages: [assistantMsg('a2', 'tc2', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyConversationAskUserAnswer(initial, {
       conversationId: 'c1',
@@ -47,7 +47,7 @@ describe('applyConversationAskUserAnswer', () => {
 
   it('given an answer, should record it in pendingMutationsSinceLoad so a racing load replays it', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
+      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyConversationAskUserAnswer(initial, {
       conversationId: 'c1',
@@ -60,7 +60,7 @@ describe('applyConversationAskUserAnswer', () => {
 
   it('given an answer for a message not present yet, should STILL record the pending mutation for later replay', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
+      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyConversationAskUserAnswer(initial, {
       conversationId: 'c1',
@@ -73,7 +73,7 @@ describe('applyConversationAskUserAnswer', () => {
 
   it('given an answer, should NOT bump loadGeneration', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
+      c1: { messages: [assistantMsg('a1', 'tc1', 'input-available')], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyConversationAskUserAnswer(initial, {
       conversationId: 'c1',
