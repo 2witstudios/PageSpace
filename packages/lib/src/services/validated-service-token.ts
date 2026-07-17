@@ -36,7 +36,8 @@ export type ServiceScope =
   | 'avatars:write'
   | 'avatars:write:any'
   | 'queue:read'
-  | 'erasure:enqueue';
+  | 'erasure:enqueue'
+  | 'broadcast:enqueue';
 
 // Duration bounds for service tokens
 const DEFAULT_EXPIRY_MS = 5 * 60 * 1000;        // 5 minutes default
@@ -332,6 +333,12 @@ function filterScopesByPermissions(
       // The security boundary is the web route that mints it; the processor
       // endpoint is internal-only.
       case 'erasure:enqueue':
+        return permissions.isOwner;
+
+      // Broadcast enqueue is minted by the admin console against the admin's own
+      // user resource, same shape as erasure:enqueue: the admin-gated route that
+      // mints it is the security boundary; the processor endpoint is internal-only.
+      case 'broadcast:enqueue':
         return permissions.isOwner;
 
       default:

@@ -11,6 +11,7 @@ import type {
   VideoProcessJobData,
   PullVerifyJobData,
   AccountErasureJobData,
+  EmailBroadcastJobData,
   TextExtractResult,
   IngestResult,
 } from '../types';
@@ -88,6 +89,7 @@ export class QueueManager {
       await this.boss.createQueue('siem-delivery');
       await this.boss.createQueue('account-erasure');
       await this.boss.createQueue('audit-chainer');
+      await this.boss.createQueue('email-broadcast');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -270,6 +272,18 @@ export class QueueManager {
     // Every 30 seconds, retryLimit 0 so overlapping runs won't stack (same
     // schedule contract as siem-delivery).
     await this.boss.schedule('audit-chainer', '*/30 * * * * *', {}, { retryLimit: 0 });
+
+    // Durable admin-console email broadcast. Retries with backoff on throw; the
+    // claim-before-send lease + UNIQUE(broadcastId, userId) ledger make a retry
+    // resume from where the last attempt stopped instead of double-sending.
+    const { runEmailBroadcastJob } = await import('./email-broadcast-worker');
+    await this.boss.work('email-broadcast',
+      async ([job]) => {
+        console.log(`Processing email-broadcast job: ${job.id}`);
+        await runEmailBroadcastJob(job.data as EmailBroadcastJobData);
+        return { success: true };
+      }
+    );
   }
 
   async addJob<Q extends QueueName>(
@@ -323,7 +337,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer', 'email-broadcast'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;
