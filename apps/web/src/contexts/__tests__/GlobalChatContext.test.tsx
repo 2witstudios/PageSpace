@@ -426,6 +426,44 @@ describe('GlobalChatProvider — conversation identity race guards', () => {
     expect(cacheEntry('brand-new-conv').messages).toEqual([]);
   });
 
+  // CR2 (CodeRabbit round 2): the init bootstrap's /active response resolving AFTER
+  // the user created a conversation must not overwrite the newer identity.
+  it('given the delayed /active bootstrap resolves after createNewConversation already won, should NOT overwrite the newer identity', async () => {
+    let resolveActive!: (value: unknown) => void;
+    mockFetchWithAuth.mockImplementation((url: string) => {
+      if (url === '/api/ai/global/active') {
+        return new Promise((resolve) => { resolveActive = resolve; });
+      }
+      return defaultFetch(url);
+    });
+
+    const { conversationState } = await import('@/lib/ai/core/conversation-state');
+    vi.mocked(conversationState.createAndSetActiveConversation).mockResolvedValue({
+      id: 'user-created-conv',
+      type: 'global',
+      title: null,
+      lastMessageAt: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    const { result } = renderProvider();
+
+    // User creates a conversation while the bootstrap's /active fetch is in flight.
+    await act(async () => {
+      await result.current.createNewConversation();
+    });
+    expect(result.current.currentConversationId).toBe('user-created-conv');
+
+    // The stale bootstrap now resolves with the OLD active conversation.
+    await act(async () => {
+      resolveActive({ ok: true, json: async () => ({ id: 'stale-old-active' }) });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentConversationId).toBe('user-created-conv');
+  });
+
   it("given loadConversation is called, the cache entry should read loading until its messages fetch resolves", async () => {
     let resolveMessages!: (value: unknown) => void;
     mockFetchWithAuth.mockImplementation((url: string) => {

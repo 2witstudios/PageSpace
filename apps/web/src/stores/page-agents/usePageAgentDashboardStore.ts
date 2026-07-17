@@ -308,6 +308,12 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
 
       // Try to load most recent conversation
       const mostRecent = await fetchMostRecentAgentConversation(agent.id);
+      // CR3 (CodeRabbit round 2): a rapid A→B agent switch runs two of these
+      // resolutions concurrently, and the reducer alone cannot tell them apart
+      // (both are RESOLVED against a 'resolving' state) — A's late result would
+      // claim B's pending identity and pair agent B with agent A's conversation
+      // (and flip the URL back to A). The selected agent is the discriminator.
+      if (get().selectedAgent?.id !== agent.id) return;
       if (mostRecent) {
         const resolved = applyIdentity({ type: 'RESOLVED', conversationId: mostRecent.id });
         if (conversationIdFrom(resolved) !== mostRecent.id) return;
@@ -328,6 +334,10 @@ export const usePageAgentDashboardStore = create<AgentState>()((set, get) => {
       await get().createNewConversation();
     } catch (error) {
       console.error('Failed to load most recent conversation:', error);
+      // Same agent-switch discriminator on the failure path (CR3): agent A's
+      // late failure must not RESOLVE_FAILED B's in-flight resolution and then
+      // mint a fallback conversation on top of it.
+      if (get().selectedAgent?.id !== agent.id) return;
       const resolved = applyIdentity({ type: 'RESOLVE_FAILED', message: error instanceof Error ? error.message : 'Failed to load conversation' });
       // RESOLVE_FAILED only takes effect if we were still 'resolving' — if a
       // newer identity already won, resolved.status won't be 'error' and we

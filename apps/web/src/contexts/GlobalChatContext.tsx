@@ -164,8 +164,16 @@ export function GlobalChatProvider({ children }: { children: ReactNode }) {
         }
 
         const response = await fetchWithAuth('/api/ai/global/active');
+        // CR2 (CodeRabbit round 2): everything below this await is a BOOTSTRAP
+        // result, and the user may have created/selected a conversation while it
+        // was in flight — their IDENTITY_SET moved the reducer past 'resolving',
+        // and a stale bootstrap must not overwrite it. (loadConversation itself
+        // keeps its unconditional IDENTITY_SET: a user-initiated select always
+        // wins; only these post-await bootstrap adoptions are guarded.)
+        if (!isResolving(identityRef.current)) return;
         if (response.ok) {
           const conversation = await response.json();
+          if (!isResolving(identityRef.current)) return;
           if (conversation && conversation.id) {
             await loadConversation(conversation.id);
             if (!hasAgent) {

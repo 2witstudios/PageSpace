@@ -351,7 +351,9 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   // UNIFIED INTERFACE - select based on mode
   // ============================================
-  const messages = selectedAgent ? agentMessages : globalLocalMessages;
+  // NO mode-selected `messages` alias: nothing renders or reasons over the raw
+  // transport arrays any more — the mirrors read their own per-chat arrays, and
+  // every other consumer uses the rendered/settled cache views.
   const sendMessage = selectedAgent ? agentSendMessage : globalSendMessage;
   const status = selectedAgent ? agentStatus : globalStatus;
   const error = selectedAgent ? agentError : globalError;
@@ -462,11 +464,14 @@ const GlobalAssistantView: React.FC = () => {
       .map((p) => (p as { type: 'text'; text: string }).text)
       .join('');
   }, [plainMessages, isStreaming]);
-  // Synchronously updated each render — lets tryRecover read the live message
-  // count without adding messages to its useCallback deps (which would cause
-  // the useStreamRecovery effect to re-subscribe on every message update).
-  const currentMessagesRef = useRef(messages);
-  currentMessagesRef.current = messages;
+  // Synchronously updated each render — lets tryRecover read the CURRENT
+  // CONVERSATION's rendered rows without adding them to its useCallback deps.
+  // plainMessages, not the transport array (CR1, CodeRabbit round 2): the
+  // transport accumulates rows across conversation switches and is never
+  // seeded from loads post-cutover, so its last-user id could belong to a
+  // different conversation and defeat the persisted-reply check.
+  const currentMessagesRef = useRef(plainMessages);
+  currentMessagesRef.current = plainMessages;
   // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
   // useChat's local state into usePendingStreamsStore, so this surface's own streams are present
   // in the store the same way a bootstrapped or remote one is. Everything above derives from
@@ -633,6 +638,9 @@ const GlobalAssistantView: React.FC = () => {
 
     // Step 2: DB check for a persisted reply to the CURRENT turn.
     try {
+      // Token BEFORE the fetch — a stale recovery snapshot must not overwrite
+      // anything fresher committed while it was in flight (CR4).
+      const snapshotToken = conversationMessagesActions.beginServerSnapshot(conversationId);
       const url = selectedAgent
         ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
         : `/api/ai/global/${conversationId}/messages`;
@@ -675,7 +683,7 @@ const GlobalAssistantView: React.FC = () => {
           // conversation's loaded truth. The cache write is conversation-keyed and renders
           // via merge-at-render — no transport write needed to surface the recovered reply
           // (PR 5B: the refetch branch's fetch+setMessages becomes a cache commit).
-          conversationMessagesActions.applyServerSnapshot(conversationId, msgs as unknown as UIMessage[]);
+          conversationMessagesActions.applyServerSnapshot(conversationId, snapshotToken, msgs as unknown as UIMessage[]);
           return { recovered: true, probeAnswered, dbAnswered };
         }
       }

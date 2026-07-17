@@ -244,7 +244,6 @@ const SidebarChatTab: React.FC = () => {
   // Sidebar Chat (custom hook - unified interface)
   // ============================================
   const {
-    messages,
     sendMessage,
     status,
     error,
@@ -490,10 +489,14 @@ const SidebarChatTab: React.FC = () => {
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
   const voiceBaselineRef = useRef<string | null | undefined>(undefined);
 
-  // Synchronously updated each render — lets tryRecover read the live message
-  // count without adding messages to its useCallback deps.
-  const currentMessagesRef = useRef(messages);
-  currentMessagesRef.current = messages;
+  // Synchronously updated each render — lets tryRecover read the CURRENT
+  // CONVERSATION's rendered rows without adding them to its useCallback deps.
+  // plainMessages, not the transport array (CR1, CodeRabbit round 2): the
+  // transport accumulates rows across conversation switches and is never
+  // seeded from loads post-cutover, so its last-user id could belong to a
+  // different conversation and defeat the persisted-reply check.
+  const currentMessagesRef = useRef<UIMessage[]>([]);
+  currentMessagesRef.current = plainMessages;
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -903,6 +906,9 @@ const SidebarChatTab: React.FC = () => {
 
     // Step 2: DB check for a persisted reply to the CURRENT turn.
     try {
+      // Token BEFORE the fetch — a stale recovery snapshot must not overwrite
+      // anything fresher committed while it was in flight (CR4).
+      const snapshotToken = conversationMessagesActions.beginServerSnapshot(conversationId);
       const url = selectedAgent
         ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
         : `/api/ai/global/${conversationId}/messages`;
@@ -944,7 +950,7 @@ const SidebarChatTab: React.FC = () => {
           // Commit the SAME normalized array the guards above were computed from, as the
           // conversation's loaded truth — the cache write is conversation-keyed and renders
           // via merge-at-render (PR 5B: the refetch branch becomes a cache commit).
-          conversationMessagesActions.applyServerSnapshot(conversationId, msgs as unknown as UIMessage[]);
+          conversationMessagesActions.applyServerSnapshot(conversationId, snapshotToken, msgs as unknown as UIMessage[]);
           return { recovered: true, probeAnswered, dbAnswered };
         }
       }

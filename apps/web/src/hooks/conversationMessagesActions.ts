@@ -52,9 +52,12 @@ export const conversationMessagesActions = {
    */
   promoteOptimisticSends: (conversationId: string): void =>
     useConversationMessagesStore.getState().promoteOptimisticSends(conversationId),
-  /** Commit an already-fetched server list as loaded truth in one step (supersedes in-flight loads). */
-  applyServerSnapshot: (conversationId: string, messages: UIMessage[]): void =>
-    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, messages),
+  /** Capture the token a background snapshot must present at commit — call BEFORE the fetch. */
+  beginServerSnapshot: (conversationId: string): number =>
+    useConversationMessagesStore.getState().beginServerSnapshot(conversationId),
+  /** Silently commit an already-fetched server list as loaded truth; dropped if the token went stale. */
+  applyServerSnapshot: (conversationId: string, generationToken: number, messages: UIMessage[]): void =>
+    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, generationToken, messages),
   /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
   seedConversation: (conversationId: string): void =>
     useConversationMessagesStore.getState().seedConversation(conversationId),

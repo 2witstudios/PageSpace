@@ -32,13 +32,22 @@ interface ConversationMessagesState {
   /** Promote optimistic sends into confirmed messages — call on OWN stream commit only (see promoteOptimisticSends). */
   promoteOptimisticSends: (conversationId: string) => void;
   /**
-   * Commits an already-fetched server message list as the conversation's new
-   * loaded truth in one step (startLoad + applyLoad composed) — for callers
-   * that fetched BEFORE deciding to commit (tryRecover's refetch branch),
-   * where a separate startLoad would leave a window for the data to go stale
-   * against its own generation. Supersedes any in-flight load.
+   * Captures the entry's current generation WITHOUT any state change — the
+   * token a background snapshot fetch must present at commit. Any generation
+   * movement in between (a loud load starting, another snapshot committing)
+   * invalidates the token, so an older-fetched snapshot can never overwrite
+   * fresher data (CodeRabbit CR4, PR #2098).
    */
-  applyServerSnapshot: (conversationId: string, messages: UIMessage[]) => void;
+  beginServerSnapshot: (conversationId: string) => number;
+  /**
+   * Commits an already-fetched server message list as the conversation's new
+   * loaded truth in one step (startLoad + applyLoad composed), silently — no
+   * 'loading' status flip. Dropped when `generationToken` (from
+   * `beginServerSnapshot`, captured before the fetch) is no longer the entry's
+   * current generation. Mutations recorded since the fetch began are replayed
+   * onto the snapshot (they are newer than it).
+   */
+  applyServerSnapshot: (conversationId: string, generationToken: number, messages: UIMessage[]) => void;
   /**
    * Marks a freshly-minted conversation as loaded-empty — createNewConversation
    * paths know the server has no rows for the id they just minted, so nothing
@@ -93,8 +102,17 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
     set((state) => ({ byConversationId: promoteOptimisticSends(state.byConversationId, conversationId) }));
   },
 
-  applyServerSnapshot: (conversationId, messages) => {
+  beginServerSnapshot: (conversationId) =>
+    get().byConversationId[conversationId]?.loadGeneration ?? 0,
+
+  applyServerSnapshot: (conversationId, generationToken, messages) => {
     set((state) => {
+      // Stale-token drop (CR4): the generation moved since this snapshot's fetch
+      // began — a loud load started, or a fresher snapshot already committed — so
+      // this data is older than what the entry holds/awaits. Replay cannot save it
+      // (the newer commit cleared the pending queue).
+      const currentGeneration = state.byConversationId[conversationId]?.loadGeneration ?? 0;
+      if (currentGeneration !== generationToken) return state;
       // The snapshot was FETCHED before this call (unlike startLoad's contract, where
       // the fetch starts after), so live mutations recorded while it was in flight are
       // NEWER than the snapshot — replay them onto it instead of letting the generation

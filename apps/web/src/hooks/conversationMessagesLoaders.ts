@@ -60,13 +60,16 @@ export const refreshConversationSnapshot = async (
   agentId: string | null,
   conversationId: string,
 ): Promise<void> => {
+  // Token BEFORE the fetch: any generation movement while the fetch is in flight
+  // (a loud load, a fresher snapshot committing) invalidates this commit (CR4).
+  const token = conversationMessagesActions.beginServerSnapshot(conversationId);
   try {
     if (agentId) {
       const result = await fetchAgentConversationMessages(agentId, conversationId, {
         limit: 50,
         includeStreaming: true,
       });
-      conversationMessagesActions.applyServerSnapshot(conversationId, result.messages);
+      conversationMessagesActions.applyServerSnapshot(conversationId, token, result.messages);
       return;
     }
     const res = await fetchWithAuth(
@@ -78,7 +81,7 @@ export const refreshConversationSnapshot = async (
     }
     const data = await res.json();
     const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-    conversationMessagesActions.applyServerSnapshot(conversationId, messages);
+    conversationMessagesActions.applyServerSnapshot(conversationId, token, messages);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] snapshot refresh failed', conversationId, error);
   }

@@ -22,47 +22,77 @@ describe('useConversationMessagesStore', () => {
     expect(useConversationMessagesStore.getState().byConversationId.c1).toBeUndefined();
   });
 
-  it('given applyServerSnapshot, should commit the messages as loaded truth in one step', () => {
-    const { applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
-    applyServerSnapshot('c1', [msg('m1'), msg('m2')]);
+  it('given applyServerSnapshot with a current token, should commit the messages as loaded truth', () => {
+    const { beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const token = beginServerSnapshot('c1');
+    applyServerSnapshot('c1', token, [msg('m1'), msg('m2')]);
     const entry = getEntry('c1');
     expect(entry.messages).toEqual([msg('m1'), msg('m2')]);
     expect(entry.loadStatus).toBe('loaded');
   });
 
-  it('given applyServerSnapshot, should supersede an in-flight load (its later applyLoad is dropped as stale)', () => {
-    const { startLoad, applyServerSnapshot, applyLoad, getEntry } = useConversationMessagesStore.getState();
+  it('given a loud load starting AFTER the snapshot fetch began, the stale snapshot commit must be dropped (the loud load is fresher)', () => {
+    const { startLoad, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const token = beginServerSnapshot('c1');
+    startLoad('c1');
+    applyServerSnapshot('c1', token, [msg('snapshot')]);
+    expect(getEntry('c1').messages).toEqual([]);
+  });
+
+  it('given a snapshot committing while a loud load is still in flight, the loud load later resolving stale is dropped', () => {
+    const { startLoad, beginServerSnapshot, applyServerSnapshot, applyLoad, getEntry } = useConversationMessagesStore.getState();
     const inFlight = startLoad('c1');
-    applyServerSnapshot('c1', [msg('snapshot')]);
+    // Snapshot fetch begins AFTER the loud load started — it holds the newer view.
+    const token = beginServerSnapshot('c1');
+    applyServerSnapshot('c1', token, [msg('snapshot')]);
     applyLoad('c1', inFlight, [msg('stale')]);
     expect(getEntry('c1').messages).toEqual([msg('snapshot')]);
+  });
+
+  // CR4 (CodeRabbit round 2): two concurrent background heals — the one whose fetch
+  // started FIRST must not overwrite the one that committed with fresher data, and
+  // replay cannot recover rows the newer snapshot introduced (its commit clears the
+  // pending queue). The token is captured BEFORE each fetch; a commit whose token no
+  // longer matches the entry's generation is dropped.
+  it('given two racing snapshots, the older-fetched one must not overwrite the newer committed one', () => {
+    const { beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const tokenA = beginServerSnapshot('c1');
+    const tokenB = beginServerSnapshot('c1');
+    // B (fresher fetch) commits first.
+    applyServerSnapshot('c1', tokenB, [msg('m1'), msg('reply2')]);
+    // A (older fetch, missing reply2) resolves late — must be dropped.
+    applyServerSnapshot('c1', tokenA, [msg('m1')]);
+    expect(getEntry('c1').messages).toEqual([msg('m1'), msg('reply2')]);
   });
 
   it('given a live delete recorded while the snapshot fetch was in flight, applyServerSnapshot must not resurrect the deleted message', () => {
     // The snapshot was FETCHED before this call, so a mutation recorded in the
     // window between fetch and commit is newer than the snapshot — it must be
     // replayed onto it, not cleared by the generation bump (CodeRabbit P2, PR #2098).
-    const { startLoad, applyLoad, applyDelete, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const { startLoad, applyLoad, applyDelete, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
     const gen = startLoad('c1');
     applyLoad('c1', gen, [msg('m1'), msg('m2')]);
-    // tryRecover's fetch is in flight; another tab deletes m2 (recorded as a pending mutation).
+    // tryRecover's fetch begins; another tab deletes m2 (recorded as a pending mutation).
+    const token = beginServerSnapshot('c1');
     applyDelete('c1', 'm2');
     // The recovery snapshot resolves — it still contains m2.
-    applyServerSnapshot('c1', [msg('m1'), msg('m2')]);
+    applyServerSnapshot('c1', token, [msg('m1'), msg('m2')]);
     expect(getEntry('c1').messages).toEqual([msg('m1')]);
   });
 
   it('given a live remote append recorded while the snapshot fetch was in flight, applyServerSnapshot must keep it', () => {
-    const { applyRemoteUserMessage, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const { applyRemoteUserMessage, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const token = beginServerSnapshot('c1');
     applyRemoteUserMessage('c1', msg('live-append'));
-    applyServerSnapshot('c1', [msg('m1')]);
+    applyServerSnapshot('c1', token, [msg('m1')]);
     expect(getEntry('c1').messages).toEqual([msg('m1'), msg('live-append')]);
   });
 
   it('given applyServerSnapshot containing an optimistic send id, should reconcile it out of optimisticSends', () => {
-    const { addOptimisticSend, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const { addOptimisticSend, beginServerSnapshot, applyServerSnapshot, getEntry } = useConversationMessagesStore.getState();
+    const token = beginServerSnapshot('c1');
     addOptimisticSend('c1', msg('opt1'));
-    applyServerSnapshot('c1', [msg('opt1')]);
+    applyServerSnapshot('c1', token, [msg('opt1')]);
     const entry = getEntry('c1');
     expect(entry.optimisticSends).toEqual([]);
     expect(entry.messages).toEqual([msg('opt1')]);

@@ -171,9 +171,11 @@ describe('useAgentChannelMultiplayer', () => {
     });
 
     it('given the cache already holds a HALF-STREAMED row under the same id (includeStreaming placeholder), the commit should REPLACE it, not skip (the rejoin content-loss fix)', () => {
-      useConversationMessagesStore.getState().applyServerSnapshot('conv-active', [
-        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'half-stre' }] } as UIMessage,
-      ]);
+      useConversationMessagesStore.getState().applyServerSnapshot(
+        'conv-active',
+        useConversationMessagesStore.getState().beginServerSnapshot('conv-active'),
+        [{ id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'half-stre' }] } as UIMessage],
+      );
       pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
 
       renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));

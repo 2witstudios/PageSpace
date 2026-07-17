@@ -618,6 +618,46 @@ describe('usePageAgentDashboardStore', () => {
       expect(result.current.conversationId).toBe(newId);
     });
 
+    it("given a rapid A→B agent switch, agent A's late resolution must NOT claim agent B's pending identity (CR3)", async () => {
+      let resolveAgentAList!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          // First call = agent A's most-recent lookup: delayed. Later calls resolve empty.
+          if (!resolveAgentAList) {
+            return new Promise((resolve) => { resolveAgentAList = resolve; });
+          }
+          return new Promise((resolve) => { resolveAgentAList = resolve; });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [], conversations: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadAPromise!: Promise<void>;
+      act(() => {
+        loadAPromise = result.current.loadMostRecentConversation();
+      });
+      const resolveA = resolveAgentAList;
+
+      // User switches to agent B while A's lookup is in flight; B starts its own
+      // resolution (its list fetch hangs — identity stays 'resolving', the exact
+      // state a stale RESOLVED could otherwise claim).
+      act(() => {
+        result.current.selectAgent(mockAgent2);
+      });
+      expect(usePageAgentDashboardStore.getState().selectedAgent?.id).toBe(mockAgent2.id);
+
+      // A's lookup now resolves with A's conversation — it must be dropped.
+      await act(async () => {
+        resolveA({ ok: true, json: async () => ({ conversations: [{ id: 'agent-a-conv' }] }) });
+        await loadAPromise;
+      });
+
+      expect(usePageAgentDashboardStore.getState().conversationId).not.toBe('agent-a-conv');
+      expect(usePageAgentDashboardStore.getState().selectedAgent?.id).toBe(mockAgent2.id);
+    });
+
     it('given a stale RESOLVED dispatch is a guaranteed no-op (a newer identity already won), should not write to the store at all', async () => {
       let resolveMostRecentList!: (value: unknown) => void;
       mockFetchWithAuth.mockImplementation((url: string) => {
