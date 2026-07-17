@@ -99,6 +99,7 @@ import {
   loadAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
+import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
@@ -740,7 +741,11 @@ const GlobalAssistantView: React.FC = () => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: requestBody }));
+    rollbackOptimisticSendOnFailure(
+      wrapSend(() => sendMessage(userMessage, { body: requestBody })),
+      currentConversationId,
+      userMessage.id,
+    );
     setInput('');
     clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
@@ -755,7 +760,11 @@ const GlobalAssistantView: React.FC = () => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() }));
+    rollbackOptimisticSendOnFailure(
+      wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [currentConversationId, sendMessage, buildRequestBody, wrapSend]);
 
   // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is

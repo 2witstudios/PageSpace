@@ -4,6 +4,7 @@ import { applyStartLoad } from '@/stores/conversationMessages/applyStartLoad';
 import { applyLoad } from '@/stores/conversationMessages/applyLoad';
 import { applyFailLoad } from '@/stores/conversationMessages/applyFailLoad';
 import { applyOptimisticSend } from '@/stores/conversationMessages/applyOptimisticSend';
+import { applyOptimisticSendFailure } from '@/stores/conversationMessages/applyOptimisticSendFailure';
 import { applyConversationEdit } from '@/stores/conversationMessages/applyConversationEdit';
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
 import { applyConversationAskUserAnswer } from '@/stores/conversationMessages/applyConversationAskUserAnswer';
@@ -26,6 +27,8 @@ interface ConversationMessagesState {
   applyLoad: (conversationId: string, generation: number, messages: UIMessage[]) => void;
   failLoad: (conversationId: string, generation: number) => void;
   addOptimisticSend: (conversationId: string, message: UIMessage) => void;
+  /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9) — never touches confirmed `messages`. */
+  removeOptimisticSendOnFailure: (conversationId: string, messageId: string) => void;
   applyEdit: (conversationId: string, payload: MessageEditPayload) => void;
   applyDelete: (conversationId: string, messageId: string) => void;
   /** Optimistic ask_user answer patch (epic leaf 6.3) — the resume POST's own commit reconciles it once persisted. */
@@ -86,6 +89,10 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   addOptimisticSend: (conversationId, message) => {
     set((state) => ({ byConversationId: applyOptimisticSend(state.byConversationId, { conversationId, message }) }));
+  },
+
+  removeOptimisticSendOnFailure: (conversationId, messageId) => {
+    set((state) => ({ byConversationId: applyOptimisticSendFailure(state.byConversationId, { conversationId, messageId }) }));
   },
 
   applyEdit: (conversationId, payload) => {

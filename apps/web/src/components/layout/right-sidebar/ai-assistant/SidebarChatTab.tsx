@@ -38,6 +38,7 @@ import {
   loadAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
+import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
@@ -706,7 +707,11 @@ const SidebarChatTab: React.FC = () => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
+    rollbackOptimisticSendOnFailure(
+      wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      currentConversationId,
+      userMessage.id,
+    );
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -732,7 +737,11 @@ const SidebarChatTab: React.FC = () => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
+    rollbackOptimisticSendOnFailure(
+      wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [
     currentConversationId,
     writeMode,

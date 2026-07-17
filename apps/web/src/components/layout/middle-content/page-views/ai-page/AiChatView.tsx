@@ -38,6 +38,7 @@ import { useStopStream } from '@/hooks/useStopStream';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
@@ -1086,7 +1087,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() }));
+    rollbackOptimisticSendOnFailure(
+      wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [
     isReadOnly,
     input,
@@ -1119,7 +1124,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() }));
+    rollbackOptimisticSendOnFailure(
+      wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [
     isReadOnly,
     currentConversationId,

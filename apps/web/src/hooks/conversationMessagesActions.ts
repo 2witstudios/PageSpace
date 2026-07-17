@@ -25,6 +25,9 @@ export const conversationMessagesActions = {
     useConversationMessagesStore.getState().failLoad(conversationId, generation),
   addOptimisticSend: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().addOptimisticSend(conversationId, message),
+  /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9). */
+  removeOptimisticSendOnFailure: (conversationId: string, messageId: string): void =>
+    useConversationMessagesStore.getState().removeOptimisticSendOnFailure(conversationId, messageId),
   applyEdit: (conversationId: string, payload: MessageEditPayload): void =>
     useConversationMessagesStore.getState().applyEdit(conversationId, payload),
   applyDelete: (conversationId: string, messageId: string): void =>
