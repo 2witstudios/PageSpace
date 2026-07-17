@@ -657,6 +657,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const effectiveIsStreaming =
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
+  // Read after an await (resume runs async), so a ref rather than the captured value.
+  // Conversation-scoped, unlike ownStreamLiveRef above: that one is deliberately raw
+  // (isStreaming || activeStream?.isOwn) for the transport-clobber guard, which stays true
+  // for the OLD conversation's still-in-flight request after a switch — exactly wrong for
+  // resume's isOwnStreamLive gate (PR 6 review, CodeRabbit; same class of bug fixed in
+  // GlobalAssistantView/SidebarChatTab's resume wiring).
+  const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
+  effectiveIsStreamingRef.current = effectiveIsStreaming;
 
   // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
   const streamingAssistantText = useMemo(
@@ -972,6 +980,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     currentConversationId,
     error,
     clearError,
+    pendingSendConversationId ?? currentConversationId,
   );
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -1202,7 +1211,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     rejoin: rejoinActiveStreams,
     reload: handlePullUpRefresh,
     stop: chatStop,
-    isOwnStreamLive: useCallback(() => ownStreamLiveRef.current, []),
+    isOwnStreamLive: useCallback(() => effectiveIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 

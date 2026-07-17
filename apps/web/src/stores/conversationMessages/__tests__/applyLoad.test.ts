@@ -80,12 +80,25 @@ describe('applyLoad', () => {
     expect(result.c1.olderCursor).toBe('m1');
   });
 
-  it('given NO pagination envelope, should default to hasMoreOlder=false and olderCursor=null (legacy call sites unaffected)', () => {
+  it('given NO pagination envelope and no prior cursor, should default to hasMoreOlder=false and olderCursor=null', () => {
     const initial: ConversationMessagesById = {
       c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyLoad(initial, { conversationId: 'c1', generation: 1, messages: [msg('m1')] });
     expect(result.c1.hasMoreOlder).toBe(false);
     expect(result.c1.olderCursor).toBeNull();
+  });
+
+  // PR 6 review (Codex): a caller without an envelope (applyServerSnapshot after stream
+  // completion, AiChatView's preloaded fast path) must not clobber a cursor a PRIOR
+  // envelope-carrying load already established — otherwise "load older" silently breaks
+  // after the very next background refresh.
+  it('given NO pagination envelope but an existing cursor from a prior load, should preserve it rather than resetting to false/null', () => {
+    const initial: ConversationMessagesById = {
+      c1: { messages: [], optimisticSends: [], loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: 'existing-cursor', hasMoreOlder: true, isLoadingOlder: false },
+    };
+    const result = applyLoad(initial, { conversationId: 'c1', generation: 1, messages: [msg('m1')] });
+    expect(result.c1.hasMoreOlder).toBe(true);
+    expect(result.c1.olderCursor).toBe('existing-cursor');
   });
 });

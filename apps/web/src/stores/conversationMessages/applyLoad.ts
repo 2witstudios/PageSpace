@@ -50,8 +50,11 @@ export const applyLoad = (
       optimisticSends,
       pendingMutationsSinceLoad: [],
       loadStatus: 'loaded',
-      hasMoreOlder: event.pagination?.hasMore ?? false,
-      olderCursor: event.pagination?.nextCursor ?? null,
+      // A caller without a pagination envelope (background snapshot refresh, a
+      // preloaded fast path) must not clobber an already-known cursor — leave it as
+      // whatever the last envelope-carrying load established (PR 6 review, Codex).
+      hasMoreOlder: event.pagination ? event.pagination.hasMore : existing.hasMoreOlder,
+      olderCursor: event.pagination ? event.pagination.nextCursor : existing.olderCursor,
     },
   };
 };

@@ -448,6 +448,12 @@ const SidebarChatTab: React.FC = () => {
   // Read after an await (resume runs async), so a ref rather than the captured value.
   const isOwnSendLiveRef = useRef(isOwnSendLive);
   isOwnSendLiveRef.current = isOwnSendLive;
+  // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
+  // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit) — AskUser
+  // answerability and resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
+  // guard above, which is deliberately conversation-agnostic (see displayIsStreaming's docblock).
+  const displayIsStreamingRef = useRef(displayIsStreaming);
+  displayIsStreamingRef.current = displayIsStreaming;
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
@@ -581,6 +587,7 @@ const SidebarChatTab: React.FC = () => {
     currentConversationId,
     error,
     clearError,
+    pendingSendConversationId ?? currentConversationId,
   );
 
   useEffect(() => {
@@ -775,11 +782,13 @@ const SidebarChatTab: React.FC = () => {
 
   // renderedMessages (selector output): "answerable" is decided by the conversation's
   // LAST message, and remote edits/deletes/messages update the store, not useChat.
-  // isConversationBusy replaces status==='ready'.
+  // isConversationBusy replaces status==='ready'. displayIsStreaming, not isOwnSendLive:
+  // the latter includes raw useChat status, which stays true for the OLD conversation's
+  // still-in-flight request after a switch (PR 6 review, CodeRabbit).
   const askUserAnswering = useAnswerAskUser({
     conversationId: currentConversationId,
     renderedMessages,
-    isConversationBusy: isOwnSendLive,
+    isConversationBusy: displayIsStreaming,
     setMessages,
     addToolResult,
     wrapSend,
@@ -828,7 +837,7 @@ const SidebarChatTab: React.FC = () => {
     rejoin: rejoinActiveMode,
     reload: handleAppResume,
     stop,
-    isOwnStreamLive: useCallback(() => isOwnSendLiveRef.current, []),
+    isOwnStreamLive: useCallback(() => displayIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 

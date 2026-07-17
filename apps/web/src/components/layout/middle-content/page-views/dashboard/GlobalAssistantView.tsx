@@ -526,6 +526,12 @@ const GlobalAssistantView: React.FC = () => {
   // Read after an await (resume runs async), so a ref rather than the captured value.
   const isOwnSendLiveRef = useRef(isOwnSendLive);
   isOwnSendLiveRef.current = isOwnSendLive;
+  // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
+  // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit, same class as the
+  // AskUser fix above) — resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
+  // guard, which is deliberately conversation-agnostic.
+  const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
+  effectiveIsStreamingRef.current = effectiveIsStreaming;
 
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
@@ -589,7 +595,7 @@ const GlobalAssistantView: React.FC = () => {
     rejoin: rejoinActiveMode,
     reload: handlePullUpRefresh,
     stop: rawStop,
-    isOwnStreamLive: useCallback(() => isOwnSendLiveRef.current, []),
+    isOwnStreamLive: useCallback(() => effectiveIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 
@@ -662,6 +668,7 @@ const GlobalAssistantView: React.FC = () => {
     currentConversationId,
     error,
     clearError,
+    pendingSendConversationId ?? currentConversationId,
   );
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -784,11 +791,14 @@ const GlobalAssistantView: React.FC = () => {
   // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
   // decided by whether the ask_user part sits on the conversation's LAST message, and
   // remote edits/deletes/messages update the store, not useChat's local array.
-  // isConversationBusy replaces status==='ready'.
+  // isConversationBusy replaces status==='ready'. Conversation-scoped effectiveIsStreaming,
+  // not isOwnSendLive: the latter includes raw useChat status, which stays true for the OLD
+  // conversation's still-in-flight request after a switch (PR 6 review, CodeRabbit) — that
+  // would incorrectly disable an answerable AskUser prompt in the conversation on screen now.
   const askUserAnswering = useAnswerAskUser({
     conversationId: currentConversationId,
     renderedMessages,
-    isConversationBusy: isOwnSendLive,
+    isConversationBusy: effectiveIsStreaming,
     setMessages,
     addToolResult,
     wrapSend,
