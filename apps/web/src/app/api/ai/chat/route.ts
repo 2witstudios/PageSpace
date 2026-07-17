@@ -179,6 +179,15 @@ export async function POST(request: Request) {
   // the three steps wrong (e.g. latching before the save resolves, which would eat the mention
   // when the save then fails). Callers keep their own try/catch and assistantMessagePersisted
   // handling — this owns only the exactly-once mention contract.
+  //
+  // Best-effort exactly-once, named honestly: the latch flips only AFTER the save resolves
+  // (deliberately — latching before it would lose the mention when the save fails), so two
+  // terminal writers overlapping in flight (the outer-catch cleanup racing a still-running
+  // execute-end) can each pass the gate before either latches, and a stalled-but-alive stream
+  // reaped by another instance's materializer can be re-notified by this process's own later
+  // save. Both windows resolve to a DUPLICATE ping, never a lost one — the epic's chosen
+  // direction. The durable fix (idempotent createMentionNotification per user+message) is a
+  // filed epic D task.
   const saveTerminalAssistantMessage = async (
     args: Omit<Parameters<typeof saveMessageToDatabase>[0], 'mentionNotify'>,
   ): Promise<void> => {
@@ -1555,7 +1564,12 @@ export async function POST(request: Request) {
             const payload = buildAssistantPersistencePayload(serverAssistantMessageId, bufferedParts);
             // This write may be the sole record of the message (see the docblock above) — it
             // must carry the mention gate, or an @mention in a reply whose onFinish never runs
-            // is silently never notified (Codex P2, PR #2097).
+            // is silently never notified (Codex P2, PR #2097). Notification content is the
+            // buffered snapshot THIS save persists; if onFinish's refined responseMessage ever
+            // contained mention text the buffer missed (which would indicate an onChunk
+            // text-forwarding gap, not expected), that delta is not re-notified — filed as an
+            // epic D task rather than re-checking on refine, which would duplicate-notify on
+            // every normal run.
             try {
               await saveTerminalAssistantMessage({
                 messageId: serverAssistantMessageId,

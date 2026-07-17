@@ -85,7 +85,20 @@ async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string): Pr
       lockKey.replace(/[\r\n]/g, ' '),
       err.message,
     );
-    client.release(err);
+    // This catch is also reached when the SUCCESS-path release() itself threw (e.g. a
+    // double-release from a hook, or a pool already shut down) — in that case this second
+    // release(err) throws synchronously too, and without the guard it would escape the catch
+    // and break the never-throws contract the caller's finally relies on (it would replace a
+    // successful fn() result with a rejection).
+    try {
+      client.release(err);
+    } catch (releaseError) {
+      console.error(
+        '[withAdvisoryLock:%s] Destroy-release also failed — connection already released or pool gone: %s',
+        lockKey.replace(/[\r\n]/g, ' '),
+        releaseError instanceof Error ? releaseError.message : String(releaseError),
+      );
+    }
   }
 }
 

@@ -61,6 +61,59 @@ describe('withAdvisoryLock', () => {
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 
+  // The never-throws contract must hold even when release() itself throws: without the guard,
+  // the success-path release throwing would route into the catch, whose destroy-release then
+  // throws a synchronous double-release error that escapes — replacing a successful fn() result
+  // with a rejection inside withAdvisoryLock's finally.
+  it('given release() itself throws after a successful unlock, should swallow the double-release error and still resolve acquired', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }),
+      release: vi
+        .fn()
+        .mockImplementationOnce(() => { throw new Error('release hook failed'); })
+        .mockImplementationOnce(() => { throw new Error('Release called on a client which has already been released'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({
+      outcome: 'acquired',
+      result: 'ok',
+    });
+
+    expect(client.release).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Destroy-release also failed'),
+      'my-lock',
+      'Release called on a client which has already been released',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given release() throws a non-Error value, should stringify it in the destroy-release log and still resolve', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }),
+      release: vi
+        .fn()
+        .mockImplementationOnce(() => { throw new Error('release hook failed'); })
+        .mockImplementationOnce(() => { throw 'released twice'; }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({
+      outcome: 'acquired',
+      result: 'ok',
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Destroy-release also failed'),
+      'my-lock',
+      'released twice',
+    );
+    errorSpy.mockRestore();
+  });
+
   // Lock keys can be derived from request-supplied ids, so the failure log must treat the key
   // as data: constant format string (%s), newlines stripped — a crafted key must not be able to
   // forge log lines or smuggle %-directives (CodeQL js/log-injection / js/tainted-format-string).
