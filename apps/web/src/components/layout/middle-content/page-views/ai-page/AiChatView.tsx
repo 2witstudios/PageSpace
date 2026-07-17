@@ -61,6 +61,7 @@ import {
   useSendHandoff,
   useResumeBootstrap,
   useAnswerAskUser,
+  useChatErrorCause,
   buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
@@ -179,7 +180,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id, transport, handleChatError]
   );
 
-  const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop, addToolResult } =
+  const { messages, sendMessage, status, error, clearError, regenerate, setMessages, stop: chatStop, addToolResult } =
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -941,10 +942,16 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     },
   });
 
+  // Typed error cause, per-conversation (epic leaf 6.5) — replaces raw `error`/getAIErrorMessage.
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    currentConversationId,
+    error,
+    clearError,
+  );
   // Reset error visibility when new error occurs
   useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
+    if (errorCause) setShowError(true);
+  }, [errorCause]);
 
   // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
   // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
@@ -1333,9 +1340,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             disabled={!isAnyProviderConfigured || !canSendMessage}
             placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
             driveId={driveId}
-            error={error}
+            cause={errorCause}
             showError={showError}
-            onClearError={() => setShowError(false)}
+            onClearError={() => {
+              setShowError(false);
+              dismissError();
+            }}
             welcomeTitle={`Chat with ${page.title}`}
             welcomeSubtitle={agentConfig?.systemPrompt ? 'Ask me anything!' : 'Start a conversation with the AI assistant'}
             onEdit={!isReadOnly ? handleEdit : undefined}

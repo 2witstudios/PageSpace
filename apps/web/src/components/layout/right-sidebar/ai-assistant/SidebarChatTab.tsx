@@ -44,7 +44,7 @@ import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostB
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -553,9 +553,16 @@ const SidebarChatTab: React.FC = () => {
   // Effects: UI State
   // ============================================
 
+  // Typed error cause, per-conversation (epic leaf 6.5) — replaces raw `error`/getAIErrorMessage.
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    currentConversationId,
+    error,
+    clearError,
+  );
+
   useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
+    if (errorCause) setShowError(true);
+  }, [errorCause]);
 
 
   // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
@@ -949,9 +956,12 @@ const SidebarChatTab: React.FC = () => {
         }}
       >
         <ChatErrorBanner
-          error={error}
+          cause={errorCause}
           show={showError}
-          onClearError={() => setShowError(false)}
+          onClearError={() => {
+            setShowError(false);
+            dismissError();
+          }}
         />
 
         <div className="px-1">

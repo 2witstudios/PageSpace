@@ -65,6 +65,7 @@ import {
   useSendHandoff,
   useResumeBootstrap,
   useAnswerAskUser,
+  useChatErrorCause,
   buildChatConfig,
   AGENT_CHAT_ID,
   LocationContext,
@@ -641,10 +642,16 @@ const GlobalAssistantView: React.FC = () => {
   // idle for a bootstrapped stream after a refresh — so the window this surface most needed SWR
   // protection in was exactly the window it declared itself not streaming.
 
+  // Typed error cause, per-conversation (epic leaf 6.5) — replaces raw `error`/getAIErrorMessage.
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    currentConversationId,
+    error,
+    clearError,
+  );
   // Reset error visibility when new error occurs
   useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
+    if (errorCause) setShowError(true);
+  }, [errorCause]);
 
   // ============================================
   // HANDLERS
@@ -911,9 +918,12 @@ const GlobalAssistantView: React.FC = () => {
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
         driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
         crossDrive={!selectedAgent}
-        error={error}
+        cause={errorCause}
         showError={showError}
-        onClearError={() => setShowError(false)}
+        onClearError={() => {
+          setShowError(false);
+          dismissError();
+        }}
         welcomeTitle={
           selectedAgent
             ? `Chat with ${selectedAgent.title}`
