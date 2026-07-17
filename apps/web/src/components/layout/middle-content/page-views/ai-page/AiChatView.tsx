@@ -38,6 +38,9 @@ import { useStopStream } from '@/hooks/useStopStream';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
+import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
+import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
@@ -634,15 +637,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
-  const streamingAssistantText = useMemo(() => {
-    if (!isStreaming) return null;
-    const last = plainMessages[plainMessages.length - 1];
-    if (!last || last.role !== 'assistant') return null;
-    return (last.parts ?? [])
-      .filter((p) => p.type === 'text')
-      .map((p) => (p as { type: 'text'; text: string }).text)
-      .join('');
-  }, [plainMessages, isStreaming]);
+  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
+  const streamingAssistantText = useMemo(
+    () => selectVoiceStreamText(renderedMessages),
+    [renderedMessages],
+  );
   // Show a loading indicator (not a blank) both during init and during any
   // subsequent message-fetch triggered by conversation switch or refresh.
   const isLoading = !isInitialized || isLoadingMessages;
@@ -947,9 +946,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (error) setShowError(true);
   }, [error]);
 
-  // Track last AI response for voice mode TTS.
-  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
-  // messages are never spoken — only genuinely new responses trigger TTS.
+  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
+  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
   useEffect(() => {
     if (!isVoiceModeActive) {
       voiceBaselineRef.current = undefined;
@@ -961,34 +959,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = plainMessages[plainMessages.length - 1];
-      // During streaming the last overall message is the in-progress assistant reply;
-      // the baseline should be the previously-finalized message before it.
-      const streamingAssistantIdx =
-        isStreaming && lastOverallMsg?.role === 'assistant'
-          ? assistantMsgs.length - 1
-          : assistantMsgs.length;
-      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
-      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
       return;
     }
 
-    if (isStreaming) return;
+    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
+    if (!next) return;
 
-    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
-    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join('');
-    if (!text.trim()) return;
-    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
-
-    setLastAIResponse((current) =>
-      current?.id === lastAssistantMsg.id
-        ? current
-        : { id: lastAssistantMsg.id, text }
-    );
-  }, [plainMessages, isStreaming, isVoiceModeActive]);
+    setLastAIResponse((current) => (current?.id === next.id ? current : next));
+  }, [renderedMessages, isVoiceModeActive]);
 
   // ============================================
   // HANDLERS

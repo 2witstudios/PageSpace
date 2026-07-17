@@ -38,6 +38,9 @@ import {
   loadAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
+import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
+import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
+import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
@@ -365,15 +368,11 @@ const SidebarChatTab: React.FC = () => {
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
     : null;
 
-  const streamingAssistantText = useMemo(() => {
-    if (!displayIsStreaming) return null;
-    const last = plainMessages[plainMessages.length - 1];
-    if (!last || last.role !== 'assistant') return null;
-    return (last.parts ?? [])
-      .filter((p) => p.type === 'text')
-      .map((p) => (p as { type: 'text'; text: string }).text)
-      .join('');
-  }, [plainMessages, displayIsStreaming]);
+  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
+  const streamingAssistantText = useMemo(
+    () => selectVoiceStreamText(renderedMessages),
+    [renderedMessages],
+  );
 
 
 
@@ -559,9 +558,8 @@ const SidebarChatTab: React.FC = () => {
   }, [error]);
 
 
-  // Track last AI response for voice mode TTS.
-  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
-  // messages are never spoken — only genuinely new responses trigger TTS.
+  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
+  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
   useEffect(() => {
     if (!isVoiceModeActive) {
       voiceBaselineRef.current = undefined;
@@ -573,34 +571,15 @@ const SidebarChatTab: React.FC = () => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = plainMessages[plainMessages.length - 1];
-      // During streaming the last overall message is the in-progress assistant reply;
-      // the baseline should be the previously-finalized message before it.
-      const streamingAssistantIdx =
-        displayIsStreaming && lastOverallMsg?.role === 'assistant'
-          ? assistantMsgs.length - 1
-          : assistantMsgs.length;
-      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
-      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
       return;
     }
 
-    if (displayIsStreaming) return;
+    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
+    if (!next) return;
 
-    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
-    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join('');
-    if (!text.trim()) return;
-    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
-
-    setLastAIResponse((current) =>
-      current?.id === lastAssistantMsg.id
-        ? current
-        : { id: lastAssistantMsg.id, text }
-    );
-  }, [plainMessages, displayIsStreaming, isVoiceModeActive]);
+    setLastAIResponse((current) => (current?.id === next.id ? current : next));
+  }, [renderedMessages, isVoiceModeActive]);
 
   // Refresh this surface from the DB — the `reload` step of app-resume (useResumeBootstrap
   // below), catching a reply that landed while we were away. One cache reload for both
