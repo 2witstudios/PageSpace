@@ -112,9 +112,15 @@ export function useCacheMessageActions({
     // the settled rendered rows at the moment of the action — TRANSITIONAL, shared
     // with AskUser answering (see hydrateTransportBeforeReinvoke).
     hydrateTransportBeforeReinvoke(setMessages, stableMessages, isOwnSendLive);
+    // Delete BEFORE awaiting handleRetryBase, not after: its underlying `regenerate` is a
+    // real Promise that resolves once the new stream finishes (the ai SDK's makeRequest
+    // reads the response to completion), so awaiting it first would leave the old assistant
+    // rows visible in the cache/UI alongside the new streaming reply for the whole
+    // regeneration (PR 6 review, CodeRabbit).
+    if (conversationId) {
+      for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
+    }
     await handleRetryBase();
-    if (!conversationId) return;
-    for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);
   }, [renderedMessages, handleRetryBase, stableMessages, conversationId, isOwnSendLive, setMessages]);
 
   return { handleEdit, handleDelete, handleRetry, stableMessages };

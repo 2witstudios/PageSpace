@@ -76,14 +76,20 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
       // Guard: still answerable on THIS render. Cheap and correct for the ordinary
       // single-surface case; claimAnswering below is what actually arbitrates a race.
       if (!answerableToolCallIds.has(toolCallId)) return;
-      if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) return;
 
-      const messageId = stableMessages[stableMessages.length - 1]?.id;
-      if (conversationId && messageId) {
-        conversationMessagesActions.applyAskUserAnswer(conversationId, { messageId, toolCallId, output });
-      }
-
+      // The claim and the optimistic patch live INSIDE wrapSend's callback, not before it:
+      // wrapSend can drop the request without ever invoking this callback (e.g. no
+      // conversationId), and if the claim/patch happened before that guard, both would leak
+      // indefinitely — nothing would ever reach the try/finally that clears them (PR 6 review,
+      // CodeRabbit, Critical).
       wrapSend(async () => {
+        if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) return;
+
+        const messageId = stableMessages[stableMessages.length - 1]?.id;
+        if (conversationId && messageId) {
+          conversationMessagesActions.applyAskUserAnswer(conversationId, { messageId, toolCallId, output });
+        }
+
         try {
           hydrateTransportBeforeReinvoke(setMessages, stableMessages, isConversationBusy);
           const body = await buildBody();
