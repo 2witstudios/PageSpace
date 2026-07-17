@@ -13,7 +13,7 @@ export { useChatTransport } from './useChatTransport';
 export { useStreamingRegistration } from './useStreamingRegistration';
 export { useSendHandoff } from './useSendHandoff';
 export { useResumeBootstrap } from './useResumeBootstrap';
-export { useAskUserAnswering } from './useAskUserAnswering';
+export { useAnswerAskUser } from './useAnswerAskUser';
 
 // Pure functions (no hooks, no side effects)
 export {

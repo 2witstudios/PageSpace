@@ -64,7 +64,7 @@ import {
   useChatTransport,
   useSendHandoff,
   useResumeBootstrap,
-  useAskUserAnswering,
+  useAnswerAskUser,
   buildChatConfig,
   AGENT_CHAT_ID,
   LocationContext,
@@ -512,7 +512,7 @@ const GlobalAssistantView: React.FC = () => {
   const isOwnSendLiveRef = useRef(isOwnSendLive);
   isOwnSendLiveRef.current = isOwnSendLive;
 
-  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
+  const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
@@ -673,104 +673,10 @@ const GlobalAssistantView: React.FC = () => {
     setActiveTab('history');
   };
 
-  const handleSendMessage = async () => {
-    const files = getFilesForSend();
-    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
-
-    const requestBody = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: currentConversationId,
-          selectedProvider: agentSelectedProvider,
-          selectedModel: agentSelectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          contextRef: buildFreshContextRef(),
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-          mcpTools: mcpToolSchemas,
-        });
-
-    // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
-    // silently drops any id passed alongside it, so the message would push under an
-    // SDK-generated id the conversation cache never saw. Written to the cache
-    // immediately (optimistic) because the sender's own tab never receives its own
-    // chat:user_message broadcast back — this is what makes the bubble appear the
-    // same tick the user hits Send (leaf 5.2 acceptance).
-    const userMessage = buildUserMessage({
-      id: createId(),
-      text: input.trim().length > 0 ? input : undefined,
-      files: files.length > 0 ? files : undefined,
-    }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: requestBody }));
-    setInput('');
-    clearFiles();
-    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
-  };
-
-  // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback((text: string) => {
-    if (!text.trim() || !currentConversationId) return;
-
-    const requestBody = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: currentConversationId,
-          selectedProvider: agentSelectedProvider,
-          selectedModel: agentSelectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          contextRef: buildFreshContextRef(),
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-          mcpTools: mcpToolSchemas,
-        });
-
-    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
-    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: requestBody }));
-  }, [
-    currentConversationId,
-    selectedAgent,
-    agentSelectedProvider,
-    agentSelectedModel,
-    isReadOnly,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    buildFreshContextRef,
-    currentProvider,
-    currentModel,
-    mcpToolSchemas,
-    sendMessage,
-    wrapSend,
-  ]);
-
-  const buildAskUserAnswerBody = useCallback(() => {
+  // Shared by every send-shaped request (typed send, voice send, AskUser resume) — one
+  // definition means the body a resume POST carries can't drift from what a real send
+  // would have sent (epic leaf 6.3: deletes the separate buildAskUserAnswerBody).
+  const buildRequestBody = useCallback(() => {
     return selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -808,28 +714,56 @@ const GlobalAssistantView: React.FC = () => {
     mcpToolSchemas,
   ]);
 
-  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
-  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
-  // question on a conversation opened from history/reload would silently do nothing.
-  // Seed the settled rendered rows first (same imperative, action-scoped write as the
-  // retry seed; skipped while our own send is live — the array is the mirror's read
-  // source then, and a live own turn means the transport already holds the question).
-  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
-    if (!isOwnSendLive) {
-      setMessages(stableMessages);
-    }
-    return addToolResult(args);
-  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
+  const handleSendMessage = async () => {
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
-  // plainMessages (store-rendered), not useChat's raw `messages`: "answerable" is
-  // decided by whether the ask_user part sits on the conversation's LAST message,
-  // and remote edits/deletes/messages update the store, not useChat's local array.
-  const askUserAnswering = useAskUserAnswering({
-    messages: plainMessages,
-    status,
-    addToolResult: seededAddToolResult,
+    const requestBody = buildRequestBody();
+
+    // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
+    // silently drops any id passed alongside it, so the message would push under an
+    // SDK-generated id the conversation cache never saw. Written to the cache
+    // immediately (optimistic) because the sender's own tab never receives its own
+    // chat:user_message broadcast back — this is what makes the bubble appear the
+    // same tick the user hits Send (leaf 5.2 acceptance).
+    const userMessage = buildUserMessage({
+      id: createId(),
+      text: input.trim().length > 0 ? input : undefined,
+      files: files.length > 0 ? files : undefined,
+    }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage(userMessage, { body: requestBody }));
+    setInput('');
+    clearFiles();
+    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
+  };
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback((text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
+    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() }));
+  }, [currentConversationId, sendMessage, buildRequestBody, wrapSend]);
+
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and
+  // remote edits/deletes/messages update the store, not useChat's local array.
+  // isConversationBusy replaces status==='ready'.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: isOwnSendLive,
+    setMessages,
+    addToolResult,
     wrapSend,
-    buildBody: buildAskUserAnswerBody,
+    buildBody: buildRequestBody,
   });
 
   // Track last AI response for voice mode TTS.

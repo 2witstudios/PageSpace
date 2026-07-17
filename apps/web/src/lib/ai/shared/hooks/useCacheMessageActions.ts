@@ -23,6 +23,7 @@
 import { useCallback, useMemo } from 'react';
 import type { UIMessage } from 'ai';
 import { useMessageActions } from './useMessageActions';
+import { hydrateTransportBeforeReinvoke } from './hydrateTransportBeforeReinvoke';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { planRetry } from '@/lib/ai/streams/planRetry';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
@@ -108,12 +109,9 @@ export function useCacheMessageActions({
     // "not found" on an unknown id). Post-cutover nothing keeps that array in sync
     // with loaded history — the loads write the cache — so a Retry on a conversation
     // opened from history would act on an empty or stale transport copy. Seed it from
-    // the settled rendered rows at the moment of the action (imperative,
-    // user-action-scoped — NOT an effect syncing two containers, so rail 11 stands).
-    // Skipped while our own send is live: the array is the mirror's read source then.
-    if (!isOwnSendLive) {
-      setMessages(stableMessages);
-    }
+    // the settled rendered rows at the moment of the action — TRANSITIONAL, shared
+    // with AskUser answering (see hydrateTransportBeforeReinvoke).
+    hydrateTransportBeforeReinvoke(setMessages, stableMessages, isOwnSendLive);
     await handleRetryBase();
     if (!conversationId) return;
     for (const id of assistantIdsToDelete) conversationMessagesActions.applyDelete(conversationId, id);

@@ -41,7 +41,7 @@ import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -427,7 +427,7 @@ const SidebarChatTab: React.FC = () => {
   const isOwnSendLiveRef = useRef(isOwnSendLive);
   isOwnSendLiveRef.current = isOwnSendLive;
 
-  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
+  const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
@@ -756,35 +756,20 @@ const SidebarChatTab: React.FC = () => {
     wrapSend,
   ]);
 
-  const buildAskUserAnswerBody = useCallback(() => {
-    const isReadOnly = !writeMode;
-    return buildSidebarChatRequestBody(buildFreshContextRef(), isReadOnly);
-  }, [
-    writeMode,
-    buildFreshContextRef,
-    buildSidebarChatRequestBody,
-  ]);
-
-  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
-  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
-  // question on a conversation opened from history/reload would silently do nothing.
-  // Seed the settled rendered rows first (same imperative, action-scoped write as the
-  // retry seed; skipped while our own send is live).
-  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
-    if (!isOwnSendLive) {
-      setMessages(stableMessages);
-    }
-    return addToolResult(args);
-  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
-
-  // plainMessages (store-rendered): "answerable" is decided by the conversation's
+  // renderedMessages (selector output): "answerable" is decided by the conversation's
   // LAST message, and remote edits/deletes/messages update the store, not useChat.
-  const askUserAnswering = useAskUserAnswering({
-    messages: plainMessages,
-    status,
-    addToolResult: seededAddToolResult,
+  // isConversationBusy replaces status==='ready'.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: isOwnSendLive,
+    setMessages,
+    addToolResult,
     wrapSend,
-    buildBody: buildAskUserAnswerBody,
+    buildBody: useCallback(
+      () => buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode),
+      [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],
+    ),
   });
 
   // Voice mode toggle handler

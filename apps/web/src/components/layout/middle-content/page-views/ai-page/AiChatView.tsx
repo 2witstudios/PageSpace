@@ -57,7 +57,7 @@ import {
   useChatTransport,
   useSendHandoff,
   useResumeBootstrap,
-  useAskUserAnswering,
+  useAnswerAskUser,
   buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
@@ -789,11 +789,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // same dual-write shape as loadMessagesForConversation's, not a NEW two-way sync
     // (rail 11): both writes are independent, terminal applications of the SAME
     // upstream event, not one container's state flowing into the other. Required
-    // because `regenerate()` and `useAskUserAnswering` (via plainMessages, but
-    // `regenerate` itself indexes useChat's OWN local array) need useChat's copy to
-    // still reflect a remote edit/delete/message — otherwise a retry right after a
-    // collaborator's edit on a shared conversation could regenerate against stale
-    // history (PR review finding, independently confirmed by three review passes).
+    // because `regenerate()` indexes useChat's OWN local array directly — otherwise a
+    // retry right after a collaborator's edit on a shared conversation could
+    // regenerate against stale history (PR review finding, independently confirmed by
+    // three review passes). `useAnswerAskUser`'s own hydrate step (6.3) fully
+    // overwrites this array from the cache immediately before every addToolResult
+    // call, so it no longer depends on this dual-write staying fresh in between.
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId || !currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
@@ -1012,7 +1013,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id, driveId]
   );
 
-  const buildAskUserAnswerBody = useCallback(() => ({
+  // Shared by every send-shaped request (typed send, voice send, AskUser resume) — one
+  // definition means the body a resume POST carries can't drift from what a real send
+  // would have sent (epic leaf 6.3: deletes the separate buildAskUserAnswerBody).
+  const buildRequestBody = useCallback(() => ({
     chatId: page.id,
     conversationId: currentConversationId,
     selectedProvider,
@@ -1034,18 +1038,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     contextRef,
   ]);
 
-  // plainMessages (store-rendered), not useChat's raw `messages`: "answerable"
-  // is decided by whether the ask_user part sits on the conversation's LAST
-  // message, and a remote edit/delete/message on this conversation updates
-  // the store but no longer updates useChat's local array (leaf 4.3 — those
-  // socket handlers write only to the store). Reading plainMessages keeps
-  // this decision matched to what the user actually sees on screen.
-  const askUserAnswering = useAskUserAnswering({
-    messages: plainMessages,
-    status,
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and a
+  // remote edit/delete/message on this conversation updates the store but no longer
+  // updates useChat's local array (leaf 4.3 — those socket handlers write only to the
+  // store). isConversationBusy replaces status==='ready'.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: effectiveIsStreaming,
+    setMessages,
     addToolResult,
     wrapSend,
-    buildBody: buildAskUserAnswerBody,
+    buildBody: buildRequestBody,
   });
 
   // A send creates the conversations row server-side under exactly this id, so the id
@@ -1095,22 +1100,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    wrapSend(() => sendMessage(
-      userMessage,
-      {
-        body: {
-          chatId: page.id,
-          conversationId: currentConversationId,
-          selectedProvider,
-          selectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          contextRef,
-        },
-      }
-    ));
+    wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() }));
   }, [
     isReadOnly,
     input,
@@ -1123,13 +1113,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     clearInputDraft,
     clearFiles,
     sendMessage,
-    page.id,
-    selectedProvider,
-    selectedModel,
-    webSearchEnabled,
-    imageGenEnabled,
-    mcpToolSchemas,
-    contextRef,
+    buildRequestBody,
     wrapSend,
     adoptConversationAsPersisted,
   ]);
@@ -1149,34 +1133,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    wrapSend(() => sendMessage(
-      userMessage,
-      {
-        body: {
-          chatId: page.id,
-          conversationId: currentConversationId,
-          selectedProvider,
-          selectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          contextRef,
-        },
-      }
-    ));
+    wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() }));
   }, [
     isReadOnly,
     currentConversationId,
     canSendMessage,
     sendMessage,
-    page.id,
-    selectedProvider,
-    selectedModel,
-    webSearchEnabled,
-    imageGenEnabled,
-    contextRef,
-    mcpToolSchemas,
+    buildRequestBody,
     wrapSend,
     adoptConversationAsPersisted,
   ]);

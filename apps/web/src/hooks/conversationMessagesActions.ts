@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import type { AskUserAnswerPayload, AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 /**
  * Facade — the sanctioned way for a component to WRITE to
@@ -28,6 +29,12 @@ export const conversationMessagesActions = {
     useConversationMessagesStore.getState().applyEdit(conversationId, payload),
   applyDelete: (conversationId: string, messageId: string): void =>
     useConversationMessagesStore.getState().applyDelete(conversationId, messageId),
+  /** Optimistic ask_user answer patch — the resume POST's own commit reconciles it once persisted. */
+  applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload): void =>
+    useConversationMessagesStore.getState().applyAskUserAnswer(conversationId, payload),
+  /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
+  revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload): void =>
+    useConversationMessagesStore.getState().revertAskUserAnswer(conversationId, payload),
   /**
    * Appends a broadcast user message, reconciling it out of `optimisticSends` if
    * present. No-ops if the id is already confirmed — correct for a user message,

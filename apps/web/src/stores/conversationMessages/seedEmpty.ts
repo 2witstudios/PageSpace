@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import type { AskUserAnswerPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 /**
  * A live mutation (remote broadcast) recorded while a load is in flight, so
@@ -10,7 +11,8 @@ export type PendingMutation =
   | { type: 'remoteMessage'; message: UIMessage }
   | { type: 'confirmedMessage'; message: UIMessage }
   | { type: 'edit'; payload: MessageEditPayload }
-  | { type: 'delete'; messageId: string };
+  | { type: 'delete'; messageId: string }
+  | { type: 'askUserAnswer'; payload: AskUserAnswerPayload };
 
 /**
  * Per-conversation slice of `useConversationMessagesStore`. `messages` is the

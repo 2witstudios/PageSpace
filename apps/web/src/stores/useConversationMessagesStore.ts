@@ -6,12 +6,14 @@ import { applyFailLoad } from '@/stores/conversationMessages/applyFailLoad';
 import { applyOptimisticSend } from '@/stores/conversationMessages/applyOptimisticSend';
 import { applyConversationEdit } from '@/stores/conversationMessages/applyConversationEdit';
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
+import { applyConversationAskUserAnswer } from '@/stores/conversationMessages/applyConversationAskUserAnswer';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
 import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 export type { ConversationCacheEntry, ConversationMessagesById };
 
@@ -26,6 +28,10 @@ interface ConversationMessagesState {
   addOptimisticSend: (conversationId: string, message: UIMessage) => void;
   applyEdit: (conversationId: string, payload: MessageEditPayload) => void;
   applyDelete: (conversationId: string, messageId: string) => void;
+  /** Optimistic ask_user answer patch (epic leaf 6.3) — the resume POST's own commit reconciles it once persisted. */
+  applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload) => void;
+  /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
+  revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload) => void;
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
   /** Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's docblock. */
   applyConfirmedMessage: (conversationId: string, message: UIMessage) => void;
@@ -88,6 +94,23 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   applyDelete: (conversationId, messageId) => {
     set((state) => ({ byConversationId: applyConversationDelete(state.byConversationId, { conversationId, messageId }) }));
+  },
+
+  applyAskUserAnswer: (conversationId, payload) => {
+    set((state) => ({ byConversationId: applyConversationAskUserAnswer(state.byConversationId, { conversationId, payload }) }));
+  },
+
+  revertAskUserAnswer: (conversationId, payload) => {
+    set((state) => {
+      const existing = state.byConversationId[conversationId];
+      if (!existing) return state;
+      return {
+        byConversationId: {
+          ...state.byConversationId,
+          [conversationId]: { ...existing, messages: revertAskUserAnswer(existing.messages, payload) },
+        },
+      };
+    });
   },
 
   applyRemoteUserMessage: (conversationId, message) => {
