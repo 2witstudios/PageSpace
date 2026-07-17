@@ -106,7 +106,7 @@ describe('useConversationMessagesStore', () => {
   it('given actions against one conversation, should not affect another conversation entry', () => {
     const { addOptimisticSend, getEntry } = useConversationMessagesStore.getState();
     addOptimisticSend('c1', msg('opt1'));
-    expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [] });
+    expect(getEntry('c2')).toEqual({ messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle' });
   });
 
   it('given isLoadCurrent with the generation returned by startLoad, should return true; with a stale generation, should return false', () => {

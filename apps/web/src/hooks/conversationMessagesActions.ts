@@ -45,4 +45,10 @@ export const conversationMessagesActions = {
    */
   applyConfirmedMessage: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().applyConfirmedMessage(conversationId, message),
+  /** Commit an already-fetched server list as loaded truth in one step (supersedes in-flight loads). */
+  applyServerSnapshot: (conversationId: string, messages: UIMessage[]): void =>
+    useConversationMessagesStore.getState().applyServerSnapshot(conversationId, messages),
+  /** Mark a freshly-minted conversation loaded-empty (nothing to fetch for it). */
+  seedConversation: (conversationId: string): void =>
+    useConversationMessagesStore.getState().seedConversation(conversationId),
 };

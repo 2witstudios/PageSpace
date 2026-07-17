@@ -27,6 +27,20 @@ interface ConversationMessagesState {
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
   /** Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's docblock. */
   applyConfirmedMessage: (conversationId: string, message: UIMessage) => void;
+  /**
+   * Commits an already-fetched server message list as the conversation's new
+   * loaded truth in one step (startLoad + applyLoad composed) — for callers
+   * that fetched BEFORE deciding to commit (tryRecover's refetch branch),
+   * where a separate startLoad would leave a window for the data to go stale
+   * against its own generation. Supersedes any in-flight load.
+   */
+  applyServerSnapshot: (conversationId: string, messages: UIMessage[]) => void;
+  /**
+   * Marks a freshly-minted conversation as loaded-empty — createNewConversation
+   * paths know the server has no rows for the id they just minted, so nothing
+   * should ever fetch for it and the UI must not show a loading state.
+   */
+  seedConversation: (conversationId: string) => void;
 }
 
 export const useConversationMessagesStore = create<ConversationMessagesState>((set, get) => ({
@@ -69,5 +83,19 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   applyConfirmedMessage: (conversationId, message) => {
     set((state) => ({ byConversationId: applyConfirmedMessage(state.byConversationId, { conversationId, message }) }));
+  },
+
+  applyServerSnapshot: (conversationId, messages) => {
+    set((state) => {
+      const { byConversationId, generation } = applyStartLoad(state.byConversationId, conversationId);
+      return { byConversationId: applyLoad(byConversationId, { conversationId, generation, messages }) };
+    });
+  },
+
+  seedConversation: (conversationId) => {
+    set((state) => {
+      const { byConversationId, generation } = applyStartLoad(state.byConversationId, conversationId);
+      return { byConversationId: applyLoad(byConversationId, { conversationId, generation, messages: [] }) };
+    });
   },
 }));

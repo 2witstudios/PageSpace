@@ -18,12 +18,21 @@ export interface RenderedMessage {
  * surface renders — merge-at-render, so no effect ordering can blank a live
  * stream.
  *
- * Cache wins on id collision: a stream whose `messageId` already appears in
- * `messages` or `optimisticSends` is dropped (reuses `dedupRemoteStreams`),
- * so a stream that has landed (or reconciled into an optimistic send) never
- * double-renders. `messages` are assumed pre-ordered (DB order);
- * `optimisticSends` render in send order after them; remaining streams are
- * ordered by `startedAt` among themselves and rendered last.
+ * Id collisions (PR 5B): a LIVE stream whose `messageId` matches a row in
+ * `messages` renders IN PLACE of that row, with the stream's parts — the
+ * pending-stream entry is by definition fresher than any cached copy of the
+ * same id. The colliding cached row is a DB streaming-placeholder (loads
+ * carry `includeStreaming=1` so a history rejoin can see an in-flight
+ * conversation); letting the cache win froze the bubble at the placeholder
+ * snapshot for the rest of the generation — the #2092 failure class, moved
+ * into the cache. At completion the two carry identical content, so the
+ * one-render lag between the confirmed commit and the entry's removal cannot
+ * flash. A stream colliding with an `optimisticSends` id is still dropped
+ * (an optimistic send is a user message; an assistant stream under that id
+ * is a duplicate echo, never fresher content). `messages` are assumed
+ * pre-ordered (DB order); `optimisticSends` render in send order after them;
+ * non-colliding streams are ordered by `startedAt` among themselves and
+ * rendered last.
  *
  * Doesn't reuse `mergeServerAndPending` for the streaming tail: that helper
  * is single-stream (one `pendingMessageId`), but this selector must support
@@ -40,10 +49,17 @@ export const selectRenderedMessages = (
   cacheEntry: ConversationCacheEntry,
   activeStreams: readonly PendingStream[],
 ): RenderedMessage[] => {
-  const confirmed: RenderedMessage[] = cacheEntry.messages.map((message) => ({
-    message,
-    mode: 'confirmed' as const,
-  }));
+  const streamById = new Map(activeStreams.map((s) => [s.messageId, s]));
+
+  const confirmed: RenderedMessage[] = cacheEntry.messages.map((message) => {
+    const liveStream = streamById.get(message.id);
+    return liveStream
+      ? {
+          message: synthesizeAssistantMessage(liveStream.messageId, liveStream.parts, liveStream.startedAt),
+          mode: 'streaming' as const,
+        }
+      : { message, mode: 'confirmed' as const };
+  });
   const optimistic: RenderedMessage[] = cacheEntry.optimisticSends.map((message) => ({
     message,
     mode: 'optimistic' as const,

@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
-import type { ConversationCacheEntry } from '@/stores/conversationMessages/seedEmpty';
+import type { ConversationCacheEntry, ConversationLoadStatus } from '@/stores/conversationMessages/seedEmpty';
 import { seedEmpty } from '@/stores/conversationMessages/seedEmpty';
 import { selectRenderedMessages, type RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import { useActiveStream } from '@/hooks/useActiveStream';
@@ -31,3 +32,28 @@ export const useRenderedMessages = (
 
   return useMemo(() => selectRenderedMessages(cacheEntry, streams), [cacheEntry, streams]);
 };
+
+export interface ConversationLoadState {
+  status: ConversationLoadStatus;
+  /** True while a load for this conversation is in flight. */
+  isLoading: boolean;
+  /** True when the last settled load failed (messages, if any, are the prior snapshot). */
+  hasError: boolean;
+}
+
+/**
+ * Facade — a conversation's cache load state, for the loading/error UI that
+ * used to live in per-surface local state (`isLoadingMessages`,
+ * `globalMessagesLoadError`, `isConversationMessagesLoading`). Same
+ * container-agnostic consumer rule as `useRenderedMessages`: components read
+ * this, never the store's entry map.
+ */
+export const useConversationLoadState = (conversationId: string | null): ConversationLoadState =>
+  useConversationMessagesStore(
+    useShallow((state) => {
+      const status: ConversationLoadStatus = conversationId
+        ? state.byConversationId[conversationId]?.loadStatus ?? 'idle'
+        : 'idle';
+      return { status, isLoading: status === 'loading', hasError: status === 'error' };
+    }),
+  );

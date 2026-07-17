@@ -47,6 +47,7 @@ export const applyLoad = (
       messages,
       optimisticSends,
       pendingMutationsSinceLoad: [],
+      loadStatus: 'loaded',
     },
   };
 };
