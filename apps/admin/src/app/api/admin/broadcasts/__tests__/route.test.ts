@@ -396,6 +396,28 @@ describe('/api/admin/broadcasts', () => {
       expect(body.duplicateOf).toBe('bc_active');
       expect(mockRepo.create).not.toHaveBeenCalled();
       expect(mockEnqueue).not.toHaveBeenCalled();
+      // 'failed' is queried as active: the worker writes failed + rethrows so
+      // pg-boss retries — a failed row is often a live send between attempts.
+      expect(mockRepo.listByStatus).toHaveBeenCalledWith([
+        'pending',
+        'queued',
+        'in_progress',
+        'paused',
+        'failed',
+      ]);
+    });
+
+    it('409s a same-subject create while a FAILED broadcast awaits its pg-boss retry', async () => {
+      mockRepo.listByStatus.mockResolvedValue([
+        { id: 'bc_failed', subject: 'Launch update', status: 'failed', dryRun: false } as never,
+      ]);
+
+      const response = await POST(postRequest(liveBody));
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.duplicateOf).toBe('bc_failed');
+      expect(mockRepo.create).not.toHaveBeenCalled();
     });
 
     it('lets allowDuplicate deliberately bypass the active-duplicate guard', async () => {

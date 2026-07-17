@@ -111,12 +111,18 @@ export const POST = withAdminAuth(async (admin, request) => {
     // two rows mean the whole audience is mailed twice. An active broadcast
     // with the same resolved subject is almost always the same intent, so
     // refuse it unless the admin explicitly says the duplicate is deliberate.
+    // 'failed' counts as active for the same reason the cancel route may
+    // cancel it: the worker writes 'failed' + rethrows so pg-boss retries,
+    // meaning a failed row is often a live send between attempts. A row whose
+    // retries are truly exhausted needs allowDuplicate — a deliberate re-send,
+    // not an accidental double blast during retry backoff.
     if (!input.allowDuplicate) {
       const active = await broadcastRepository.listByStatus([
         'pending',
         'queued',
         'in_progress',
         'paused',
+        'failed',
       ]);
       const duplicate = active.find((b) => !b.dryRun && b.subject === content.subject);
       if (duplicate) {
