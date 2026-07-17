@@ -61,6 +61,27 @@ describe('withAdvisoryLock', () => {
     expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
   });
 
+  // Lock keys can be derived from request-supplied ids, so the failure log must treat the key
+  // as data: constant format string (%s), newlines stripped — a crafted key must not be able to
+  // forge log lines or smuggle %-directives (CodeQL js/log-injection / js/tainted-format-string).
+  it('given a lock key containing newlines, should log it newline-stripped as a format argument, never interpolated into the format string', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce(new Error('unlock failed')),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await withAdvisoryLock(pool, 'evil\nkey\r%s', async () => 'ok');
+
+    const [format, keyArg] = errorSpy.mock.calls[0];
+    expect(format).not.toContain('evil');
+    expect(keyArg).toBe('evil key %s');
+    errorSpy.mockRestore();
+  });
+
   // pg's release(err) only destroys the connection when handed an actual Error — a raw driver
   // rejection value (drivers CAN reject with strings/objects) passed through unwrapped would be
   // truthy enough to look intentional but is not guaranteed to trip pg's destroy path. The
@@ -84,8 +105,11 @@ describe('withAdvisoryLock', () => {
     expect(releasedWith).toBeInstanceOf(Error);
     expect((releasedWith as Error).message).toContain('unlock rejected as a plain string');
     // The recurring-failure signal must stay operator-visible even for non-Error rejections.
+    // Constant format string + args (never the key interpolated into the format position) —
+    // see the CodeQL note at the console.error call.
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Advisory unlock failed'),
+      'my-lock',
       'unlock rejected as a plain string',
     );
     errorSpy.mockRestore();

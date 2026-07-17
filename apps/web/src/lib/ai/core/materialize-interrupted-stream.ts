@@ -1,14 +1,16 @@
 import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
-import { chatMessages, pages } from '@pagespace/db/schema/core';
-import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { chatMessages } from '@pagespace/db/schema/core';
+import { messages } from '@pagespace/db/schema/conversations';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { broadcastAiStreamComplete } from '@/lib/websocket';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
 import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import type { UIMessagePart } from '@/lib/ai/core/stream-multicast-registry';
 
 /**
@@ -99,16 +101,14 @@ export interface MaterializableStreamRow {
  */
 const notifyMentionsBestEffort = async (row: MaterializableStreamRow, content: string): Promise<void> => {
   try {
-    const [page] = await db
-      .select({ driveId: pages.driveId, title: pages.title })
-      .from(pages)
-      .where(eq(pages.id, row.channelId));
-    if (!page?.driveId) return;
+    // The same readers the live paths use (never re-derived selects, per the reuse rail):
+    // pageRepository.findById excludes trashed pages by default, so a page trashed between
+    // stream death and this reap can't page drive members about content they can no longer
+    // open; getConversation is the route's own source of isConversationShared.
+    const page = await pageRepository.findById(row.channelId);
+    if (!page) return;
 
-    const [conversation] = await db
-      .select({ isShared: conversations.isShared })
-      .from(conversations)
-      .where(eq(conversations.id, row.conversationId));
+    const conversation = await conversationRepository.getConversation(row.conversationId);
     if (conversation?.isShared !== true) return;
 
     await notifyMentionedUsers({

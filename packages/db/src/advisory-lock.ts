@@ -76,8 +76,13 @@ async function unlockAndRelease(client: AdvisoryLockClient, lockKey: string): Pr
     client.release();
   } catch (unlockError) {
     const err = unlockError instanceof Error ? unlockError : new Error(String(unlockError));
+    // Constant format string with the key passed as a %s argument, newlines stripped: lock keys
+    // can be derived from request-supplied ids (e.g. a per-conversation lock), so interpolating
+    // one into the format-string position would let a crafted key smuggle %-directives or forge
+    // log lines (CodeQL js/tainted-format-string, js/log-injection — PR #2097).
     console.error(
-      `[withAdvisoryLock:${lockKey}] Advisory unlock failed — destroying the connection so the session lock cannot leak into the pool:`,
+      '[withAdvisoryLock:%s] Advisory unlock failed — destroying the connection so the session lock cannot leak into the pool: %s',
+      lockKey.replace(/[\r\n]/g, ' '),
       err.message,
     );
     client.release(err);
@@ -117,14 +122,12 @@ export async function withAdvisoryLock<T>(
 
   // `fn`'s own errors run against its own I/O and leave this lock connection's protocol state
   // untouched — they are NOT lock machinery and keep propagating as a rejection (the caller's
-  // own error, unwrapped), after the lock is released either way.
-  let result: T;
+  // own error, unwrapped), after the lock is released either way. unlockAndRelease never
+  // throws, so the finally cannot mask fn's rejection.
   try {
-    result = await fn();
-  } catch (fnError) {
+    const result = await fn();
+    return { outcome: 'acquired', result };
+  } finally {
     await unlockAndRelease(client, lockKey);
-    throw fnError;
   }
-  await unlockAndRelease(client, lockKey);
-  return { outcome: 'acquired', result };
 }

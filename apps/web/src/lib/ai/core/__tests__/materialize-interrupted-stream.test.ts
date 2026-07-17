@@ -8,9 +8,8 @@ const {
   mockReturning,
   mockUpdateSet,
   mockUpdateWhere,
-  mockSelect,
-  mockSelectFrom,
-  mockSelectWhere,
+  mockFindPageById,
+  mockGetConversation,
   mockBroadcastAiStreamComplete,
   mockNotifyMentionedUsers,
   mockLoggerWarn,
@@ -21,9 +20,8 @@ const {
   mockReturning: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
-  mockSelect: vi.fn(),
-  mockSelectFrom: vi.fn(),
-  mockSelectWhere: vi.fn(),
+  mockFindPageById: vi.fn(),
+  mockGetConversation: vi.fn(),
   mockBroadcastAiStreamComplete: vi.fn(),
   mockNotifyMentionedUsers: vi.fn(),
   mockLoggerWarn: vi.fn(),
@@ -33,7 +31,6 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: mockInsert,
     update: vi.fn(() => ({ set: mockUpdateSet })),
-    select: mockSelect,
   },
 }));
 
@@ -56,21 +53,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
     id: 'chat_messages.id',
     status: 'chat_messages.status',
   },
-  pages: {
-    id: 'pages.id',
-    driveId: 'pages.driveId',
-    title: 'pages.title',
-  },
 }));
 
 vi.mock('@pagespace/db/schema/conversations', () => ({
   messages: {
     id: 'messages.id',
     status: 'messages.status',
-  },
-  conversations: {
-    id: 'conversations.id',
-    isShared: 'conversations.isShared',
   },
 }));
 
@@ -84,6 +72,15 @@ vi.mock('@/lib/websocket', () => ({
 
 vi.mock('@/lib/channels/notify-mentioned-users', () => ({
   notifyMentionedUsers: mockNotifyMentionedUsers,
+}));
+
+// The mention gate reads through the SAME repositories the live paths use (reuse rail) —
+// mocked at the module boundary, not as raw db.select chains.
+vi.mock('@pagespace/lib/repositories/page-repository', () => ({
+  pageRepository: { findById: mockFindPageById },
+}));
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: { getConversation: mockGetConversation },
 }));
 
 import { materializeInterruptedStream, type MaterializableStreamRow } from '../materialize-interrupted-stream';
@@ -131,11 +128,10 @@ beforeEach(() => {
   // gate needs it); the global chain awaits the upsert directly and ignores this shape.
   mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
   mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
-  mockSelect.mockReturnValue({ from: mockSelectFrom });
-  mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
   // Default the mention-gate lookups to "page gone" so tests not about notifications never
   // trip the notify path.
-  mockSelectWhere.mockResolvedValue([]);
+  mockFindPageById.mockResolvedValue(null);
+  mockGetConversation.mockResolvedValue(null);
   mockNotifyMentionedUsers.mockResolvedValue(undefined);
   mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
   // Defaults to "one row actually settled" (rowCount: 1) — the common case. Tests exercising the
@@ -473,29 +469,18 @@ describe('materializeInterruptedStream — never throws', () => {
 describe('materializeInterruptedStream — mention notifications (best-effort, mirrors the finalize path)', () => {
   const MENTION_CONTENT = 'Hey @[Alice](alice-id:user), here is what I found so far';
 
-  // The mention-notify path needs the page-chat upsert chain to report whether it actually
-  // wrote (`.returning`), plus the page/conversation lookups the route-level gate reads.
-  beforeEach(() => {
-    mockOnConflictDoUpdate.mockReturnValue({ returning: mockReturning });
-    mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
-    mockSelect.mockReturnValue({ from: mockSelectFrom });
-    mockSelectFrom.mockReturnValue({ where: mockSelectWhere });
-    mockSelectWhere.mockResolvedValue([]);
-    mockNotifyMentionedUsers.mockResolvedValue(undefined);
-  });
-
-  // Stands in for the two gate lookups, in the order the implementation runs them: the page
-  // (driveId + title, mirroring `page?.driveId` and `mentionerName: page.title`) and then the
-  // conversation (`isShared`, mirroring `isConversationShared`).
+  // Stands in for the two gate lookups the implementation runs: pageRepository.findById
+  // (driveId + title; null = missing OR trashed) and conversationRepository.getConversation
+  // (`isShared`, the route's own source of isConversationShared).
   const gateLookups = ({
-    page = [{ driveId: 'drive-1', title: 'Research Agent' }],
-    conversation = [{ isShared: true }],
+    page = { driveId: 'drive-1', title: 'Research Agent' },
+    conversation = { isShared: true },
   }: {
-    page?: Array<{ driveId: string; title: string }>;
-    conversation?: Array<{ isShared: boolean }>;
+    page?: { driveId: string; title: string } | null;
+    conversation?: { isShared: boolean } | null;
   } = {}) => {
-    mockSelectWhere.mockReset();
-    mockSelectWhere.mockResolvedValueOnce(page).mockResolvedValueOnce(conversation);
+    mockFindPageById.mockResolvedValue(page);
+    mockGetConversation.mockResolvedValue(conversation);
   };
 
   // The notification is fire-and-forget (like the finalize path's own `void notifyMentionedUsers`)
@@ -528,7 +513,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
-    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockFindPageById).not.toHaveBeenCalled();
   });
 
   it('given the compare-and-swap upsert wrote nothing (the row already left streaming via its own onFinish, which already notified), does not notify again', async () => {
@@ -558,11 +543,11 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
     await flushNotify();
 
     expect(mockNotifyMentionedUsers).not.toHaveBeenCalled();
-    expect(mockSelect).not.toHaveBeenCalled();
+    expect(mockFindPageById).not.toHaveBeenCalled();
   });
 
-  it('given the page row is gone (deleted between death and reap), does not notify — mirrors the route\'s page?.driveId gate', async () => {
-    gateLookups({ page: [] });
+  it('given the page row is gone or trashed (findById filters both), does not notify', async () => {
+    gateLookups({ page: null });
 
     await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
@@ -571,7 +556,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   });
 
   it('given the conversation row is missing, fails closed and does not notify — same as the route treating a missing row as private', async () => {
-    gateLookups({ conversation: [] });
+    gateLookups({ conversation: null });
 
     await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
@@ -580,7 +565,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   });
 
   it('given the conversation is not shared, does not notify — a private conversation\'s reply must not page other drive members', async () => {
-    gateLookups({ conversation: [{ isShared: false }] });
+    gateLookups({ conversation: { isShared: false } });
 
     await materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }));
     await flushNotify();
@@ -589,8 +574,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   });
 
   it('given the gate lookup rejects, warns (best-effort, operator-visible) and the materialization result is unaffected', async () => {
-    mockSelectWhere.mockReset();
-    mockSelectWhere.mockRejectedValue(new Error('lookup down'));
+    mockFindPageById.mockRejectedValue(new Error('lookup down'));
 
     await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
     await flushNotify();
@@ -603,8 +587,7 @@ describe('materializeInterruptedStream — mention notifications (best-effort, m
   });
 
   it('given the gate lookup rejects with a non-Error value, still warns without throwing', async () => {
-    mockSelectWhere.mockReset();
-    mockSelectWhere.mockRejectedValue('a rejected string, not an Error instance');
+    mockFindPageById.mockRejectedValue('a rejected string, not an Error instance');
 
     await expect(materializeInterruptedStream(pageRow({ parts: [textPart(MENTION_CONTENT)] }))).resolves.toBe(true);
     await flushNotify();
