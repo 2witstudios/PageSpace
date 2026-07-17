@@ -134,6 +134,17 @@ describe('transactional engine — renderOne', () => {
     expect(generateUnsubscribeToken).not.toHaveBeenCalled();
     expect(sendEmail).not.toHaveBeenCalled();
   });
+
+  it('should render once per engine and reuse it — a dry run calls this once per audience row', async () => {
+    // The output carries the placeholder token, not the recipient's, so it is
+    // byte-identical for everyone; a 50k-row dry run must not pay 50k renders.
+    const engine = createTransactionalEngine(config);
+    const first = engine.renderOne(recipient);
+    const second = engine.renderOne({ userId: 'u2', userName: 'Grace', email: 'grace@example.com' });
+
+    expect(second).toBe(first);
+    expect(await first).toContain('<strong>world</strong>');
+  });
 });
 
 describe('transactional engine — preflight', () => {

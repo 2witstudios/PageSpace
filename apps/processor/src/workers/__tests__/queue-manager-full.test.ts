@@ -45,6 +45,11 @@ vi.mock('../audit-chainer-worker', () => ({
   processAuditChainer: vi.fn().mockResolvedValue({ outcome: 'idle', drained: 0 }),
 }));
 
+// Mock email broadcast worker (dynamically imported by queue-manager)
+vi.mock('../email-broadcast-worker', () => ({
+  runEmailBroadcastJob: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock workers
 vi.mock('../text-extractor', () => ({
   needsTextExtraction: vi.fn().mockReturnValue(false),
@@ -118,7 +123,7 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(9);
+      expect(mockBossWork).toHaveBeenCalledTimes(10);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
@@ -128,7 +133,8 @@ describe('QueueManager', () => {
       expect(mockBossWork.mock.calls[6][0]).toBe('pull-verify');
       expect(mockBossWork.mock.calls[7][0]).toBe('account-erasure');
       expect(mockBossWork.mock.calls[8][0]).toBe('audit-chainer');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(9);
+      expect(mockBossWork.mock.calls[9][0]).toBe('email-broadcast');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(10);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
@@ -138,6 +144,7 @@ describe('QueueManager', () => {
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('account-erasure');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('audit-chainer');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('email-broadcast');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
       // Same cadence + no-stack pattern as siem-delivery: retryLimit 0 so
       // overlapping scheduled runs never pile up; the advisory lock inside
@@ -218,6 +225,43 @@ describe('QueueManager', () => {
         mimeType: 'application/pdf',
         originalName: 'test.pdf',
       })).rejects.toThrow('Failed to queue job on ingest-file');
+    });
+
+    it('gives email-broadcast a retry policy that outlasts the one-hour email rate limiter', async () => {
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' });
+
+      // sendEmail's per-recipient limiter blocks for roughly an hour; the default
+      // 3×5s policy would exhaust every retry in seconds and strand rate-limited
+      // recipients as `failed` forever. Exponential backoff from 60s crosses the
+      // window. expireInSeconds must dwarf the longest legitimate attempt: the
+      // pg-boss default of 15 minutes would fail a long-running send mid-flight
+      // and start a concurrent duplicate run.
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'email-broadcast',
+        { broadcastId: 'bcast-1' },
+        expect.objectContaining({
+          retryLimit: 10,
+          retryDelay: 60,
+          retryBackoff: true,
+          expireInSeconds: 6 * 60 * 60,
+        })
+      );
+    });
+
+    it('lets caller options (e.g. singletonKey) pass through and win over queue defaults', async () => {
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' }, { singletonKey: 'bcast-1' });
+
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'email-broadcast',
+        { broadcastId: 'bcast-1' },
+        expect.objectContaining({ singletonKey: 'bcast-1', retryLimit: 10 })
+      );
     });
 
     it('sets higher priority for image-optimize queue', async () => {
@@ -353,6 +397,7 @@ describe('QueueManager', () => {
       expect(status['ocr-process']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['siem-delivery']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['audit-chainer']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
+      expect(status['email-broadcast']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
     });
 
     it('maps queue states correctly', async () => {

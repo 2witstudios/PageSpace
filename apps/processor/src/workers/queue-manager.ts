@@ -11,6 +11,7 @@ import type {
   VideoProcessJobData,
   PullVerifyJobData,
   AccountErasureJobData,
+  EmailBroadcastJobData,
   TextExtractResult,
   IngestResult,
 } from '../types';
@@ -88,6 +89,7 @@ export class QueueManager {
       await this.boss.createQueue('siem-delivery');
       await this.boss.createQueue('account-erasure');
       await this.boss.createQueue('audit-chainer');
+      await this.boss.createQueue('email-broadcast');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -270,6 +272,18 @@ export class QueueManager {
     // Every 30 seconds, retryLimit 0 so overlapping runs won't stack (same
     // schedule contract as siem-delivery).
     await this.boss.schedule('audit-chainer', '*/30 * * * * *', {}, { retryLimit: 0 });
+
+    // Durable admin-console email broadcast. Retries with backoff on throw; the
+    // claim-before-send lease + UNIQUE(broadcastId, userId) ledger make a retry
+    // resume from where the last attempt stopped instead of double-sending.
+    const { runEmailBroadcastJob } = await import('./email-broadcast-worker');
+    await this.boss.work('email-broadcast',
+      async ([job]) => {
+        console.log(`Processing email-broadcast job: ${job.id}`);
+        await runEmailBroadcastJob(job.data as EmailBroadcastJobData);
+        return { success: true };
+      }
+    );
   }
 
   async addJob<Q extends QueueName>(
@@ -280,15 +294,42 @@ export class QueueManager {
     if (!this.boss) throw new Error('Queue manager not initialized');
 
     // Set priority based on queue type
-    const priority = queue === 'image-optimize' ? 100 : 
-                    queue === 'text-extract' ? 50 : 
+    const priority = queue === 'image-optimize' ? 100 :
+                    queue === 'text-extract' ? 50 :
                     queue === 'ingest-file' ? 60 : 10;
 
+    // Retry policy. email-broadcast needs one that outlasts sendEmail's
+    // per-recipient rate limiter: that limiter blocks for roughly an hour, the
+    // worker surfaces blocked recipients as a terminal throw, and the default
+    // 3×5s policy would burn every retry within seconds — leaving those
+    // recipients recorded `failed` with no automatic retry ever reaching them.
+    // Exponential backoff from 60s (60+120+…+30720s over 10 retries) reaches
+    // multi-hour gaps by the later retries; the early ones may still find the
+    // limiter's sliding window closed (each denied attempt nudges it forward),
+    // which is why the tail of the schedule matters more than the head.
+    //
+    // expireInSeconds must dwarf the longest legitimate attempt: pg-boss's
+    // default is 15 MINUTES, after which it fails the still-running job and
+    // dispatches a retry that runs CONCURRENTLY with the original handler —
+    // duplicate audience walks racing each other and the retry budget burning
+    // on timeouts. Six hours covers ~40k recipients at the default 120ms
+    // inter-send delay plus provider round-trips. The trade-off is crash
+    // recovery: a SIGKILLed worker's job waits out this expiration before
+    // retrying, which is acceptable for a queue this infrequent.
+    const retryPolicy: Pick<
+      PgBoss.SendOptions,
+      'retryLimit' | 'retryDelay' | 'retryBackoff' | 'expireInSeconds'
+    > =
+      queue === 'email-broadcast'
+        ? { retryLimit: 10, retryDelay: 60, retryBackoff: true, expireInSeconds: 6 * 60 * 60 }
+        : { retryLimit: 3, retryDelay: 5 };
+
+    // Caller options win over the per-queue defaults (a caller that passes
+    // retryLimit/singletonKey knows something this table doesn't).
     const jobOptions = {
-      ...options,
       priority,
-      retryLimit: 3,
-      retryDelay: 5
+      ...retryPolicy,
+      ...options,
     };
     
     const jobId = await this.boss.send(queue, data, jobOptions);
@@ -323,7 +364,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer', 'email-broadcast'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

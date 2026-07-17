@@ -197,6 +197,17 @@ export function listUnsubscribeHeaders(unsubscribeUrl: string): Record<string, s
 export type PreflightResult = { ok: true } | { ok: false; reason: string };
 
 /**
+ * Why an on-prem deployment may never run a LIVE broadcast. Exported so the one
+ * caller that must refuse before `preflight` can run (the durable worker, which
+ * checks this before any status transition or provider read) states the same
+ * reason `preflight` does — two hand-typed copies of this text had already
+ * drifted apart once.
+ */
+export const ON_PREM_LIVE_SEND_REFUSAL =
+  'DEPLOYMENT_MODE is on-prem, where sendEmail() silently drops mail. The run would send\n' +
+  '   nothing while recording everyone as already-sent, poisoning the ledger for the real send.';
+
+/**
  * The guards that stand between a mistake and an unrecoverable mass email.
  * Pure, so each one can be pinned by a test — they are the whole safety story,
  * and "we never actually ran the guard" is not something you learn afterwards.
@@ -236,12 +247,7 @@ export function preflight(input: {
     // sendEmail() is a silent no-op on-prem. A "successful" live run would print
     // a tick per recipient and record a ledger entry for each, sending nothing and
     // permanently marking those people as already-mailed. Refuse instead.
-    return {
-      ok: false,
-      reason:
-        'DEPLOYMENT_MODE is on-prem, where sendEmail() silently drops mail. The run would send\n' +
-        '   nothing while recording everyone as already-sent, poisoning the ledger for the real send.',
-    };
+    return { ok: false, reason: ON_PREM_LIVE_SEND_REFUSAL };
   }
 
   if (!input.fromEmail?.trim()) {
@@ -486,9 +492,10 @@ export async function runBroadcast(input: {
     reason: SkipReason;
   }) => Promise<void>;
   /**
-   * Optional: called for every send that failed, so a durable caller can persist the
-   * error for the admin UI. The recipient is deliberately NOT recorded as sent, so a
-   * retry picks them up again.
+   * Optional: called for every recipient that failed — a send that threw, or a row
+   * whose PII would not decrypt (then with an empty `email`) — so a durable caller
+   * can persist the error for the admin UI. The recipient is deliberately NOT
+   * recorded as sent, so a retry picks them up again.
    */
   onFailure?: (failure: {
     userId: string;
@@ -518,6 +525,17 @@ export async function runBroadcast(input: {
       const msg = error instanceof Error ? error.message : String(error);
       errors.push(`user ${row.id}: could not decrypt PII: ${msg}`);
       input.logError(`  ✗ Skipping user ${row.id}: could not decrypt PII: ${msg}`);
+      if (input.onFailure) {
+        // Persist it like any other per-recipient failure (empty address — the
+        // address IS what we could not decrypt): without a ledger row this user
+        // is invisible in the admin's failed count, and lastError's masked
+        // message is the only trace of who a durable run could never reach.
+        await input.onFailure({
+          userId: row.id,
+          email: '',
+          error: `could not decrypt PII: ${msg}`,
+        });
+      }
       continue;
     }
 

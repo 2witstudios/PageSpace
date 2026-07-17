@@ -47,6 +47,13 @@ export function createTransactionalEngine(config: TransactionalEngineConfig): Br
   const unsubscribeUrlFor = (token: string) =>
     `${config.baseUrl}/api/notifications/unsubscribe/${token}`;
 
+  // renderOne's output carries the placeholder token, not a recipient's, so it is
+  // byte-identical for every recipient — and a dry run calls it once per audience
+  // row. Render once; a 50k-recipient preview should not pay 50k markdown-parse +
+  // SSR passes to recompute one constant string. (Not reused across engines: the
+  // cache lives and dies with this config closure.)
+  let renderedPreview: Promise<string> | null = null;
+
   return {
     name: 'transactional',
 
@@ -87,13 +94,19 @@ export function createTransactionalEngine(config: TransactionalEngineConfig): Br
 
     /** Dry-run: render the real email so a content error still surfaces, and send nothing. */
     renderOne(): Promise<string> {
-      return renderBroadcastEmail({
+      renderedPreview ??= renderBroadcastEmail({
         subject: config.subject,
         bodyMarkdown: config.bodyMarkdown,
         // A dry run mints no token: that would be a DB write per previewed recipient.
         unsubscribeUrl: unsubscribeUrlFor('<token>'),
         postalAddress: config.postalAddress,
+      }).catch((error) => {
+        // A failed render must not be cached: the next call should retry, not
+        // replay a stale rejection after the operator fixes the content.
+        renderedPreview = null;
+        throw error;
       });
+      return renderedPreview;
     },
   };
 }

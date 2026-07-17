@@ -93,6 +93,15 @@ export interface AccountErasureJobData {
   userId: string;
 }
 
+/**
+ * Durable admin-console email broadcast job. Carries only the broadcast id; the
+ * worker re-reads the email_broadcasts row for the authoritative state, exactly
+ * like AccountErasureJobData.
+ */
+export interface EmailBroadcastJobData {
+  broadcastId: string;
+}
+
 // Discriminated union for addJob
 export type JobDataMap = {
   'ingest-file': IngestFileJobData;
@@ -104,6 +113,7 @@ export type JobDataMap = {
   'siem-delivery': Record<string, never>;
   'account-erasure': AccountErasureJobData;
   'audit-chainer': Record<string, never>;
+  'email-broadcast': EmailBroadcastJobData;
 };
 
 export type QueueName = keyof JobDataMap;
