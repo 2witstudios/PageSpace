@@ -790,6 +790,14 @@ const GlobalAssistantView: React.FC = () => {
 
     const requestBody = buildRequestBody();
 
+    // Capture and clear the draft BEFORE the handoff await below: the wait can run up to
+    // ~1.5s, and anything the user types or attaches during it must survive — a post-await
+    // setInput('')/clearFiles() would discard it (Codex review, PR #2121).
+    const text = input;
+    const sendFiles = files.length > 0 ? files : undefined;
+    setInput('');
+    clearFiles();
+
     // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
     // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
     await prepareSendForMode(currentConversationId);
@@ -802,8 +810,8 @@ const GlobalAssistantView: React.FC = () => {
     // same tick the user hits Send (leaf 5.2 acceptance).
     const userMessage = buildUserMessage({
       id: createId(),
-      text: input.trim().length > 0 ? input : undefined,
-      files: files.length > 0 ? files : undefined,
+      text: text.trim().length > 0 ? text : undefined,
+      files: sendFiles,
     }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
@@ -813,8 +821,6 @@ const GlobalAssistantView: React.FC = () => {
       currentConversationId,
       userMessage.id,
     );
-    setInput('');
-    clearFiles();
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
 
