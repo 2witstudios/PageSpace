@@ -416,8 +416,10 @@ export function useChannelStreamSocket(
           // Bootstrap also re-runs on socket reconnect, which can land while this
           // tab's useChat is mid-POST on its own stream — attaching to the multicast
           // as well would render every remaining token twice. `isOwn` alone can't
-          // tell us that (it survives a reload; consuming state doesn't).
-          if (!shouldAttachStream({ isOwn, isConsuming: isChannelConsuming(channelId) })) continue;
+          // tell us that (it survives a reload; consuming state doesn't). Consuming is
+          // scoped per conversation: another conversation's POST on this channel must
+          // NOT block attaching this one's own stream (the send handoff depends on it).
+          if (!shouldAttachStream({ isOwn, isConsuming: isChannelConsuming(channelId, stream.conversationId) })) continue;
           // Seed the persisted snapshot as the stream's initial parts so the
           // restored mid-stream content renders immediately — without waiting
           // on (or depending on) the live multicast, which is unavailable if
@@ -514,12 +516,14 @@ export function useChannelStreamSocket(
 
       const isOwn = isOwnStream(payload.triggeredBy, localBrowserSessionId);
       // The ONLY reason to decline a live stream: this browser context is already
-      // reading its tokens off the POST body, so joining the multicast too would
-      // double-render. This used to be a blanket `isOwn` skip, which meant a
+      // reading THIS CONVERSATION's tokens off the POST body, so joining the multicast
+      // too would double-render. This used to be a blanket `isOwn` skip, which meant a
       // reloaded tab — still "own" via sessionStorage, but consuming nothing —
       // dropped its own stream forever and showed an empty chat while the server
-      // kept generating. See consumingChannels.ts / shouldAttachStream.ts.
-      if (!shouldAttachStream({ isOwn, isConsuming: isChannelConsuming(channelId) })) return;
+      // kept generating. And it used to be channel-wide, which meant one conversation's
+      // POST blocked attaching a concurrent conversation's own (handed-off) stream on
+      // the same channel. See consumingChannels.ts / shouldAttachStream.ts.
+      if (!shouldAttachStream({ isOwn, isConsuming: isChannelConsuming(channelId, payload.conversationId) })) return;
       if (controllers.has(payload.messageId)) return;
 
       addStream({

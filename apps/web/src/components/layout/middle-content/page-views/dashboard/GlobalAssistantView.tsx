@@ -63,6 +63,7 @@ import {
   useProviderSettings,
   useChatTransport,
   useSendHandoff,
+  useConversationSendHandoff,
   useStreamRecovery,
   useAskUserAnswering,
   buildChatConfig,
@@ -405,7 +406,6 @@ const GlobalAssistantView: React.FC = () => {
     activeStream?.isOwn === true,
   );
 
-  const stop = useStopStream({ activeStream, pendingSendConversationId, rawStop });
 
   // "Is MY OWN stream live for the conversation on screen", per chat. The #2061 clobber
   // guards that used to consume these died with PR 5B (merge-at-render made them
@@ -488,7 +488,7 @@ const GlobalAssistantView: React.FC = () => {
   // undefined unless the last message is an assistant's — during the submitted window the last
   // message is the user's own, which is exactly why no store entry exists in that window (and why
   // Stop falls back to the send-time conversationId there).
-  useOwnStreamMirror({
+  const { getLatchedConversationId: getAgentLatchedConversationId } = useOwnStreamMirror({
     status: agentStatus,
     ownMessages: agentMessages,
     pageId: selectedAgent?.id ?? '',
@@ -496,12 +496,54 @@ const GlobalAssistantView: React.FC = () => {
     triggeredBy: mirrorTriggeredBy,
   });
 
-  useOwnStreamMirror({
+  const { getLatchedConversationId: getGlobalLatchedConversationId } = useOwnStreamMirror({
     status: globalStatus,
     ownMessages: globalLocalMessages,
     pageId: channelIdForGlobal ?? '',
     conversationId: globalConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,
+  });
+
+  // Pre-send handoff, PER CHAT like the mirrors: a send into a different conversation than the
+  // one a chat is consuming for must first stop the local read and hand the in-flight stream to
+  // the socket path — the SDK's Chat cannot consume two response bodies at once, and a second
+  // concurrent send is how chat 1's stream ended up rendering inside chat 2. See
+  // useConversationSendHandoff.
+  // Through the ref: useAgentChannelMultiplayer mounts further down, and the ref is its standing
+  // late-binding (same pattern as the recovery path's rejoinAgentStreamRef.current() call).
+  const rejoinAgentStreamLate = useCallback(() => { rejoinAgentStreamRef.current(); }, []);
+  const { prepareSend: prepareAgentSend } = useConversationSendHandoff({
+    status: agentStatus,
+    stop: agentStop,
+    getLatchedConversationId: getAgentLatchedConversationId,
+    rejoin: rejoinAgentStreamLate,
+  });
+  const { prepareSend: prepareGlobalSend } = useConversationSendHandoff({
+    status: globalStatus,
+    stop: globalStop,
+    getLatchedConversationId: getGlobalLatchedConversationId,
+    rejoin: rejoinGlobalStream,
+  });
+  const prepareSendForMode = selectedAgent ? prepareAgentSend : prepareGlobalSend;
+
+  // Retry/regenerate is a send too: a retry for the conversation on screen while this chat is
+  // still consuming ANOTHER conversation's stream needs the same handoff first.
+  const regenerateWithHandoff = useCallback(
+    async (options?: { body?: Record<string, unknown> }) => {
+      if (currentConversationId) await prepareSendForMode(currentConversationId);
+      regenerate(options);
+    },
+    [prepareSendForMode, regenerate, currentConversationId],
+  );
+
+  // Declared after the mirrors: the rawStop gate reads the mode-selected latch, so a Stop on a
+  // socket-attached conversation cannot abort another conversation's live local fetch.
+  const stop = useStopStream({
+    activeStream,
+    pendingSendConversationId,
+    rawStop,
+    getLocalSendConversationId: selectedAgent ? getAgentLatchedConversationId : getGlobalLatchedConversationId,
+    targetConversationId: currentConversationId,
   });
 
 
@@ -547,7 +589,7 @@ const GlobalAssistantView: React.FC = () => {
     renderedMessages,
     isOwnSendLive,
     setMessages,
-    regenerate,
+    regenerate: regenerateWithHandoff,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -1000,6 +1042,10 @@ const GlobalAssistantView: React.FC = () => {
           mcpTools: mcpToolSchemas,
         });
 
+    // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
+    // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
+    await prepareSendForMode(currentConversationId);
+
     // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
     // silently drops any id passed alongside it, so the message would push under an
     // SDK-generated id the conversation cache never saw. Written to the cache
@@ -1021,8 +1067,11 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback((text: string) => {
+  const handleVoiceSend = useCallback(async (text: string) => {
     if (!text.trim() || !currentConversationId) return;
+
+    // Same cross-conversation handoff as handleSendMessage.
+    await prepareSendForMode(currentConversationId);
 
     const requestBody = selectedAgent
       ? {
@@ -1068,6 +1117,7 @@ const GlobalAssistantView: React.FC = () => {
     mcpToolSchemas,
     sendMessage,
     wrapSend,
+    prepareSendForMode,
   ]);
 
   const buildAskUserAnswerBody = useCallback(() => {

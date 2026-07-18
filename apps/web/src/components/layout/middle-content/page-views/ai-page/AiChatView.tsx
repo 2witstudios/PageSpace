@@ -58,6 +58,7 @@ import {
   isResolving,
   useChatTransport,
   useSendHandoff,
+  useConversationSendHandoff,
   useAskUserAnswering,
   buildChatConfig,
   AgentConfig,
@@ -570,13 +571,38 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // deliberately reads raw `messages` (useChat), not `plainMessages`: this is the
   // ONE place that must read the SDK's own live-growing content in order to copy it
   // OUT into the store — reading the store here would be circular.
-  useOwnStreamMirror({
+  const { getLatchedConversationId } = useOwnStreamMirror({
     status,
     ownMessages: messages,
     pageId: page.id,
     conversationId: currentConversationId ?? '',
     triggeredBy: { userId: user?.id ?? '', displayName: user?.name || user?.email || 'You' },
   });
+
+  // Pre-send handoff (dual-stream fix): a send into a different conversation than the one this
+  // chat is consuming for must first stop the local read and hand the in-flight stream to the
+  // socket path — the SDK's Chat cannot consume two response bodies at once. Page-agent pages
+  // host multiple conversations on one channel (page.id), so the same cross-conversation
+  // mis-keying the global sidebar had exists here. See useConversationSendHandoff.
+  // Through a ref: useChannelStreamSocket mounts further down; assigned right after it.
+  const rejoinActiveStreamsRef = useRef<() => void>(() => {});
+  const rejoinActiveStreamsLate = useCallback(() => { rejoinActiveStreamsRef.current(); }, []);
+  const { prepareSend } = useConversationSendHandoff({
+    status,
+    stop: chatStop,
+    getLatchedConversationId,
+    rejoin: rejoinActiveStreamsLate,
+  });
+
+  // Retry/regenerate is a send too: a retry for the conversation on screen while this chat is
+  // still consuming ANOTHER conversation's stream needs the same handoff first.
+  const regenerateWithHandoff = useCallback(
+    async (options?: { body?: Record<string, unknown> }) => {
+      if (currentConversationId) await prepareSend(currentConversationId);
+      regenerate(options);
+    },
+    [prepareSend, regenerate, currentConversationId],
+  );
 
   // Find in page
   const findQuery = useFindStore((s) => s.query);
@@ -660,7 +686,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     renderedMessages,
     isOwnSendLive: isStreaming || activeStream?.isOwn === true,
     setMessages,
-    regenerate,
+    regenerate: regenerateWithHandoff,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -777,6 +803,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     activeStream,
     pendingSendConversationId,
     rawStop: chatStop,
+    // The rawStop gate: a Stop on a socket-attached conversation must not abort another
+    // conversation's live local fetch (conversation-scoped consuming, dual-stream fix).
+    getLocalSendConversationId: getLatchedConversationId,
+    targetConversationId: currentConversationId,
   });
 
   usePageSocketRoom(page.id);
@@ -941,6 +971,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
       }
     },
   });
+  // Late-binding for the pre-send handoff declared above the socket hook.
+  rejoinActiveStreamsRef.current = rejoinActiveStreams;
 
   // Reset error visibility when new error occurs
   useEffect(() => {
@@ -1060,7 +1092,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     setPersisted(true);
   }, [setPersisted]);
 
-  const handleSendMessage = useCallback(() => {
+  const handleSendMessage = useCallback(async () => {
     if (isReadOnly) {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
@@ -1074,6 +1106,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     clearInputDraft();
     clearFiles();
     inputRef.current?.clear();
+
+    // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
+    // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
+    await prepareSend(currentConversationId);
 
     adoptConversationAsPersisted();
 
@@ -1133,10 +1169,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     contextRef,
     wrapSend,
     adoptConversationAsPersisted,
+    prepareSend,
   ]);
 
   // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback((text: string) => {
+  const handleVoiceSend = useCallback(async (text: string) => {
     if (isReadOnly) {
       toast.error('You do not have permission to send messages in this AI chat');
       return;
@@ -1145,6 +1182,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!trimmed) return;
     if (!canSendMessage) return;
     if (!currentConversationId) return;
+
+    // Same cross-conversation handoff as handleSendMessage.
+    await prepareSend(currentConversationId);
 
     adoptConversationAsPersisted();
     const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
@@ -1180,6 +1220,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     mcpToolSchemas,
     wrapSend,
     adoptConversationAsPersisted,
+    prepareSend,
   ]);
 
   // Voice mode toggle handler

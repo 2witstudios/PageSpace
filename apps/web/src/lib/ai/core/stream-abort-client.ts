@@ -18,6 +18,7 @@ import {
   markChannelConsuming,
   unmarkChannelConsuming,
 } from '@/lib/ai/streams/consumingChannels';
+import { extractConversationIdFromBody } from '@/lib/ai/streams/extractConversationIdFromBody';
 import type { AbortCode } from '@/lib/ai/core/stream-abort-decisions';
 
 /**
@@ -246,16 +247,22 @@ export const createStreamTrackingFetch = ({
     merged.set('X-Browser-Session-Id', getBrowserSessionId());
     const headers = Object.fromEntries(merged.entries());
 
+    // Scopes the consuming mark to the conversation this POST actually targets, read from the
+    // request body — NOT from a live getter, which the SDK's auto-resend would read after the
+    // surface has moved (see extractConversationIdFromBody). Undefined falls back to the
+    // channel-wide sentinel mark (pre-scoping semantics, conservative).
+    const conversationId = extractConversationIdFromBody(options?.body);
+
     // Marked BEFORE the request leaves, so it can never lose the race against the
     // server's broadcastAiStreamStart (which is why this is not derived from the
     // X-Stream-Id response header).
-    if (channelId) markChannelConsuming(channelId);
+    if (channelId) markChannelConsuming(channelId, conversationId);
 
     let response: Response;
     try {
       response = await fetchWithAuth(urlString, { ...options, headers });
     } catch (error) {
-      if (channelId) unmarkChannelConsuming(channelId);
+      if (channelId) unmarkChannelConsuming(channelId, conversationId);
       throw error;
     }
 
@@ -267,12 +274,12 @@ export const createStreamTrackingFetch = ({
 
     const consumedChannelId = channelId;
     if (!response.ok) {
-      unmarkChannelConsuming(consumedChannelId);
+      unmarkChannelConsuming(consumedChannelId, conversationId);
       return response;
     }
 
     return withBodyCompletion(response, () => {
-      unmarkChannelConsuming(consumedChannelId);
+      unmarkChannelConsuming(consumedChannelId, conversationId);
     });
   };
 };
