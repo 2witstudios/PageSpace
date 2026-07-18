@@ -23,7 +23,7 @@ import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { VersionHistoryItem } from './VersionHistoryItem';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import type { ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog } from '@/components/activity/types';
@@ -67,7 +67,6 @@ export function VersionHistoryPanel({
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [showAiOnly, setShowAiOnly] = useState(false);
   const [operationFilter, setOperationFilter] = useState<string>('all');
-  const { toast } = useToast();
   const { mutate } = useSWRConfig();
 
   const context = pageId ? 'page' : driveId ? 'drive' : 'user_dashboard';
@@ -138,18 +137,14 @@ export function VersionHistoryPanel({
       logger.debug('[History:Fetch] Fetch error', {
         error: error instanceof Error ? error.message : String(error),
       });
-      toast({
-        title: 'Error',
-        description: 'Failed to load version history',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load version history');
     } finally {
       setLoading(false);
     }
   // Fix 18: Removed offset from dependencies to prevent potential infinite loop
   // (fetchVersions updates offset state, which would trigger re-render)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId, driveId, showAiOnly, operationFilter, context, toast]);
+  }, [pageId, driveId, showAiOnly, operationFilter, context]);
 
   // Keep a ref to the latest fetchVersions to avoid stale closure issues
   const fetchVersionsRef = useRef(fetchVersions);
@@ -182,10 +177,7 @@ export function VersionHistoryPanel({
         activityId,
       });
 
-      toast({
-        title: 'Success',
-        description: result.message || 'Change undone',
-      });
+      toast.success(result.message || 'Change undone');
 
       // Invalidate SWR caches for affected resources
       if (pageId) {
@@ -206,14 +198,10 @@ export function VersionHistoryPanel({
         error: error instanceof Error ? error.message : String(error),
       });
 
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to rollback',
-        variant: 'destructive',
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to rollback');
       throw error;
     }
-  }, [context, pageId, driveId, toast, mutate, fetchVersions]);
+  }, [context, pageId, driveId, mutate, fetchVersions]);
 
   const handleLoadMore = () => {
     if (!loading && hasMore) {
