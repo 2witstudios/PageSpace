@@ -3,12 +3,12 @@
 import React from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/utils';
-import { getAIErrorMessage, isOutOfCreditsError } from '@/lib/ai/shared/error-messages';
+import type { AIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 
 export interface ChatErrorBannerProps {
-  /** The AI SDK chat error, if any. */
-  error?: Error | null;
+  /** The typed error cause (epic leaf 6.5), or null when there's nothing to show. */
+  cause?: AIErrorCause | null;
   /** Whether the banner should be shown (parent dismiss state). Defaults to true. */
   show?: boolean;
   /** Callback to dismiss the error. When omitted, no dismiss button is rendered. */
@@ -21,24 +21,24 @@ export interface ChatErrorBannerProps {
  * ChatErrorBanner - the single error banner shared by every AI-chat surface
  * (AI Chat page, Global Assistant, sidebar assistant, and the agent input area).
  *
- * It translates the raw chat error — which for credit-gate denials is the raw JSON
- * body, e.g. `{"error":"out_of_credits",...}` — into friendly copy via
- * `getAIErrorMessage()`, and surfaces a "Buy credits" call to action when the user is
- * out of prepaid credits. Never render `error.message` directly anywhere else.
+ * Renders `cause.message` directly — already friendly copy resolved by
+ * `toErrorCause`/`parseLegacyErrorMessage` upstream (epic leaf 6.5) — and
+ * surfaces a "Buy credits" call to action on `cause.code === 'out_of_credits'`.
+ * Never render a raw `Error.message` anywhere in this component.
  */
 export function ChatErrorBanner({
-  error,
+  cause,
   show = true,
   onClearError,
   className,
 }: ChatErrorBannerProps) {
   const shouldReduceMotion = useReducedMotion();
 
-  const visible = Boolean(error) && show;
+  const visible = Boolean(cause) && show;
 
   return (
     <AnimatePresence>
-      {visible && error && (
+      {visible && cause && (
         <motion.div
           data-testid="chat-error-banner"
           initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
@@ -51,7 +51,7 @@ export function ChatErrorBanner({
           )}
         >
           <div className="flex items-center justify-between gap-2">
-            <p className="text-sm text-destructive flex-1">{getAIErrorMessage(error.message)}</p>
+            <p className="text-sm text-destructive flex-1">{cause.message}</p>
             {onClearError && (
               <button
                 type="button"
@@ -62,7 +62,7 @@ export function ChatErrorBanner({
               </button>
             )}
           </div>
-          {isOutOfCreditsError(error.message) && (
+          {cause.code === 'out_of_credits' && (
             <BuyCreditsButton variant="default" size="sm" className="self-start" />
           )}
         </motion.div>

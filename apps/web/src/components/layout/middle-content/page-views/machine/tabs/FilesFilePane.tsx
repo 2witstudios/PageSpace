@@ -2,21 +2,30 @@
 
 /**
  * FilesFilePane — the Files tab's main pane: fetches ONE selected file's content
- * from the machine files route (`mode=read`) and shows it in a read-only Monaco
- * (Machine page rebuild, Phase 3).
+ * from the machine files route (`mode=read`) and shows it in Monaco, editable
+ * when it loaded cleanly as (non-truncated) text. Scoped by `FilesScope`
+ * (Machine Files Manager epic, Part A) — either the Machine's own root Sprite
+ * (`/workspace`) or a project/branch checkout within it — like its sibling
+ * {@link MachineFileTree}.
  *
- * Read-only by design — this tab views a live checkout, it does not edit it, so
- * Monaco is mounted with `readOnly` and there is no onChange/save path. Content
- * is fetched lazily: the pane only mounts once a file is actually clicked (the
- * tab renders a placeholder until then), and every settled state carries the
- * path it settled for, so the pane can never paint one file's content under
- * another's name. The route caps a single read at 2 MiB and reports `truncated`
- * when it clips a larger file; that surfaces as a banner so a partial view is
- * never mistaken for the whole file. The working tree is LIVE (an agent terminal
- * can rewrite the open file), and re-clicking the same row in the tree is a
- * no-op, so the header carries a reload.
+ * EDITING + SAVE. A clean text read (`loaded`, not `truncated`, not binary) is
+ * editable; Cmd/Ctrl-S or the header's Save button POSTs `kind: 'file'` with the
+ * editor's current value back to the same route (overwrite IS save — see the
+ * route header). The editor's draft is tracked separately from the last-loaded
+ * content so a failed save never loses the edit, and the header's dot + "Save"
+ * affordance only appear once the draft actually diverges from what's on disk.
+ * `truncated` reads stay READ-ONLY, full stop — the route caps a single read at
+ * 2 MiB, so a truncated buffer is missing the file's tail, and saving it would
+ * silently truncate the real file on disk.
  *
- * BINARIES. A real working tree is full of them — images, fonts, archives,
+ * Saving registers with `useEditingStore` for as long as the draft is dirty
+ * (repo rule, CLAUDE.md) — this is what stops an SWR revalidation or an auth
+ * refresh from clobbering an edit the user hasn't saved yet. The reload button
+ * (needed because the working tree is LIVE — see below) confirms before
+ * discarding a dirty draft, since it's the only path that would otherwise
+ * silently blow away unsaved work.
+ *
+ * BINARIES. A real filesystem is full of them — images, fonts, archives,
  * `.node` addons, `__pycache__` — and the route decodes whatever it reads as
  * UTF-8, so a binary would land in Monaco as mojibake. Two guards, because
  * neither alone is enough:
@@ -28,22 +37,25 @@
  *      binary. A flood of U+FFFD (bytes the server's decoder couldn't map) is
  *      the same conclusion by a different route.
  *
- * A checkout that has gone away is NOT an error here: the route's `reason` is
- * mapped through the shared {@link CHECKOUT_ABSENT_COPY}, so the pane says the
+ * A scope that has gone away is NOT an error here: the route's `reason` is
+ * mapped through the shared {@link FILES_ABSENT_COPY}, so the pane says the
  * same words the sidebar says, at the same moment, about the same fact. The
- * route keeps `not_found`/`vanished` (this branch has no checkout) distinct from
- * `file_not_found` (the checkout is fine; that one file is gone), so we can tell
- * the reader which of the two actually happened instead of guessing.
+ * route keeps `not_found`/`vanished`/`not_started` (this scope isn't reachable)
+ * distinct from `file_not_found` (the scope is fine; that one file is gone), so
+ * we can tell the reader which of the two actually happened instead of guessing.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AlertTriangle, FileQuestion, RefreshCw } from 'lucide-react';
+import { AlertTriangle, FileQuestion, RefreshCw, Save } from 'lucide-react';
+import { toast } from 'sonner';
 import { detectLanguageFromFilename, isBinaryFile } from '@pagespace/lib/utils/language-detection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { Button } from '@/components/ui/button';
+import { useEditingStore } from '@/stores/useEditingStore';
 import { PaneLoading, PaneNotice } from './tab-states';
-import { CHECKOUT_ABSENT_COPY, asAbsentReason, readErrorBody, type CheckoutAbsentReason } from './checkout-states';
+import { FILES_ABSENT_COPY, asAbsentReason, readErrorBody, type FilesAbsentReason } from './checkout-states';
+import { type FilesScope, filesScopeSearchParams } from './files-scope';
 
 // Monaco pulls the editor bundle + `window`, so it must never SSR — matches
 // every other MonacoEditor mount in the app (CodePageView, DocumentView, …).
@@ -51,10 +63,17 @@ const MonacoEditor = dynamic(() => import('@/components/editors/MonacoEditor'), 
 
 interface FilesFilePaneProps {
   machineId: string;
-  projectName: string;
-  branchName: string;
-  /** Checkout-relative path of the file to show, e.g. `src/index.ts`. */
+  scope: FilesScope;
+  /** Path of the file to show, relative to the scope root, e.g. `src/index.ts`. */
   path: string;
+  /**
+   * Reports whether the pane currently holds an unsaved draft. The parent uses
+   * this to guard its own navigation (file clicks, scope switches) behind the
+   * same discard-confirm the Reload button applies — without it, ordinary
+   * navigation would be the one path that silently drops an edit. Reported
+   * `false` again on unmount.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
@@ -69,7 +88,7 @@ type FileState =
   | { status: 'loading' }
   | { status: 'loaded'; path: string; content: string; truncated: boolean }
   | { status: 'binary'; path: string }
-  | { status: 'absent'; path: string; reason: CheckoutAbsentReason }
+  | { status: 'absent'; path: string; reason: FilesAbsentReason }
   | { status: 'error'; path: string; message: string };
 
 const NUL_CHAR_CODE = 0;
@@ -106,37 +125,55 @@ const looksBinary = (content: string): boolean => {
   return replacements >= MIN_REPLACEMENTS && replacements / sample.length > MAX_REPLACEMENT_RATIO;
 };
 
-export default function FilesFilePane({ machineId, projectName, branchName, path }: FilesFilePaneProps) {
+/** The POST body's scope fields — a pair, present only for branch scope (mirrors `filesScopeSearchParams`). */
+const filesScopeBodyFields = (scope: FilesScope): Record<string, string> =>
+  scope.kind === 'branch' ? { projectName: scope.projectName, branchName: scope.branchName } : {};
+
+export default function FilesFilePane({ machineId, scope, path, onDirtyChange }: FilesFilePaneProps) {
   const [state, setState] = useState<FileState>({ status: 'loading' });
-  // Bumped by Retry to re-run the read without changing the selected file.
+  // Bumped by Retry/Reload to re-run the read without changing the selected file.
   const [attempt, setAttempt] = useState(0);
+  // Non-null once the user edits a clean text file — the draft buffer the
+  // editor shows, distinct from `state`'s content (the last-loaded/last-saved
+  // value) so a failed save never loses the edit and Save has something to
+  // diff against.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const fileName = basename(path);
 
   useEffect(() => {
     // Nothing useful to render for a known binary, so don't spend a read on one.
     if (isBinaryFile(fileName)) {
       setState({ status: 'binary', path });
+      setDraft(null);
       return;
     }
 
-    // A new file, a Retry, or a Refresh makes an in-flight read stale — this
+    // A new file, a Retry, or a Reload makes an in-flight read stale — this
     // flag, flipped by the cleanup, keeps a late resolver from landing on the
     // state that replaced it.
     let cancelled = false;
     setState({ status: 'loading' });
+    // A new load (new path, Retry, or a confirmed Reload) always starts clean —
+    // the draft it would replace has already been either discarded (Reload's
+    // confirm) or was never valid for this path to begin with.
+    setDraft(null);
 
     const load = async () => {
       try {
-        const search = new URLSearchParams({ machineId, projectName, branchName, path, mode: 'read' });
+        const search = filesScopeSearchParams(machineId, scope);
+        search.set('path', path);
+        search.set('mode', 'read');
         const res = await fetchWithAuth(`/api/machines/files?${search.toString()}`);
         if (cancelled) return;
 
         if (!res.ok) {
           const { error, reason } = readErrorBody(await res.json().catch(() => null));
           if (cancelled) return;
-          // The route keeps "this branch has no checkout" (`not_found`/`vanished`)
-          // and "that one file is gone" (`file_not_found`) as distinct reasons, so
-          // we can tell the reader which actually happened instead of guessing.
+          // The route keeps "this scope isn't reachable" (`not_found`/`vanished`/
+          // `not_started`) and "that one file is gone" (`file_not_found`) as
+          // distinct reasons, so we can tell the reader which actually happened
+          // instead of guessing.
           const absent = asAbsentReason(reason);
           if (absent !== null) {
             setState({ status: 'absent', path, reason: absent });
@@ -144,7 +181,9 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
           }
           throw new Error(
             reason === 'file_not_found'
-              ? 'This file is no longer in the checkout.'
+              ? scope.kind === 'branch'
+                ? 'This file is no longer in the checkout.'
+                : 'This file is no longer on the machine.'
               : error ?? `Failed to read file (${res.status})`,
           );
         }
@@ -171,12 +210,137 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
     return () => {
       cancelled = true;
     };
-  }, [machineId, projectName, branchName, path, fileName, attempt]);
+    // `scope` is safe alongside `path` here even though it isn't part of the
+    // effect's cache-busting story: the pane only ever mounts while `path` is
+    // non-null, and FilesTab's Selection nulls `path` in the very same state
+    // update that changes `scope` — so a scope change can never fire this
+    // effect on its own; `path` becoming null unmounts the pane first.
+  }, [machineId, scope, path, fileName, attempt]);
 
   // The state of a DIFFERENT file is not this file's state — until the effect
   // catches up, we have nothing to show but the spinner. (See FileState.)
   const current: FileState = state.status === 'loading' || state.path === path ? state : { status: 'loading' };
-  const reload = () => setAttempt((a) => a + 1);
+  // Truncated content is a partial read (the route caps at 2 MiB) — editing and
+  // saving it would silently drop the file's tail on disk, so it stays
+  // read-only no matter what the banner already says.
+  const editable = current.status === 'loaded' && !current.truncated;
+  // A draft that has been edited BACK to the loaded content is clean — no Save
+  // affordance, no navigation guard, no editing-store session for an edit that
+  // no longer exists.
+  const dirty = editable && draft !== null && draft !== current.content;
+
+  // Mirror the dirty flag up to the parent so ITS navigation (file clicks,
+  // scope switches) can confirm before discarding — see the prop doc. The
+  // cleanup reports `false` so an unmount never strands the parent thinking a
+  // gone pane still holds an edit.
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+    return () => {
+      onDirtyChange?.(false);
+    };
+  }, [dirty, onDirtyChange]);
+
+  // Registers for as long as the draft is dirty — repo rule (CLAUDE.md): this
+  // is what stops an SWR revalidation or an auth-refresh interrupt from
+  // clobbering an edit the user hasn't saved yet. Mirrors CodePageView's
+  // registration for the same store.
+  useEffect(() => {
+    const sessionId = `machine-files-pane-${machineId}`;
+    if (dirty) {
+      useEditingStore.getState().startEditing(sessionId, 'document', { componentName: 'FilesFilePane' });
+    } else {
+      useEditingStore.getState().endEditing(sessionId);
+    }
+    return () => {
+      useEditingStore.getState().endEditing(sessionId);
+    };
+  }, [dirty, machineId]);
+
+  // Kept current by plain assignment so an async save completion can ask
+  // "is the pane still showing the file I saved?" without a stale closure.
+  const latestPathRef = useRef(path);
+  latestPathRef.current = path;
+
+  const save = async () => {
+    // `saving` also gates re-entrancy: the Cmd/Ctrl-S listener bypasses the
+    // disabled Save button, so without it a held keystroke would fire
+    // overlapping POSTs whose completions race each other's setDraft.
+    if (!dirty || current.status !== 'loaded' || draft === null || saving) return;
+    const content = draft;
+    const savedPath = path;
+    setSaving(true);
+    try {
+      const res = await fetchWithAuth('/api/machines/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          machineId,
+          ...filesScopeBodyFields(scope),
+          path: savedPath,
+          kind: 'file',
+          encoding: 'utf8',
+          content,
+        }),
+      });
+      if (!res.ok) {
+        const { error } = readErrorBody(await res.json().catch(() => null));
+        const message =
+          res.status === 403
+            ? "You don't have edit access to this machine"
+            : res.status === 413
+              ? 'File is too large to upload'
+              : (error ?? `Failed to save file (${res.status})`);
+        toast.error(message);
+        return;
+      }
+      // The user may have kept typing while the POST was in flight, or
+      // navigated to another file. Only adopt the saved content as the loaded
+      // state if the pane still shows the saved file, and only clear the draft
+      // if it is still EXACTLY what was submitted — a newer draft is unsaved
+      // work and must survive the older save's completion.
+      if (latestPathRef.current === savedPath) {
+        setState({ status: 'loaded', path: savedPath, content, truncated: false });
+      }
+      setDraft((d) => (d === content ? null : d));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save file');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Kept fresh every render (a plain assignment, not an effect — `save` is a
+  // new closure every render, so an effect for this would just run every
+  // render anyway) so the mount-once keydown listener below always calls the
+  // current save (current draft, current path) — mirrors CodePageView's
+  // forceSaveRef.
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        void saveRef.current();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  const reload = () => {
+    // The only place `attempt` bumps — a confirmed discard here is what keeps a
+    // Reload from silently blowing away an unsaved edit.
+    if (dirty && !window.confirm('Discard unsaved changes to this file?')) return;
+    setAttempt((a) => a + 1);
+  };
+
+  const handleChange = (value: string | undefined) => {
+    if (value === undefined) return;
+    setDraft(value);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -184,12 +348,30 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
         <span className="min-w-0 truncate text-xs text-muted-foreground" title={path}>
           {path}
         </span>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {dirty && (
+            // Matches TabItem's dirty-tab dot exactly (amber dot + this title).
+            <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" title="Unsaved changes" />
+          )}
           {current.status === 'loaded' && current.truncated && (
             <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
               <AlertTriangle className="size-3" />
               Truncated
             </span>
+          )}
+          {dirty && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-5 gap-1 px-1.5 text-[10px]"
+              title="Save file (Cmd/Ctrl-S)"
+              onClick={() => void save()}
+              disabled={saving}
+            >
+              <Save className="size-3" />
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
           )}
           {/* The working tree is LIVE — an agent terminal can rewrite this file
               while it's open — and re-clicking the same row in the tree is a
@@ -219,8 +401,8 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
         {current.status === 'absent' && (
           <PaneNotice
             testId="checkout-absent-pane"
-            title={CHECKOUT_ABSENT_COPY[current.reason].title}
-            description={CHECKOUT_ABSENT_COPY[current.reason].description}
+            title={FILES_ABSENT_COPY[current.reason].title}
+            description={FILES_ABSENT_COPY[current.reason].description}
           />
         )}
         {current.status === 'error' && (
@@ -234,8 +416,9 @@ export default function FilesFilePane({ machineId, projectName, branchName, path
         )}
         {current.status === 'loaded' && (
           <MonacoEditor
-            value={current.content}
-            readOnly
+            value={draft ?? current.content}
+            onChange={editable ? handleChange : undefined}
+            readOnly={!editable}
             language={detectLanguageFromFilename(fileName)}
             className="h-full"
           />

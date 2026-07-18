@@ -17,6 +17,7 @@ import {
   Menu,
   MessageSquareText,
   Moon,
+  Send,
   Sun,
   TrendingUp,
   Users,
@@ -78,6 +79,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'People',
     items: [
       { href: '/users', label: 'Users', icon: Users },
+      { href: '/broadcasts', label: 'Broadcasts', icon: Send },
       { href: '/support', label: 'Support', icon: LifeBuoy },
       { href: '/audit-logs', label: 'Audit Logs', icon: FileClock },
     ],

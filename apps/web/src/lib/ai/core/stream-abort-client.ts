@@ -20,6 +20,7 @@ import {
 } from '@/lib/ai/streams/consumingChannels';
 import { extractConversationIdFromBody } from '@/lib/ai/streams/extractConversationIdFromBody';
 import type { AbortCode } from '@/lib/ai/core/stream-abort-decisions';
+import { toErrorCause } from '@/lib/ai/shared/toErrorCause';
 
 /**
  * What the server says happened.
@@ -270,14 +271,23 @@ export const createStreamTrackingFetch = ({
     // whose only consumer was an abort-by-chatId path that could not work in the windows that
     // mattered (see the map's deletion note above). The server still sends it.
 
+    if (!response.ok) {
+      if (channelId) unmarkChannelConsuming(channelId, conversationId);
+      // Epic leaf 6.5: read the body ONCE here (where httpStatus + the real JSON are both in
+      // hand) and throw a typed cause rather than letting the SDK construct a bare
+      // `new Error(await response.text())` from a re-read of the same body. `response.clone()`
+      // is required — the SDK's own transport still expects to be able to read a body if it
+      // ever got the Response itself, but throwing here means it never does; kept only for
+      // defense (a future SDK version that inspects the response before the fetch promise even
+      // resolves would otherwise see an already-consumed stream).
+      const body = await response.clone().json().catch(() => undefined);
+      const cause = toErrorCause(response.status, body);
+      throw new Error(cause.message, { cause });
+    }
+
     if (!channelId) return response;
 
     const consumedChannelId = channelId;
-    if (!response.ok) {
-      unmarkChannelConsuming(consumedChannelId, conversationId);
-      return response;
-    }
-
     return withBodyCompletion(response, () => {
       unmarkChannelConsuming(consumedChannelId, conversationId);
     });

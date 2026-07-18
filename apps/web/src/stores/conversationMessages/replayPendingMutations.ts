@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai';
 import { applyMessageEdit } from '@/lib/ai/streams/applyMessageEdit';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
+import { applyAskUserAnswer } from '@/lib/ai/streams/applyAskUserAnswer';
 import type { PendingMutation } from './seedEmpty';
 
 /**
@@ -32,6 +33,9 @@ export const replayPendingMutations = (
     }
     if (mutation.type === 'edit') {
       return applyMessageEdit(acc, mutation.payload);
+    }
+    if (mutation.type === 'askUserAnswer') {
+      return applyAskUserAnswer(acc, mutation.payload);
     }
     return applyMessageDelete(acc, mutation.messageId);
   }, messages);

@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import type { AskUserAnswerPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 /**
  * A live mutation (remote broadcast) recorded while a load is in flight, so
@@ -10,7 +11,8 @@ export type PendingMutation =
   | { type: 'remoteMessage'; message: UIMessage }
   | { type: 'confirmedMessage'; message: UIMessage }
   | { type: 'edit'; payload: MessageEditPayload }
-  | { type: 'delete'; messageId: string };
+  | { type: 'delete'; messageId: string }
+  | { type: 'askUserAnswer'; payload: AskUserAnswerPayload };
 
 /**
  * Per-conversation slice of `useConversationMessagesStore`. `messages` is the
@@ -54,6 +56,12 @@ export interface ConversationCacheEntry {
   loadGeneration: number;
   pendingMutationsSinceLoad: PendingMutation[];
   loadStatus: ConversationLoadStatus;
+  /** Cursor for the NEXT "load older" page (epic leaf 6.6) — the initial load's `pagination.nextCursor`. */
+  olderCursor: string | null;
+  /** Whether an older page exists to load — the initial/older load's `pagination.hasMore`. */
+  hasMoreOlder: boolean;
+  /** True while a "load older" fetch is in flight — inline scroll indicator only, no error-banner takeover. */
+  isLoadingOlder: boolean;
 }
 
 export type ConversationMessagesById = Record<string, ConversationCacheEntry>;
@@ -65,4 +73,7 @@ export const seedEmpty = (): ConversationCacheEntry => ({
   loadGeneration: 0,
   pendingMutationsSinceLoad: [],
   loadStatus: 'idle',
+  olderCursor: null,
+  hasMoreOlder: false,
+  isLoadingOlder: false,
 });

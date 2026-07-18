@@ -6,6 +6,7 @@ import { UIMessage } from 'ai';
 import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
 import { InputCard } from '@/components/ui/floating-input/InputCard';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
+import type { AIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
@@ -39,8 +40,8 @@ export interface ChatLayoutProps {
   driveId?: string;
   /** Allow cross-drive mentions */
   crossDrive?: boolean;
-  /** Current error (if any) */
-  error?: Error | null;
+  /** Current typed error cause (epic leaf 6.5), if any */
+  cause?: AIErrorCause | null;
   /** Whether to show the error */
   showError?: boolean;
   /** Callback when error is cleared */
@@ -67,6 +68,10 @@ export interface ChatLayoutProps {
   onUndoSuccess?: () => void;
   /** Callback for pull-up refresh (to check for missed messages) */
   onPullUpRefresh?: () => Promise<void>;
+  /** Scroll-near-top handler (epic leaf 6.6) — fetches the next older page. */
+  onScrollNearTop?: () => void;
+  /** Whether an older page is currently loading (inline indicator, not an error state). */
+  isLoadingOlder?: boolean;
 
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
@@ -139,7 +144,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       placeholder = 'Type your message...',
       driveId,
       crossDrive = false,
-      error,
+      cause,
       showError = true,
       onClearError,
       welcomeTitle,
@@ -153,6 +158,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       isReadOnly = false,
       onUndoSuccess,
       onPullUpRefresh,
+      onScrollNearTop,
+      isLoadingOlder,
       renderInput,
       mcpRunningServers = 0,
       mcpServerNames = [],
@@ -284,6 +291,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 isReadOnly={isReadOnly}
                 onUndoSuccess={onUndoSuccess}
                 onPullUpRefresh={onPullUpRefresh}
+                onScrollNearTop={onScrollNearTop}
+                isLoadingOlder={isLoadingOlder}
                 remoteStreams={remoteStreams}
                 findMatchSet={findMatchSet}
                 findCurrentMessageId={findCurrentMessageId}
@@ -319,7 +328,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
         <InputPositioner position={inputPosition}>
           <InputCard
             errorSlot={
-              <ChatErrorBanner error={error} show={showError} onClearError={onClearError} />
+              <ChatErrorBanner cause={cause} show={showError} onClearError={onClearError} />
             }
           >
             {inputContent}

@@ -9,7 +9,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ChevronLeft, Save } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { ROLE_COLORS } from '@/lib/utils';
 import { PermissionsGrid } from '@/components/members/PermissionsGrid';
@@ -34,7 +34,6 @@ interface RoleEditorProps {
 
 export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps) {
   const isEditing = !!role;
-  const { toast } = useToast();
 
   const [name, setName] = useState(role?.name || '');
   const [description, setDescription] = useState(role?.description || '');
@@ -80,20 +79,12 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
   const handleSave = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
-      toast({
-        title: 'Name required',
-        description: 'Please enter a name for this role',
-        variant: 'destructive',
-      });
+      toast.error('Please enter a name for this role');
       return;
     }
 
     if (trimmedName.length > 50) {
-      toast({
-        title: 'Name too long',
-        description: 'Role name must be 50 characters or less',
-        variant: 'destructive',
-      });
+      toast.error('Role name must be 50 characters or less');
       return;
     }
 
@@ -119,26 +110,16 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
 
       if (isEditing && role) {
         await patch(`/api/drives/${driveId}/roles/${role.id}`, roleData);
-        toast({
-          title: 'Success',
-          description: 'Role updated successfully',
-        });
+        toast.success('Role updated successfully');
       } else {
         await post(`/api/drives/${driveId}/roles`, roleData);
-        toast({
-          title: 'Success',
-          description: 'Role created successfully',
-        });
+        toast.success('Role created successfully');
       }
 
       onSave();
     } catch (error) {
       console.error('Error saving role:', error);
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to save role',
-        variant: 'destructive',
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to save role');
     } finally {
       setSaving(false);
     }
