@@ -144,7 +144,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/tasks/[taskId]', 'Individual task CRUD — follow-up'],
   ['pages/[pageId]/tasks/reorder', 'Task reorder — follow-up'],
   ['pages/[pageId]/tasks/statuses', 'Task status list — follow-up'],
-  ['pages/[pageId]/versions/compare', 'Version comparison — follow-up'],
   ['pages/[pageId]/view', 'Page view endpoint — follow-up'],
   ['pages/tree', 'Page tree navigation — follow-up'],
 
