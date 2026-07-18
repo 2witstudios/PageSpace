@@ -7,6 +7,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Toast notifications now actually appear** — member management, role editing, drive AI
+  settings, drive deletion, invites, and version-history/activity rollback actions had been
+  silently logging success and error feedback to the browser console instead of showing a
+  toast, since December 2025. These flows now surface real toast notifications.
 - **Subscription renewals now set the correct billing period** — a renewal used to stamp your
   account with the billing cycle that had just *ended* (Stripe reports the old cycle on the invoice
   itself; the new one is on its line items), so every subscriber's period looked expired the moment
