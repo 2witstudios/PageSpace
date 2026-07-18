@@ -28,6 +28,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **`pagespace drives update-context` and a full `pagespace roles` command family** — the CLI can
+  now set a drive's AI context prompt (`drives update-context <driveId> <drivePrompt>`) and
+  manage custom drive roles end-to-end (`roles list|get|create|update|delete`,
+  `set-page-permissions`, `set-drive-wide-permissions`, `remove-page-permissions`) — previously
+  these were only reachable via the full MCP tool registry, not the `pagespace` CLI directly.
 - **Approve a device's active key in the browser** — the `pagespace` CLI's new
   `pagespace keys use <name>` sets one of your access keys as a machine's ambient default, gated
   by the same browser consent screen that mints keys. The consent page now narrates this
