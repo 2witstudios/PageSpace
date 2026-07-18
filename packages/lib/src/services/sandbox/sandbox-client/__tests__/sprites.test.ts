@@ -64,6 +64,13 @@ interface FakeCommandSpec {
    * runs, and "never opened" for one that only errors (the cold-start drop).
    */
   opened?: boolean;
+  /**
+   * Delay (ms) between `spawn` opening and `exit` firing — for a Sprite that's
+   * merely SLOW to become ready (not broken), as opposed to `hang: true`'s
+   * permanently-stuck command. Defaults to 0 (exits on the same macrotask as
+   * `spawn`/`data`).
+   */
+  exitDelayMs?: number;
 }
 
 function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: string[] } {
@@ -82,6 +89,10 @@ function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: 
       return;
     }
     if (spec.hang) return;
+    if (spec.exitDelayMs) {
+      setTimeout(() => events.emit('exit', spec.exitCode ?? 0), spec.exitDelayMs);
+      return;
+    }
     events.emit('exit', spec.exitCode ?? 0);
   }, 0);
 
@@ -93,27 +104,6 @@ function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: 
       killed.push(signal ?? 'SIGTERM');
     },
     killed,
-  };
-}
-
-/**
- * A command that opens immediately but doesn't exit until `delayMs` later —
- * for testing a Sprite that's merely SLOW to become ready (not broken), as
- * opposed to `fakeCommand({ hang: true })`'s permanently-stuck command. Used
- * to prove a late exit, deep inside a full-length retry attempt's timeout
- * window, still succeeds rather than being raced past by an earlier attempt.
- */
-function fakeSlowCommand(delayMs: number, exitCode = 0): SpriteCommandLike {
-  const events = new EventEmitter();
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  setTimeout(() => events.emit('spawn'), 0);
-  setTimeout(() => events.emit('exit', exitCode), delayMs);
-  return {
-    stdout: { on: (event, listener) => stdout.on(event, listener) },
-    stderr: { on: (event, listener) => stderr.on(event, listener) },
-    on: (event, listener) => events.on(event, listener as (...args: unknown[]) => void),
-    kill: () => {},
   };
 }
 
@@ -632,7 +622,7 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
   // Direct regression test for the P2 finding on an earlier version of this
   // fix (PR #2113): a Sprite that's merely SLOW — not broken — must still get
   // a full, genuine 30s window on attempts after the first, not be raced past
-  // by an undersized timeout. `fakeSlowCommand` exits 25s into attempt 2's
+  // by an undersized timeout. `exitDelayMs: 25_000` exits 25s into attempt 2's
   // window (deep inside its 30s budget, not near-instantly), which an
   // undersized per-attempt timeout would have missed entirely.
   it('given a FRESH create whose mkdir HANGS on attempt 1 but succeeds 25s into attempt 2 (deep inside its full 30s window), should retain and succeed — a merely-slow boot is never shortchanged', async () => {
@@ -644,7 +634,7 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
         name: 'k',
         spawn: () => {
           mkdirAttempts += 1;
-          return mkdirAttempts === 1 ? fakeCommand({ hang: true }) : fakeSlowCommand(25_000);
+          return mkdirAttempts === 1 ? fakeCommand({ hang: true }) : fakeCommand({ exitDelayMs: 25_000 });
         },
       });
       const sdk: SpritesSdk = {
