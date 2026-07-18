@@ -556,6 +556,91 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     expect(destroyed).toBe('k');
   });
 
+  // Regression test for the egress-lockdown retry-compounding latency bug: a
+  // freshly-created Sprite whose mkdir exec HANGS (never emits exit/error —
+  // the "not ready yet" case, distinct from the fast pre-open drop covered
+  // above) used to burn the full 30s per outer attempt, since a timeout is
+  // deliberately NOT retried by the inner wake-retry (`isPreOpenWakeError`
+  // excludes it). The tiered timeout bounds this to LOCKDOWN_EXEC_TIMEOUT_MS
+  // per non-final attempt, with only the last attempt keeping the full 30s.
+  it('given a FRESH create whose mkdir HANGS (never resolves) on every attempt, should fast-fail the non-final attempts and bound total retry time well under the old per-attempt-30s worst case, then destroy', async () => {
+    vi.useFakeTimers();
+    try {
+      let destroyed: string | null = null;
+      let mkdirAttempts = 0;
+      const sprite = fakeSprite({
+        name: 'k',
+        spawn: () => {
+          mkdirAttempts += 1;
+          // opened (spawn fires) but never exits: a Sprite whose exec surface
+          // accepted the connection but isn't ready to run commands yet.
+          return fakeCommand({ hang: true });
+        },
+      });
+      const sdk: SpritesSdk = {
+        getSprite: async () => {
+          throw new Error('not found');
+        },
+        createSprite: async () => sprite,
+        deleteSprite: async (name) => {
+          destroyed = name;
+        },
+      };
+      const client = createSpritesSandboxClient({ sdk });
+      const result = client.getOrCreate({ name: 'k', options });
+      const assertion = expect(result).rejects.toBeInstanceOf(SandboxProvisionError);
+
+      // Worst case: 2 × LOCKDOWN_EXEC_TIMEOUT_MS (5s) + FS_OP_TIMEOUT_MS (30s)
+      // on the last attempt + linear backoff (500ms + 1000ms) ≈ 41.5s — down
+      // from the ~91.5s this loop actually produced before this fix (3 × 30s,
+      // since a hang-to-timeout never triggers the inner wake-retry).
+      await vi.advanceTimersByTimeAsync(42_000);
+      await assertion;
+
+      expect(mkdirAttempts).toBe(3);
+      expect(destroyed).toBe('k');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given a FRESH create whose mkdir HANGS on the first two attempts but succeeds on the third (last, full-timeout) attempt, should retain and succeed rather than destroy — the safety-net attempt is never shortchanged', async () => {
+    vi.useFakeTimers();
+    try {
+      let destroyed: string | null = null;
+      let mkdirAttempts = 0;
+      const sprite = fakeSprite({
+        name: 'k',
+        spawn: () => {
+          mkdirAttempts += 1;
+          return mkdirAttempts < 3 ? fakeCommand({ hang: true }) : fakeCommand({ exitCode: 0 });
+        },
+      });
+      const sdk: SpritesSdk = {
+        getSprite: async () => {
+          throw new Error('not found');
+        },
+        createSprite: async () => sprite,
+        deleteSprite: async (name) => {
+          destroyed = name;
+        },
+      };
+      const client = createSpritesSandboxClient({ sdk });
+      const result = client.getOrCreate({ name: 'k', options });
+
+      // Two 5s fast-fail attempts plus backoff, well under the 30s the final
+      // attempt would still have been allowed if it too had needed it.
+      await vi.advanceTimersByTimeAsync(12_000);
+      const handle = await result;
+
+      expect(handle.sandboxId).toBe('k');
+      expect(mkdirAttempts).toBe(3);
+      expect(destroyed).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('given a fresh Sprite destroyed after exhausting its retry budget, the next acquire under the same name should provision a clean replacement and succeed', async () => {
     let created = 0;
     let policyCalls = 0;
