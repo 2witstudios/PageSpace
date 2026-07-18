@@ -26,6 +26,12 @@
  * (`buildSetRolePagePermissionsInput`, `buildRemoveRolePagePermissionsInput`,
  * `buildSetRoleDriveWidePermissionsInput`) rather than hand-constructing the
  * `permissionsPatch` shape.
+ *
+ * `update`'s nullable string fields (`description`/`color`) distinguish
+ * "leave unchanged" (flag omitted) from "clear to null" (`--clear-description`/
+ * `--clear-color`, mutually exclusive with the corresponding value flag) —
+ * see `resolveNullableField` — since a value flag alone can never express
+ * `null` over argv.
  */
 import type { PageSpaceClient } from '@pagespace/sdk';
 import {
