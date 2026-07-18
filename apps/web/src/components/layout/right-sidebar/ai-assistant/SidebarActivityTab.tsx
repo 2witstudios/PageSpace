@@ -32,7 +32,7 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
-import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
+import { RollbackConfirmDialog } from '@/components/activity/RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useToast } from '@/hooks/useToast';

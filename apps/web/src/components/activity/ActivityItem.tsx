@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
+import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { RollbackToPointDialog } from './RollbackToPointDialog';
 import { useToast } from '@/hooks/useToast';
 import { post } from '@/lib/auth/auth-fetch';
