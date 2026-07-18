@@ -29,8 +29,6 @@
     "test:coverage": "turbo run test:coverage",
     "coverage:report": "node scripts/coverage-report.mjs",
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
-    "test:scripts": "echo 'Script tests require isolated vitest context. Run: bun --cwd packages/db ../../scripts/verify-token-migration.ts' && exit 1",
-    "verify:migrations": "bun --cwd packages/db ../../scripts/verify-token-migration.ts",
     "dev:desktop": "bun run --filter 'desktop' dev",
     "build:desktop": "bun run --filter 'desktop' build",
     "package:desktop": "bun run --filter 'desktop' package",
