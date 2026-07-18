@@ -96,6 +96,27 @@ function fakeCommand(spec: FakeCommandSpec = {}): SpriteCommandLike & { killed: 
   };
 }
 
+/**
+ * A command that opens immediately but doesn't exit until `delayMs` later —
+ * for testing a Sprite that's merely SLOW to become ready (not broken), as
+ * opposed to `fakeCommand({ hang: true })`'s permanently-stuck command. Used
+ * to prove a late exit, deep inside a full-length retry attempt's timeout
+ * window, still succeeds rather than being raced past by an earlier attempt.
+ */
+function fakeSlowCommand(delayMs: number, exitCode = 0): SpriteCommandLike {
+  const events = new EventEmitter();
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  setTimeout(() => events.emit('spawn'), 0);
+  setTimeout(() => events.emit('exit', exitCode), delayMs);
+  return {
+    stdout: { on: (event, listener) => stdout.on(event, listener) },
+    stderr: { on: (event, listener) => stderr.on(event, listener) },
+    on: (event, listener) => events.on(event, listener as (...args: unknown[]) => void),
+    kill: () => {},
+  };
+}
+
 function fakeFs(over: Partial<SpriteFsLike> = {}): SpriteFsLike {
   return {
     readFile: async () => Buffer.from('contents'),
@@ -561,9 +582,10 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
   // the "not ready yet" case, distinct from the fast pre-open drop covered
   // above) used to burn the full 30s per outer attempt, since a timeout is
   // deliberately NOT retried by the inner wake-retry (`isPreOpenWakeError`
-  // excludes it). The tiered timeout bounds this to LOCKDOWN_EXEC_TIMEOUT_MS
-  // per non-final attempt, with only the last attempt keeping the full 30s.
-  it('given a FRESH create whose mkdir HANGS (never resolves) on every attempt, should fast-fail the non-final attempts and bound total retry time well under the old per-attempt-30s worst case, then destroy', async () => {
+  // excludes it). ONLY the first attempt is capped at LOCKDOWN_EXEC_TIMEOUT_MS
+  // — every attempt after it keeps the full 30s (see applyEgressLockdown's
+  // doc for why only the first, not every-but-last, is shortened).
+  it('given a FRESH create whose mkdir HANGS (never resolves) on every attempt, should fast-fail only the first attempt and bound total retry time well under the old per-attempt-30s worst case, then destroy', async () => {
     vi.useFakeTimers();
     try {
       let destroyed: string | null = null;
@@ -590,11 +612,14 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       const result = client.getOrCreate({ name: 'k', options });
       const assertion = expect(result).rejects.toBeInstanceOf(SandboxProvisionError);
 
-      // Worst case: 2 × LOCKDOWN_EXEC_TIMEOUT_MS (5s) + FS_OP_TIMEOUT_MS (30s)
-      // on the last attempt + linear backoff (500ms + 1000ms) ≈ 41.5s — down
-      // from the ~91.5s this loop actually produced before this fix (3 × 30s,
-      // since a hang-to-timeout never triggers the inner wake-retry).
-      await vi.advanceTimersByTimeAsync(42_000);
+      // Worst case: LOCKDOWN_EXEC_TIMEOUT_MS (5s, attempt 1 only) +
+      // 2 × FS_OP_TIMEOUT_MS (30s, attempts 2 and 3) + linear backoff
+      // (500ms + 1000ms) ≈ 66.5s — down from the ~91.5s this loop actually
+      // produced before this fix (3 × 30s, since a hang-to-timeout never
+      // triggers the inner wake-retry), while keeping TWO full 30s
+      // fresh-spawn chances (not just one) for a merely-slow boot — see the
+      // next test.
+      await vi.advanceTimersByTimeAsync(67_000);
       await assertion;
 
       expect(mkdirAttempts).toBe(3);
@@ -604,7 +629,13 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
     }
   });
 
-  it('given a FRESH create whose mkdir HANGS on the first two attempts but succeeds on the third (last, full-timeout) attempt, should retain and succeed rather than destroy — the safety-net attempt is never shortchanged', async () => {
+  // Direct regression test for the P2 finding on an earlier version of this
+  // fix (PR #2113): a Sprite that's merely SLOW — not broken — must still get
+  // a full, genuine 30s window on attempts after the first, not be raced past
+  // by an undersized timeout. `fakeSlowCommand` exits 25s into attempt 2's
+  // window (deep inside its 30s budget, not near-instantly), which an
+  // undersized per-attempt timeout would have missed entirely.
+  it('given a FRESH create whose mkdir HANGS on attempt 1 but succeeds 25s into attempt 2 (deep inside its full 30s window), should retain and succeed — a merely-slow boot is never shortchanged', async () => {
     vi.useFakeTimers();
     try {
       let destroyed: string | null = null;
@@ -613,7 +644,7 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
         name: 'k',
         spawn: () => {
           mkdirAttempts += 1;
-          return mkdirAttempts < 3 ? fakeCommand({ hang: true }) : fakeCommand({ exitCode: 0 });
+          return mkdirAttempts === 1 ? fakeCommand({ hang: true }) : fakeSlowCommand(25_000);
         },
       });
       const sdk: SpritesSdk = {
@@ -628,13 +659,15 @@ describe('createSpritesSandboxClient.getOrCreate', () => {
       const client = createSpritesSandboxClient({ sdk });
       const result = client.getOrCreate({ name: 'k', options });
 
-      // Two 5s fast-fail attempts plus backoff, well under the 30s the final
-      // attempt would still have been allowed if it too had needed it.
-      await vi.advanceTimersByTimeAsync(12_000);
+      // Attempt 1 fails at 5s + 500ms backoff; attempt 2 starts at ~5.5s and
+      // succeeds at ~30.5s (25s into ITS window) — well past the 5s an
+      // undersized non-final timeout would have allowed, but comfortably
+      // inside the full 30s FS_OP_TIMEOUT_MS this attempt actually gets.
+      await vi.advanceTimersByTimeAsync(35_000);
       const handle = await result;
 
       expect(handle.sandboxId).toBe('k');
-      expect(mkdirAttempts).toBe(3);
+      expect(mkdirAttempts).toBe(2);
       expect(destroyed).toBeNull();
     } finally {
       vi.useRealTimers();
