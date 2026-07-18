@@ -91,7 +91,8 @@ function scanFlags(args: readonly string[], spec: ScanFlagsSpec): ScanFlagsResul
     const token = args[i] as string;
     if (spec.valueFlags.includes(token)) {
       const value = args[i + 1];
-      if (value === undefined) return { ok: false, message: `Flag ${token} requires a value.` };
+      const missing = value === undefined || spec.valueFlags.includes(value) || spec.booleanFlags.includes(value);
+      if (missing) return { ok: false, message: `Flag ${token} requires a value.` };
       values.set(token, value);
       i += 2;
       continue;

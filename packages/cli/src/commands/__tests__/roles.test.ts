@@ -304,6 +304,16 @@ describe('rolesUpdateHandler', () => {
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(update).not.toHaveBeenCalled();
   });
+
+  it('exits 2 with a usage error when a value flag is immediately followed by another recognized flag, instead of consuming it as the value', async () => {
+    const update = vi.fn(async () => ({ role: ROLE }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { update } }) });
+
+    const code = await rolesUpdateHandler(ctx, commandIntent(['drv_1', 'role_1', '--description', '--clear-color']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(update).not.toHaveBeenCalled();
+  });
 });
 
 describe('rolesDeleteHandler (destructive)', () => {
