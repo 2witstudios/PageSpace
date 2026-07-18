@@ -18,7 +18,7 @@ import { getInitials } from '@/components/activity/utils';
 import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import { RollbackConfirmDialog } from './RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { post } from '@/lib/auth/auth-fetch';
 import type { ActivityLog } from '@/components/activity/types';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
@@ -41,7 +41,6 @@ export function VersionHistoryItem({
   const [showConfirm, setShowConfirm] = useState(false);
   const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
-  const { toast } = useToast();
 
   const displayOperation = activity.operation === 'rollback'
     ? activity.rollbackSourceOperation || activity.operation
@@ -78,11 +77,7 @@ export function VersionHistoryItem({
         activityId: activity.id,
         error: error instanceof Error ? error.message : String(error),
       });
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to load rollback preview',
-        variant: 'destructive',
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to load rollback preview');
       setPreview({
         action: 'rollback',
         canExecute: false,

@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Loader2 } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { post } from '@/lib/auth/auth-fetch';
 import { usePageAgents } from '@/hooks/page-agents/usePageAgents';
 
@@ -38,7 +38,6 @@ export function InviteAgentDialog({
   existingAgentPageIds,
   onInvited,
 }: InviteAgentDialogProps) {
-  const { toast } = useToast();
   const { allAgents, isLoading } = usePageAgents();
   const [selectedAgent, setSelectedAgent] = useState<string>('');
   const [role, setRole] = useState<'MEMBER' | 'ADMIN'>('MEMBER');
@@ -55,17 +54,13 @@ export function InviteAgentDialog({
     setSubmitting(true);
     try {
       await post(`/api/drives/${driveId}/agents`, { agentPageId: selectedAgent, role });
-      toast({ title: 'Agent invited', description: 'The agent now has access to this drive.' });
+      toast.success('The agent now has access to this drive.');
       setSelectedAgent('');
       setRole('MEMBER');
       onOpenChange(false);
       onInvited();
     } catch (e) {
-      toast({
-        title: 'Error',
-        description: e instanceof Error ? e.message : 'Failed to invite agent',
-        variant: 'destructive',
-      });
+      toast.error(e instanceof Error ? e.message : 'Failed to invite agent');
     } finally {
       setSubmitting(false);
     }
