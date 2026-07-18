@@ -9,7 +9,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
+import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
 import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
 
 export async function POST(request: NextRequest) {
@@ -157,13 +159,31 @@ export async function POST(request: NextRequest) {
             await applyStripeFunding(event);
           });
           // Push the buyer's new balance to their open tabs so the top-up appears
-          // live. Best-effort, post-commit; never blocks the webhook ack.
+          // live, and send a payment receipt. Both best-effort, post-commit; never
+          // block the webhook ack (see sendTopupReceiptEmail's own try/catch).
           if (
             session.mode === 'payment' &&
             session.metadata?.kind === 'credit_pack' &&
             session.metadata?.userId
           ) {
             void emitCreditsUpdated(session.metadata.userId);
+
+            const buyerEmail = session.customer_details?.email;
+            if (buyerEmail) {
+              const packLabel = getCreditPack(session.metadata.packId ?? '')?.label ?? 'Credit top-up';
+              const buyer = await db
+                .select({ name: users.name })
+                .from(users)
+                .where(eq(users.id, session.metadata.userId))
+                .limit(1);
+              void sendTopupReceiptEmail({
+                session,
+                packLabel,
+                email: buyerEmail,
+                userName: buyer[0]?.name ?? 'there',
+                eventId: event.id,
+              });
+            }
           }
           break;
         }
@@ -181,16 +201,30 @@ export async function POST(request: NextRequest) {
             // of the subscription webhook still grants the correct (paid) allowance.
             await applyStripeFunding(event, { tier: tierFromInvoice(invoice) });
           });
-          // Push the refilled balance to the user's open tabs. Best-effort, post-commit.
+          // Push the refilled balance to the user's open tabs, and send a payment
+          // receipt. Both best-effort, post-commit — a receipt-send failure must
+          // never affect funding that already succeeded (see
+          // sendSubscriptionReceiptEmail's own try/catch) or force a Stripe retry.
+          // Skipped for $0 invoices (proration/trial) — nothing to receipt.
           {
             const customerId = invoice.customer as string | null;
             if (customerId) {
               const refilled = await db
-                .select({ id: users.id })
+                .select({ id: users.id, name: users.name, email: users.email })
                 .from(users)
                 .where(eq(users.stripeCustomerId, customerId))
                 .limit(1);
-              if (refilled[0]) void emitCreditsUpdated(refilled[0].id);
+              if (refilled[0]) {
+                void emitCreditsUpdated(refilled[0].id);
+                if (invoice.amount_paid > 0) {
+                  void sendSubscriptionReceiptEmail({
+                    invoice,
+                    email: refilled[0].email,
+                    userName: refilled[0].name,
+                    eventId: event.id,
+                  });
+                }
+              }
             }
           }
           break;
