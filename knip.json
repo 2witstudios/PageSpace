@@ -49,6 +49,14 @@
         "@radix-ui/react-navigation-menu"
       ]
     },
+    "apps/admin": {
+      "ignoreDependencies": [
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks"
+      ]
+    },
     "apps/realtime": {
       "entry": [
         "src/index.ts"
@@ -491,7 +499,8 @@
       "ignoreDependencies": [
         "server-only",
         "@react-email/preview-server",
-        "@types/xlsx"
+        "@types/xlsx",
+        "react-dom"
       ]
     },
     "apps/android": {
@@ -502,7 +511,8 @@
         "@capacitor/push-notifications",
         "@capacitor/splash-screen",
         "@capacitor/status-bar",
-        "@capgo/capacitor-social-login"
+        "@capgo/capacitor-social-login",
+        "web"
       ]
     },
     "apps/ios": {
@@ -515,7 +525,8 @@
         "@capacitor/push-notifications",
         "@capacitor/splash-screen",
         "@capacitor/status-bar",
-        "@capgo/capacitor-social-login"
+        "@capgo/capacitor-social-login",
+        "web"
       ]
     },
     "packages/cli": {

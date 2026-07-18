@@ -447,11 +447,6 @@
       "import": "./dist/services/sandbox/audit.js",
       "require": "./dist/services/sandbox/audit.js"
     },
-    "./services/sandbox/lifecycle": {
-      "types": "./dist/services/sandbox/lifecycle.d.ts",
-      "import": "./dist/services/sandbox/lifecycle.js",
-      "require": "./dist/services/sandbox/lifecycle.js"
-    },
     "./services/sandbox/sandbox-options": {
       "types": "./dist/services/sandbox/sandbox-options.d.ts",
       "import": "./dist/services/sandbox/sandbox-options.js",
@@ -766,11 +761,6 @@
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",
       "require": "./dist/services/date-utils.js"
-    },
-    "./services/rate-limit-cache": {
-      "types": "./dist/services/rate-limit-cache.d.ts",
-      "import": "./dist/services/rate-limit-cache.js",
-      "require": "./dist/services/rate-limit-cache.js"
     },
     "./deployment-mode": {
       "types": "./dist/deployment-mode.d.ts",
@@ -1795,9 +1785,6 @@
       "services/sandbox/audit": [
         "./dist/services/sandbox/audit.d.ts"
       ],
-      "services/sandbox/lifecycle": [
-        "./dist/services/sandbox/lifecycle.d.ts"
-      ],
       "services/sandbox/sandbox-options": [
         "./dist/services/sandbox/sandbox-options.d.ts"
       ],
@@ -1950,9 +1937,6 @@
       ],
       "services/date-utils": [
         "./dist/services/date-utils.d.ts"
-      ],
-      "services/rate-limit-cache": [
-        "./dist/services/rate-limit-cache.d.ts"
       ],
       "deployment-mode": [
         "./dist/deployment-mode.d.ts"
@@ -2375,10 +2359,8 @@
     "drizzle-orm": "^0.32.2",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
-    "mammoth": "^1.10.0",
     "marked": "^17.0.1",
     "pako": "^2.1.0",
-    "pdf-parse-debugging-disabled": "^1.1.1",
     "react": "^19.1.2",
     "react-dom": "^19.1.2",
     "react-email": "^5.1.1",
