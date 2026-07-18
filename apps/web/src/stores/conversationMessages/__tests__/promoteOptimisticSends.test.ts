@@ -16,7 +16,7 @@ import type { ConversationMessagesById } from '../seedEmpty';
 const msg = (id: string): UIMessage => ({ id, role: 'user', parts: [] });
 
 const entry = (messages: UIMessage[], optimisticSends: UIMessage[]): ConversationMessagesById => ({
-  c1: { messages, optimisticSends, loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded' },
+  c1: { messages, optimisticSends, loadGeneration: 1, pendingMutationsSinceLoad: [], loadStatus: 'loaded', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
 });
 
 describe('promoteOptimisticSends', () => {

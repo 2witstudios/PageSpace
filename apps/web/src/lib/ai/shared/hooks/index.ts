@@ -12,8 +12,9 @@ export { useProviderSettings } from './useProviderSettings';
 export { useChatTransport } from './useChatTransport';
 export { useStreamingRegistration } from './useStreamingRegistration';
 export { useSendHandoff } from './useSendHandoff';
-export { useStreamRecovery } from './useStreamRecovery';
-export { useAskUserAnswering } from './useAskUserAnswering';
+export { useResumeBootstrap } from './useResumeBootstrap';
+export { useAnswerAskUser } from './useAnswerAskUser';
+export { useChatErrorCause } from './useChatErrorCause';
 
 // Pure functions (no hooks, no side effects)
 export {

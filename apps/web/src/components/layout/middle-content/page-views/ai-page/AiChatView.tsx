@@ -25,13 +25,12 @@ import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegra
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 
-import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { isCapacitorApp } from '@/hooks/useCapacitor';
 import { useEditingStore } from '@/stores/useEditingStore';
-import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
+import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { usePageSocketRoom } from '@/hooks/usePageSocketRoom';
 import { useChannelStreamSocket } from '@/hooks/useChannelStreamSocket';
-import { useRenderedMessages } from '@/hooks/useRenderedMessages';
+import { useRenderedMessages, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
+import { loadOlderAgentConversationMessages } from '@/hooks/conversationMessagesLoaders';
 import { useActiveStream, useConversationActiveStream, getActiveStreamById } from '@/hooks/useActiveStream';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { refreshConversationSnapshot } from '@/hooks/conversationMessagesLoaders';
@@ -40,6 +39,10 @@ import { useStopStream } from '@/hooks/useStopStream';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
 import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
 import { applyMessageEdit, type MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
+import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
+import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
+import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { applyMessageDelete } from '@/lib/ai/streams/applyMessageDelete';
 import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo';
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
@@ -58,7 +61,9 @@ import {
   isResolving,
   useChatTransport,
   useSendHandoff,
-  useAskUserAnswering,
+  useResumeBootstrap,
+  useAnswerAskUser,
+  useChatErrorCause,
   buildChatConfig,
   AgentConfig,
 } from '@/lib/ai/shared';
@@ -84,7 +89,10 @@ interface AiChatViewProps {
 }
 
 type ConversationListResponse = { conversations?: Array<{ id: string }> };
-type ConversationMessagesResponse = { messages: UIMessage[] };
+type ConversationMessagesResponse = {
+  messages: UIMessage[];
+  pagination?: { hasMore: boolean; nextCursor: string | null };
+};
 
 const VOICE_OWNER: VoiceModeOwner = 'ai-page';
 
@@ -177,7 +185,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id, transport, handleChatError]
   );
 
-  const { messages, sendMessage, status, error, regenerate, setMessages, stop: chatStop, addToolResult } =
+  const { messages, sendMessage, status, error, clearError, regenerate, setMessages, stop: chatStop, addToolResult } =
     useChat(chatConfig || {});
 
   const isStreaming = status === 'submitted' || status === 'streaming';
@@ -238,13 +246,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     try {
       let serverMessages: UIMessage[];
+      // Only the network path below carries a pagination envelope (epic leaf 6.6) — the
+      // preloaded fast path (history-select, init prefetch) only ever passed the bare
+      // messages array through preloadedMessagesRef. "Load older" is unavailable until
+      // this conversation's next network reload in that case (best-effort, not a
+      // correctness gap: hasMoreOlder simply defaults false until then).
+      let pagination: { hasMore: boolean; nextCursor: string | null } | undefined;
 
       if (preloadedMessages !== undefined) {
         // Fast path: caller already did the fetch (history-select, init).
         serverMessages = preloadedMessages;
       } else {
         const res = await fetchWithAuth(
-          `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages`,
+          `/api/ai/page-agents/${page.id}/conversations/${conversationId}/messages?limit=50`,
         );
         // Stale check after await — a newer load of this conversation may have superseded this one.
         if (!isCurrent()) return;
@@ -261,14 +275,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
           return;
         }
         if (!res.ok) throw new Error(`Failed to load messages (${res.status})`);
-        const data = await res.json();
+        const data = await res.json() as ConversationMessagesResponse;
         if (!isCurrent()) return;
-        serverMessages = (data as ConversationMessagesResponse).messages ?? [];
+        serverMessages = data.messages ?? [];
+        pagination = data.pagination;
       }
 
       if (!isCurrent()) return;
 
-      conversationMessagesActions.applyLoad(conversationId, generation, serverMessages);
+      conversationMessagesActions.applyLoad(conversationId, generation, serverMessages, pagination);
       if (isActiveLoad()) {
         // The CACHE always takes the load — that is what renders. The useChat array is a different
         // thing: transport-local bookkeeping, and the array `useOwnStreamMirror` reads to find its
@@ -564,6 +579,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const renderedMessages = useRenderedMessages(page.id, currentConversationId);
   const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
 
+  // "Load older" (epic leaf 6.6, scroll-to-top): AiChatView's route IS the agent-conversation
+  // route (page.id is the agentId), so the shared agent-mode loader applies directly.
+  const { isLoadingOlder } = useConversationOlderPageState(currentConversationId);
+  const handleScrollNearTop = useCallback(() => {
+    if (!currentConversationId) return;
+    void loadOlderAgentConversationMessages(page.id, currentConversationId);
+  }, [page.id, currentConversationId]);
+
   // TRANSITIONAL (see useOwnStreamMirror) — copies this tab's own live assistant
   // reply from useChat's local state into usePendingStreamsStore so it renders via
   // the same store-first path a remote/rejoining tab uses. `ownAssistantMessage`
@@ -634,16 +657,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const effectiveIsStreaming =
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
+  // Read after an await (resume runs async), so a ref rather than the captured value.
+  // Conversation-scoped, unlike ownStreamLiveRef above: that one is deliberately raw
+  // (isStreaming || activeStream?.isOwn) for the transport-clobber guard, which stays true
+  // for the OLD conversation's still-in-flight request after a switch — exactly wrong for
+  // resume's isOwnStreamLive gate (PR 6 review, CodeRabbit; same class of bug fixed in
+  // GlobalAssistantView/SidebarChatTab's resume wiring).
+  const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
+  effectiveIsStreamingRef.current = effectiveIsStreaming;
 
-  const streamingAssistantText = useMemo(() => {
-    if (!isStreaming) return null;
-    const last = plainMessages[plainMessages.length - 1];
-    if (!last || last.role !== 'assistant') return null;
-    return (last.parts ?? [])
-      .filter((p) => p.type === 'text')
-      .map((p) => (p as { type: 'text'; text: string }).text)
-      .join('');
-  }, [plainMessages, isStreaming]);
+  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
+  const streamingAssistantText = useMemo(
+    () => selectVoiceStreamText(renderedMessages),
+    [renderedMessages],
+  );
   // Show a loading indicator (not a blank) both during init and during any
   // subsequent message-fetch triggered by conversation switch or refresh.
   const isLoading = !isInitialized || isLoadingMessages;
@@ -790,11 +817,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // same dual-write shape as loadMessagesForConversation's, not a NEW two-way sync
     // (rail 11): both writes are independent, terminal applications of the SAME
     // upstream event, not one container's state flowing into the other. Required
-    // because `regenerate()` and `useAskUserAnswering` (via plainMessages, but
-    // `regenerate` itself indexes useChat's OWN local array) need useChat's copy to
-    // still reflect a remote edit/delete/message — otherwise a retry right after a
-    // collaborator's edit on a shared conversation could regenerate against stale
-    // history (PR review finding, independently confirmed by three review passes).
+    // because `regenerate()` indexes useChat's OWN local array directly — otherwise a
+    // retry right after a collaborator's edit on a shared conversation could
+    // regenerate against stale history (PR review finding, independently confirmed by
+    // three review passes). `useAnswerAskUser`'s own hydrate step (6.3) fully
+    // overwrites this array from the cache immediately before every addToolResult
+    // call, so it no longer depends on this dual-write staying fresh in between.
     onUserMessage: (message, payload) => {
       if (payload.conversationId !== currentConversationId || !currentConversationId) return;
       setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
@@ -829,7 +857,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     onConversationDeleted: () => {
       refreshConversations();
     },
-    onStreamComplete: (messageId, completedConvId) => {
+    onStreamComplete: (messageId, completedConvId, _info, aborted) => {
+      // epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): badge a crash-reaped or Stopped stream as
+      // 'interrupted' the instant this tab hears about it, instead of only after the next
+      // reload — the persisted row already carries this status; this just stops a live-open
+      // tab from rendering stale.
+      const terminalStatus = aborted ? 'interrupted' as const : 'complete' as const;
       const stream = getActiveStreamById(messageId);
 
       // The conversation row is definitely on the server by now (the stream that just
@@ -876,7 +909,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         // handlers above) — covers the cross-instance-recovery case, where the
         // recovered content never went through this tab's own useChat stream and would
         // otherwise leave regenerate()'s bookkeeping short of it.
-        const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt);
+        const synthesized = synthesizeAssistantMessage(messageId, stream.parts, stream.startedAt, terminalStatus);
         // The useChat dual-write is for OUR OWN stream only. `chat:stream_complete` carries no
         // own-stream filter, so on a shared conversation this handler also sees a COLLABORATOR's
         // stream completing in our conversation — and appending their message into our transport's
@@ -934,7 +967,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             setIdentity(persisted.id);
             conversationMessagesActions.applyConfirmedMessage(
               persisted.id,
-              synthesizeAssistantMessage(messageId, parts, startedAt),
+              synthesizeAssistantMessage(messageId, parts, startedAt, terminalStatus),
             );
           })
           .catch((err) => console.warn('[AiChatView] late-joiner sync failed', err));
@@ -942,14 +975,20 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     },
   });
 
+  // Typed error cause, per-conversation (epic leaf 6.5) — replaces raw `error`/getAIErrorMessage.
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    currentConversationId,
+    error,
+    clearError,
+    pendingSendConversationId ?? currentConversationId,
+  );
   // Reset error visibility when new error occurs
   useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
+    if (errorCause) setShowError(true);
+  }, [errorCause]);
 
-  // Track last AI response for voice mode TTS.
-  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
-  // messages are never spoken — only genuinely new responses trigger TTS.
+  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
+  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
   useEffect(() => {
     if (!isVoiceModeActive) {
       voiceBaselineRef.current = undefined;
@@ -961,34 +1000,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = plainMessages[plainMessages.length - 1];
-      // During streaming the last overall message is the in-progress assistant reply;
-      // the baseline should be the previously-finalized message before it.
-      const streamingAssistantIdx =
-        isStreaming && lastOverallMsg?.role === 'assistant'
-          ? assistantMsgs.length - 1
-          : assistantMsgs.length;
-      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
-      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
       return;
     }
 
-    if (isStreaming) return;
+    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
+    if (!next) return;
 
-    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
-    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join('');
-    if (!text.trim()) return;
-    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
-
-    setLastAIResponse((current) =>
-      current?.id === lastAssistantMsg.id
-        ? current
-        : { id: lastAssistantMsg.id, text }
-    );
-  }, [plainMessages, isStreaming, isVoiceModeActive]);
+    setLastAIResponse((current) => (current?.id === next.id ? current : next));
+  }, [renderedMessages, isVoiceModeActive]);
 
   // ============================================
   // HANDLERS
@@ -1013,7 +1033,10 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     [page.id, driveId]
   );
 
-  const buildAskUserAnswerBody = useCallback(() => ({
+  // Shared by every send-shaped request (typed send, voice send, AskUser resume) — one
+  // definition means the body a resume POST carries can't drift from what a real send
+  // would have sent (epic leaf 6.3: deletes the separate buildAskUserAnswerBody).
+  const buildRequestBody = useCallback(() => ({
     chatId: page.id,
     conversationId: currentConversationId,
     selectedProvider,
@@ -1035,18 +1058,19 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     contextRef,
   ]);
 
-  // plainMessages (store-rendered), not useChat's raw `messages`: "answerable"
-  // is decided by whether the ask_user part sits on the conversation's LAST
-  // message, and a remote edit/delete/message on this conversation updates
-  // the store but no longer updates useChat's local array (leaf 4.3 — those
-  // socket handlers write only to the store). Reading plainMessages keeps
-  // this decision matched to what the user actually sees on screen.
-  const askUserAnswering = useAskUserAnswering({
-    messages: plainMessages,
-    status,
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and a
+  // remote edit/delete/message on this conversation updates the store but no longer
+  // updates useChat's local array (leaf 4.3 — those socket handlers write only to the
+  // store). isConversationBusy replaces status==='ready'.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: effectiveIsStreaming,
+    setMessages,
     addToolResult,
     wrapSend,
-    buildBody: buildAskUserAnswerBody,
+    buildBody: buildRequestBody,
   });
 
   // A send creates the conversations row server-side under exactly this id, so the id
@@ -1096,22 +1120,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    wrapSend(() => sendMessage(
-      userMessage,
-      {
-        body: {
-          chatId: page.id,
-          conversationId: currentConversationId,
-          selectedProvider,
-          selectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          contextRef,
-        },
-      }
-    ));
+    rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [
     isReadOnly,
     input,
@@ -1124,13 +1137,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     clearInputDraft,
     clearFiles,
     sendMessage,
-    page.id,
-    selectedProvider,
-    selectedModel,
-    webSearchEnabled,
-    imageGenEnabled,
-    mcpToolSchemas,
-    contextRef,
+    buildRequestBody,
     wrapSend,
     adoptConversationAsPersisted,
   ]);
@@ -1150,34 +1157,17 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    wrapSend(() => sendMessage(
-      userMessage,
-      {
-        body: {
-          chatId: page.id,
-          conversationId: currentConversationId,
-          selectedProvider,
-          selectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-          contextRef,
-        },
-      }
-    ));
+    rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [
     isReadOnly,
     currentConversationId,
     canSendMessage,
     sendMessage,
-    page.id,
-    selectedProvider,
-    selectedModel,
-    webSearchEnabled,
-    imageGenEnabled,
-    contextRef,
-    mcpToolSchemas,
+    buildRequestBody,
     wrapSend,
     adoptConversationAsPersisted,
   ]);
@@ -1202,37 +1192,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     await loadMessagesForConversation(currentConversationId);
   }, [currentConversationId, loadMessagesForConversation]);
 
+  // Gate on USER editing only, evaluated at fire time (callback form). The old gate was
+  // `!isEditingActive()`, i.e. isAnyActive(), which is true whenever an 'ai-streaming' session
+  // exists — and this component registers one while streaming. So the hook early-returned in
+  // exactly the case it was written for. Worse, a boolean captured at render is stale on iOS,
+  // which freezes JS while backgrounded — the captured value was always the streaming one.
   const resumeEnabled = useCallback(
-    () => currentConversationIdRef.current !== null && !useEditingStore.getState().isAnyEditing(),
+    () => canResumeRecovery(currentConversationIdRef.current, useEditingStore.getState().isAnyEditing()),
     [],
   );
 
-  // App state recovery - re-attach/refetch AI stream when returning from background.
-  // On native (Capacitor): if streaming, stop the local fetch, rejoin any still-live
-  // server stream, then refetch to recover a stream that finished while backgrounded.
-  // On web: never interrupt a live fetch on tab-switch (the fetch stays alive).
-  // Known limitation (pre-existing): if the user switched conversation while backgrounded,
-  // onStreamComplete's conversationId guard suppresses the append; the message is still
-  // persisted and appears on navigating back to the conversation.
-  useAppStateRecovery({
-    onResume: useCallback(async () => {
-      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
-      if (action === 'noop') return;
-      if (action === 'rejoin-and-refresh') {
-        // chatStop is local-only; it does NOT signal the server (the existing effectiveStop
-        // does that separately via abortActiveStreamByMessageId). We only need to clear the
-        // local useChat streaming state so rejoin can attach cleanly.
-        chatStop();
-        rejoinActiveStreams();
-      }
-      await handlePullUpRefresh();
-    }, [effectiveIsStreaming, chatStop, rejoinActiveStreams, handlePullUpRefresh]),
-    // Gate on USER editing only, and evaluate it at fire time (callback form).
-    // The old gate was `!isEditingActive()`, i.e. isAnyActive(), which is true
-    // whenever an 'ai-streaming' session exists — and this component registers one
-    // while streaming. So the hook early-returned in exactly the case it was
-    // written for. Worse, a boolean is captured at render, and iOS freezes JS
-    // while backgrounded, so the captured value was always the streaming one.
+  // App-resume = the same path as mount/socket-reconnect (epic leaf 6.2): re-bootstrap active
+  // streams, reload the conversation into the cache, and settle a frozen local transport.
+  // Nothing renders from the local fetch under store-first rendering, so there is no
+  // native/web or was-i-streaming choreography left to make — this subsumes
+  // resolveResumeAction (deleted) and #2065.
+  useResumeBootstrap({
+    rejoin: rejoinActiveStreams,
+    reload: handlePullUpRefresh,
+    stop: chatStop,
+    isOwnStreamLive: useCallback(() => effectiveIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 
@@ -1403,9 +1382,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
             disabled={!isAnyProviderConfigured || !canSendMessage}
             placeholder={isReadOnly ? 'View only - cannot send messages' : 'Message AI...'}
             driveId={driveId}
-            error={error}
+            cause={errorCause}
             showError={showError}
-            onClearError={() => setShowError(false)}
+            onClearError={() => {
+              setShowError(false);
+              dismissError();
+            }}
+            onScrollNearTop={handleScrollNearTop}
+            isLoadingOlder={isLoadingOlder}
             welcomeTitle={`Chat with ${page.title}`}
             welcomeSubtitle={agentConfig?.systemPrompt ? 'Ask me anything!' : 'Start a conversation with the AI assistant'}
             onEdit={!isReadOnly ? handleEdit : undefined}

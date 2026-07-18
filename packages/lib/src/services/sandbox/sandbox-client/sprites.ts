@@ -1197,6 +1197,44 @@ export function planProvisionFailure({
 // see `applyEgressLockdown`'s call site).
 const PROVISION_LOCKDOWN_MAX_ATTEMPTS = 3;
 
+// Per-attempt timeout for a FRESH Sprite's very first lockdown attempt only
+// — see `mkdirLockdownTimeoutMs`. Both Fly's own design
+// (fly.io/blog/design-and-implementation: pooled "empty" Sprites, a `create`
+// is "basically just... start") and docs.sprites.dev's quickstart ("running
+// and ready to accept commands") say a fresh Sprite is ready in ~1-2s, so 5s
+// already gives 2.5-5x margin for the common case.
+//
+// Only attempt 1 is shortened — every attempt after it keeps the full
+// `FS_OP_TIMEOUT_MS` (30s). An earlier version of this fix shortened every
+// attempt but the last; a P2 review finding on PR #2113 correctly pointed out
+// that shortening two of three attempts meaningfully cut the total patience a
+// genuinely-slow-but-healthy boot has to succeed, since a timeout is never
+// retried mid-attempt (no fresh spawn happens once one is killed) — losing a
+// whole attempt is losing a whole 30s fresh-spawn chance, not just shaving
+// time off the margin. Shortening only attempt 1 keeps two full 30s chances
+// (attempts 2 and 3) instead of one: worst case for a fresh Sprite that hangs
+// on every attempt is `LOCKDOWN_EXEC_TIMEOUT_MS + 2 × FS_OP_TIMEOUT_MS` plus
+// linear backoff — about 66.5s, down from the ~91.5s this loop actually
+// produced before this fix (3 × 30s, since a hang-to-timeout never triggers
+// the inner wake-retry) and the ~270s theoretical figure once cited here
+// (which required the inner retry to ALSO compound on fast pre-open drops
+// every attempt — a materially different and much rarer failure mode).
+const LOCKDOWN_EXEC_TIMEOUT_MS = 5_000;
+
+/**
+ * Pure: the timeout for the lockdown `mkdir` exec on this `attempt` — see
+ * `LOCKDOWN_EXEC_TIMEOUT_MS`'s doc for why only attempt 1 is shortened and
+ * the worst-case math this produces. Gated on `fresh` itself, not on
+ * `maxAttempts > 1`: the two happen to coincide at today's single call site
+ * (`maxAttempts: fresh ? PROVISION_LOCKDOWN_MAX_ATTEMPTS : 1`), but `fresh` is
+ * the actual invariant this leaf cares about, so a future caller or a changed
+ * `PROVISION_LOCKDOWN_MAX_ATTEMPTS` can't silently detune it back to the old
+ * always-30s behavior.
+ */
+export function mkdirLockdownTimeoutMs(attempt: number, fresh: boolean): number {
+  return attempt === 1 && fresh ? LOCKDOWN_EXEC_TIMEOUT_MS : FS_OP_TIMEOUT_MS;
+}
+
 /**
  * Apply the deny-by-default egress policy and ensure the sandbox root exists,
  * retrying a FAILED lockdown up to `maxAttempts` times (with backoff) before
@@ -1232,16 +1270,15 @@ const PROVISION_LOCKDOWN_MAX_ATTEMPTS = 3;
  *
  * Nested retry note: the `mkdir` step below goes through
  * `runSpawnedWithWakeRetry`, which has its OWN bounded wake-drop retry
- * (`MAX_EXEC_ATTEMPTS`, each capped at the 30s passed here). In the
- * vanishingly rare worst case where a Sprite hits pre-open wake-drops on every
- * inner attempt AND every outer attempt, the two bounds compound
- * (`maxAttempts` × `MAX_EXEC_ATTEMPTS` × 30s, plus backoff) — several minutes,
- * not the ~90s a glance at `maxAttempts` alone suggests. This is accepted: it
- * requires a VM that is broken in a very specific, narrow way, this driver
- * runs inside long-lived Fly services (not a hard-timeout serverless
- * function), and the alternative — a shorter per-attempt timeout — risks
- * misjudging a merely slow-to-wake but healthy cold boot as "unusable" (the
- * exact failure mode this leaf exists to fix).
+ * (`MAX_EXEC_ATTEMPTS`). That inner retry only re-runs a STRUCTURALLY
+ * pre-open failure (`isPreOpenWakeError` — a fast WebSocket-closed-before-open
+ * drop); a Sprite whose exec surface simply isn't accepting commands yet
+ * hangs instead of erroring, which is a timeout, not a pre-open drop, and the
+ * inner retry deliberately does not touch it (a timeout "may already have
+ * run" the command, and no fresh spawn happens once a stuck one is killed).
+ * So a not-yet-ready Sprite is discovered only by the OUTER loop's own
+ * per-attempt timeout expiring — see `mkdirLockdownTimeoutMs` for which
+ * timeout each attempt gets and the worst-case math that produces.
  *
  * Residual risk (accepted, out of scope): if the PROCESS itself is killed
  * mid-loop (a Fly Machine restart/OOM, not a request timeout — see above),
@@ -1281,14 +1318,15 @@ async function applyEgressLockdown({
         await sprite.updateNetworkPolicy(policy);
         policyApplied = true;
       }
-      // Use spawn + runSpawned (30 s wall-clock) to create the workspace dir
-      // instead of filesystem().mkdir(). The filesystem API uses a bare fetch()
-      // with no AbortSignal — it hangs for 52–90 s when the Sprite VM is
-      // cold-booting and Fly's proxy eventually closes the connection. spawn()
-      // connects via WebSocket, which is the designated wake-up path;
-      // runSpawned enforces the timeout and SIGKILLs if the Sprite never
-      // becomes ready.
-      await runSpawnedWithWakeRetry(() => sprite.spawn('mkdir', ['-p', SANDBOX_ROOT]), DEFAULT_MAX_OUTPUT_BYTES, 30_000);
+      // Use spawn + runSpawned instead of filesystem().mkdir(). The filesystem
+      // API uses a bare fetch() with no AbortSignal — it hangs for 52–90 s when
+      // the Sprite VM is cold-booting and Fly's proxy eventually closes the
+      // connection. spawn() connects via WebSocket, which is the designated
+      // wake-up path; runSpawned enforces the timeout and SIGKILLs if the
+      // Sprite never becomes ready — see `mkdirLockdownTimeoutMs` for which
+      // timeout each attempt gets.
+      const mkdirTimeoutMs = mkdirLockdownTimeoutMs(attempt, fresh);
+      await runSpawnedWithWakeRetry(() => sprite.spawn('mkdir', ['-p', SANDBOX_ROOT]), DEFAULT_MAX_OUTPUT_BYTES, mkdirTimeoutMs);
       return;
     } catch (error) {
       const plan = planProvisionFailure({ fresh, attempt, maxAttempts });

@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { getRoleColorClasses } from '@/lib/utils';
 import { patch, del } from '@/lib/auth/auth-fetch';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 
 export interface AgentMember {
   id: string;
@@ -69,7 +69,6 @@ export function AgentMemberRow({
   onRoleChange,
   onRemove,
 }: AgentMemberRowProps) {
-  const { toast } = useToast();
   const [saving, setSaving] = useState(false);
   const canManage = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const displayName = agent.title ?? 'Unnamed Agent';
@@ -95,7 +94,7 @@ export function AgentMemberRow({
         customRole: customRole ? { id: customRole.id, name: customRole.name, color: customRole.color ?? null } : null,
       });
     } catch {
-      toast({ title: 'Error', description: 'Failed to update agent role', variant: 'destructive' });
+      toast.error('Failed to update agent role');
     } finally {
       setSaving(false);
     }
@@ -107,7 +106,7 @@ export function AgentMemberRow({
       await del(`/api/drives/${driveId}/agents/${agent.agentPageId}`);
       onRemove(agent.agentPageId);
     } catch {
-      toast({ title: 'Error', description: 'Failed to remove agent member', variant: 'destructive' });
+      toast.error('Failed to remove agent member');
     }
   };
 

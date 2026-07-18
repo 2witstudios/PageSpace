@@ -36,11 +36,53 @@ export const loadGlobalConversationMessages = async (conversationId: string): Pr
     const data = await res.json();
     if (!conversationMessagesActions.isLoadCurrent(conversationId, generation)) return;
     const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
-    conversationMessagesActions.applyLoad(conversationId, generation, messages);
+    // epic leaf 6.6: capture the pagination envelope (dropped entirely before this PR) so
+    // "load older" has a cursor and knows whether there's anything left to fetch.
+    const pagination = Array.isArray(data) ? undefined : data.pagination;
+    conversationMessagesActions.applyLoad(conversationId, generation, messages, pagination);
   } catch (error) {
     console.warn('[conversationMessagesLoaders] global load failed', conversationId, error);
     // failLoad is generation-gated, so a stale failure cannot clobber a newer load's status.
     conversationMessagesActions.failLoad(conversationId, generation);
+  }
+};
+
+/**
+ * Loads the next OLDER page for a conversation (epic leaf 6.6, scroll-to-top) and
+ * prepends it. Guarded by hasMoreOlder/isLoadingOlder so a rapid double-trigger (fast
+ * scroll) fetches once, and generation-gated the same way as the initial load — a
+ * conversation switch mid-fetch (which calls startLoad, bumping the generation) makes
+ * this page a safe no-op on arrival.
+ */
+export const loadOlderGlobalConversationMessages = async (conversationId: string): Promise<void> => {
+  const entry = conversationMessagesActions.getEntry(conversationId);
+  if (!entry.hasMoreOlder || entry.isLoadingOlder) return;
+
+  const generation = conversationMessagesActions.beginServerSnapshot(conversationId);
+  conversationMessagesActions.startLoadingOlder(conversationId);
+  try {
+    const cursor = entry.olderCursor ? `&cursor=${encodeURIComponent(entry.olderCursor)}` : '';
+    const res = await fetchWithAuth(
+      `/api/ai/global/${conversationId}/messages?limit=50&direction=before${cursor}`,
+    );
+    if (!res.ok) {
+      console.warn('[conversationMessagesLoaders] loadOlder global failed', conversationId, res.status);
+      conversationMessagesActions.failLoadingOlder(conversationId, generation);
+      return;
+    }
+    const data = await res.json();
+    const messages: UIMessage[] = Array.isArray(data) ? data : (data.messages ?? []);
+    const pagination = Array.isArray(data) ? undefined : data.pagination;
+    conversationMessagesActions.applyOlderPage(
+      conversationId,
+      generation,
+      messages,
+      pagination?.hasMore ?? false,
+      pagination?.nextCursor ?? null,
+    );
+  } catch (error) {
+    console.warn('[conversationMessagesLoaders] loadOlder global failed', conversationId, error);
+    conversationMessagesActions.failLoadingOlder(conversationId, generation);
   }
 };
 
@@ -98,9 +140,43 @@ export const loadAgentConversationMessages = async (
       includeStreaming: true,
     });
     if (!conversationMessagesActions.isLoadCurrent(conversationId, generation)) return;
-    conversationMessagesActions.applyLoad(conversationId, generation, result.messages);
+    conversationMessagesActions.applyLoad(
+      conversationId,
+      generation,
+      result.messages,
+      result.pagination ?? undefined,
+    );
   } catch (error) {
     console.warn('[conversationMessagesLoaders] agent load failed', agentId, conversationId, error);
     conversationMessagesActions.failLoad(conversationId, generation);
+  }
+};
+
+/** Agent-mode counterpart to loadOlderGlobalConversationMessages — see its docblock. */
+export const loadOlderAgentConversationMessages = async (
+  agentId: string,
+  conversationId: string,
+): Promise<void> => {
+  const entry = conversationMessagesActions.getEntry(conversationId);
+  if (!entry.hasMoreOlder || entry.isLoadingOlder) return;
+
+  const generation = conversationMessagesActions.beginServerSnapshot(conversationId);
+  conversationMessagesActions.startLoadingOlder(conversationId);
+  try {
+    const result = await fetchAgentConversationMessages(agentId, conversationId, {
+      limit: 50,
+      direction: 'before',
+      cursor: entry.olderCursor ?? undefined,
+    });
+    conversationMessagesActions.applyOlderPage(
+      conversationId,
+      generation,
+      result.messages,
+      result.pagination?.hasMore ?? false,
+      result.pagination?.nextCursor ?? null,
+    );
+  } catch (error) {
+    console.warn('[conversationMessagesLoaders] loadOlder agent failed', agentId, conversationId, error);
+    conversationMessagesActions.failLoadingOlder(conversationId, generation);
   }
 };

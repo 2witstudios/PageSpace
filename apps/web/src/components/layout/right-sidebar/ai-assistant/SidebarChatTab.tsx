@@ -16,7 +16,6 @@ import {
   useConversationScrollRef
 } from '@/components/ai/ui/conversation';
 import { useDriveStore } from '@/hooks/useDrive';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChatConversation, useGlobalChatConfig } from '@/contexts/GlobalChatContext';
@@ -32,30 +31,30 @@ import { LocationContext } from '@/lib/ai/shared';
 import { resolveLocationContext } from '@/lib/ai/shared/resolveLocationContext';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
-import { useRenderedMessages, useConversationLoadState } from '@/hooks/useRenderedMessages';
+import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
+  loadOlderGlobalConversationMessages,
+  loadOlderAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
+import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
+import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
+import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
+import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useCacheMessageActions, useStreamRecovery, useAskUserAnswering, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
-import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { isCapacitorApp } from '@/hooks/useCapacitor';
-import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
 import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
-import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
-import { canConcludeTurnIsLost, type RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
-import { evictStalePartial, canEvictStalePartial } from '@/lib/ai/streams/evictStalePartial';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 
 const VOICE_OWNER: VoiceModeOwner = 'sidebar-chat';
@@ -80,6 +79,16 @@ export interface SidebarMessagesContentProps {
   displayIsStreaming: boolean;
   /** Remote in-progress streams to render inline below the messages. */
   remoteStreams: PendingStream[];
+  /** Scroll-near-top handler (epic leaf 6.6) — fetches the next older page. */
+  onScrollNearTop?: () => void;
+  /** Whether an older page is currently loading. */
+  isLoadingOlder?: boolean;
+  /** Whether more (older) pages exist for this conversation — forces virtualization even
+   *  under SIDEBAR_VIRTUALIZATION_THRESHOLD, since only the virtualized branch wires
+   *  onScrollNearTop/isLoadingOlder (PR 6 review, CodeRabbit: the regular/non-virtualized
+   *  branch had no near-top detection at all, so "load older" was unreachable below the
+   *  threshold no matter how much older history existed). */
+  hasMoreOlder?: boolean;
 }
 
 export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
@@ -94,9 +103,16 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
   lastUserMessageId,
   displayIsStreaming,
   remoteStreams,
+  onScrollNearTop,
+  isLoadingOlder,
+  hasMoreOlder,
 }) => {
   const scrollRef = useConversationScrollRef();
-  const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD;
+  // Also virtualize whenever an older page remains, regardless of the count threshold —
+  // the regular branch below has no scroll listener of its own, so "load older" would
+  // otherwise be unreachable for a conversation with more history than the cache
+  // currently holds but fewer than SIDEBAR_VIRTUALIZATION_THRESHOLD rendered messages.
+  const shouldVirtualize = messages.length >= SIDEBAR_VIRTUALIZATION_THRESHOLD || hasMoreOlder === true;
   // Streams whose messageId already landed in `messages` are filtered out so
   // we don't render the same message twice during the brief window between
   // server-confirm and store-removal.
@@ -148,6 +164,8 @@ export const SidebarMessagesContent: React.FC<SidebarMessagesContentProps> = ({
           messages={messages}
           renderMessage={renderMessage}
           scrollRef={scrollRef}
+          onScrollNearTop={onScrollNearTop}
+          isLoadingOlder={isLoadingOlder}
           estimatedRowHeight={60}
           overscan={5}
           gap={6}
@@ -252,7 +270,6 @@ const SidebarChatTab: React.FC = () => {
     setMessages,
     stop,
     isStreaming,
-    setGlobalMessages,
     addToolResult,
     globalStatus,
     globalMessages,
@@ -277,17 +294,8 @@ const SidebarChatTab: React.FC = () => {
   // Derived State
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
-  // The conversation on screen, mirrored every render. Read after an await to decide whether a
-  // response that just resolved is still wanted — the useChat id is constant across a conversation
-  // switch, so a late write would otherwise land in whatever conversation the user moved to.
-  const currentConversationIdRef = useRef<string | null>(null);
-  currentConversationIdRef.current = currentConversationId;
   const isInitialized = selectedAgent ? agentIsInitialized : globalIsInitialized;
   const assistantName = selectedAgent ? selectedAgent.title : 'Global Assistant';
-  // Mirrored so the resume handler can read it AFTER its awaits. Its own closure captured the
-  // pre-background value, which cannot tell it whether a generation has since restarted.
-  const isStreamingRef = useRef(false);
-  isStreamingRef.current = isStreaming;
 
   // ============================================
   // Remote Streams (multiplayer rendering)
@@ -345,6 +353,18 @@ const SidebarChatTab: React.FC = () => {
     }
   }, [currentConversationId, selectedAgent]);
 
+  // "Load older" (epic leaf 6.6, scroll-to-top) — same agent/global branch as reload.
+  const { isLoadingOlder, hasMoreOlder } = useConversationOlderPageState(currentConversationId);
+  const handleScrollNearTop = useCallback(() => {
+    const conversationId = currentConversationId;
+    if (!conversationId) return;
+    if (selectedAgent) {
+      void loadOlderAgentConversationMessages(selectedAgent.id, conversationId);
+    } else {
+      void loadOlderGlobalConversationMessages(conversationId);
+    }
+  }, [currentConversationId, selectedAgent]);
+
   // Agent-mode multiplayer wiring. No-op when selectedAgent is null. Message
   // callbacks write the shared conversation cache (PR 5B, leaf 5.6); reconnect
   // reloads via the sidebar state's cache-committing loader.
@@ -378,25 +398,15 @@ const SidebarChatTab: React.FC = () => {
     activeStream?.isOwn === true ||
     (pendingSendConversationId !== null && pendingSendConversationId === currentConversationId);
 
-  // "Is MY OWN stream live for the conversation on screen". The #2061 clobber guards that
-  // consumed this died with PR 5B (merge-at-render); what remains is the resume handler's
-  // "had a turn in flight" record — conversation-scoped, so a stream still running against
-  // a conversation the user left cannot trigger a regenerate for the one on screen.
-  const isOwnStreamForCurrentConversation = activeStream?.isOwn === true;
-
   const remoteStreamingUser = !displayIsStreaming
     ? remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
     : null;
 
-  const streamingAssistantText = useMemo(() => {
-    if (!displayIsStreaming) return null;
-    const last = plainMessages[plainMessages.length - 1];
-    if (!last || last.role !== 'assistant') return null;
-    return (last.parts ?? [])
-      .filter((p) => p.type === 'text')
-      .map((p) => (p as { type: 'text'; text: string }).text)
-      .join('');
-  }, [plainMessages, displayIsStreaming]);
+  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
+  const streamingAssistantText = useMemo(
+    () => selectVoiceStreamText(renderedMessages),
+    [renderedMessages],
+  );
 
 
 
@@ -446,8 +456,17 @@ const SidebarChatTab: React.FC = () => {
   // only — a synthesized live-stream row must never reach retry/delete's
   // server-side DELETEs (the live bubble's verb is Stop).
   const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
+  // Read after an await (resume runs async), so a ref rather than the captured value.
+  const isOwnSendLiveRef = useRef(isOwnSendLive);
+  isOwnSendLiveRef.current = isOwnSendLive;
+  // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
+  // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit) — AskUser
+  // answerability and resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
+  // guard above, which is deliberately conversation-agnostic (see displayIsStreaming's docblock).
+  const displayIsStreamingRef = useRef(displayIsStreaming);
+  displayIsStreamingRef.current = displayIsStreaming;
 
-  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
+  const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
@@ -488,15 +507,6 @@ const SidebarChatTab: React.FC = () => {
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   // undefined = uninitialized, null = initialized with no baseline message, string = baseline message ID
   const voiceBaselineRef = useRef<string | null | undefined>(undefined);
-
-  // Synchronously updated each render — lets tryRecover read the CURRENT
-  // CONVERSATION's rendered rows without adding them to its useCallback deps.
-  // plainMessages, not the transport array (CR1, CodeRabbit round 2): the
-  // transport accumulates rows across conversation switches and is never
-  // seeded from loads post-cutover, so its last-user id could belong to a
-  // different conversation and defeat the persisted-reply check.
-  const currentMessagesRef = useRef<UIMessage[]>([]);
-  currentMessagesRef.current = plainMessages;
 
   // Voice mode state
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
@@ -583,14 +593,21 @@ const SidebarChatTab: React.FC = () => {
   // Effects: UI State
   // ============================================
 
+  // Typed error cause, per-conversation (epic leaf 6.5) — replaces raw `error`/getAIErrorMessage.
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    currentConversationId,
+    error,
+    clearError,
+    pendingSendConversationId ?? currentConversationId,
+  );
+
   useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
+    if (errorCause) setShowError(true);
+  }, [errorCause]);
 
 
-  // Track last AI response for voice mode TTS.
-  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
-  // messages are never spoken — only genuinely new responses trigger TTS.
+  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
+  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
   useEffect(() => {
     if (!isVoiceModeActive) {
       voiceBaselineRef.current = undefined;
@@ -602,39 +619,19 @@ const SidebarChatTab: React.FC = () => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = plainMessages[plainMessages.length - 1];
-      // During streaming the last overall message is the in-progress assistant reply;
-      // the baseline should be the previously-finalized message before it.
-      const streamingAssistantIdx =
-        displayIsStreaming && lastOverallMsg?.role === 'assistant'
-          ? assistantMsgs.length - 1
-          : assistantMsgs.length;
-      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
-      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
       return;
     }
 
-    if (displayIsStreaming) return;
+    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
+    if (!next) return;
 
-    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
-    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join('');
-    if (!text.trim()) return;
-    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
+    setLastAIResponse((current) => (current?.id === next.id ? current : next));
+  }, [renderedMessages, isVoiceModeActive]);
 
-    setLastAIResponse((current) =>
-      current?.id === lastAssistantMsg.id
-        ? current
-        : { id: lastAssistantMsg.id, text }
-    );
-  }, [plainMessages, displayIsStreaming, isVoiceModeActive]);
-
-  // Refresh this surface from the DB after a background resume, catching a reply that
-  // landed while we were away. Reached on the WEB resume path only (an idle tab coming
-  // back); the native path recovers through tryRecover, which never reads the DB while
-  // a run is live. One cache reload for both modes (leaf 5.4 W3).
+  // Refresh this surface from the DB — the `reload` step of app-resume (useResumeBootstrap
+  // below), catching a reply that landed while we were away. One cache reload for both
+  // modes (leaf 5.4 W3).
   const handleAppResume = useCallback(async () => {
     if (!isInitialized) return;
     await reloadCurrentConversation();
@@ -750,7 +747,11 @@ const SidebarChatTab: React.FC = () => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
+    rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      currentConversationId,
+      userMessage.id,
+    );
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   }, [
     input,
@@ -776,7 +777,11 @@ const SidebarChatTab: React.FC = () => {
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
     // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) }));
+    rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, { body: buildSidebarChatRequestBody(contextRef, isReadOnly) })),
+      currentConversationId,
+      userMessage.id,
+    );
   }, [
     currentConversationId,
     writeMode,
@@ -786,35 +791,22 @@ const SidebarChatTab: React.FC = () => {
     wrapSend,
   ]);
 
-  const buildAskUserAnswerBody = useCallback(() => {
-    const isReadOnly = !writeMode;
-    return buildSidebarChatRequestBody(buildFreshContextRef(), isReadOnly);
-  }, [
-    writeMode,
-    buildFreshContextRef,
-    buildSidebarChatRequestBody,
-  ]);
-
-  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
-  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
-  // question on a conversation opened from history/reload would silently do nothing.
-  // Seed the settled rendered rows first (same imperative, action-scoped write as the
-  // retry seed; skipped while our own send is live).
-  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
-    if (!isOwnSendLive) {
-      setMessages(stableMessages);
-    }
-    return addToolResult(args);
-  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
-
-  // plainMessages (store-rendered): "answerable" is decided by the conversation's
+  // renderedMessages (selector output): "answerable" is decided by the conversation's
   // LAST message, and remote edits/deletes/messages update the store, not useChat.
-  const askUserAnswering = useAskUserAnswering({
-    messages: plainMessages,
-    status,
-    addToolResult: seededAddToolResult,
+  // isConversationBusy replaces status==='ready'. displayIsStreaming, not isOwnSendLive:
+  // the latter includes raw useChat status, which stays true for the OLD conversation's
+  // still-in-flight request after a switch (PR 6 review, CodeRabbit).
+  const askUserAnswering = useAnswerAskUser({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: displayIsStreaming,
+    setMessages,
+    addToolResult,
     wrapSend,
-    buildBody: buildAskUserAnswerBody,
+    buildBody: useCallback(
+      () => buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode),
+      [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],
+    ),
   });
 
   // Voice mode toggle handler
@@ -830,304 +822,33 @@ const SidebarChatTab: React.FC = () => {
   // first 'streaming' render and held so Stop could name it after the surface moved on. The store
   // entry already holds exactly that, written once at stream_start — `activeStream.messageId`.
 
-  // Rejoin-first recovery probe for useStreamRecovery.
-  // On a network error (e.g. iOS backgrounding kills the fetch):
-  //   1. Check /api/ai/chat/active-streams — if the original run is still live, rejoin it.
-  //   2. Else fetch messages from the DB — if the run persisted a reply, surface it.
-  //   3. Only fall through to regenerate() when neither path finds anything to recover.
-  const tryRecover = useCallback(async (): Promise<RecoveryAttempt> => {
-    // `probeAnswered` is RETURNED, never stashed in a ref. tryRecover has two callers — this
-    // surface's resume handler and useStreamRecovery's network-error retry — and they can be in
-    // flight together. A single shared slot would let one caller's probe answer the other's
-    // question, which on this path means regenerating over a run we never actually asked about.
-    let probeAnswered = false;
-    let dbAnswered = false;
-    const conversationId = currentConversationId;
-    if (!conversationId) return { recovered: false, probeAnswered, dbAnswered };
-    const channelId = selectedAgent?.id ?? channelIdForGlobal;
-    if (!channelId) return { recovered: false, probeAnswered, dbAnswered };
-    // Every transport write below happens after an await, into a useChat instance whose
-    // id is constant across conversation switches. Re-check the LIVE conversation before
-    // each one — otherwise a recovery for the conversation the user just left lands in
-    // the one they moved to. (The cache write is conversation-keyed; no gate needed.)
-    const stillOnThisConversation = () =>
-      conversationId === currentConversationIdRef.current;
-
-    // Step 1: live stream check
-    try {
-      const res = await fetchWithAuth(
-        `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
-      );
-      if (res.ok) {
-        const data = (await res.json()) as {
-          streams?: Array<{
-            messageId: string;
-            conversationId: string;
-            parts?: unknown[];
-            triggeredBy: { userId: string };
-          }>;
-        };
-        // Only NOW do we know the server told us something. Setting this off `res.ok` alone would
-        // be a lie: res.json() can still throw on a body that dies mid-read — which is exactly the
-        // cold-radio-after-foreground case this whole path exists for — and the catch below would
-        // swallow it while we went on believing we had an answer.
-        probeAnswered = true;
-        const liveStream = (data.streams ?? []).find(
-          (s) => s.conversationId === conversationId && s.triggeredBy.userId === user?.id,
-        );
-        // decideRecovery's priority (rejoin > refetch > regenerate) is expressed by the ORDER of
-        // these steps, not by a call here: with hasLiveStream hardcoded true it could only ever
-        // answer 'rejoin', so asking would be decoration. Step 2 below is where it genuinely
-        // decides. A live stream is always rejoined, never read around.
-        if (liveStream && stillOnThisConversation()) {
-          // Evict the half-streamed assistant bubble useChat is still holding for this run. See
-          // evictStalePartial: without it the rejoined stream is deduped straight back out and
-          // renders nothing, and it is safe only when the server's checkpoint has frames the
-          // bootstrap can actually seed in its place.
-          //
-          // Ask before writing, so an unsafe checkpoint costs no state write at all; then evict
-          // through the UPDATER form, so the filter runs against the freshest message list rather
-          // than one captured before the awaits above.
-          const staleId = liveStream.messageId;
-          if (canEvictStalePartial(liveStream.parts)) {
-            const evict = (prev: UIMessage[]) => evictStalePartial(prev, staleId, liveStream.parts);
-            if (selectedAgent) setMessages(evict);
-            else setGlobalMessages(evict);
-          }
-          if (selectedAgent) {
-            rejoinAgentStream();
-          } else {
-            rejoinGlobalStream();
-          }
-          return { recovered: true, probeAnswered, dbAnswered };
-        }
-      }
-    } catch { /* network error — fall through to DB check */ }
-
-    // Step 2: DB check for a persisted reply to the CURRENT turn.
-    try {
-      // Token BEFORE the fetch — a stale recovery snapshot must not overwrite
-      // anything fresher committed while it was in flight (CR4).
-      const snapshotToken = conversationMessagesActions.beginServerSnapshot(conversationId);
-      const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
-        : `/api/ai/global/${conversationId}/messages`;
-      const res = await fetchWithAuth(url);
-      if (res.ok) {
-        const data = await res.json();
-        const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{
-          id: string;
-          role: string;
-        }>;
-        // Only NOW do we know what is persisted. As with the probe above, a throw or a non-ok
-        // leaves us knowing nothing — and treating that silence as "no reply exists" would let the
-        // caller regenerate over a reply that had in fact completed, which DELETES it (handleRetry
-        // removes the trailing assistant by the very id the server persisted it under).
-        dbAnswered = true;
-
-        // "Was the user's turn persisted?" asked by IDENTITY, not by counting.
-        //
-        // It used to compare user-message counts (dbUserCount >= localUserCount). That silently
-        // breaks on any conversation longer than one page: this GET is unpaginated, so the route
-        // applies its default limit of 50 and returns only the newest 50 rows, while local
-        // `messages` is the initial 50 PLUS every turn since. Past that boundary the count guard
-        // is permanently false, step 2 can never recover, and every interrupted turn on a long
-        // conversation would fall through to a regenerate that deletes the reply it should have
-        // refetched. The last local user message is by definition the newest, so it is always
-        // inside the returned window — checking for its id is both correct and pagination-proof.
-        const lastLocalUserId = [...currentMessagesRef.current]
-          .reverse()
-          .find((m) => m.role === 'user')?.id;
-        const ourTurnIsPersisted =
-          lastLocalUserId === undefined || msgs.some((m) => m.id === lastLocalUserId);
-        const hasPersistedReply =
-          msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && ourTurnIsPersisted;
-
-        if (
-          stillOnThisConversation() &&
-          decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch'
-        ) {
-          // Commit the SAME normalized array the guards above were computed from, as the
-          // conversation's loaded truth — the cache write is conversation-keyed and renders
-          // via merge-at-render (PR 5B: the refetch branch becomes a cache commit).
-          conversationMessagesActions.applyServerSnapshot(conversationId, snapshotToken, msgs as unknown as UIMessage[]);
-          return { recovered: true, probeAnswered, dbAnswered };
-        }
-      }
-    } catch { /* network error — the caller must not treat this as "nothing is persisted" */ }
-
-    return { recovered: false, probeAnswered, dbAnswered };
-  }, [
-    currentConversationId,
-    selectedAgent,
-    channelIdForGlobal,
-    user,
-    rejoinGlobalStream,
-    rejoinAgentStream,
-    setMessages,
-    setGlobalMessages,
-  ]);
-
-  // Auto-retry on network errors — rejoin-first, regenerate only as last resort
-  // useStreamRecovery only asks "did you recover?" — the probe-reachability half of the answer is
-  // for the resume path, which is the one that would otherwise regenerate over a live run.
-  const tryRecoverForError = useCallback(async () => (await tryRecover()).recovered, [tryRecover]);
-
-  // ONE mutex across BOTH recovery paths.
-  //
-  // useStreamRecovery watches this same failure from the other side (it fires on
-  // `status === 'error'`) and regenerates too, and the two shared no lock. Either could decide to
-  // regenerate the turn while the other was still deciding — useStreamRecovery calls clearError()
-  // BEFORE running its own probes, so for the whole of its decision window the status reads
-  // `ready` and looks idle to us. Two regenerates for one turn is the double destruction the
-  // resume gate exists to prevent: the server takes over the conversation on every generation
-  // start, so the second aborts the first, and handleRetry deletes its assistant message on the
-  // way in.
-  //
-  // The lock is held across the whole of handleRetry — its message DELETEs are a network
-  // round-trip — after which the restarted generation's own `submitted` status keeps the other
-  // path out (see `nothingHasRestarted` below).
-  const regenerationInFlightRef = useRef(false);
-  const regenerateTurnOnce = useCallback(async () => {
-    if (regenerationInFlightRef.current) return;
-    regenerationInFlightRef.current = true;
-    try {
-      await handleRetry();
-    } finally {
-      regenerationInFlightRef.current = false;
+  // Re-bootstrap whichever mode is on screen (epic leaf 6.2's `rejoin` step) — one
+  // channel is live at a time in this surface (agent/global are mutually exclusive).
+  const rejoinActiveMode = useCallback(() => {
+    if (selectedAgent) {
+      rejoinAgentStream();
+    } else {
+      rejoinGlobalStream();
     }
-  }, [handleRetry]);
+  }, [selectedAgent, rejoinAgentStream, rejoinGlobalStream]);
 
-  useStreamRecovery({ error, status, clearError, handleRetry: regenerateTurnOnce, maxRetries: 2, tryRecover: tryRecoverForError });
-
-  // App state recovery — deterministic stream rejoin on mobile.
-  //
-  // Placed HERE, below tryRecover, rather than up with the other effects: it delegates to
-  // tryRecover, and a resume callback declared above it would close over a temporal-dead-zone
-  // binding.
-  //
-  // The `enabled` gate MUST be a callback, not a render-time boolean: iOS freezes JS the moment
-  // the app backgrounds, so a boolean captured at render is whatever was true when the app went
-  // away. That is how this path was dead in exactly the case it was written for — `!isStreaming`
-  // was false (streaming), and the recovery hook was gated off.
-  //
-  // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh' (the
-  // local fetch is dead after backgrounding) — and then delegates to `tryRecover`, the same
-  // rejoin-first probe useStreamRecovery uses on a network error, because a background/foreground
-  // cycle IS a network error on iOS, just one we are told about. Do NOT blind-refresh from the DB
-  // here: the reply is not persisted until the run completes, so while a stream is still live a DB
-  // snapshot contains no assistant message and writing it would wipe the in-progress bubble.
-  // tryRecover asks /active-streams first — the server's authoritative answer — and only touches
-  // the DB when nothing is live:
-  //
-  //   live stream        → rejoin it, no DB read at all
-  //   already persisted  → refetch the completed reply (the stream finished while backgrounded)
-  //   neither            → regenerate — but ONLY once both questions actually came back
-  //                         (canConcludeTurnIsLost). Never a DB refresh: see the gate below.
+  // Gate on USER editing only, evaluated at fire time (callback form) — iOS freezes JS the
+  // moment the app backgrounds, so a boolean captured at render would be stale.
   const resumeEnabled = useCallback(
     () => canResumeRecovery(currentConversationId, useEditingStore.getState().isAnyEditing()),
     [currentConversationId],
   );
 
-  useAppStateRecovery({
-    onResume: useCallback(async () => {
-      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: displayIsStreaming });
-      if (action === 'noop') return;
-      if (action === 'refresh') {
-        // Web, no live fetch of our own: a plain DB refresh is safe and is all we need.
-        await handleAppResume();
-        return;
-      }
-      // Native. Whether a turn of OUR OWN was in flight, for the conversation on screen, when we
-      // went away. iOS froze JS at that moment, so this render-time value is a faithful record of
-      // it — which is exactly what it is used for here, and why it is safe even though it is
-      // useless for deciding whether the TRANSPORT is still alive (that is resolveResumeAction's
-      // job, and the answer is "no").
-      //
-      // Conversation-scoped, NOT the broader displayIsStreaming: that also reports true for a
-      // stream still running against a conversation the user has since navigated away from (the
-      // useChat id is stable across a switch), and regenerating on the strength of it would fire
-      // a generation for the turn the user is now LOOKING at rather than the one that was
-      // actually interrupted.
-      const hadTurnInFlight = isOwnStreamForCurrentConversation;
-      // The conversation that turn belongs to. The recovery below spans up to a few seconds of
-      // network, and the user can switch conversation inside that window — at which point
-      // regenerating would fire a generation for the turn they moved TO, not the one that was
-      // interrupted. `handleRetry` always acts on the live conversation, so the only way to keep
-      // it honest is to re-check that we are still on the one we started from.
-      const conversationAtResume = currentConversationId;
-
-      // Local-only useChat stop: it does NOT signal the server (that is done separately via
-      // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It also
-      // ends the dead response body, which releases this channel's `consuming` mark — without
-      // that the rejoin's bootstrap would classify the stream as one we are already reading off
-      // the POST and skip attaching it.
-      stop();
-      let attempt = await tryRecover();
-      if (attempt.recovered) return;
-
-      // Came up empty — but "we recovered nothing" is NOT "there was nothing to recover". Each of
-      // tryRecover's two questions can come back UNANSWERED, and silence from either one means the
-      // work we would be about to destroy might still exist:
-      //
-      //   /active-streams silent → a run may still be LIVE.       Regenerating aborts it.
-      //   messages GET silent    → the reply may already be SAVED. Regenerating deletes it.
-      //
-      // The first request after a foreground is the one most likely to fail (cold radio), so this
-      // is common on exactly this path. Re-ask until both questions come back, bounded — the radio
-      // returns well inside a few seconds.
-      for (let i = 1; !(attempt.probeAnswered && attempt.dbAnswered) && i <= 2; i++) {
-        await new Promise((resolve) => setTimeout(resolve, i * 1000));
-        attempt = await tryRecover();
-        if (attempt.recovered) return;
-      }
-
-      // Regenerate ONLY once BOTH questions came back, and only for a turn of ours that really was
-      // in flight (canConcludeTurnIsLost).
-      //
-      // The regenerate is needed BECAUSE of the stop above: aborting the fetch settles useChat at
-      // `ready` with NO `error`, and useStreamRecovery only fires on `status === 'error'`. Without
-      // it, a turn whose POST died on the background transition would find no stream, no reply and
-      // no error, and the user's prompt would sit unanswered forever.
-      //
-      // But regenerating on SILENCE would be far worse than doing nothing, because regenerating is
-      // destructive twice over:
-      //   - takeOverConversationStreams runs on every generation start, so a regenerate issued
-      //     while the run is in fact still live ABORTS it — re-running write tools it had already
-      //     executed, billing its discarded tokens, stranding its partial in the DB.
-      //   - handleRetry DELETEs the trailing assistant by id before re-requesting, and that is the
-      //     same id the server persisted the reply under — so a regenerate issued when the reply
-      //     had in fact completed deletes the finished reply and pays for it again.
-      //
-      // Doing nothing on silence is safe: the stop released this channel's `consuming` mark, so a
-      // live run is picked up by the socket-reconnect bootstrap once the network returns, a
-      // persisted reply is picked up by the next load, and a genuinely dead turn leaves the user
-      // their prompt and the retry action on it.
-      const stillOnTheInterruptedConversation =
-        currentConversationIdRef.current === conversationAtResume;
-      // Belt to regenerateTurnOnce's braces. The mutex stops the two paths regenerating at the
-      // same moment; this stops us regenerating on top of a turn that has ALREADY restarted and
-      // moved on — the mutex is released as soon as handleRetry returns, but the generation it
-      // kicked off is still running. Read through a ref because the closure's copy of `isStreaming`
-      // is the value captured before we were frozen.
-      const nothingHasRestarted = !isStreamingRef.current;
-      if (
-        hadTurnInFlight &&
-        stillOnTheInterruptedConversation &&
-        nothingHasRestarted &&
-        canConcludeTurnIsLost(attempt)
-      ) {
-        await regenerateTurnOnce();
-      }
-    }, [
-      displayIsStreaming,
-      currentConversationId,
-      isOwnStreamForCurrentConversation,
-      stop,
-      tryRecover,
-      handleAppResume,
-      regenerateTurnOnce,
-    ]),
+  // App-resume = the same path as mount/socket-reconnect (epic leaf 6.2): re-bootstrap active
+  // streams, reload the conversation into the cache, and settle a frozen local transport.
+  // Nothing renders from the local fetch under store-first rendering, so there is no
+  // native/web or was-i-streaming choreography left to make — this subsumes the old
+  // tryRecover/decideRecovery probe tree, resolveResumeAction (deleted), and #2065.
+  useResumeBootstrap({
+    rejoin: rejoinActiveMode,
+    reload: handleAppResume,
+    stop,
+    isOwnStreamLive: useCallback(() => displayIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 
@@ -1271,6 +992,9 @@ const SidebarChatTab: React.FC = () => {
               lastUserMessageId={lastUserMessageId}
               displayIsStreaming={displayIsStreaming}
               remoteStreams={remoteStreams}
+              onScrollNearTop={handleScrollNearTop}
+              isLoadingOlder={isLoadingOlder}
+              hasMoreOlder={hasMoreOlder}
             />
             {/* Scroll-to-bottom button - visible when user scrolls up */}
             <ConversationScrollButton className="z-10 bottom-8" />
@@ -1286,9 +1010,12 @@ const SidebarChatTab: React.FC = () => {
         }}
       >
         <ChatErrorBanner
-          error={error}
+          cause={errorCause}
           show={showError}
-          onClearError={() => setShowError(false)}
+          onClearError={() => {
+            setShowError(false);
+            dismissError();
+          }}
         />
 
         <div className="px-1">
