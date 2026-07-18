@@ -12,7 +12,10 @@
         "msw",
         "stripe"
       ],
-      "drizzle": false
+      "drizzle": false,
+      "ignoreUnresolved": [
+        "./src/test/setup.ts"
+      ]
     },
     "apps/web": {
       "entry": [

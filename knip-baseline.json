@@ -235,9 +235,5 @@
   "types::apps/web/src/services/api/permission-management-service.ts::PermissionManagementService",
   "types::apps/web/src/types/mentions.ts::EnhancedMention",
   "types::apps/web/src/types/mentions.ts::TypedMention",
-  "types::packages/lib/src/logging/logger-types.ts::LogMetadata",
-  "unresolved::scripts/__tests__/changelog-shell-safety.test.ts::../changelog/detect-abandoned-approaches",
-  "unresolved::scripts/__tests__/changelog-shell-safety.test.ts::../changelog/git-exec",
-  "unresolved::scripts/__tests__/changelog-shell-safety.test.ts::../changelog/track-file-evolution",
-  "unresolved::vitest.workspace.ts::./src/test/setup.ts"
+  "types::packages/lib/src/logging/logger-types.ts::LogMetadata"
 ]
