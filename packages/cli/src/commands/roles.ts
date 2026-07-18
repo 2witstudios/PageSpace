@@ -249,12 +249,27 @@ export const rolesCreateHandler: CommandHandler = async (ctx, intent) => {
 // ---------------------------------------------------------------------------
 
 const UPDATE_USAGE =
-  'Usage: pagespace roles update <driveId> <roleId> [--name <text>] [--description <text>] [--color <hex>] [--is-default true|false] [--drive-wide-view/--drive-wide-edit/--drive-wide-share true|false | --clear-drive-wide]\n';
+  'Usage: pagespace roles update <driveId> <roleId> [--name <text>] [--description <text>|--clear-description] [--color <hex>|--clear-color] [--is-default true|false] [--drive-wide-view/--drive-wide-edit/--drive-wide-share true|false | --clear-drive-wide]\n';
+
+/** Pure: no I/O. Resolves a nullable string field from its value flag and clear flag — mutually exclusive; `undefined` means "leave unchanged". */
+function resolveNullableField(
+  values: ReadonlyMap<string, string>,
+  booleans: ReadonlySet<string>,
+  valueFlag: string,
+  clearFlag: string,
+): { readonly ok: true; readonly value: string | null | undefined } | { readonly ok: false; readonly message: string } {
+  const value = values.get(valueFlag);
+  const clear = booleans.has(clearFlag);
+  if (clear && value !== undefined) {
+    return { ok: false, message: `Flags ${valueFlag} and ${clearFlag} are mutually exclusive.` };
+  }
+  return { ok: true, value: clear ? null : value };
+}
 
 export const rolesUpdateHandler: CommandHandler = async (ctx, intent) => {
   const scanned = scanFlags(intent.args, {
     valueFlags: ['--name', '--description', '--color', '--is-default', '--drive-wide-view', '--drive-wide-edit', '--drive-wide-share'],
-    booleanFlags: ['--clear-drive-wide'],
+    booleanFlags: ['--clear-drive-wide', '--clear-description', '--clear-color'],
   });
   if (!scanned.ok) {
     ctx.stderr.write(`${scanned.message}\n`);
@@ -264,6 +279,17 @@ export const rolesUpdateHandler: CommandHandler = async (ctx, intent) => {
   const [driveId, roleId, ...extra] = scanned.rest;
   if (!driveId || !roleId || extra.length > 0) {
     ctx.stderr.write(UPDATE_USAGE);
+    return EXIT_USAGE_ERROR;
+  }
+
+  const description = resolveNullableField(scanned.values, scanned.booleans, '--description', '--clear-description');
+  if (!description.ok) {
+    ctx.stderr.write(`${description.message}\n`);
+    return EXIT_USAGE_ERROR;
+  }
+  const color = resolveNullableField(scanned.values, scanned.booleans, '--color', '--clear-color');
+  if (!color.ok) {
+    ctx.stderr.write(`${color.message}\n`);
     return EXIT_USAGE_ERROR;
   }
 
@@ -295,8 +321,8 @@ export const rolesUpdateHandler: CommandHandler = async (ctx, intent) => {
       driveId,
       roleId,
       name: scanned.values.get('--name'),
-      description: scanned.values.get('--description'),
-      color: scanned.values.get('--color'),
+      description: description.value,
+      color: color.value,
       isDefault: isDefaultRaw === undefined ? undefined : isDefaultRaw === 'true',
       driveWidePermissions,
     }),
@@ -317,7 +343,7 @@ export const rolesUpdateHandler: CommandHandler = async (ctx, intent) => {
 
 export const rolesDeleteHandler: CommandHandler = async (ctx, intent) => {
   const [driveId, roleId] = intent.args;
-  if (!driveId || !roleId) {
+  if (!driveId || !roleId || intent.args.length > 2) {
     ctx.stderr.write('Usage: pagespace roles delete <driveId> <roleId> [--yes]\n');
     return EXIT_USAGE_ERROR;
   }
@@ -452,7 +478,7 @@ export const rolesSetDriveWidePermissionsHandler: CommandHandler = async (ctx, i
 
 export const rolesRemovePagePermissionsHandler: CommandHandler = async (ctx, intent) => {
   const [driveId, roleId, pageId] = intent.args;
-  if (!driveId || !roleId || !pageId) {
+  if (!driveId || !roleId || !pageId || intent.args.length > 3) {
     ctx.stderr.write('Usage: pagespace roles remove-page-permissions <driveId> <roleId> <pageId> [--yes]\n');
     return EXIT_USAGE_ERROR;
   }

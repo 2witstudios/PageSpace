@@ -138,8 +138,8 @@ roles     list <driveId>
           get <driveId> <roleId>
           create <driveId> <name> [--description <text>] [--color <hex>] [--is-default true|false]
                  [--drive-wide-view true|false --drive-wide-edit true|false --drive-wide-share true|false]
-          update <driveId> <roleId> [--name <text>] [--description <text>] [--color <hex>] [--is-default true|false]
-                 [--drive-wide-view/--drive-wide-edit/--drive-wide-share true|false | --clear-drive-wide]
+          update <driveId> <roleId> [--name <text>] [--description <text>|--clear-description] [--color <hex>|--clear-color]
+                 [--is-default true|false] [--drive-wide-view/--drive-wide-edit/--drive-wide-share true|false | --clear-drive-wide]
           delete <driveId> <roleId> [--yes]
           set-page-permissions <driveId> <roleId> <pageId> --view true|false --edit true|false --share true|false
           set-drive-wide-permissions <driveId> <roleId> --view true|false --edit true|false --share true|false

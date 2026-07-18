@@ -255,6 +255,55 @@ describe('rolesUpdateHandler', () => {
     expect(code).toBe(EXIT_USAGE_ERROR);
     expect(update).not.toHaveBeenCalled();
   });
+
+  it('--clear-description sends description: null', async () => {
+    const update = vi.fn(async () => ({ role: ROLE }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { update } }) });
+
+    const code = await rolesUpdateHandler(ctx, commandIntent(['drv_1', 'role_1', '--clear-description']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ description: null }));
+  });
+
+  it('--clear-color sends color: null', async () => {
+    const update = vi.fn(async () => ({ role: ROLE }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { update } }) });
+
+    const code = await rolesUpdateHandler(ctx, commandIntent(['drv_1', 'role_1', '--clear-color']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ color: null }));
+  });
+
+  it('--description sets the string value (not null)', async () => {
+    const update = vi.fn(async () => ({ role: ROLE }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { update } }) });
+
+    await rolesUpdateHandler(ctx, commandIntent(['drv_1', 'role_1', '--description', 'updated text']));
+
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ description: 'updated text' }));
+  });
+
+  it('exits 2 with a usage error when --description and --clear-description are combined, never calling the SDK', async () => {
+    const update = vi.fn(async () => ({ role: ROLE }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { update } }) });
+
+    const code = await rolesUpdateHandler(ctx, commandIntent(['drv_1', 'role_1', '--description', 'x', '--clear-description']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('exits 2 with a usage error when --color and --clear-color are combined, never calling the SDK', async () => {
+    const update = vi.fn(async () => ({ role: ROLE }));
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { update } }) });
+
+    const code = await rolesUpdateHandler(ctx, commandIntent(['drv_1', 'role_1', '--color', '#000000', '--clear-color']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(update).not.toHaveBeenCalled();
+  });
 });
 
 describe('rolesDeleteHandler (destructive)', () => {
@@ -268,6 +317,18 @@ describe('rolesDeleteHandler (destructive)', () => {
     expect(code).toBe(EXIT_SUCCESS);
     expect(prompt).not.toHaveBeenCalled();
     expect(del).toHaveBeenCalledWith({ driveId: 'drv_1', roleId: 'role_1' });
+  });
+
+  it('exits 2 with a usage error on a trailing extra operand, even with --yes, never calling delete or prompting', async () => {
+    const del = vi.fn(async () => ({ success: true }));
+    const prompt = vi.fn(async () => 'y');
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { delete: del } }), isTTY: true, prompt });
+
+    const code = await rolesDeleteHandler(ctx, commandIntent(['drv_1', 'role_1', 'role_2', '--yes']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled();
   });
 
   it('fails closed in a non-TTY session without --yes, never calling delete', async () => {
@@ -317,6 +378,18 @@ describe('rolesRemovePagePermissionsHandler (destructive)', () => {
     expect(code).toBe(EXIT_SUCCESS);
     expect(prompt).not.toHaveBeenCalled();
     expect(removePagePermissions).toHaveBeenCalledWith({ driveId: 'drv_1', roleId: 'role_1', permissionsPatch: { pg_1: null } });
+  });
+
+  it('exits 2 with a usage error on a trailing extra operand, even with --yes, never calling the SDK or prompting', async () => {
+    const removePagePermissions = vi.fn(async () => ({ role: ROLE }));
+    const prompt = vi.fn(async () => 'y');
+    const ctx = createFakeContext({ sdk: fakeSdk({ roles: { removePagePermissions } }), isTTY: true, prompt });
+
+    const code = await rolesRemovePagePermissionsHandler(ctx, commandIntent(['drv_1', 'role_1', 'pg_1', 'pg_2', '--yes']));
+
+    expect(code).toBe(EXIT_USAGE_ERROR);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(removePagePermissions).not.toHaveBeenCalled();
   });
 
   it('fails closed in a non-TTY session without --yes, never calling the SDK', async () => {
