@@ -39,7 +39,8 @@
         "src/**/__tests__/**",
         "src/lib/auth/platform-storage/desktop-storage.ts",
         "src/lib/auth/platform-storage/ios-storage.ts",
-        "src/lib/auth/platform-storage/web-storage.ts"
+        "src/lib/auth/platform-storage/web-storage.ts",
+        "src/test/next-server-stub.ts"
       ],
       "ignoreDependencies": [
         "eslint-config-next",
@@ -101,6 +102,7 @@
         "src/db.ts",
         "src/migrate-admin.ts",
         "src/migrate.ts",
+        "src/migrate-pending-invites.ts",
         "src/operators.ts",
         "src/provision-admin-users.ts",
         "src/schema.ts",
@@ -550,6 +552,11 @@
         "eslint",
         "@next/eslint-plugin-next",
         "eslint-plugin-react-hooks"
+      ]
+    },
+    "apps/e2e": {
+      "ignore": [
+        "support/mock-server-main.ts"
       ]
     }
   },
