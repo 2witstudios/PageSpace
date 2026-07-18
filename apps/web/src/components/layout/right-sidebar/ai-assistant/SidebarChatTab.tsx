@@ -477,7 +477,7 @@ const SidebarChatTab: React.FC = () => {
   // chat is still consuming ANOTHER conversation's stream needs the same handoff first.
   const regenerateWithHandoff = useCallback(
     async (options?: { body?: Record<string, unknown> }) => {
-      if (currentConversationId) await prepareSendForMode(currentConversationId);
+      if (currentConversationId && !(await prepareSendForMode(currentConversationId))) return;
       regenerate(options);
     },
     [prepareSendForMode, regenerate, currentConversationId],
@@ -767,7 +767,13 @@ const SidebarChatTab: React.FC = () => {
 
     // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
     // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
-    await prepareSendForMode(currentConversationId);
+    // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
+    // the latch still held): sending would re-key the new stream under the old conversation, so
+    // abort and restore the draft text for a retry.
+    if (!(await prepareSendForMode(currentConversationId))) {
+      setInput(text);
+      return;
+    }
 
     // Client-minted id, parts-form send (PR 4 pattern): only that shape preserves the
     // id end to end, and the id is what lets the cache reconcile the optimistic bubble
@@ -808,8 +814,8 @@ const SidebarChatTab: React.FC = () => {
     const isReadOnly = !writeMode;
     const contextRef = buildFreshContextRef();
 
-    // Same cross-conversation handoff as handleSendMessage.
-    await prepareSendForMode(currentConversationId);
+    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff.
+    if (!(await prepareSendForMode(currentConversationId))) return;
 
     // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
     const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;

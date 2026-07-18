@@ -621,7 +621,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // still consuming ANOTHER conversation's stream needs the same handoff first.
   const regenerateWithHandoff = useCallback(
     async (options?: { body?: Record<string, unknown> }) => {
-      if (currentConversationId) await prepareSend(currentConversationId);
+      if (currentConversationId && !(await prepareSend(currentConversationId))) return;
       regenerate(options);
     },
     [prepareSend, regenerate, currentConversationId],
@@ -1133,7 +1133,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
 
     // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
     // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
-    await prepareSend(currentConversationId);
+    // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
+    // the latch still held): sending would re-key the new stream under the old conversation, so
+    // abort and restore the draft text for a retry.
+    if (!(await prepareSend(currentConversationId))) {
+      setInput(trimmed);
+      return;
+    }
 
     adoptConversationAsPersisted();
 
@@ -1171,6 +1177,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     canSendMessage,
     getFilesForSend,
     clearInputDraft,
+    setInput,
     clearFiles,
     sendMessage,
     buildRequestBody,
@@ -1190,8 +1197,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!canSendMessage) return;
     if (!currentConversationId) return;
 
-    // Same cross-conversation handoff as handleSendMessage.
-    await prepareSend(currentConversationId);
+    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff.
+    if (!(await prepareSend(currentConversationId))) return;
 
     adoptConversationAsPersisted();
     const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;

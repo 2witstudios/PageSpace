@@ -3,9 +3,10 @@ import { useCallback, useEffect, useRef } from 'react';
 type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
 
 /**
- * If the settle wait somehow never observes ready/error, proceed anyway rather than wedging the
- * composer. useChat's stop() settles status in the abort's catch handler, which is prompt; this
- * only fires if that contract breaks.
+ * Bound on the settle wait so a never-settling status cannot wedge the composer. useChat's
+ * stop() settles status in the abort's catch handler, which is prompt; this only fires if that
+ * contract breaks. On timeout the handoff consults the mirror's latch: released → safe to send;
+ * still held → prepareSend resolves false and the caller must abort the send.
  */
 const SETTLE_TIMEOUT_MS = 1500;
 
@@ -40,6 +41,11 @@ const SETTLE_TIMEOUT_MS = 1500;
  *
  * Same-conversation sends and idle chats resolve immediately — the handoff only exists for the
  * cross-conversation-while-busy case.
+ *
+ * `prepareSend` resolves `true` when it is safe to send, `false` when it is not: the surface
+ * unmounted mid-wait (nothing left to render or mirror the send), or the settle wait timed out
+ * with the mirror's latch STILL held (sending would re-key the new stream under the old
+ * conversation — the bug this hook prevents). Callers MUST abort the send on `false`.
  */
 export const useConversationSendHandoff = ({
   status,
@@ -55,10 +61,10 @@ export const useConversationSendHandoff = ({
   getLatchedConversationId: () => string | undefined;
   /** The channel socket's `rejoinActiveStreams` — re-bootstraps and attaches unconsumed own streams. */
   rejoin: () => void;
-}): { prepareSend: (targetConversationId: string) => Promise<void> } => {
+}): { prepareSend: (targetConversationId: string) => Promise<boolean> } => {
   const statusRef = useRef(status);
   statusRef.current = status;
-  const settleResolversRef = useRef<(() => void)[]>([]);
+  const settleResolversRef = useRef<((outcome: 'settled' | 'unmounted') => void)[]>([]);
 
   // Flush settle waiters when the status lands on ready/error. Runs after the same commit in
   // which the mirror's falling edge ran (all of a commit's effects flush before the awaiting
@@ -68,40 +74,57 @@ export const useConversationSendHandoff = ({
     const resolvers = settleResolversRef.current;
     if (resolvers.length === 0) return;
     settleResolversRef.current = [];
-    for (const resolve of resolvers) resolve();
+    for (const resolve of resolvers) resolve('settled');
   }, [status]);
 
   useEffect(() => () => {
-    // Unmount: release any waiters rather than leaving their sends pending forever.
+    // Unmount: release any waiters rather than leaving their sends pending forever. They resolve
+    // as 'unmounted', which prepareSend reports as NOT safe to send — the surface is gone, and
+    // nothing would render (or mirror) the send's outcome.
     const resolvers = settleResolversRef.current;
     settleResolversRef.current = [];
-    for (const resolve of resolvers) resolve();
+    for (const resolve of resolvers) resolve('unmounted');
   }, []);
 
   const prepareSend = useCallback(
-    async (targetConversationId: string): Promise<void> => {
+    async (targetConversationId: string): Promise<boolean> => {
       const latched = getLatchedConversationId();
       // Idle chat (nothing latched), or a send into the conversation already being consumed —
       // no handoff. Bootstrapped/socket-attached streams never latch, so they never trigger one.
-      if (latched === undefined || latched === targetConversationId) return;
+      // An empty-string latch is the mirror's unresolved-identity placeholder, never a real
+      // send (same reasoning as useStopStream's rawStop gate) — don't hand off on garbage.
+      if (latched === undefined || latched === '' || latched === targetConversationId) return true;
 
       stop();
 
+      let outcome: 'settled' | 'timeout' | 'unmounted' = 'settled';
       if (statusRef.current !== 'ready' && statusRef.current !== 'error') {
-        await new Promise<void>((resolve) => {
+        outcome = await new Promise<'settled' | 'timeout' | 'unmounted'>((resolve) => {
           const timer = setTimeout(() => {
             settleResolversRef.current = settleResolversRef.current.filter((r) => r !== wrapped);
-            console.warn(
-              '[useConversationSendHandoff] chat status never settled after stop(); proceeding',
-            );
-            resolve();
+            resolve('timeout');
           }, SETTLE_TIMEOUT_MS);
-          const wrapped = () => {
+          const wrapped = (settleOutcome: 'settled' | 'unmounted') => {
             clearTimeout(timer);
-            resolve();
+            resolve(settleOutcome);
           };
           settleResolversRef.current.push(wrapped);
         });
+      }
+
+      if (outcome === 'unmounted') return false;
+
+      // Timeout is NOT success by fiat (review finding, PR #2121): proceeding with the latch
+      // still held would hand the NEW send the OLD conversation's identity — the exact
+      // mis-keying this hook exists to prevent. The latch itself is the invariant, so consult
+      // it: if the mirror released it despite the status flush lagging, the handoff is safe;
+      // if it is still held, refuse the send (the caller aborts, the composer un-wedges, and a
+      // retry re-attempts the handoff).
+      if (outcome === 'timeout' && getLatchedConversationId() !== undefined) {
+        console.warn(
+          '[useConversationSendHandoff] chat status never settled after stop(); refusing the send',
+        );
+        return false;
       }
 
       // Fire-and-forget: the bootstrap's HTTP roundtrip must not delay the user's send. The
@@ -110,6 +133,7 @@ export const useConversationSendHandoff = ({
       // handoff whose stream row didn't exist yet, and the processed/skip guards cover a stream
       // that completed during the gap.
       rejoin();
+      return true;
     },
     [getLatchedConversationId, stop, rejoin],
   );
