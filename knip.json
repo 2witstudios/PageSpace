@@ -55,6 +55,9 @@
         "eslint",
         "@next/eslint-plugin-next",
         "eslint-plugin-react-hooks"
+      ],
+      "ignore": [
+        "src/components/ui/**"
       ]
     },
     "apps/realtime": {
@@ -536,6 +539,14 @@
       ],
       "project": [
         "src/**/*.ts"
+      ]
+    },
+    "apps/marketing": {
+      "ignoreDependencies": [
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks"
       ]
     }
   },
