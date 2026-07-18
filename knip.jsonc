@@ -6,8 +6,6 @@
       "project": ["scripts/**/*.{ts,js}"],
       "ignoreDependencies": [
         "msw",
-        "@pagespace/db",
-        "@pagespace/lib",
         "stripe"
       ],
       "drizzle": false
@@ -47,17 +45,67 @@
         "eslint",
         "@next/eslint-plugin-next",
         "eslint-plugin-react-hooks",
-        "monaco-editor",
-        "prettier",
         "postcss",
         "tailwindcss",
         "tw-animate-css",
         "@radix-ui/react-navigation-menu",
-        "@radix-ui/react-slider",
-        "react-day-picker",
-        "@types/dompurify",
-        "@pagespace/db",
-        "@pagespace/lib"
+        // Only consumed by files under src/components/ui/** (excluded above via
+        // "ignore"), so knip can't trace the import — confirmed live via direct
+        // grep of accordion.tsx / hover-card.tsx / carousel.tsx.
+        "@radix-ui/react-accordion",
+        "@radix-ui/react-hover-card",
+        "embla-carousel-react",
+        // Explicitly externalized in next.config.ts (serverExternalPackages +
+        // webpack externals) so @pagespace/db's pg driver isn't bundled — no
+        // direct import in apps/web/src, but removing it risks breaking that
+        // webpack externalization contract.
+        "pg"
+      ]
+    },
+    "apps/android": {
+      "ignoreDependencies": [
+        // Capacitor plugins: consumed via JS/TS calls in the shared apps/web
+        // codebase that this shell wraps (not apps/android's own tiny src), or
+        // configured natively in capacitor.config.ts's "plugins" block — neither
+        // pattern is visible to knip's per-workspace import analysis.
+        "@capacitor/app",
+        "@capacitor/browser",
+        "@capacitor/preferences",
+        "@capacitor/push-notifications",
+        "@capacitor/splash-screen",
+        "@capacitor/status-bar",
+        "@capgo/capacitor-social-login",
+        // "web": "workspace:*" devDependency — no static import (build:full's
+        // `bun run --filter 'web' build` doesn't need one), but left declared
+        // deliberately: Turbo's task graph derives ^build ordering from
+        // package.json dependency edges, and this repo's other typecheck/build
+        // verification relies on that graph. Not confirmed safe to remove.
+        "web"
+      ]
+    },
+    "apps/ios": {
+      "ignoreDependencies": [
+        // Same cross-workspace/native-config pattern as apps/android.
+        "@capawesome/capacitor-badge",
+        "@capacitor/app",
+        "@capacitor/browser",
+        "@capacitor/ios",
+        "@capacitor/preferences",
+        "@capacitor/push-notifications",
+        "@capacitor/splash-screen",
+        "@capacitor/status-bar",
+        "@capgo/capacitor-social-login",
+        "web"
+      ]
+    },
+    "apps/admin": {
+      "ignoreDependencies": [
+        // Used via eslint.config.mjs's FlatCompat.extends("next/core-web-vitals",
+        // "next/typescript") — a preset-string resolution knip can't trace.
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks"
       ]
     },
     "apps/e2e": {
@@ -74,8 +122,7 @@
     },
     "apps/processor": {
       "entry": ["src/server.ts"],
-      "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["crypto"]
+      "project": ["src/**/*.ts"]
     },
     "apps/desktop": {
       "entry": [
@@ -91,14 +138,22 @@
         "electron-vite"
       ]
     },
+    "apps/marketing": {
+      "ignoreDependencies": [
+        // Same FlatCompat next.js preset pattern as apps/admin.
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks"
+      ]
+    },
     "packages/cli": {
       "entry": [
         // package.json "bin" entrypoints — knip can't resolve these without an
         // explicit entry pattern for this workspace.
         "src/bin.ts",
         "src/bin-pagespace-mcp.ts",
-        "src/index.ts",
-        "vitest.config.ts"
+        "src/index.ts"
       ],
       "project": ["src/**/*.ts"],
       "ignore": [
