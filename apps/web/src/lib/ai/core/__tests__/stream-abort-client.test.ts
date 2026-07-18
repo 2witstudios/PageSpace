@@ -201,16 +201,31 @@ describe('stream-abort-client', () => {
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
     });
 
-    it('given a non-ok response (e.g. 402 out of credits), should unmark the channel', async () => {
+    it('given a non-ok response (e.g. 402 out of credits), should unmark the channel and throw a typed-cause Error (epic leaf 6.5) instead of returning the raw response', async () => {
       const client = await import('../stream-abort-client');
       const consuming = await import('@/lib/ai/streams/consumingChannels');
 
-      vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response('{}', { status: 402 }));
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'out_of_credits', message: 'balance too low' }), { status: 402 }),
+      );
 
       const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
-      await trackingFetch('/api/ai/chat', { method: 'POST' });
+      await expect(trackingFetch('/api/ai/chat', { method: 'POST' })).rejects.toMatchObject({
+        cause: { code: 'out_of_credits', httpStatus: 402, message: 'balance too low', retryable: false },
+      });
 
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given a non-ok response with a non-JSON body, should still throw a safe typed-cause Error (never crash)', async () => {
+      const client = await import('../stream-abort-client');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(new Response('not json', { status: 500 }));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
+      await expect(trackingFetch('/api/ai/chat', { method: 'POST' })).rejects.toMatchObject({
+        cause: { code: 'unknown', httpStatus: 500, retryable: true },
+      });
     });
 
     it('given the tracked response, should preserve status and headers (the X-Stream-Id contract must survive the body re-wrap)', async () => {
@@ -241,6 +256,7 @@ describe('stream-abort-client', () => {
       const client = await import('../stream-abort-client');
 
       const mockResponse = {
+        ok: true,
         headers: {
           get: vi.fn().mockReturnValue('stream-id'),
         },
@@ -262,6 +278,7 @@ describe('stream-abort-client', () => {
       const client = await import('../stream-abort-client');
 
       const mockResponse = {
+        ok: true,
         headers: { get: vi.fn().mockReturnValue(null) },
       } as unknown as Response;
 

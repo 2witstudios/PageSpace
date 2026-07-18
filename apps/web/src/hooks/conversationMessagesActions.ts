@@ -1,6 +1,8 @@
 import type { UIMessage } from 'ai';
 import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
+import type { ConversationCacheEntry } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import type { AskUserAnswerPayload, AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 /**
  * Facade — the sanctioned way for a component to WRITE to
@@ -18,16 +20,48 @@ export const conversationMessagesActions = {
   /** True while `generation` is still the newest `startLoad` result for `conversationId` — false once a newer load has superseded it. */
   isLoadCurrent: (conversationId: string, generation: number): boolean =>
     useConversationMessagesStore.getState().isLoadCurrent(conversationId, generation),
-  applyLoad: (conversationId: string, generation: number, messages: UIMessage[]): void =>
-    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages),
+  applyLoad: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+  ): void =>
+    useConversationMessagesStore.getState().applyLoad(conversationId, generation, messages, pagination),
   failLoad: (conversationId: string, generation: number): void =>
     useConversationMessagesStore.getState().failLoad(conversationId, generation),
+  /** Imperative snapshot read of a conversation's cache entry (defaults when never seen). */
+  getEntry: (conversationId: string): ConversationCacheEntry =>
+    useConversationMessagesStore.getState().getEntry(conversationId),
+  /** Marks a "load older" fetch in flight (epic leaf 6.6) — inline indicator, no generation change. */
+  startLoadingOlder: (conversationId: string): void =>
+    useConversationMessagesStore.getState().startLoadingOlder(conversationId),
+  /** Prepends a dedup'd older page and advances olderCursor/hasMoreOlder; generation-gated. */
+  applyOlderPage: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    hasMoreOlder: boolean,
+    nextCursor: string | null,
+  ): void =>
+    useConversationMessagesStore.getState().applyOlderPage(conversationId, generation, messages, hasMoreOlder, nextCursor),
+  /** Clears isLoadingOlder on a failed "load older" fetch; leaves the cache otherwise intact. */
+  failLoadingOlder: (conversationId: string, generation: number): void =>
+    useConversationMessagesStore.getState().failLoadingOlder(conversationId, generation),
   addOptimisticSend: (conversationId: string, message: UIMessage): void =>
     useConversationMessagesStore.getState().addOptimisticSend(conversationId, message),
+  /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9). */
+  removeOptimisticSendOnFailure: (conversationId: string, messageId: string): void =>
+    useConversationMessagesStore.getState().removeOptimisticSendOnFailure(conversationId, messageId),
   applyEdit: (conversationId: string, payload: MessageEditPayload): void =>
     useConversationMessagesStore.getState().applyEdit(conversationId, payload),
   applyDelete: (conversationId: string, messageId: string): void =>
     useConversationMessagesStore.getState().applyDelete(conversationId, messageId),
+  /** Optimistic ask_user answer patch — the resume POST's own commit reconciles it once persisted. */
+  applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload): void =>
+    useConversationMessagesStore.getState().applyAskUserAnswer(conversationId, payload),
+  /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
+  revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload): void =>
+    useConversationMessagesStore.getState().revertAskUserAnswer(conversationId, payload),
   /**
    * Appends a broadcast user message, reconciling it out of `optimisticSends` if
    * present. No-ops if the id is already confirmed — correct for a user message,

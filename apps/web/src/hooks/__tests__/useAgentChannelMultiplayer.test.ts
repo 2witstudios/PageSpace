@@ -148,7 +148,24 @@ describe('useAgentChannelMultiplayer', () => {
       });
 
       expect(cacheMessages('conv-active')).toEqual([
-        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }] },
+        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }], status: 'complete' },
+      ]);
+    });
+
+    // Epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): a crash-reaped or Stopped stream must badge
+    // 'interrupted' the instant a live-open tab hears chat:stream_complete's aborted flag —
+    // not only after the next reload.
+    it('given the stream was aborted, the committed message should carry status "interrupted"', () => {
+      pendingStreams.current = new Map([[ 'msg-done', streamFixture({}) ]]);
+
+      renderWiring(baseOptions({ selectedAgent: AGENT, agentConversationId: 'conv-active' }));
+
+      act(() => {
+        capturedChannel.options?.onStreamComplete?.('msg-done', 'conv-active', { joinFailed: false }, true);
+      });
+
+      expect(cacheMessages('conv-active')).toEqual([
+        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }], status: 'interrupted' },
       ]);
     });
 
@@ -166,7 +183,7 @@ describe('useAgentChannelMultiplayer', () => {
       });
 
       expect(cacheMessages('conv-active')).toEqual([
-        { id: 'msg-foreign', role: 'assistant', parts: [{ type: 'text', text: 'other tab reply' }] },
+        { id: 'msg-foreign', role: 'assistant', parts: [{ type: 'text', text: 'other tab reply' }], status: 'complete' },
       ]);
     });
 
@@ -185,7 +202,7 @@ describe('useAgentChannelMultiplayer', () => {
       });
 
       expect(cacheMessages('conv-active')).toEqual([
-        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }] },
+        { id: 'msg-done', role: 'assistant', parts: [{ type: 'text', text: 'final response text' }], status: 'complete' },
       ]);
     });
 
