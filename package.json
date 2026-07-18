@@ -37,6 +37,8 @@
     "check:fetch": "node scripts/check-fetch-auth.js",
     "knip": "knip",
     "knip:fix": "knip --fix",
+    "knip:check": "node scripts/knip-ratchet.mjs",
+    "knip:ratchet": "node scripts/knip-ratchet.mjs --write",
     "changelog:generate": "npx tsx scripts/changelog/index.ts",
     "test:infra": "cd infrastructure && bunx vitest run",
     "test:infra:runtime": "cd infrastructure && bunx vitest run scripts/__tests__/image-runtime.test.ts --timeout 120000",
