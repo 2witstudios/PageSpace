@@ -145,7 +145,10 @@ export const useConversationSendHandoff = ({
       // retry re-attempts the handoff). Rejoin REGARDLESS: stop() above already killed the
       // local read, so the handed-off stream must be offered to the socket path either way —
       // the bootstrap's consuming-mark gate makes a rejoin of a still-consumed stream a no-op.
-      if (outcome === 'timeout' && getLatchedConversationId() !== undefined) {
+      // (`''` is the same unresolved-identity placeholder as at the initial gate above — not a
+      // real latch, so not grounds to refuse.)
+      const latchAfterTimeout = getLatchedConversationId();
+      if (outcome === 'timeout' && latchAfterTimeout !== undefined && latchAfterTimeout !== '') {
         console.warn(
           '[useConversationSendHandoff] chat status never settled after stop(); refusing the send',
         );

@@ -214,6 +214,28 @@ describe('useConversationSendHandoff', () => {
     expect(rejoin).toHaveBeenCalledTimes(1);
   });
 
+  it('given the timeout fires with an empty-string latch (placeholder, not a real latch), should resolve true and rejoin', async () => {
+    vi.useFakeTimers();
+    const { result, rejoin, latchedRef } = setup({ status: 'streaming', latched: 'conv-1' });
+
+    let prepare!: Promise<boolean>;
+    act(() => {
+      prepare = result.current.prepareSend('conv-2');
+    });
+    let value: boolean | undefined;
+    void prepare.then((v) => { value = v; });
+
+    // The latch reads back as the unresolved-identity placeholder — same no-latch rule as the
+    // initial gate and shouldRunLocalStop.
+    latchedRef.current = '';
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(value).toBe(true);
+    expect(rejoin).toHaveBeenCalledTimes(1);
+  });
+
   it('given the hook unmounts mid-wait, should resolve false (nothing left to render the send)', async () => {
     const { result, rejoin, unmount } = setup({ status: 'streaming', latched: 'conv-1' });
 
