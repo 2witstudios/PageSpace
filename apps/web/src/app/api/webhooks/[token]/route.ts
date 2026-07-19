@@ -1,37 +1,16 @@
 import { NextResponse } from 'next/server';
-import { createHmac } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { pages } from '@pagespace/db/schema/core';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
-import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { v0Scheme, DEFAULT_REPLAY_WINDOW_MS } from '@pagespace/lib/security/webhook-signature';
 import { publishWebhookMessage } from '@pagespace/lib/services/page-webhook-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-
-const REPLAY_WINDOW_MS = 5 * 60 * 1000;
 
 // Arbitrary-JSON envelope cap — checked on the raw bytes BEFORE JSON.parse so
 // an oversized body never costs a parse.
 const MAX_BODY_BYTES = 64 * 1024;
-
-/**
- * Verify `x-pagespace-signature`/`x-pagespace-timestamp` the same way the
- * Zoom webhook does (`zoom/verify-webhook.ts`): HMAC-SHA256 over
- * `v0:{timestamp}:{rawBody}`, `secureCompare` for the comparison (never raw
- * `crypto.timingSafeEqual` on an unhashed secret — see secure-compare.ts),
- * and a 5-minute replay window.
- */
-function verifySignature(signature: string | null, timestamp: string | null, rawBody: string, secret: string): boolean {
-  if (!signature || !timestamp) return false;
-
-  const ts = Number(timestamp);
-  if (!Number.isFinite(ts) || Math.abs(Date.now() - ts * 1000) > REPLAY_WINDOW_MS) return false;
-
-  const message = `v0:${timestamp}:${rawBody}`;
-  const expected = 'v0=' + createHmac('sha256', secret).update(message).digest('hex');
-  return secureCompare(signature, expected);
-}
 
 const NOT_FOUND = () => NextResponse.json({ error: 'Not found' }, { status: 404 });
 
@@ -56,9 +35,15 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     }
 
     const secret = await decryptField(webhook.webhookSecretEncrypted);
-    const signature = request.headers.get('x-pagespace-signature');
-    const timestamp = request.headers.get('x-pagespace-timestamp');
-    if (!verifySignature(signature, timestamp, rawBody, secret)) {
+    const verified = v0Scheme.verify({
+      secret,
+      signature: request.headers.get('x-pagespace-signature'),
+      timestamp: request.headers.get('x-pagespace-timestamp'),
+      rawBody,
+      nowMs: Date.now(),
+      replayWindowMs: DEFAULT_REPLAY_WINDOW_MS,
+    });
+    if (!verified) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
     }
 
