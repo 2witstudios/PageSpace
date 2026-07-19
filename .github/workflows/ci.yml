@@ -88,7 +88,7 @@ jobs:
       # independently of CI — a new one-off scripts/__tests__ file must be
       # added to this list by hand to actually run here.
       - name: Run backfill script tests
-        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts
+        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts __tests__/check-destructive-migrations.test.ts
 
       - name: Coverage report
         if: always()
@@ -123,3 +123,29 @@ jobs:
 
       - name: Run TypeScript check
         run: bun run typecheck
+
+  migration-safety:
+    name: Destructive Migration Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      # Newly added packages/db/drizzle/*.sql migrations that contain a destructive
+      # statement (DROP TABLE/COLUMN, TRUNCATE, a type change, an enum-swap rename,
+      # or a NOT NULL column with no DEFAULT) must carry a leading
+      # `-- destructive-migration-ack: <reason>` comment. See
+      # scripts/check-destructive-migrations.ts for the full pattern list and scope
+      # notes (per-file only, not retroactive on existing migrations).
+      - name: Check for unacknowledged destructive migrations
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "0000000000000000000000000000000000000000" ]; then
+            BASE_REF="HEAD~1"
+          fi
+          bun scripts/check-destructive-migrations.ts "$BASE_REF"
