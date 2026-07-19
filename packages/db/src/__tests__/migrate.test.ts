@@ -2,9 +2,12 @@
  * @scaffold - migrate.ts Tests
  *
  * migrate.ts is a custom migration runner that executes each migration in its
- * own transaction (fixing PostgreSQL enum ADD VALUE limitations).
- * We mock out readMigrationFiles and the db to avoid any real database connections,
- * then dynamically import the module to trigger its top-level IIFE.
+ * own transaction (fixing PostgreSQL enum ADD VALUE limitations). It runs on
+ * getMigrationPool() (Phase 7 of #j44e35jwzlhr54fbmruk3k4i) — NOT the
+ * app-throttled `db` — so DDL isn't bounded by the app pool's
+ * statement_timeout/lock_timeout. We mock out readMigrationFiles, the pool,
+ * and drizzle() to avoid any real database connections, then dynamically
+ * import the module to trigger its top-level IIFE.
  */
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
@@ -24,18 +27,26 @@ vi.mock('drizzle-orm', () => ({
   }),
 }));
 
-// Mock the db index so no real PG pool is created
+// Mock the migration pool (db.ts's getMigrationPool) so no real PG pool is created
+const mockPoolEnd = vi.fn().mockResolvedValue(undefined);
+const mockGetMigrationPool = vi.fn(() => ({ end: mockPoolEnd }));
+
+vi.mock('../db', () => ({
+  getMigrationPool: mockGetMigrationPool,
+}));
+
+// Mock drizzle(pool) -> the {execute, transaction} surface migration-runner.ts drives
 const mockExecute = vi.fn();
 const mockTxExecute = vi.fn();
 const mockTransaction = vi.fn(async (fn: (tx: { execute: typeof mockTxExecute }) => Promise<void>) => {
   await fn({ execute: mockTxExecute });
 });
 
-vi.mock('../db', () => ({
-  db: {
+vi.mock('drizzle-orm/node-postgres', () => ({
+  drizzle: vi.fn(() => ({
     execute: mockExecute,
     transaction: mockTransaction,
-  },
+  })),
 }));
 
 describe('migrate.ts', () => {
@@ -61,6 +72,8 @@ describe('migrate.ts', () => {
     mockTransaction.mockClear();
     mockTxExecute.mockReset();
     mockReadMigrationFiles.mockReset();
+    mockGetMigrationPool.mockClear();
+    mockPoolEnd.mockReset().mockResolvedValue(undefined);
   });
 
   it('runs migrations and exits with 0 on success', async () => {
@@ -74,6 +87,16 @@ describe('migrate.ts', () => {
     expect(mockReadMigrationFiles).toHaveBeenCalledTimes(1);
     expect(mockTransaction).toHaveBeenCalledTimes(1);
     expect(processExitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('runs on the dedicated migration pool (getMigrationPool), not the app-throttled db, and ends it before exiting', async () => {
+    mockReadMigrationFiles.mockReturnValue([]);
+
+    await import('../migrate');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockGetMigrationPool).toHaveBeenCalledTimes(1);
+    expect(mockPoolEnd).toHaveBeenCalledTimes(1);
   });
 
   it('reads migrations from the drizzle folder', async () => {

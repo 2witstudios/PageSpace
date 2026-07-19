@@ -81,3 +81,31 @@ export function getAdvisoryLockPool(): Pool {
   }
   return advisoryLockPool;
 }
+
+/**
+ * Dedicated pool for the main-DB migration entrypoint (migrate.ts) and other
+ * one-shot maintenance/backfill scripts (e.g. migrate-pending-invites.ts) —
+ * deliberately built from basePoolConfig() with NO `options`, so it never
+ * inherits the app pool's statement_timeout/lock_timeout. Migrations run DDL
+ * (index builds, table rewrites) that can legitimately run past 15s on a
+ * populated table, and can legitimately queue behind a lock held by an
+ * in-flight app transaction for longer than 5s — applying the app pool's
+ * request-serving limits there would abort a migration mid-run and block
+ * deployment instead of completing it. `max: 1` matches these scripts'
+ * actual concurrency: each runs its statements sequentially on a single
+ * connection, never in parallel.
+ *
+ * Lazily constructed like getAdvisoryLockPool(): only migration/backfill
+ * scripts ever call this, and each is a short-lived process that exits when
+ * done, so it isn't registered with pool-stats (nothing long-running is ever
+ * around to report on it).
+ */
+let migrationPool: Pool | null = null;
+
+export function getMigrationPool(): Pool {
+  if (!migrationPool) {
+    migrationPool = new Pool({ ...basePoolConfig(), max: 1 });
+    migrationPool.on('error', (_err, _client) => {});
+  }
+  return migrationPool;
+}
