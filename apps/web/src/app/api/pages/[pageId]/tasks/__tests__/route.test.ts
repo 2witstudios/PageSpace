@@ -526,6 +526,32 @@ describe('Task API Routes', () => {
       expect(vi.mocked(ilike).mock.calls[0]?.[1]).toBe('%100\\% done%');
     });
 
+    it('tiebreaks the phase-1 order by taskItems.id (regression: non-deterministic paging when positions collide)', async () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+      // A read-then-write race in POST's nextPosition, or a backfilled row that never got
+      // a distinct position, can leave two tasks sharing the same page.position — without a
+      // secondary sort key, LIMIT/OFFSET has no guaranteed stable order across repeated calls.
+      const phase1Chain = makeSelectChain([{ id: 'task-1' }]);
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
+
+      vi.mocked(db.select)
+        .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // childPages
+        .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // backfill existingRows
+        .mockImplementationOnce(() => phase1Chain as never) // phase 1: the query under test
+        .mockImplementation(() => makeSelectChain([]) as never); // trigger / sub-task counts
+
+      const response = await GET(createRequest(), { params: mockParams });
+
+      expect(response.status).toBe(200);
+      expect(phase1Chain.orderBy).toHaveBeenCalledTimes(1);
+      // Primary sort key (page.position/task.position) plus a taskItems.id tiebreaker.
+      expect((phase1Chain.orderBy as ReturnType<typeof vi.fn>).mock.calls[0]).toHaveLength(2);
+    });
+
     it('caps the result to the requested limit and hydrates only the bounded ids (regression: OOM crash fix)', async () => {
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
       // 5 TASK_LIST children — more than the ?limit=2 requested below.

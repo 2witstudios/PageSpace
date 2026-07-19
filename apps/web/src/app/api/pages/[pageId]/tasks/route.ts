@@ -161,7 +161,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
       search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
     ))
-    .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr))
+    // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
+    // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
+    // rows that never got a distinct one) have no guaranteed stable order across repeated
+    // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
+    .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
     .limit(limit)
     .offset(offset);
   const boundedTaskIds = orderedIdRows.map(r => r.id);
