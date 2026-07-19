@@ -1,0 +1,92 @@
+/**
+ * reorderTaskListChildren concurrency integration test (real Postgres).
+ *
+ * Requirement: Given a reorder transaction has locked the scope of a task
+ * list's TASK_LIST child pages via reorderTaskListChildren, when a
+ * concurrent transaction attempts to trash one of those pages, the trash
+ * update should block until the reorder transaction commits — so
+ * lockedBatchReorder's two statements (SELECT ... FOR UPDATE, then the
+ * batched UPDATE) observe the same scope instead of racing under READ
+ * COMMITTED. Without the FOR SHARE lock this closes, a page trashed in the
+ * gap between those two statements leaves a task reported as "locked" (and
+ * the route reports success) while its position was silently never written.
+ *
+ * Requires DATABASE_URL → a running Postgres with migrations applied
+ * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable —
+ * mirrors packages/lib/src/services/reorder/__tests__/locked-batch-reorder.integration.test.ts.
+ */
+import { describe, it, expect, beforeAll } from 'vitest';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { taskItems } from '@pagespace/db/schema/tasks';
+import { factories } from '@pagespace/db/test/factories';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
+import { reorderTaskListChildren } from '../reorder-task-list';
+
+let dbAvailable = false;
+
+describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
+  beforeAll(async () => {
+    try {
+      await db.select().from(pages).limit(1);
+      dbAvailable = true;
+    } catch {
+      dbAvailable = false;
+    }
+  });
+
+  it('blocks a concurrent page trash until the reorder transaction commits', async () => {
+    if (!dbAvailable) return;
+
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const taskListPage = await factories.createPage(drive.id, { type: 'FOLDER' });
+    const childPage = await factories.createPage(drive.id, {
+      parentId: taskListPage.id,
+      type: 'TASK_LIST',
+      isTrashed: false,
+    });
+    const [task] = await db.insert(taskItems).values({
+      userId: owner.id,
+      pageId: childPage.id,
+      position: 0,
+    }).returning();
+
+    const HOLD_MS = 500;
+
+    const plan = computeReorderPlan([{ id: task.id, position: 9 }]);
+    const reorderPromise = db.transaction(async (tx) => {
+      const lockedIds = await reorderTaskListChildren(tx, taskListPage.id, plan);
+      // Hold the FOR SHARE lock open for a measurable window so the
+      // concurrent trash attempt below is provably blocked, not just fast.
+      await new Promise((resolve) => setTimeout(resolve, HOLD_MS));
+      return lockedIds;
+    });
+
+    // Give the reorder transaction a head start to acquire its FOR SHARE
+    // lock before the trash attempt fires.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const trashStart = performance.now();
+    await db.update(pages).set({ isTrashed: true }).where(eq(pages.id, childPage.id));
+    const trashDurationMs = performance.now() - trashStart;
+
+    const lockedIds = await reorderPromise;
+
+    // The trash UPDATE must have waited for the reorder transaction's SHARE
+    // lock to release — without the fix it would return almost immediately.
+    expect(trashDurationMs).toBeGreaterThanOrEqual(HOLD_MS - 100);
+
+    // The reorder itself still succeeded: the task was in scope for the
+    // entire transaction (locked before the trash committed), so it must be
+    // reported as locked/updated rather than silently dropped.
+    expect(lockedIds).toEqual([task.id]);
+
+    const [updatedTask] = await db.select().from(taskItems).where(eq(taskItems.id, task.id));
+    expect(updatedTask.position).toBe(9);
+
+    const [updatedPage] = await db.select().from(pages).where(eq(pages.id, childPage.id));
+    expect(updatedPage.isTrashed).toBe(true);
+  });
+});

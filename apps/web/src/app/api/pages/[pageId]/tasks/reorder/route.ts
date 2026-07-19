@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
+import { taskLists } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
+import { computeReorderPlan } from '@pagespace/lib/services/reorder';
+import { reorderTaskListChildren } from './reorder-task-list';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -71,33 +72,9 @@ export async function PATCH(
   // that deadlocked production Postgres on 2026-07-18.
   const plan = computeReorderPlan(tasks);
   if (plan.orderedIds.length > 0) {
-    // task_items has no direct FK to its task list — membership is derived
-    // the same way GET/fetchEnrichedTasks do it, via pages that are direct
-    // TASK_LIST children of this list's page. Passed as a subquery (matching
-    // fetchEnrichedTasks in task-helpers.ts) rather than a materialized id
-    // array so Postgres filters membership itself instead of the app
-    // loading and rebinding every child id — that scales the same way the
-    // rest of this epic's bounded queries do, instead of reintroducing an
-    // unbounded-collection cost for large task lists.
-    const scopeWhere = inArray(taskItems.pageId, db
-      .select({ id: pages.id })
-      .from(pages)
-      .where(and(
-        eq(pages.parentId, pageId),
-        eq(pages.type, 'TASK_LIST'),
-        eq(pages.isTrashed, false),
-      )));
-
     try {
       await db.transaction(async (tx) => {
-        const lockedIds = await lockedBatchReorder(tx, {
-          table: taskItems,
-          idColumn: taskItems.id,
-          positionColumn: taskItems.position,
-          scopeWhere,
-          plan,
-          touchColumns: [taskItems.updatedAt],
-        });
+        const lockedIds = await reorderTaskListChildren(tx, pageId, plan);
 
         if (lockedIds.length !== plan.orderedIds.length) {
           throw new Error('Invalid task IDs');
