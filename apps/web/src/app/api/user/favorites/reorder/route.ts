@@ -5,6 +5,7 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { favorites } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -37,15 +38,18 @@ export async function PATCH(req: Request) {
       return NextResponse.json({ error: 'Some favorite IDs do not belong to this user' }, { status: 403 });
     }
 
-    // Update positions in a transaction
-    await db.transaction(async tx => {
-      for (let i = 0; i < orderedIds.length; i++) {
-        await tx
-          .update(favorites)
-          .set({ position: i })
-          .where(and(eq(favorites.id, orderedIds[i]), eq(favorites.userId, userId)));
-      }
-    });
+    const plan = computeReorderPlan(orderedIds.map((id, i) => ({ id, position: i })));
+    if (plan.orderedIds.length > 0) {
+      await db.transaction(async (tx) => {
+        await lockedBatchReorder(tx, {
+          table: favorites,
+          idColumn: favorites.id,
+          positionColumn: favorites.position,
+          scopeWhere: eq(favorites.userId, userId),
+          plan,
+        });
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
