@@ -145,4 +145,14 @@ describe('migrate.ts', () => {
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.any(Error));
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
+
+  it('given migration fails, should still end the pool (finally, not just the success path)', async () => {
+    const migrationError = new TypeError('db.execute is not a function');
+    mockExecute.mockRejectedValueOnce(migrationError);
+
+    await import('../migrate');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockPoolEnd).toHaveBeenCalledTimes(1);
+  });
 });

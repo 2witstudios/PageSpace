@@ -20,14 +20,17 @@ async function main() {
   const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
   const migrationPool = getMigrationPool();
 
-  await runMigrations(
-    drizzle(migrationPool),
-    migrations,
-    { migrationsSchema: "drizzle", migrationsTable: "__drizzle_migrations" },
-    console.log,
-  );
+  try {
+    await runMigrations(
+      drizzle(migrationPool),
+      migrations,
+      { migrationsSchema: "drizzle", migrationsTable: "__drizzle_migrations" },
+      console.log,
+    );
+  } finally {
+    await migrationPool.end();
+  }
 
-  await migrationPool.end();
   console.log("Migrations finished.");
   process.exit(0);
 }
