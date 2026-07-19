@@ -124,18 +124,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     ));
   const childPageIds = childPages.map(p => p.id);
 
+  const emptyTasksResponse = () => NextResponse.json({
+    taskList: {
+      id: taskList.id,
+      title: taskList.title,
+      description: taskList.description,
+      status: taskList.status,
+      updatedAt: taskList.updatedAt,
+    },
+    tasks: [],
+    statusConfigs,
+  });
+
   if (childPageIds.length === 0) {
-    return NextResponse.json({
-      taskList: {
-        id: taskList.id,
-        title: taskList.title,
-        description: taskList.description,
-        status: taskList.status,
-        updatedAt: taskList.updatedAt,
-      },
-      tasks: [],
-      statusConfigs,
-    });
+    return emptyTasksResponse();
   }
 
   // Self-heal: any TASK_LIST child missing its task_items row (created or moved via a
@@ -163,17 +165,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const boundedTaskIds = orderedIdRows.map(r => r.id);
 
   if (boundedTaskIds.length === 0) {
-    return NextResponse.json({
-      taskList: {
-        id: taskList.id,
-        title: taskList.title,
-        description: taskList.description,
-        status: taskList.status,
-        updatedAt: taskList.updatedAt,
-      },
-      tasks: [],
-      statusConfigs,
-    });
+    return emptyTasksResponse();
   }
 
   // Phase 2: hydrate the 5 relations only for the bounded page of ids from phase 1.

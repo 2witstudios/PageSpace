@@ -36,9 +36,9 @@ export function parseTaskQuerySpec(params: URLSearchParams): TaskQuerySpec {
   });
 
   return {
-    ...(status ? { status } : {}),
-    ...(assigneeId ? { assigneeId } : {}),
-    ...(search ? { search } : {}),
+    status: status || undefined,
+    assigneeId: assigneeId || undefined,
+    search: search || undefined,
     sortOrder,
     limit,
     offset,
