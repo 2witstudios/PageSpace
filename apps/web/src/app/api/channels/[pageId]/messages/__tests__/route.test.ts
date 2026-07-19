@@ -62,9 +62,6 @@ vi.mock('@pagespace/db/db', () => ({
       pages: {
         findFirst: vi.fn().mockResolvedValue(null),
       },
-      driveMembers: {
-        findMany: vi.fn().mockResolvedValue([]),
-      },
     },
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -82,7 +79,17 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {} }));
-vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: {}, pagePermissions: {} }));
+vi.mock('@pagespace/db/schema/members', () => ({ pagePermissions: {} }));
+// The inbox-fanout member/admin lookups go through the centralized,
+// acceptedAt-gated drive-member-service (published as a prebuilt CJS/ESM
+// package) rather than an inline query — mock it directly instead of
+// driving it through the low-level db seam.
+const mockGetDriveMemberUserIds = vi.fn().mockResolvedValue([]);
+const mockGetDriveMemberUserIdsByStandardRole = vi.fn().mockResolvedValue([]);
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveMemberUserIds: (...args: unknown[]) => mockGetDriveMemberUserIds(...args),
+  getDriveMemberUserIdsByStandardRole: (...args: unknown[]) => mockGetDriveMemberUserIdsByStandardRole(...args),
+}));
 
 // --- Audit + logger seams ------------------------------------------------------
 vi.mock('@pagespace/lib/audit/audit-log', () => ({

@@ -91,14 +91,20 @@ export function DriveShareLinkSection({ driveId }: { driveId: string }) {
                   <div key={link.id} className="space-y-1">
                     <div className="flex items-center gap-2">
                       <Badge className={`text-xs shrink-0 ${label.classes}`}>{label.text}</Badge>
-                      <input
-                        type="text"
-                        readOnly
-                        value={link.shareUrl ?? ''}
-                        aria-label={`${label.text} invite link URL`}
-                        className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
-                        onClick={(e) => (e.target as HTMLInputElement).select()}
-                      />
+                      {link.shareUrl ? (
+                        <input
+                          type="text"
+                          readOnly
+                          value={link.shareUrl}
+                          aria-label={`${label.text} invite link URL`}
+                          className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
+                          onClick={(e) => (e.target as HTMLInputElement).select()}
+                        />
+                      ) : (
+                        <span className="flex-1 min-w-0 h-7 flex items-center px-2 text-xs text-muted-foreground italic truncate">
+                          Link only shown once, at creation
+                        </span>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"

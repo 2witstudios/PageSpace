@@ -33,10 +33,14 @@ export async function GET(
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
 
+  // The raw token is only ever returned once, from POST at creation time — it
+  // is hashed before being stored (see share-link-service.ts) and cannot be
+  // recovered here. Existing links show metadata only; copy the link when
+  // it's first generated, or revoke and generate a new one.
   return NextResponse.json({
     links: result.data.map((link) => ({
       ...link,
-      shareUrl: getShareUrl(link.token),
+      shareUrl: null,
     })),
   });
 }

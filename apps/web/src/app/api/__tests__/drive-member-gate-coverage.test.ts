@@ -36,15 +36,7 @@ const ACCEPTED_AT_GATE_EXEMPT = new Map<string, string>([
   ],
   [
     'account/drives-status',
-    'Followup #4: admin lookup for drive-transfer UI should gate on acceptedAt — tracked in followup-4 (invite UX/audit hardening).',
-  ],
-  [
-    'admin/global-prompt',
-    'Followup #4: admin drive picker should hide pending invitations — tracked in followup-4.',
-  ],
-  [
-    'channels/[pageId]/messages',
-    'Followup #4: pending admins should not receive @mention broadcast — tracked in followup-4.',
+    'The admin transfer-target list is served by the centralized, acceptedAt-gated getAcceptedDriveAdminsWithDetails (packages/lib/src/services/drive-member-service.ts) — no inline gate to match here. The remaining driveMembers reference in this file is the per-drive member COUNT query (solo vs multi-member classification), a UI stat with no authz consequence.',
   ],
   [
     'drives/[driveId]/backups/[backupId]/restore',

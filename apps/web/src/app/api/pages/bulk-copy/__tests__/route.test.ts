@@ -53,6 +53,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserViewPage: vi.fn().mockResolvedValue(true),
+    isDriveOwnerOrAdmin: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
@@ -114,7 +115,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
@@ -204,12 +205,12 @@ function setupSuccessScenario() {
 
   // DB queries
   vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: mockUserId } as never);
-  vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
   vi.mocked(db.query.pages.findMany).mockResolvedValue([mockSourcePage()] as never);
   vi.mocked(db.query.pages.findFirst).mockResolvedValue({ position: 5 } as never);
 
   // Permissions
   vi.mocked(canUserViewPage).mockResolvedValue(true);
+  vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
 
   // Transaction mocks
   txInsertValues.mockResolvedValue(undefined);
@@ -328,7 +329,7 @@ describe('POST /api/pages/bulk-copy', () => {
 
     it('allows when user is drive ADMIN member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN' } as never);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -337,20 +338,9 @@ describe('POST /api/pages/bulk-copy', () => {
       expect(body.success).toBe(true);
     });
 
-    it('allows when user is drive OWNER member', async () => {
+    it('returns 403 when user is only a MEMBER (non-admin)', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'OWNER' } as never);
-
-      const response = await POST(createRequest(validBody));
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.success).toBe(true);
-    });
-
-    it('returns 403 when user is only a VIEWER member', async () => {
-      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'VIEWER' } as never);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -361,7 +351,7 @@ describe('POST /api/pages/bulk-copy', () => {
 
     it('returns 403 when user has no membership', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -372,16 +362,17 @@ describe('POST /api/pages/bulk-copy', () => {
 
     // Review C2 — pending ADMIN escalation. Adversarial pin against drift back
     // to the role-only predicate that allowed pending invitees to write into
-    // a drive they had not joined.
+    // a drive they had not joined. isDriveOwnerOrAdmin (packages/lib/src/
+    // permissions/permissions.ts) is the centralized gate — a pending row
+    // (acceptedAt IS NULL) makes it resolve to false.
     it('rejects pending ADMIN (acceptedAt IS NULL) — adversarial pending-admin-can-bulk-copy-into-unaccepted-drive path', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const response = await POST(createRequest(validBody));
 
       expect(response.status).toBe(403);
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(mockUserId, mockDriveId);
     });
   });
 

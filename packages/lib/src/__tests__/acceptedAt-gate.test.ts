@@ -49,17 +49,6 @@ const GATE = /isNotNull\s*\(\s*driveMembers\.acceptedAt\s*\)/;
 describe('drive-member-service.ts', () => {
   const source = read('services/drive-member-service.ts');
 
-  it('given a non-owner caller, checkDriveAccess membership lookup gates pending rows (regression: pending row would otherwise grant isMember=true)', () => {
-    const body = extractFunctionBody(source, 'checkDriveAccess');
-    expect(body).toMatch(GATE);
-  });
-
-  it('given a non-owner caller, checkDriveAccess membership lookup must not grant ADMIN to pending rows (regression: pending admin would otherwise pass isAdmin=true)', () => {
-    const body = extractFunctionBody(source, 'checkDriveAccess');
-    expect(body).toMatch(GATE);
-    expect(body).toMatch(/role\s*===\s*'ADMIN'/);
-  });
-
   it('getDriveMemberUserIds gates pending rows out of authz member lists (regression: pending row would surface in authz allow-lists)', () => {
     const body = extractFunctionBody(source, 'getDriveMemberUserIds');
     expect(body).toMatch(GATE);
@@ -75,8 +64,33 @@ describe('drive-member-service.ts', () => {
     expect(body).toMatch(GATE);
   });
 
-  it('owners (drive.ownerId) bypass membership lookup so the gate cannot lock them out (regression: gate must not affect drive owners)', () => {
+  it('checkDriveAccess delegates to the centralized getDriveAccessLevel (Epic 2 seam) rather than re-querying driveMembers inline', () => {
     const body = extractFunctionBody(source, 'checkDriveAccess');
+    expect(body).toMatch(/return getDriveAccessLevel\(driveId, userId\)/);
+  });
+});
+
+// checkDriveAccess (drive-member-service.ts) and checkDriveAccessForRoles
+// (drive-role-service.ts) both delegate to this single centralized function —
+// pinning the gate here, rather than at each call site, is what makes the
+// drive-role-service.ts drift (it had silently lost this gate before the
+// Epic 2 centralization) structurally impossible to reintroduce.
+describe('permissions/drive-access-level.ts', () => {
+  const source = read('permissions/drive-access-level.ts');
+
+  it('given a non-owner caller, getDriveAccessLevel membership lookup gates pending rows (regression: pending row would otherwise grant isMember=true)', () => {
+    const body = extractFunctionBody(source, 'getDriveAccessLevel');
+    expect(body).toMatch(GATE);
+  });
+
+  it('given a non-owner caller, getDriveAccessLevel membership lookup must not grant ADMIN to pending rows (regression: pending admin would otherwise pass isAdmin=true)', () => {
+    const body = extractFunctionBody(source, 'getDriveAccessLevel');
+    expect(body).toMatch(GATE);
+    expect(body).toMatch(/role\s*===\s*'ADMIN'/);
+  });
+
+  it('owners (drive.ownerId) bypass membership lookup so the gate cannot lock them out (regression: gate must not affect drive owners)', () => {
+    const body = extractFunctionBody(source, 'getDriveAccessLevel');
     expect(body).toMatch(/drive\.ownerId\s*===\s*userId/);
     expect(body).toMatch(/isOwner: true, isAdmin: true, isMember: true/);
   });

@@ -4,11 +4,11 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, isNull, isNotNull } from '@pagespace/db/operators'
+import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
@@ -69,22 +69,11 @@ export async function POST(request: Request) {
       // through to the owner's own authority below.
       canEditDrive = tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
     } else {
-      const isOwner = targetDrive.ownerId === userId;
-      canEditDrive = isOwner;
-
-      if (!isOwner) {
-        // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
-        // would otherwise pass the role check and be allowed to write into a
-        // drive they have not accepted into. Closes Review C2.
-        const membership = await db.query.driveMembers.findFirst({
-          where: and(
-            eq(driveMembers.driveId, targetDriveId),
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
-          ),
-        });
-        canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
-      }
+      // isDriveOwnerOrAdmin is the centralized owner-or-accepted-admin gate
+      // (packages/lib/src/permissions/permissions.ts) — pending invitees
+      // (acceptedAt IS NULL) are excluded, so a pending ADMIN cannot write
+      // into a drive they have not accepted into.
+      canEditDrive = await isDriveOwnerOrAdmin(userId, targetDriveId);
     }
 
     if (!canEditDrive) {

@@ -1,12 +1,12 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -60,19 +60,13 @@ export async function POST(req: Request) {
     }
 
     if (action === 'transfer') {
-      // Verify the new owner is an *accepted* admin in the drive. A pending
-      // admin (acceptedAt IS NULL) must not receive ownership — they have
-      // never authenticated to the drive and cannot consent. Closes Review C2.
-      const newOwnerMembership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, newOwnerId),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        ),
-      });
+      // isDriveOwnerOrAdmin is the centralized owner-or-accepted-admin gate
+      // (packages/lib/src/permissions/permissions.ts). A pending admin
+      // (acceptedAt IS NULL) must not receive ownership — they have never
+      // authenticated to the drive and cannot consent.
+      const newOwnerIsAdmin = await isDriveOwnerOrAdmin(newOwnerId, driveId);
 
-      if (!newOwnerMembership) {
+      if (!newOwnerIsAdmin) {
         return Response.json(
           { error: 'The new owner must be an admin of the drive' },
           { status: 400 }

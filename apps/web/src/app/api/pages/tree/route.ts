@@ -2,13 +2,12 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
-import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import { getUserAccessiblePagesInDrive, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -60,20 +59,11 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });
       }
     } else {
-      let hasAccess = isOwner;
-
-      if (!isOwner) {
-        // Authz read: pending invitee (acceptedAt IS NULL) must not read the
-        // page tree of a drive they have not joined. Closes Review C2.
-        const membership = await db.query.driveMembers.findFirst({
-          where: and(
-            eq(driveMembers.driveId, driveId),
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
-          ),
-        });
-        hasAccess = !!membership;
-      }
+      // isUserDriveMember is the centralized owner-or-accepted-member gate
+      // (packages/lib/src/permissions/permissions.ts) — a pending invitee
+      // (acceptedAt IS NULL) must not read the page tree of a drive they
+      // have not joined.
+      const hasAccess = isOwner || (await isUserDriveMember(userId, driveId));
 
       if (!hasAccess) {
         return NextResponse.json({ error: 'Access denied' }, { status: 403 });

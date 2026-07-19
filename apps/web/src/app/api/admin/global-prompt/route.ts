@@ -25,9 +25,9 @@ import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc } from '@pagespace/db/operators'
-import { drives, pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core'
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 
 interface PromptSection {
   name: string;
@@ -84,51 +84,18 @@ async function handleGlobalPrompt(
     const selectedPageId = searchParams.get('pageId'); // null = drive or dashboard context
     const showPageTree = searchParams.get('showPageTree') === 'true';
 
-    // Get all drives the user has access to (for the picker)
-    // 1. Get drives owned by the user
-    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-    const ownedDrives = await db.query.drives.findMany({
-      where: and(eq(drives.ownerId, adminUser.id), eq(drives.isTrashed, false)),
-    });
-
-    // 2. Get drives shared with the user via driveMembers
-    const memberDrives = await db
-      .select({
-        driveId: driveMembers.driveId,
-        role: driveMembers.role,
-        driveName: drives.name,
-        driveSlug: drives.slug,
-      })
-      .from(driveMembers)
-      .leftJoin(drives, eq(driveMembers.driveId, drives.id))
-      .where(eq(driveMembers.userId, adminUser.id));
-
-    // 3. Merge owned drives + shared drives, deduplicating
-    const allDrivesMap = new Map<string, { id: string; name: string; slug: string; role: string }>();
-
-    // Add owned drives first (role = OWNER)
-    for (const drive of ownedDrives) {
-      allDrivesMap.set(drive.id, {
-        id: drive.id,
-        name: drive.name,
-        slug: drive.slug,
-        role: 'OWNER',
-      });
-    }
-
-    // Add shared drives (don't override if already owned)
-    for (const drive of memberDrives) {
-      if (drive.driveName && !allDrivesMap.has(drive.driveId)) {
-        allDrivesMap.set(drive.driveId, {
-          id: drive.driveId,
-          name: drive.driveName,
-          slug: drive.driveSlug!,
-          role: drive.role,
-        });
-      }
-    }
-
-    const availableDrives = Array.from(allDrivesMap.values());
+    // Get all drives the user has access to (for the picker): owned + drives
+    // where they're an accepted member. listAccessibleDrives is the
+    // centralized, acceptedAt-gated lookup — tokenScopable:true excludes
+    // page-permission-only drives, matching this picker's prior scope
+    // (owned + accepted membership, no bare page-permission grants).
+    const accessibleDrives = await listAccessibleDrives(adminUser.id, { tokenScopable: true });
+    const availableDrives = accessibleDrives.map((drive) => ({
+      id: drive.id,
+      name: drive.name,
+      slug: drive.slug,
+      role: drive.role,
+    }));
 
     // Get pages for the selected drive (for the page picker)
     let availablePages: Array<{ id: string; title: string; type: string; parentId: string | null }> = [];

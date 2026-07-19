@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
+      drives: { findFirst: vi.fn() },
       driveRoles: { findMany: vi.fn(), findFirst: vi.fn() },
       driveMembers: { findFirst: vi.fn() },
     },
@@ -39,13 +40,14 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveRoles: { id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', description: 'dr.description', color: 'dr.color', isDefault: 'dr.isDefault', permissions: 'dr.permissions', position: 'dr.position', updatedAt: 'dr.updatedAt' },
-  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', acceptedAt: 'dm.acceptedAt' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   asc: vi.fn((a) => ({ op: 'asc', a })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
   sql: Object.assign(
     vi.fn((strings: unknown, ...values: unknown[]) => ({ strings, values })),
     {
@@ -72,6 +74,7 @@ import {
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
   query: {
+    drives: { findFirst: MockFn };
     driveRoles: { findMany: MockFn; findFirst: MockFn };
     driveMembers: { findFirst: MockFn };
   };
@@ -144,14 +147,13 @@ describe('drive-role-service', () => {
   });
 
   describe('checkDriveAccessForRoles', () => {
+    // checkDriveAccessForRoles delegates to the centralized getDriveAccessLevel
+    // (packages/lib/src/permissions/drive-access-level.ts), which resolves the
+    // drive via db.query.drives.findFirst and membership via a gated
+    // db.select().from(driveMembers) — mirrors drive-member-service's own
+    // checkDriveAccess test setup.
     it('should return no access when drive not found', async () => {
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      mockDb.query.drives.findFirst.mockResolvedValueOnce(null);
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.drive).toBeNull();
@@ -159,13 +161,8 @@ describe('drive-role-service', () => {
     });
 
     it('should return owner access', async () => {
-      const drive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'user-1' };
-      mockDb.select.mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([drive]),
-          }),
-        }),
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({
+        id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'user-1',
       });
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
@@ -175,15 +172,16 @@ describe('drive-role-service', () => {
     });
 
     it('should return admin for ADMIN member', async () => {
-      const drive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'other' };
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({
+        id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'other',
+      });
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([drive]),
+            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN' }]),
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce({ role: 'ADMIN' });
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.isAdmin).toBe(true);
@@ -191,15 +189,16 @@ describe('drive-role-service', () => {
     });
 
     it('should return non-admin for MEMBER role', async () => {
-      const drive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'other' };
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({
+        id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'other',
+      });
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([drive]),
+            limit: vi.fn().mockResolvedValue([{ role: 'MEMBER' }]),
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce({ role: 'MEMBER' });
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.isAdmin).toBe(false);
@@ -207,15 +206,16 @@ describe('drive-role-service', () => {
     });
 
     it('should return non-member when no membership', async () => {
-      const drive = { id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'other' };
+      mockDb.query.drives.findFirst.mockResolvedValueOnce({
+        id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'other',
+      });
       mockDb.select.mockReturnValue({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([drive]),
+            limit: vi.fn().mockResolvedValue([]),
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce(null);
 
       const result = await checkDriveAccessForRoles('drive-1', 'user-1');
       expect(result.isMember).toBe(false);

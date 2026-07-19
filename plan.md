@@ -20,38 +20,9 @@
 - [Task List Agent Triggers Follow-up](tasks/task-list-agent-triggers-followup.md) — close PR #1177 post-merge gaps: cross-surface discoverability via TaskDetailSheet, page-scoped task broadcasts for collaborative real-time, agent-parity (instructionPageId + contextPageIds) in the trigger dialog, "anchored to" clarity in the page-level Workflows dialog, and small polish + correctness fixes.
 - [GitHub Integration Clarity & Token-Efficiency Redesign](tasks/github-integration-clarity-redesign.md) — shared tool bundles (Read-only / Code review / Issue triage / Full) that drive one-click grant presets and load only needed tools; compact `int__github__list_repos` tool names (drop the random connection-id segment), consistent `list_`/`get_` verbs, redesigned connect dialog (identity + plain-English scopes), and a clear connection → visibility → per-agent-tools scope model.
 
-## Drive Invites by Email — followups
-
-Follow-up authz queries on `drive_members` discovered during Epic 1 gate
-hardening. These were left out of Epic 1 to keep the PR tight (security
-hardening only); each callsite is allow-listed in
-`apps/web/src/app/api/__tests__/drive-member-gate-coverage.test.ts` with a
-justification, and should be revisited as a follow-up:
-
-- `apps/web/src/app/api/account/drives-status/route.ts` — admin lookup for the
-  drive-transfer UI; should gate on `acceptedAt` so a pending admin can't be
-  offered as a transfer target.
-- `apps/web/src/app/api/account/handle-drive/route.ts` — drive-transfer POST
-  validates the new owner is an admin; same gate needed so transfer to a
-  pending admin is rejected.
-- `apps/web/src/app/api/admin/global-prompt/route.ts` — admin tool listing
-  member drives for global-prompt scoping; gate so pending invitations don't
-  surface in the admin's drive picker.
-- `apps/web/src/app/api/channels/[pageId]/messages/route.ts` — admin
-  membership lookup for mention notifications; pending admins shouldn't
-  receive @mentions before accepting.
-- `apps/web/src/app/api/pages/bulk-copy/route.ts`,
-  `apps/web/src/app/api/pages/bulk-move/route.ts` — target-drive membership
-  check used to authorise cross-drive copy/move; gate so a pending member
-  can't pull pages into a drive they haven't accepted into.
-- `apps/web/src/app/api/pages/tree/route.ts` — drive membership lookup for
-  the tree-rendering authz check; same gate.
-- `packages/lib/src/services/drive-role-service.ts` — `checkDriveAccessForRoles`
-  membership lookup; same `acceptedAt` gate needed so a pending member
-  can't read or modify drive roles before accepting their invitation.
-
 ## Recently Completed
 
+- [Permissions Hardening](tasks/archive/2026-07-19-permissions-hardening.md) — ✅ 2026-07-19 — closed all 7 Drive Invites by Email follow-ups (acceptedAt gate on drives-status admin picker + global-prompt drive picker + channels mention fan-out; migrated bulk-copy/bulk-move/tree/handle-drive's duplicated inline membership checks onto centralized `isDriveOwnerOrAdmin`/`isUserDriveMember`; fixed `drive-role-service.ts`'s `checkDriveAccessForRoles` drift via a new centralized `getDriveAccessLevel`); share-link tokens (`drive_share_links`/`page_share_links`) now stored as SHA3-256 hashes, never plaintext — existing links show-once at creation, list view no longer reconstructs the URL; added a structural guard test forbidding new inline `driveMembers` authz queries in route handlers outside the centralized helpers.
 - [Kill the useToast Console.log Stub](tasks/archive/2026-07-18-kill-usetoast-stub.md) — ✅ 2026-07-18 — deleted the console.log-only `useToast` hook, migrated all 14 consumers (member management, role editing, drive AI settings, drive deletion, invites, version-history/activity rollback flows) to `sonner`; updated 2 tests, typecheck/lint clean.
 - [BYOK Retirement](tasks/archive/2026-05-01-byok-retirement.md) — ✅ 2026-05-01 — Drop `user_ai_settings`, route all AI calls through `*_DEFAULT_API_KEY` env vars, broaden per-tier rate-limit gate to every managed provider; breaking change for self-hosters.
 - [Deployment Mode Isolation Gaps](tasks/archive/2026-04-17-deployment-mode-isolation-gaps.md) — ✅ 2026-04-17 — Resend, Google Calendar, and AI provider guards for onprem mode; closes #944 #960 #964.

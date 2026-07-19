@@ -43,14 +43,20 @@ export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSecti
                     <Badge variant="secondary" className="text-xs shrink-0">
                       {permissionLabel(link.permissions)}
                     </Badge>
-                    <input
-                      type="text"
-                      readOnly
-                      value={link.shareUrl ?? ''}
-                      aria-label="Share link URL"
-                      className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
-                      onClick={(e) => (e.target as HTMLInputElement).select()}
-                    />
+                    {link.shareUrl ? (
+                      <input
+                        type="text"
+                        readOnly
+                        value={link.shareUrl}
+                        aria-label="Share link URL"
+                        className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
+                        onClick={(e) => (e.target as HTMLInputElement).select()}
+                      />
+                    ) : (
+                      <span className="flex-1 min-w-0 h-7 flex items-center px-2 text-xs text-muted-foreground italic truncate">
+                        Link only shown once, at creation
+                      </span>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"

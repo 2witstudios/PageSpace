@@ -68,13 +68,14 @@ vi.mock('@pagespace/db/schema/members', () => ({
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessiblePagesInDrive: vi.fn(),
+  isUserDriveMember: vi.fn(),
 }));
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPDriveScope } from '@/lib/auth';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db';
-import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import { getUserAccessiblePagesInDrive, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -117,6 +118,8 @@ describe('POST /api/pages/tree', () => {
     vi.mocked(buildTree).mockReturnValue([{ id: 'page_1', children: [] }] as never);
     // Default: all pages accessible (used for non-owner path)
     vi.mocked(getUserAccessiblePagesInDrive).mockResolvedValue(['page_1']);
+    // Default: not a member (each test sets this explicitly for non-owner paths)
+    vi.mocked(isUserDriveMember).mockResolvedValue(false);
   });
 
   describe('authentication', () => {
@@ -181,7 +184,7 @@ describe('POST /api/pages/tree', () => {
 
       expect(response.status).toBe(200);
       // Should NOT check membership when user is owner
-      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+      expect(isUserDriveMember).not.toHaveBeenCalled();
     });
 
     it('allows access when user is drive member (not owner)', async () => {
@@ -190,11 +193,7 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: 'other_user',
       });
-      // @ts-expect-error - partial mock data
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-        driveId: mockDriveId,
-        userId: mockUserId,
-      });
+      vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
@@ -207,7 +206,7 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: 'other_user',
       });
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(isUserDriveMember).mockResolvedValue(false);
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
       const body = await response.json();
@@ -219,20 +218,22 @@ describe('POST /api/pages/tree', () => {
     // Review C2 — pending member can read full page tree of a drive they have
     // not joined. The tree leaks every non-trashed page (id, title, type,
     // parentId, position, isTrashed). Adversarial pin against that path.
+    // isUserDriveMember (packages/lib/src/permissions/permissions.ts) is the
+    // centralized gate — a pending row (acceptedAt IS NULL) makes it resolve
+    // to false, same as "no membership at all" from this route's perspective.
     it('rejects pending member (acceptedAt IS NULL) — adversarial pending-member-reads-page-tree path', async () => {
       // @ts-expect-error - partial mock data
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({
         id: mockDriveId,
         ownerId: 'other_user',
       });
-      // Post-fix the gate filters this row out and findFirst returns undefined.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      // Post-fix the gate filters this row out inside isUserDriveMember.
+      vi.mocked(isUserDriveMember).mockResolvedValue(false);
 
       const response = await POST(createRequest({ driveId: mockDriveId }));
 
       expect(response.status).toBe(403);
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(isUserDriveMember).toHaveBeenCalledWith(mockUserId, mockDriveId);
     });
   });
 
@@ -277,11 +278,7 @@ describe('POST /api/pages/tree', () => {
         id: mockDriveId,
         ownerId: otherOwnerId,
       });
-      // @ts-expect-error - partial mock data
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({
-        driveId: mockDriveId,
-        userId: mockUserId,
-      });
+      vi.mocked(isUserDriveMember).mockResolvedValue(true);
     });
 
     it('filters out pages not in the accessible set for non-owners', async () => {

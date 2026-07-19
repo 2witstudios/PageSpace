@@ -2,12 +2,13 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, or, isNull, gt, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
+import { pagePermissions } from '@pagespace/db/schema/members'
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 // canUserViewPage below is only used for mention RECIPIENTS (other users), not
 // the requesting principal — those checks are keyed to arbitrary user ids and
 // must stay user-level.
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { getDriveMemberUserIds, getDriveMemberUserIdsByStandardRole } from '@pagespace/lib/services/drive-member-service'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -44,15 +45,14 @@ async function fanOutChannelInboxUpdate(
 ): Promise<Set<string>> {
   const { pageId, driveId, driveOwnerId, senderUserId } = input;
 
-  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-  const driveMembersRows = await db.query.driveMembers.findMany({
-    where: eq(driveMembers.driveId, driveId),
-    columns: { userId: true },
-  });
+  // getDriveMemberUserIds is the centralized, acceptedAt-gated membership
+  // lookup — a pending invitee (acceptedAt IS NULL) must not receive
+  // realtime broadcast events for a drive they have not accepted into.
+  const memberIds = await getDriveMemberUserIds(driveId);
 
-  // Build a local member set so we never mutate the ORM-returned array.
+  // Build a local member set so we never mutate the returned array.
   // Drive owner is always a recipient even if they have no explicit row.
-  const memberUserIds = new Set(driveMembersRows.map((m) => m.userId));
+  const memberUserIds = new Set(memberIds);
   if (driveOwnerId) {
     memberUserIds.add(driveOwnerId);
   }
@@ -67,15 +67,12 @@ async function fanOutChannelInboxUpdate(
     viewableUserIds.add(driveOwnerId);
   }
 
-  const adminMembers = await db.select({ userId: driveMembers.userId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      inArray(driveMembers.userId, otherMemberIds),
-      eq(driveMembers.role, 'ADMIN')
-    ));
-  for (const admin of adminMembers) {
-    viewableUserIds.add(admin.userId);
+  const adminIds = await getDriveMemberUserIdsByStandardRole(driveId, 'ADMIN');
+  const otherMemberIdSet = new Set(otherMemberIds);
+  for (const adminId of adminIds) {
+    if (otherMemberIdSet.has(adminId)) {
+      viewableUserIds.add(adminId);
+    }
   }
 
   const remainingIds = otherMemberIds.filter((id) => !viewableUserIds.has(id));

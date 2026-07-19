@@ -1,9 +1,8 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, sql } from '@pagespace/db/operators'
-import { users } from '@pagespace/db/schema/auth'
+import { eq, sql } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
-import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
+import { getAcceptedDriveAdminsWithDetails } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 
@@ -67,24 +66,10 @@ export async function GET(req: Request) {
           memberCount,
         });
       } else {
-        // Multi-member drive - get admins for transfer option
-        const adminRows = await db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            role: driveMembers.role,
-          })
-          .from(driveMembers)
-          .innerJoin(users, eq(driveMembers.userId, users.id))
-          .where(
-            and(
-              eq(driveMembers.driveId, drive.id),
-              eq(driveMembers.role, 'ADMIN')
-            )
-          );
-        // Decrypt PII at the edge so the transfer-target list shows plaintext.
-        const admins = await decryptUserRows(adminRows);
+        // Multi-member drive - get admins for transfer option. Gated on
+        // acceptedAt so a pending (never-authenticated) admin invite cannot
+        // be offered as a transfer target.
+        const admins = await getAcceptedDriveAdminsWithDetails(drive.id);
 
         multiMemberDrives.push({
           id: drive.id,

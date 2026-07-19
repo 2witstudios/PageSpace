@@ -7,9 +7,9 @@
 
 import { db } from '@pagespace/db/db';
 import { eq, and, asc } from '@pagespace/db/operators';
-import { drives } from '@pagespace/db/schema/core';
-import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
+import { driveRoles } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
+import { getDriveAccessLevel } from '../permissions/drive-access-level';
 import { computeReorderPlan, lockedBatchReorder } from './reorder';
 
 // Re-export canonical type so callers can import from one place
@@ -78,76 +78,28 @@ export interface DriveRoleAccessInfo {
 // ============================================================================
 
 /**
- * Check user's access level for a drive (reused from drive-member-service pattern)
+ * Check user's access level for a drive.
+ * Delegates to the centralized `getDriveAccessLevel` and narrows the drive
+ * shape to what role management needs.
  */
 export async function checkDriveAccessForRoles(
   driveId: string,
   userId: string
 ): Promise<DriveRoleAccessInfo> {
-  const driveResult = await db
-    .select()
-    .from(drives)
-    .where(eq(drives.id, driveId))
-    .limit(1);
-
-  if (driveResult.length === 0) {
-    return {
-      isOwner: false,
-      isAdmin: false,
-      isMember: false,
-      drive: null,
-    };
-  }
-
-  const drive = driveResult[0];
-  const isOwner = drive.ownerId === userId;
-
-  if (isOwner) {
-    return {
-      isOwner: true,
-      isAdmin: true,
-      isMember: true,
-      drive: {
-        id: drive.id,
-        name: drive.name,
-        slug: drive.slug,
-        ownerId: drive.ownerId,
-      },
-    };
-  }
-
-  // Check membership
-  const membership = await db.query.driveMembers.findFirst({
-    where: and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId)
-    ),
-  });
-
-  if (!membership) {
-    return {
-      isOwner: false,
-      isAdmin: false,
-      isMember: false,
-      drive: {
-        id: drive.id,
-        name: drive.name,
-        slug: drive.slug,
-        ownerId: drive.ownerId,
-      },
-    };
-  }
+  const access = await getDriveAccessLevel(driveId, userId);
 
   return {
-    isOwner: false,
-    isAdmin: membership.role === 'ADMIN',
-    isMember: true,
-    drive: {
-      id: drive.id,
-      name: drive.name,
-      slug: drive.slug,
-      ownerId: drive.ownerId,
-    },
+    isOwner: access.isOwner,
+    isAdmin: access.isAdmin,
+    isMember: access.isMember,
+    drive: access.drive
+      ? {
+          id: access.drive.id,
+          name: access.drive.name,
+          slug: access.drive.slug,
+          ownerId: access.drive.ownerId,
+        }
+      : null,
   };
 }
 

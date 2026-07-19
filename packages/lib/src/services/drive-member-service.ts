@@ -10,7 +10,8 @@ import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, userProfiles, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
-import { decryptUserRow, decryptUsersByIdOnce } from '../auth/user-repository';
+import { decryptUserRow, decryptUserRows, decryptUsersByIdOnce } from '../auth/user-repository';
+import { getDriveAccessLevel } from '../permissions/drive-access-level';
 
 // ============================================================================
 // Types
@@ -70,47 +71,16 @@ export interface MemberPermission {
 // ============================================================================
 
 /**
- * Check if user has access to drive and get their role
+ * Check if user has access to drive and get their role.
+ * Thin wrapper over the centralized `getDriveAccessLevel` — kept here (rather
+ * than inlined at call sites) so the many existing callers importing
+ * `checkDriveAccess` from this module don't need to change.
  */
 export async function checkDriveAccess(
   driveId: string,
   userId: string
 ): Promise<DriveAccessResult> {
-  const drive = await db.query.drives.findFirst({
-    where: eq(drives.id, driveId),
-  });
-
-  if (!drive) {
-    return { isOwner: false, isAdmin: false, isMember: false, drive: null };
-  }
-
-  const isOwner = drive.ownerId === userId;
-
-  if (isOwner) {
-    return { isOwner: true, isAdmin: true, isMember: true, drive };
-  }
-
-  const membership = await db
-    .select({ role: driveMembers.role })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ))
-    .limit(1);
-
-  if (membership.length === 0) {
-    return { isOwner: false, isAdmin: false, isMember: false, drive };
-  }
-
-  const role = membership[0].role;
-  return {
-    isOwner: false,
-    isAdmin: role === 'ADMIN',
-    isMember: true,
-    drive,
-  };
+  return getDriveAccessLevel(driveId, userId);
 }
 
 /**
@@ -181,6 +151,35 @@ export async function getDriveMemberUserIdsByStandardRole(
     ));
 
   return members.map((m) => m.userId);
+}
+
+/**
+ * List accepted ADMIN members of a drive with display details (name/email),
+ * decrypted at the edge. Used for surfaces that offer a drive's admins as
+ * candidates for a privileged action (e.g. ownership transfer) — pending
+ * invitees (acceptedAt IS NULL) must never appear here, since they have
+ * never authenticated to the drive.
+ */
+export async function getAcceptedDriveAdminsWithDetails(
+  driveId: string
+): Promise<Array<{ id: string; name: string | null; email: string; role: 'ADMIN' }>> {
+  const adminRows = await db
+    .select({
+      id: users.id,
+      name: users.name,
+      email: users.email,
+      role: driveMembers.role,
+    })
+    .from(driveMembers)
+    .innerJoin(users, eq(driveMembers.userId, users.id))
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.role, 'ADMIN'),
+      isNotNull(driveMembers.acceptedAt),
+    ));
+
+  const admins = await decryptUserRows(adminRows);
+  return admins.map((admin) => ({ id: admin.id, name: admin.name, email: admin.email, role: 'ADMIN' as const }));
 }
 
 /**

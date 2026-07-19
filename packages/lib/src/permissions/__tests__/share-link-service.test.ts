@@ -53,13 +53,13 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 vi.mock('@pagespace/db/schema/share-links', () => ({
   driveShareLinks: {
-    id: 'dsl.id', driveId: 'dsl.driveId', token: 'dsl.token',
+    id: 'dsl.id', driveId: 'dsl.driveId', tokenHash: 'dsl.tokenHash',
     role: 'dsl.role', customRoleId: 'dsl.customRoleId',
     createdBy: 'dsl.createdBy', createdAt: 'dsl.createdAt',
     expiresAt: 'dsl.expiresAt', isActive: 'dsl.isActive', useCount: 'dsl.useCount',
   },
   pageShareLinks: {
-    id: 'psl.id', pageId: 'psl.pageId', token: 'psl.token',
+    id: 'psl.id', pageId: 'psl.pageId', tokenHash: 'psl.tokenHash',
     permissions: 'psl.permissions', createdBy: 'psl.createdBy', createdAt: 'psl.createdAt',
     expiresAt: 'psl.expiresAt', isActive: 'psl.isActive', useCount: 'psl.useCount',
   },
@@ -70,10 +70,11 @@ vi.mock('../permissions', () => ({
   isUserDriveMember: vi.fn(),
 }));
 vi.mock('../../auth/token-utils', () => ({
-  generateToken: vi.fn(() => ({ token: 'ps_share_testtoken', tokenPrefix: 'ps_share_te' })),
+  generateToken: vi.fn(() => ({ token: 'ps_share_testtoken', hash: 'hash:ps_share_testtoken', tokenPrefix: 'ps_share_te' })),
   hashToken: vi.fn((t: string) => `hash:${t}`),
 }));
-// hashToken is mocked but must never be called by share-link-service — tests assert this.
+// hashToken is mocked; tests assert it IS called on every lookup path (redeem/resolve),
+// and never on the create path (which uses the hash already returned by generateToken).
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn(() => 'new-link-id'),
 }));
@@ -280,10 +281,10 @@ describe('listDriveShareLinks', () => {
     expect(result).toEqual({ ok: false, error: 'UNAUTHORIZED' });
   });
 
-  it('returns link list with expected view fields', async () => {
+  it('returns link list with expected view fields (no raw token — hashed at rest, unrecoverable)', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
     makeSelectChain([
-      { id: LINK_ID, role: 'MEMBER', useCount: 3, expiresAt: null, createdAt: new Date(), token: 'ps_share_testtoken' },
+      { id: LINK_ID, role: 'MEMBER', useCount: 3, expiresAt: null, createdAt: new Date() },
     ]);
 
     const result = await listDriveShareLinks(makeCtx(), DRIVE_ID);
@@ -293,18 +294,19 @@ describe('listDriveShareLinks', () => {
       expect(result.data[0].id).toBe(LINK_ID);
       expect(result.data[0].useCount).toBe(3);
       expect(result.data[0].role).toBe('MEMBER');
-      expect(result.data[0].token).toBe('ps_share_testtoken');
+      expect(result.data[0]).not.toHaveProperty('token');
+      expect(result.data[0]).not.toHaveProperty('tokenHash');
     }
   });
 });
 
 describe('redeemDriveShareLink', () => {
-  it('does not hash the token — looks up by plaintext token directly', async () => {
+  it('hashes the raw token before lookup — never queries by plaintext', async () => {
     makeSelectChain([]);
 
     await redeemDriveShareLink(makeCtx(), 'some-token');
 
-    expect(vi.mocked(hashToken)).not.toHaveBeenCalled();
+    expect(vi.mocked(hashToken)).toHaveBeenCalledWith('some-token');
   });
 
   it('returns NOT_FOUND for unknown token', async () => {
@@ -482,10 +484,10 @@ describe('listPageShareLinks', () => {
     expect(result).toEqual({ ok: false, error: 'UNAUTHORIZED' });
   });
 
-  it('returns link list with expected view fields', async () => {
+  it('returns link list with expected view fields (no raw token — hashed at rest, unrecoverable)', async () => {
     vi.mocked(canUserSharePage).mockResolvedValue(true);
     makeSelectChain([
-      { id: LINK_ID, permissions: ['VIEW'], useCount: 1, expiresAt: null, createdAt: new Date(), token: 'ps_share_testtoken' },
+      { id: LINK_ID, permissions: ['VIEW'], useCount: 1, expiresAt: null, createdAt: new Date() },
     ]);
 
     const result = await listPageShareLinks(makeCtx(), PAGE_ID);
@@ -495,18 +497,19 @@ describe('listPageShareLinks', () => {
       expect(result.data[0].id).toBe(LINK_ID);
       expect(result.data[0].permissions).toEqual(['VIEW']);
       expect(result.data[0].useCount).toBe(1);
-      expect(result.data[0].token).toBe('ps_share_testtoken');
+      expect(result.data[0]).not.toHaveProperty('token');
+      expect(result.data[0]).not.toHaveProperty('tokenHash');
     }
   });
 });
 
 describe('redeemPageShareLink', () => {
-  it('does not hash the token — looks up by plaintext token directly', async () => {
+  it('hashes the raw token before lookup — never queries by plaintext', async () => {
     makeSelectChain([]);
 
     await redeemPageShareLink(makeCtx(), 'bad-token');
 
-    expect(vi.mocked(hashToken)).not.toHaveBeenCalled();
+    expect(vi.mocked(hashToken)).toHaveBeenCalledWith('bad-token');
   });
 
   it('returns NOT_FOUND for invalid/revoked/expired token', async () => {
@@ -679,12 +682,12 @@ describe('redeemPageShareLink', () => {
 });
 
 describe('resolveShareToken', () => {
-  it('does not hash the token — looks up by plaintext token directly', async () => {
+  it('hashes the raw token before lookup — never queries by plaintext', async () => {
     makeSelectChain([]);
 
     await resolveShareToken('any-token');
 
-    expect(vi.mocked(hashToken)).not.toHaveBeenCalled();
+    expect(vi.mocked(hashToken)).toHaveBeenCalledWith('any-token');
   });
 
   it('returns null for not-found token (no throw)', async () => {

@@ -10,9 +10,6 @@ vi.mock('@pagespace/db/db', () => ({
       drives: {
         findFirst: vi.fn(),
       },
-      driveMembers: {
-        findFirst: vi.fn(),
-      },
     },
     update: vi.fn(),
     delete: vi.fn(),
@@ -20,14 +17,12 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
-  and: vi.fn((...args: unknown[]) => ({ args, type: 'and' })),
-  isNotNull: vi.fn((field: unknown) => ({ field, type: 'isNotNull' })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: {},
 }));
-vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: { acceptedAt: 'driveMembers.acceptedAt' },
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  isDriveOwnerOrAdmin: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -62,6 +57,7 @@ import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -95,24 +91,6 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
-});
-
-// Helper to create mock drive member
-const mockDriveMember = (overrides: {
-  id: string;
-  userId: string;
-  driveId: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
-}) => ({
-  id: overrides.id,
-  userId: overrides.userId,
-  driveId: overrides.driveId,
-  role: overrides.role,
-  customRoleId: null,
-  invitedBy: null,
-  invitedAt: new Date(),
-  acceptedAt: new Date(),
-  lastAccessedAt: null,
 });
 
 describe('POST /api/account/handle-drive', () => {
@@ -149,15 +127,8 @@ describe('POST /api/account/handle-drive', () => {
       mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: mockUserId })
     );
 
-    // Setup default admin membership
-    vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
-      mockDriveMember({
-        id: 'membership_1',
-        userId: mockNewOwnerId,
-        driveId: mockDriveId,
-        role: 'ADMIN',
-      })
-    );
+    // Setup default: new owner is an accepted admin
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
 
     // Setup default database operations
     setupUpdateMock();
@@ -343,7 +314,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is not an admin', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -365,7 +336,7 @@ describe('POST /api/account/handle-drive', () => {
       // NOTE: The production code uses WHERE clause with role='ADMIN'.
       // Mocks don't evaluate WHERE clauses, so we return undefined to simulate
       // what the database returns when no matching ADMIN record is found.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -387,7 +358,7 @@ describe('POST /api/account/handle-drive', () => {
       // NOTE: The production code uses WHERE clause with driveId filter.
       // Mocks don't evaluate WHERE clauses, so we return undefined to simulate
       // what the database returns when no matching record is found for this drive.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -405,12 +376,11 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     // Review C2 — borderline-CRIT. A leaving owner used to be able to transfer
-    // ownership to a never-accepted invitee. This test pins the gate that
-    // refuses pending admins as transfer targets.
+    // ownership to a never-accepted invitee. isDriveOwnerOrAdmin (packages/
+    // lib/src/permissions/permissions.ts) is the centralized gate — a pending
+    // row (acceptedAt IS NULL) resolves to false, so the transfer is refused.
     it('rejects transfer to pending admin (acceptedAt IS NULL) — adversarial drive-ownership-transfer-to-pending-admin path', async () => {
-      // Simulate the gate filtering the pending row out — the query now
-      // requires acceptedAt IS NOT NULL so the pending admin is invisible.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -424,8 +394,7 @@ describe('POST /api/account/handle-drive', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(400);
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(mockNewOwnerId, mockDriveId);
     });
   });
 
@@ -622,7 +591,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should NOT log activity when new owner is not admin', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',

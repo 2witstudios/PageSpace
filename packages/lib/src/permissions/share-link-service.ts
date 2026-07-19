@@ -7,7 +7,7 @@ import { decryptField } from '../encryption/field-crypto';
 import { driveShareLinks, pageShareLinks } from '@pagespace/db/schema/share-links';
 import type { DriveShareLink, ShareLinkPermission } from '@pagespace/db/schema/share-links';
 import { createId } from '@paralleldrive/cuid2';
-import { generateToken } from '../auth/token-utils';
+import { generateToken, hashToken } from '../auth/token-utils';
 import { EnforcedAuthContext } from './enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from './permissions';
 
@@ -35,7 +35,6 @@ export interface DriveShareLinkView {
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
-  token: string;
 }
 
 export interface PageShareLinkView {
@@ -44,7 +43,6 @@ export interface PageShareLinkView {
   useCount: number;
   expiresAt: Date | null;
   createdAt: Date;
-  token: string;
 }
 
 export interface DriveShareLinkRedemption {
@@ -118,14 +116,14 @@ export async function createDriveShareLink(
     if (roleRow.length === 0) return { ok: false, error: 'NOT_FOUND' };
   }
 
-  const { token } = generateToken('ps_share');
+  const { token, hash } = generateToken('ps_share');
 
   const [inserted] = await db
     .insert(driveShareLinks)
     .values({
       id: createId(),
       driveId,
-      token,
+      tokenHash: hash,
       role,
       customRoleId,
       createdBy: ctx.userId,
@@ -177,7 +175,6 @@ export async function listDriveShareLinks(
       useCount: driveShareLinks.useCount,
       expiresAt: driveShareLinks.expiresAt,
       createdAt: driveShareLinks.createdAt,
-      token: driveShareLinks.token,
     })
     .from(driveShareLinks)
     .leftJoin(driveRoles, eq(driveRoles.id, driveShareLinks.customRoleId))
@@ -213,7 +210,7 @@ export async function redeemDriveShareLink(
     })
     .from(driveShareLinks)
     .innerJoin(drives, eq(driveShareLinks.driveId, drives.id))
-    .where(eq(driveShareLinks.token, rawToken))
+    .where(eq(driveShareLinks.tokenHash, hashToken(rawToken)))
     .limit(1);
 
   if (rows.length === 0 || !isValidShareLink(rows[0])) {
@@ -295,14 +292,14 @@ export async function createPageShareLink(
     if (driveRow?.kind === 'HOME') return { ok: false, error: 'HOME_DRIVE' };
   }
 
-  const { token } = generateToken('ps_share');
+  const { token, hash } = generateToken('ps_share');
 
   const [inserted] = await db
     .insert(pageShareLinks)
     .values({
       id: createId(),
       pageId,
-      token,
+      tokenHash: hash,
       permissions: perms,
       createdBy: ctx.userId,
       expiresAt: opts.expiresAt ?? null,
@@ -350,7 +347,6 @@ export async function listPageShareLinks(
       useCount: pageShareLinks.useCount,
       expiresAt: pageShareLinks.expiresAt,
       createdAt: pageShareLinks.createdAt,
-      token: pageShareLinks.token,
     })
     .from(pageShareLinks)
     .where(
@@ -379,7 +375,7 @@ export async function redeemPageShareLink(
     })
     .from(pageShareLinks)
     .innerJoin(pages, eq(pageShareLinks.pageId, pages.id))
-    .where(eq(pageShareLinks.token, rawToken))
+    .where(eq(pageShareLinks.tokenHash, hashToken(rawToken)))
     .limit(1);
 
   const row = rows[0];
@@ -451,6 +447,7 @@ export async function redeemPageShareLink(
 // ============================================================================
 
 export async function resolveShareToken(rawToken: string): Promise<ShareTokenInfo | null> {
+  const tokenHash = hashToken(rawToken);
   const driveRows = await db
     .select({
       id: driveShareLinks.id,
@@ -469,7 +466,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
     .leftJoin(drives, eq(driveShareLinks.driveId, drives.id))
     .leftJoin(users, eq(driveShareLinks.createdBy, users.id))
     .leftJoin(driveRoles, eq(driveRoles.id, driveShareLinks.customRoleId))
-    .where(eq(driveShareLinks.token, rawToken))
+    .where(eq(driveShareLinks.tokenHash, tokenHash))
     .limit(1);
 
   if (driveRows.length > 0) {
@@ -508,7 +505,7 @@ export async function resolveShareToken(rawToken: string): Promise<ShareTokenInf
     .leftJoin(pages, eq(pageShareLinks.pageId, pages.id))
     .leftJoin(drives, eq(pages.driveId, drives.id))
     .leftJoin(users, eq(pageShareLinks.createdBy, users.id))
-    .where(eq(pageShareLinks.token, rawToken))
+    .where(eq(pageShareLinks.tokenHash, tokenHash))
     .limit(1);
 
   if (pageRows.length > 0) {
