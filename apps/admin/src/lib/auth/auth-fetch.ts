@@ -52,19 +52,3 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}): Pro
   return response;
 }
 
-async function fetchJSON<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetchWithAuth(url, options);
-  if (!res.ok) {
-    const text = await res.text().catch(() => 'Request failed');
-    try {
-      const json = JSON.parse(text);
-      throw new Error(json.error ?? json.message ?? text);
-    } catch (e) {
-      if (e instanceof SyntaxError) throw new Error(text);
-      throw e;
-    }
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
-}
-

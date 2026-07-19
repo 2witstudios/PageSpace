@@ -98,19 +98,4 @@ export class MentionFormatter {
   }
 }
 
-// Global configuration that can be overridden per component
-export interface GlobalMentionConfig {
-  defaultFormat: MentionFormatType;
-  enforceInputTypeDefaults: boolean;
-  allowFormatOverride: boolean;
-}
-
-export const DEFAULT_GLOBAL_CONFIG: GlobalMentionConfig = {
-  defaultFormat: 'label',
-  enforceInputTypeDefaults: true,
-  allowFormatOverride: true,
-};
-
-let globalConfig = { ...DEFAULT_GLOBAL_CONFIG };
-
 const mentionLogger = createClientLogger({ namespace: 'mentions', component: 'mention-config' });

@@ -3,8 +3,6 @@
  * @see https://schema.org/
  * @see https://developers.google.com/search/docs/appearance/structured-data
  */
-import { MONTHLY_CREDITS } from "./credits";
-
 // In development, set NEXT_PUBLIC_MARKETING_URL and NEXT_PUBLIC_APP_URL to distinct local origins
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
