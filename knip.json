@@ -40,7 +40,8 @@
         "src/lib/auth/platform-storage/desktop-storage.ts",
         "src/lib/auth/platform-storage/ios-storage.ts",
         "src/lib/auth/platform-storage/web-storage.ts",
-        "src/test/next-server-stub.ts"
+        "src/test/next-server-stub.ts",
+        "src/__fixtures__/eslint-unbounded-findmany/**"
       ],
       "ignoreDependencies": [
         "eslint-config-next",
