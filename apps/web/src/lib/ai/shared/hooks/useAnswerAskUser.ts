@@ -1,11 +1,13 @@
 import { useCallback, useMemo } from 'react';
 import type { UIMessage } from 'ai';
+import { toast } from 'sonner';
 import { ASK_USER_TOOL_NAME, type AskUserOutput } from '@/lib/ai/tools/ask-user-tools';
 import { selectAnswerableAskUserToolCallIds } from '@/lib/ai/streams/selectAnswerableAskUserToolCallIds';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import { useAskUserAnsweringStore } from '@/stores/useAskUserAnsweringStore';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import { hydrateTransportBeforeReinvoke } from './hydrateTransportBeforeReinvoke';
+import { HANDOFF_REFUSED_MESSAGE } from './useConversationSendHandoff';
 
 type AddToolResultFn = (args: {
   tool: string;
@@ -26,6 +28,15 @@ export interface UseAnswerAskUserOptions {
   wrapSend: <T>(sendFn: () => T) => T | undefined;
   /** Builds the per-request body (chatId/conversationId/provider/etc) for this surface. */
   buildBody: () => object | Promise<object>;
+  /**
+   * The surface's cross-conversation send handoff (`useConversationSendHandoff.prepareSend`,
+   * mode-selected where applicable). Answering an ask_user question re-invokes the chat
+   * (addToolResult auto-resend), and with a shared chat instance the question's conversation
+   * can be ON SCREEN while the chat is still consuming ANOTHER conversation's stream —
+   * answering then would fire a second concurrent send on one Chat. The handoff runs before
+   * anything is patched, so a refusal leaves no state to revert.
+   */
+  prepareSend: (conversationId: string) => Promise<boolean>;
 }
 
 export interface UseAnswerAskUserResult {
@@ -57,6 +68,7 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
     addToolResult,
     wrapSend,
     buildBody,
+    prepareSend,
   } = options;
 
   const answeringToolCallIds = useAskUserAnsweringStore((s) => s.answeringToolCallIds);
@@ -84,6 +96,15 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
       // CodeRabbit, Critical).
       wrapSend(async () => {
         if (!useAskUserAnsweringStore.getState().claimAnswering(toolCallId)) return;
+
+        // The answer re-invokes the chat: hand off any OTHER conversation's stream this chat
+        // is consuming first (dual-stream fix). Before the optimistic patch, so a refusal has
+        // nothing to revert; the claim is cleared explicitly — this sits above the try/finally.
+        if (conversationId && !(await prepareSend(conversationId))) {
+          toast.error(HANDOFF_REFUSED_MESSAGE);
+          useAskUserAnsweringStore.getState().clearAnswering(toolCallId);
+          return;
+        }
 
         const messageId = stableMessages[stableMessages.length - 1]?.id;
         if (conversationId && messageId) {
@@ -113,6 +134,7 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
       isConversationBusy,
       buildBody,
       addToolResult,
+      prepareSend,
     ],
   );
 

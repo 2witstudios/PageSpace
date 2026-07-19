@@ -4,7 +4,7 @@ import {
   abortActiveStreamByMessageId,
   reportAbortOutcome,
 } from '@/lib/ai/core/client';
-import { decideStopAction } from '@/lib/ai/streams/decideStopAction';
+import { decideStopAction, shouldRunLocalStop } from '@/lib/ai/streams/decideStopAction';
 import type { ActiveStream } from '@/lib/ai/streams/selectActiveStream';
 
 /**
@@ -53,18 +53,16 @@ export const useStopStream = ({
   useCallback(async () => {
     // Stops this client reading. Stops NOTHING on the server — streams are server-owned and
     // survive a client disconnect. Skipped only when the local fetch belongs to a DIFFERENT
-    // conversation than the one being stopped (see the docblock). An empty-string latch is
-    // treated as no latch: it is the mirror's `currentConversationId ?? ''` placeholder from a
-    // surface whose identity had not resolved, and no real send can be made without a
-    // conversation id — withholding the local stop on its account would be withholding it on
-    // garbage.
-    const localSendConversationId = getLocalSendConversationId();
-    const localFetchIsAnotherConversations =
-      localSendConversationId !== undefined &&
-      localSendConversationId !== '' &&
-      targetConversationId !== null &&
-      localSendConversationId !== targetConversationId;
-    if (!localFetchIsAnotherConversations) rawStop();
+    // conversation than the one being stopped — see `shouldRunLocalStop` (pure, tested) for the
+    // rules, including the empty-string-latch placeholder.
+    if (
+      shouldRunLocalStop({
+        localSendConversationId: getLocalSendConversationId(),
+        targetConversationId,
+      })
+    ) {
+      rawStop();
+    }
 
     const action = decideStopAction({ activeStream, pendingSendConversationId });
 

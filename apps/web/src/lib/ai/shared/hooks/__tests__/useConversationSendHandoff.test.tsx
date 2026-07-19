@@ -131,8 +131,10 @@ describe('useConversationSendHandoff', () => {
 
   // Timeout is NOT success by fiat (review finding, PR #2121): with the latch still held,
   // sending would hand the NEW send the OLD conversation's identity — the exact mis-keying this
-  // hook exists to prevent. The caller must abort (and the composer un-wedges for a retry).
-  it('given the status never settles AND the latch is still held, should resolve false after the safety timeout without rejoining', async () => {
+  // hook exists to prevent. The caller must abort (and the composer un-wedges for a retry). But
+  // the rejoin still fires: stop() already killed the local read, and without a rejoin the
+  // handed-off conversation's stream would render frozen while the server keeps generating.
+  it('given the status never settles AND the latch is still held, should resolve false after the safety timeout but STILL rejoin', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { result, rejoin } = setup({ status: 'streaming', latched: 'conv-1' });
@@ -149,9 +151,44 @@ describe('useConversationSendHandoff', () => {
     });
 
     expect(value).toBe(false);
-    expect(rejoin).not.toHaveBeenCalled();
+    expect(rejoin).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  // SERIALIZATION. Two overlapping prepareSend calls (voice auto-send racing a click) must not
+  // both run their handoff concurrently: the second waits for the first, then re-reads the latch
+  // it left behind — so it sees a settled chat and resolves without a second stop().
+  it('given two overlapping cross-conversation prepareSend calls, should serialize them (second re-evaluates after the first)', async () => {
+    const { result, rerender, stop, rejoin, latchedRef } = setup({ status: 'streaming', latched: 'conv-1' });
+
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = result.current.prepareSend('conv-2');
+      second = result.current.prepareSend('conv-3');
+    });
+    const p1 = probe(first);
+    const p2 = probe(second);
+
+    // Only the FIRST call has run: one stop(), second is queued behind it.
+    expect(stop).toHaveBeenCalledTimes(1);
+    await p1.flush();
+    expect(p1.isSettled()).toBe(false);
+    expect(p2.isSettled()).toBe(false);
+
+    // The chat settles; the mirror releases the latch in the same commit.
+    latchedRef.current = undefined;
+    act(() => rerender({ status: 'ready', latched: undefined }));
+    await p1.flush();
+    await p2.flush();
+
+    // First completed its handoff; second re-read the (now released) latch and resolved
+    // immediately — no second stop of an idle chat, no second rejoin.
+    expect(p1.value()).toBe(true);
+    expect(p2.value()).toBe(true);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(rejoin).toHaveBeenCalledTimes(1);
   });
 
   // The latch is the invariant, the status is only its proxy: if the mirror released the latch

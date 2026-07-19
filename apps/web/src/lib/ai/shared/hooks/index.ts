@@ -12,7 +12,7 @@ export { useProviderSettings } from './useProviderSettings';
 export { useChatTransport } from './useChatTransport';
 export { useStreamingRegistration } from './useStreamingRegistration';
 export { useSendHandoff } from './useSendHandoff';
-export { useConversationSendHandoff } from './useConversationSendHandoff';
+export { useConversationSendHandoff, HANDOFF_REFUSED_MESSAGE } from './useConversationSendHandoff';
 export { useResumeBootstrap } from './useResumeBootstrap';
 export { useAnswerAskUser } from './useAnswerAskUser';
 export { useChatErrorCause } from './useChatErrorCause';

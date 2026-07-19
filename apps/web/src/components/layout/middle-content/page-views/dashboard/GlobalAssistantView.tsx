@@ -42,6 +42,7 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import type { UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
+import { toast } from 'sonner';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -64,6 +65,7 @@ import {
   useChatTransport,
   useSendHandoff,
   useConversationSendHandoff,
+  HANDOFF_REFUSED_MESSAGE,
   useResumeBootstrap,
   useAnswerAskUser,
   useChatErrorCause,
@@ -183,7 +185,7 @@ const GlobalAssistantView: React.FC = () => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
+  const { attachments, addFiles, removeFile, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -497,16 +499,6 @@ const GlobalAssistantView: React.FC = () => {
   });
   const prepareSendForMode = selectedAgent ? prepareAgentSend : prepareGlobalSend;
 
-  // Retry/regenerate is a send too: a retry for the conversation on screen while this chat is
-  // still consuming ANOTHER conversation's stream needs the same handoff first.
-  const regenerateWithHandoff = useCallback(
-    async (options?: { body?: Record<string, unknown> }) => {
-      if (currentConversationId && !(await prepareSendForMode(currentConversationId))) return;
-      regenerate(options);
-    },
-    [prepareSendForMode, regenerate, currentConversationId],
-  );
-
   // Declared after the mirrors: the rawStop gate reads the mode-selected latch, so a Stop on a
   // socket-attached conversation cannot abort another conversation's live local fetch.
   const stop = useStopStream({
@@ -575,13 +567,19 @@ const GlobalAssistantView: React.FC = () => {
   const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
   effectiveIsStreamingRef.current = effectiveIsStreaming;
 
+  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
+
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
     isOwnSendLive,
     setMessages,
-    regenerate: regenerateWithHandoff,
+    regenerate,
+    // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
+    // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
+    prepareSend: prepareSendForMode,
+    getIsOwnSendLive,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -790,23 +788,29 @@ const GlobalAssistantView: React.FC = () => {
 
     const requestBody = buildRequestBody();
 
-    // Capture and clear the draft BEFORE the handoff await below: the wait can run up to
-    // ~1.5s, and anything the user types or attaches during it must survive — a post-await
-    // setInput('')/clearFiles() would discard it (Codex review, PR #2121).
+    // Capture the draft BEFORE the handoff await below: the wait can run up to ~1.5s, and
+    // anything the user types or attaches during it must survive (Codex review, PR #2121).
     const text = input;
     const sendFiles = files.length > 0 ? files : undefined;
+    // The ids behind `files` — same processed filter getFilesForSend applies. Attachments are
+    // cleared per-id AFTER the handoff confirms, so a refusal loses nothing and anything
+    // attached DURING the wait (a different id) survives the clear.
+    const sentAttachmentIds = attachments.filter((a) => !a.processing && a.dataUrl).map((a) => a.id);
+
+    // Text clears immediately (typing during the wait must not merge into the old draft) and is
+    // restored on refusal ONLY if the composer is still empty — newer keystrokes win.
     setInput('');
-    clearFiles();
 
     // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
     // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
     // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
-    // the latch still held): sending would re-key the new stream under the old conversation, so
-    // abort and restore the draft text for a retry.
+    // the latch still held): sending would re-key the new stream under the old conversation.
     if (!(await prepareSendForMode(currentConversationId))) {
-      setInput(text);
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      setInput((current) => (current === '' ? text : current));
       return;
     }
+    for (const id of sentAttachmentIds) removeFile(id);
 
     // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
     // silently drops any id passed alongside it, so the message would push under an
@@ -834,8 +838,12 @@ const GlobalAssistantView: React.FC = () => {
   const handleVoiceSend = useCallback(async (text: string) => {
     if (!text.trim() || !currentConversationId) return;
 
-    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff.
-    if (!(await prepareSendForMode(currentConversationId))) return;
+    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
+    // with feedback, or the transcript would vanish silently.
+    if (!(await prepareSendForMode(currentConversationId))) {
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      return;
+    }
 
     // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
     const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
@@ -864,6 +872,8 @@ const GlobalAssistantView: React.FC = () => {
     addToolResult,
     wrapSend,
     buildBody: buildRequestBody,
+    // Answering re-invokes the chat — same cross-conversation handoff as every send path.
+    prepareSend: prepareSendForMode,
   });
 
   // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is

@@ -62,6 +62,7 @@ import {
   useChatTransport,
   useSendHandoff,
   useConversationSendHandoff,
+  HANDOFF_REFUSED_MESSAGE,
   useResumeBootstrap,
   useAnswerAskUser,
   useChatErrorCause,
@@ -131,7 +132,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
+  const { attachments, addFiles, removeFile, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
@@ -617,15 +618,14 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     rejoin: rejoinActiveStreamsLate,
   });
 
-  // Retry/regenerate is a send too: a retry for the conversation on screen while this chat is
-  // still consuming ANOTHER conversation's stream needs the same handoff first.
-  const regenerateWithHandoff = useCallback(
-    async (options?: { body?: Record<string, unknown> }) => {
-      if (currentConversationId && !(await prepareSend(currentConversationId))) return;
-      regenerate(options);
-    },
-    [prepareSend, regenerate, currentConversationId],
-  );
+  // Live reads for post-await decisions: the send/retry paths await the handoff, and the
+  // render-captured values are stale by the time it settles.
+  const isOwnSendLive = isStreaming || activeStream?.isOwn === true;
+  const isOwnSendLiveRef = useRef(isOwnSendLive);
+  isOwnSendLiveRef.current = isOwnSendLive;
+  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
+  const inputDraftRef = useRef(input);
+  inputDraftRef.current = input;
 
   // Find in page
   const findQuery = useFindStore((s) => s.query);
@@ -711,9 +711,13 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     agentId: page.id,
     conversationId: currentConversationId,
     renderedMessages,
-    isOwnSendLive: isStreaming || activeStream?.isOwn === true,
+    isOwnSendLive,
     setMessages,
-    regenerate: regenerateWithHandoff,
+    regenerate,
+    // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
+    // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
+    prepareSend,
+    getIsOwnSendLive,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -1103,6 +1107,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     addToolResult,
     wrapSend,
     buildBody: buildRequestBody,
+    // Answering re-invokes the chat — same cross-conversation handoff as every send path.
+    prepareSend,
   });
 
   // A send creates the conversations row server-side under exactly this id, so the id
@@ -1127,19 +1133,26 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!canSendMessage) return;
     if (!currentConversationId) return;
 
+    // The ids behind `files` — same processed filter getFilesForSend applies. Attachments are
+    // cleared per-id AFTER the handoff confirms, so a refusal loses nothing and anything
+    // attached DURING the wait (a different id) survives the clear.
+    const sentAttachmentIds = attachments.filter((a) => !a.processing && a.dataUrl).map((a) => a.id);
+
+    // Text clears immediately (typing during the wait must not merge into the old draft) and is
+    // restored on refusal ONLY if the draft is still empty — newer keystrokes win.
     clearInputDraft();
-    clearFiles();
     inputRef.current?.clear();
 
     // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
     // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
     // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
-    // the latch still held): sending would re-key the new stream under the old conversation, so
-    // abort and restore the draft text for a retry.
+    // the latch still held): sending would re-key the new stream under the old conversation.
     if (!(await prepareSend(currentConversationId))) {
-      setInput(trimmed);
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      if (inputDraftRef.current === '') setInput(trimmed);
       return;
     }
+    for (const id of sentAttachmentIds) removeFile(id);
 
     adoptConversationAsPersisted();
 
@@ -1178,7 +1191,8 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     getFilesForSend,
     clearInputDraft,
     setInput,
-    clearFiles,
+    attachments,
+    removeFile,
     sendMessage,
     buildRequestBody,
     wrapSend,
@@ -1197,8 +1211,12 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (!canSendMessage) return;
     if (!currentConversationId) return;
 
-    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff.
-    if (!(await prepareSend(currentConversationId))) return;
+    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
+    // with feedback, or the transcript would vanish silently.
+    if (!(await prepareSend(currentConversationId))) {
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      return;
+    }
 
     adoptConversationAsPersisted();
     const userMessage = buildUserMessage({ id: createId(), text: trimmed }) as UIMessage;

@@ -77,3 +77,33 @@ export const decideStopAction = ({
   // surfaces do not offer a Stop button for someone else's stream. Don't invent a name.
   return { type: 'none' };
 };
+
+/**
+ * Should Stop also abort THIS surface's local `useChat` fetch?
+ *
+ * With conversation-scoped consuming (the dual-stream fix), one chat instance can be locally
+ * consuming conversation B's stream while conversation A's handed-off stream renders via the
+ * socket on the same surface. A Stop pressed on A must not cancel B's live local read — that
+ * would send B dark mid-token (its generation continues server-side, unwatched).
+ *
+ * `localSendConversationId` is the own-stream mirror's latch: which conversation the local fetch
+ * belongs to, or undefined when the chat is idle (where rawStop is a harmless no-op — absence
+ * never suppresses a wanted local stop). An EMPTY-STRING latch is the mirror's
+ * `currentConversationId ?? ''` placeholder from a surface whose identity had not resolved; no
+ * real send can be made without a conversation id, so it is treated as no latch — withholding
+ * the local stop on its account would be withholding it on garbage. The same rule is applied by
+ * `useConversationSendHandoff` when deciding whether a handoff is needed at all.
+ */
+export const shouldRunLocalStop = ({
+  localSendConversationId,
+  targetConversationId,
+}: {
+  /** The mode-selected mirror's latched conversation, or undefined when idle. */
+  localSendConversationId: string | undefined;
+  /** The conversation on screen — the one being stopped. */
+  targetConversationId: string | null;
+}): boolean =>
+  localSendConversationId === undefined ||
+  localSendConversationId === '' ||
+  targetConversationId === null ||
+  localSendConversationId === targetConversationId;

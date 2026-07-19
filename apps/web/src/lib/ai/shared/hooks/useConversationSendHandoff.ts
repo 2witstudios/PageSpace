@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react';
+import type { OwnStreamMirrorStatus } from '@/lib/ai/streams/planOwnStreamMirror';
 
-type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
+/** The chat's live status — the same union the mirror watches (one source of truth). */
+type ChatStatus = OwnStreamMirrorStatus;
 
 /**
  * Bound on the settle wait so a never-settling status cannot wedge the composer. useChat's
@@ -9,6 +11,13 @@ type ChatStatus = 'ready' | 'submitted' | 'streaming' | 'error';
  * still held → prepareSend resolves false and the caller must abort the send.
  */
 const SETTLE_TIMEOUT_MS = 1500;
+
+/**
+ * The one user-facing sentence for a refused handoff. Callers that show feedback on a `false`
+ * `prepareSend` result should show THIS, so the composer, voice, and retry paths cannot drift.
+ */
+export const HANDOFF_REFUSED_MESSAGE =
+  'The previous response is still wrapping up — please try again in a moment.';
 
 /**
  * Enforces ONE live locally-consumed stream per `useChat` instance — the invariant the AI SDK
@@ -42,10 +51,20 @@ const SETTLE_TIMEOUT_MS = 1500;
  * Same-conversation sends and idle chats resolve immediately — the handoff only exists for the
  * cross-conversation-while-busy case.
  *
+ * SERIALIZED per hook instance: overlapping `prepareSend` calls (a voice auto-send racing a
+ * click, retry racing a send) run one at a time through an internal promise chain, and each run
+ * re-reads the latch at ITS start — so the second caller observes the state the first caller
+ * left, not the state both started from. (The residual window where a send has been issued but
+ * its `submitted` status has not yet committed — during which the latch is still unset — is
+ * inherent to driving the latch off the SDK's status and is documented on the mirror.)
+ *
  * `prepareSend` resolves `true` when it is safe to send, `false` when it is not: the surface
  * unmounted mid-wait (nothing left to render or mirror the send), or the settle wait timed out
  * with the mirror's latch STILL held (sending would re-key the new stream under the old
- * conversation — the bug this hook prevents). Callers MUST abort the send on `false`.
+ * conversation — the bug this hook prevents). Callers MUST abort the send on `false` and should
+ * surface `HANDOFF_REFUSED_MESSAGE`. On the timeout refusal the rejoin is STILL fired: the local
+ * read was already stopped, so without it the handed-off conversation's stream would render
+ * frozen even though the server keeps generating.
  */
 export const useConversationSendHandoff = ({
   status,
@@ -65,6 +84,10 @@ export const useConversationSendHandoff = ({
   const statusRef = useRef(status);
   statusRef.current = status;
   const settleResolversRef = useRef<((outcome: 'settled' | 'unmounted') => void)[]>([]);
+  // The in-flight run, if any — see "SERIALIZED" in the docblock. Null when idle, so the common
+  // (non-overlapping) call starts SYNCHRONOUSLY: `stop()` must fire before prepareSend returns,
+  // not in a microtask, or a caller could observe the old stream still being read after calling.
+  const inFlightRef = useRef<Promise<unknown> | null>(null);
 
   // Flush settle waiters when the status lands on ready/error. Runs after the same commit in
   // which the mirror's falling edge ran (all of a commit's effects flush before the awaiting
@@ -86,13 +109,13 @@ export const useConversationSendHandoff = ({
     for (const resolve of resolvers) resolve('unmounted');
   }, []);
 
-  const prepareSend = useCallback(
+  const runPrepareSend = useCallback(
     async (targetConversationId: string): Promise<boolean> => {
       const latched = getLatchedConversationId();
       // Idle chat (nothing latched), or a send into the conversation already being consumed —
       // no handoff. Bootstrapped/socket-attached streams never latch, so they never trigger one.
       // An empty-string latch is the mirror's unresolved-identity placeholder, never a real
-      // send (same reasoning as useStopStream's rawStop gate) — don't hand off on garbage.
+      // send (same reasoning as shouldRunLocalStop's rule) — don't hand off on garbage.
       if (latched === undefined || latched === '' || latched === targetConversationId) return true;
 
       stop();
@@ -119,11 +142,14 @@ export const useConversationSendHandoff = ({
       // mis-keying this hook exists to prevent. The latch itself is the invariant, so consult
       // it: if the mirror released it despite the status flush lagging, the handoff is safe;
       // if it is still held, refuse the send (the caller aborts, the composer un-wedges, and a
-      // retry re-attempts the handoff).
+      // retry re-attempts the handoff). Rejoin REGARDLESS: stop() above already killed the
+      // local read, so the handed-off stream must be offered to the socket path either way —
+      // the bootstrap's consuming-mark gate makes a rejoin of a still-consumed stream a no-op.
       if (outcome === 'timeout' && getLatchedConversationId() !== undefined) {
         console.warn(
           '[useConversationSendHandoff] chat status never settled after stop(); refusing the send',
         );
+        rejoin();
         return false;
       }
 
@@ -136,6 +162,30 @@ export const useConversationSendHandoff = ({
       return true;
     },
     [getLatchedConversationId, stop, rejoin],
+  );
+
+  const prepareSend = useCallback(
+    (targetConversationId: string): Promise<boolean> => {
+      const previous = inFlightRef.current;
+      const run = previous
+        ? previous.then(
+            () => runPrepareSend(targetConversationId),
+            () => runPrepareSend(targetConversationId),
+          )
+        : runPrepareSend(targetConversationId);
+      // Track settlement (failures swallowed — they never propagate to the NEXT caller; each
+      // caller still sees its own run's result via `run`).
+      const settled = run.then(
+        () => undefined,
+        () => undefined,
+      );
+      inFlightRef.current = settled;
+      void settled.then(() => {
+        if (inFlightRef.current === settled) inFlightRef.current = null;
+      });
+      return run;
+    },
+    [runPrepareSend],
   );
 
   return { prepareSend };

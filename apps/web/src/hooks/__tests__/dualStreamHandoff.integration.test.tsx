@@ -93,7 +93,7 @@ describe('dual-stream handoff (integration: mirror + handoff + store)', () => {
     );
 
     // ── User hits Send in chat 2. The surface awaits prepareSend before sendMessage.
-    let prepare!: Promise<void>;
+    let prepare!: Promise<boolean>;
     act(() => {
       prepare = result.current.prepareSend('conv-2');
     });

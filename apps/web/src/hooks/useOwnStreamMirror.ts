@@ -68,6 +68,16 @@ export interface UseOwnStreamMirrorInput {
  * So: latch on the RISING EDGE of the send — the moment status becomes submitted/streaming, which
  * is the moment the user hit Send and the surface is still, by construction, on the conversation
  * being sent to. Hold it for the send; release on the falling edge.
+ *
+ * KNOWN LIMITATION (accepted): the SDK's `sendAutomaticallyWhen` auto-resend re-fires the
+ * transport with the ORIGINAL conversation's body, but if a `ready` commit lands between the
+ * resend's falling and rising edges AFTER the user has moved to another conversation, the
+ * re-latch captures the live (new) conversation while the fetch consumes the old one. The
+ * consuming MARK stays correct (it is body-derived — see extractConversationIdFromBody), but the
+ * latch — and everything gated on it (useConversationSendHandoff's equality check, the rawStop
+ * gate) — briefly mis-names the fetch. Closing this requires a transport-level identity (the
+ * WorkflowChatTransport swap this whole hook is deleted at); until then the window is one React
+ * commit wide inside an auto-resend, and the failure mode is the pre-fix behavior, not a new one.
  */
 export const useOwnStreamMirror = ({
   status,
