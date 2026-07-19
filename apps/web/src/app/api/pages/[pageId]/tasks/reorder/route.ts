@@ -72,18 +72,21 @@ export async function PATCH(
   const plan = computeReorderPlan(tasks);
   if (plan.orderedIds.length > 0) {
     // task_items has no direct FK to its task list — membership is derived
-    // the same way GET does, via pages that are direct TASK_LIST children of
-    // this list's page. Scoping the write to that set closes a gap the old
-    // per-row loop never checked (it trusted every submitted id blindly).
-    const childPages = await db
+    // the same way GET/fetchEnrichedTasks do it, via pages that are direct
+    // TASK_LIST children of this list's page. Passed as a subquery (matching
+    // fetchEnrichedTasks in task-helpers.ts) rather than a materialized id
+    // array so Postgres filters membership itself instead of the app
+    // loading and rebinding every child id — that scales the same way the
+    // rest of this epic's bounded queries do, instead of reintroducing an
+    // unbounded-collection cost for large task lists.
+    const scopeWhere = inArray(taskItems.pageId, db
       .select({ id: pages.id })
       .from(pages)
       .where(and(
         eq(pages.parentId, pageId),
         eq(pages.type, 'TASK_LIST'),
         eq(pages.isTrashed, false),
-      ));
-    const childPageIds = childPages.map(p => p.id);
+      )));
 
     try {
       await db.transaction(async (tx) => {
@@ -91,7 +94,7 @@ export async function PATCH(
           table: taskItems,
           idColumn: taskItems.id,
           positionColumn: taskItems.position,
-          scopeWhere: inArray(taskItems.pageId, childPageIds),
+          scopeWhere,
           plan,
           touchColumns: [taskItems.updatedAt],
         });

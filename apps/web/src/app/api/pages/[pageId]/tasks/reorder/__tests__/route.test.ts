@@ -98,6 +98,7 @@ import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
 import { taskItems } from '@pagespace/db/schema/tasks';
+import { inArray } from '@pagespace/db/operators';
 
 // ---------- Helpers ----------
 
@@ -269,6 +270,28 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(computeReorderPlan).toHaveBeenCalledWith(tasks);
     expect(lockedBatchReorder).toHaveBeenCalledTimes(1);
     expect(db.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('scopes the reorder write with a pages subquery, not a materialized id array', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    const tasks = [{ id: 'task-a', position: 0 }];
+    await PATCH(createRequest({ tasks }), context);
+
+    // A large task list must not force every child page id into app memory
+    // and then into a bind-param array (that reintroduces the unbounded-
+    // collection cost this epic exists to remove, and risks the Postgres
+    // bind-parameter limit). inArray's second argument must be the query
+    // builder returned by db.select(...).from(...).where(...) itself, so
+    // Postgres runs `IN (SELECT ...)` — matching fetchEnrichedTasks in
+    // task-helpers.ts, not a resolved/materialized array of ids.
+    expect(db.select).toHaveBeenCalledWith({ id: expect.anything() });
+    expect(inArray).toHaveBeenCalledWith(taskItems.pageId, expect.anything());
+    const scopeArg = vi.mocked(inArray).mock.calls[0][1];
+    expect(Array.isArray(scopeArg)).toBe(false);
   });
 
   it('returns 400 when a submitted task id falls outside the task list scope', async () => {
