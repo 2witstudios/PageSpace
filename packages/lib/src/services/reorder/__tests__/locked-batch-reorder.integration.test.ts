@@ -65,6 +65,15 @@ import { lockedBatchReorder } from '../locked-batch-reorder';
 
 let dbAvailable = false;
 
+// Tuning for the deterministic contention proof in the "never deadlock" test
+// below: how long to wait for both sides' backend pids, and the poll
+// interval/attempt budget for observing genuine lock contention via
+// pg_stat_activity (~3s total: CONTENTION_POLL_MAX_ATTEMPTS *
+// CONTENTION_POLL_INTERVAL_MS).
+const PID_WAIT_INTERVAL_MS = 5;
+const CONTENTION_POLL_MAX_ATTEMPTS = 150;
+const CONTENTION_POLL_INTERVAL_MS = 20;
+
 describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
   beforeAll(async () => {
     try {
@@ -254,7 +263,7 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
         // this resolves almost immediately — not a contention wait.
         const waitForPids = (async () => {
           while (pids.one === null || pids.two === null) {
-            await new Promise((resolve) => setTimeout(resolve, 5));
+            await new Promise((resolve) => setTimeout(resolve, PID_WAIT_INTERVAL_MS));
           }
         })();
         await Promise.race([waitForPids, earlyFailure]);
@@ -264,7 +273,7 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
         // lock. The assertion below fails the test if that's never observed,
         // rather than the loop spinning silently forever.
         const pollForContention = (async () => {
-          for (let i = 0; i < 150 && observedBlockedPid === null; i++) {
+          for (let i = 0; i < CONTENTION_POLL_MAX_ATTEMPTS && observedBlockedPid === null; i++) {
             const activity = await db.execute(sql`
               SELECT pid, wait_event_type FROM pg_stat_activity
               WHERE pid IN (${pids.one}, ${pids.two})
@@ -276,7 +285,7 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
               }
             }
             if (observedBlockedPid === null) {
-              await new Promise((resolve) => setTimeout(resolve, 20));
+              await new Promise((resolve) => setTimeout(resolve, CONTENTION_POLL_INTERVAL_MS));
             }
           }
         })();
