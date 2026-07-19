@@ -7,7 +7,7 @@ import { Gauge } from 'lucide-react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 interface ConcurrencyResponse {
-  liveAgentSessions: { inFlight: number; limit: number };
+  inFlightHolds: { count: number; limit: number };
   codeExecutionLimit: number;
 }
 
@@ -18,10 +18,12 @@ const fetcher = async (url: string): Promise<ConcurrencyResponse> => {
 };
 
 /**
- * Live agent-terminal session count — the number the `too_many_in_flight`
- * gate checks against MACHINE_MAX_INFLIGHT, polled rather than socket-driven
- * because `credits:updated` never fires on hold creation (only
- * release/settle), so it would miss increments.
+ * Live in-flight AI-call count — the number the `too_many_in_flight` gate
+ * checks against MACHINE_MAX_INFLIGHT on your next Machine run. Covers ALL
+ * in-flight AI activity (chat/voice/machine alike), not machine sessions
+ * specifically — credit_holds has no per-source column to split them.
+ * Polled rather than socket-driven because `credits:updated` never fires on
+ * hold creation (only release/settle), so it would miss increments.
  */
 export function ConcurrencyCard() {
   const { data, error, isLoading } = useSWR<ConcurrencyResponse>(
@@ -37,7 +39,7 @@ export function ConcurrencyCard() {
           <Gauge className="h-5 w-5" />
           Concurrency
         </CardTitle>
-        <CardDescription>Live agent-terminal sessions right now</CardDescription>
+        <CardDescription>AI calls in flight right now</CardDescription>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -49,14 +51,15 @@ export function ConcurrencyCard() {
         ) : (
           <div className="space-y-1 text-sm">
             <div className="flex items-center justify-between gap-2">
-              <span className="font-medium">Live agent sessions</span>
+              <span className="font-medium">In-flight AI calls</span>
               <span className="tabular-nums text-muted-foreground">
-                {data.liveAgentSessions.inFlight} / {data.liveAgentSessions.limit}
+                {data.inFlightHolds.count} / {data.inFlightHolds.limit}
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Your tier&apos;s concurrent code-execution ceiling is {data.codeExecutionLimit}
-              (enforced per server instance).
+              Includes chat, voice, and Machine runs combined — this is what a Machine run
+              checks against before starting. Your tier&apos;s separate code-execution ceiling is{' '}
+              {data.codeExecutionLimit} concurrent runs (enforced per server instance).
             </p>
           </div>
         )}

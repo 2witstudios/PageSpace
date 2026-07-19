@@ -3,7 +3,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
-import { getLiveMachineInFlight } from '@pagespace/lib/billing/live-concurrency-query';
+import { getLiveInFlightHolds } from '@pagespace/lib/billing/live-concurrency-query';
 import { MACHINE_MAX_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -14,10 +14,13 @@ const isSubscriptionTier = (value: string): value is SubscriptionTier =>
   value === 'free' || value === 'pro' || value === 'founder' || value === 'business';
 
 /**
- * GET /api/credits/concurrency — the authenticated user's live agent-terminal
- * session count. `liveAgentSessions` is the literal COUNT the
- * `too_many_in_flight` gate checks against `MACHINE_MAX_INFLIGHT` (not an
- * approximation). `codeExecutionLimit` is the configured per-tier ceiling from
+ * GET /api/credits/concurrency — the authenticated user's live in-flight
+ * credit-hold count. `inFlightHolds.count` is the literal COUNT the
+ * `too_many_in_flight` gate checks against `MACHINE_MAX_INFLIGHT` on the
+ * user's next Machine run (not an approximation) — it covers ALL of the
+ * user's in-flight AI activity (chat/voice/machine alike), since
+ * `credit_holds` has no per-source column to filter machine-only sessions
+ * out. `codeExecutionLimit` is the configured per-tier ceiling from
  * quota.ts — that semaphore lives in server-process memory, so it has no
  * reliable cross-replica live count and is exposed as a static value only.
  */
@@ -36,7 +39,7 @@ export async function GET(request: NextRequest) {
     const rawTier = rows[0]?.subscriptionTier;
     const tier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'free';
 
-    const inFlight = await getLiveMachineInFlight(userId);
+    const count = await getLiveInFlightHolds(userId);
 
     auditRequest(request, {
       eventType: 'data.read',
@@ -46,7 +49,7 @@ export async function GET(request: NextRequest) {
     });
 
     return NextResponse.json({
-      liveAgentSessions: { inFlight, limit: MACHINE_MAX_INFLIGHT },
+      inFlightHolds: { count, limit: MACHINE_MAX_INFLIGHT },
       codeExecutionLimit: getCodeExecutionConcurrencyLimit(tier),
     });
   } catch (error) {
