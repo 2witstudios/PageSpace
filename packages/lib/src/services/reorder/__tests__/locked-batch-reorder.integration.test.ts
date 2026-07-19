@@ -13,15 +13,37 @@
  * Requires DATABASE_URL → a running Postgres with migrations applied
  * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable.
  *
- * NOTE (manual lock proof): temporarily drop the `.orderBy(asc(idColumn))` from
- * lockedBatchReorder's `FOR UPDATE` select (or otherwise lock rows in an order
- * that isn't shared across callers) and the second test below has a real chance
- * to fail with a Postgres `deadlock detected` error instead of both transactions
- * resolving cleanly. Restore after.
+ * The second test below forces genuine contention with a deliberate
+ * `pg_sleep` while each transaction holds its locks — without that, a bare
+ * `Promise.all([runOne, runTwo])` has no guarantee the two transactions ever
+ * actually hold overlapping locks at the same time (Postgres could run one
+ * to completion before the other's locking select even arrives), which would
+ * let the test pass "vacuously" — proving nothing about lock contention —
+ * even against a broken implementation. The forced hold guarantees real
+ * row-lock blocking/serialization happens on every run (observable as the
+ * test's duration jumping to roughly the sleep length), not just that both
+ * promises happened to resolve.
+ *
+ * NOTE (manual lock proof, verified): temporarily dropping only the
+ * `.orderBy(asc(idColumn))` from lockedBatchReorder's `FOR UPDATE` select
+ * does NOT reliably reproduce a deadlock here — verified by hand. Postgres's
+ * `id = ANY(...)` filter against the primary-key index already visits rows
+ * in a consistent order for both concurrently-running queries regardless of
+ * an explicit ORDER BY, at least for a table this small, so both
+ * transactions still end up acquiring the shared rows in the same relative
+ * order and never form a wait cycle. The ORDER BY is still the right,
+ * theory-backed defense (a consistent lock order provably rules out circular
+ * wait; an "it happened not to reorder this time" default scan order does
+ * not, and could differ under a different query plan, index choice, or table
+ * size) — mirrors `lockDriveRolesInOrder`'s doc comment in
+ * drive-role-service.ts — but don't trust a quick local edit as a
+ * regression check for it; this file's real regression coverage is the
+ * "never deadlock" assertion under forced contention below, not a manual
+ * probe of Postgres's incidental scan order.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
 import { computeReorderPlan } from '../compute-reorder-plan';
@@ -152,6 +174,11 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
       { id: c.id, position: 202 },
     ]);
 
+    // Whichever transaction wins the race to lock first holds its locks for
+    // this long before committing — forcing the OTHER transaction's locking
+    // select to genuinely arrive and block while those overlapping rows are
+    // still held, instead of the two transactions merely running back-to-back
+    // without ever actually contending. See the file-level doc comment.
     const runOne = db.transaction(async (tx) => {
       await lockedBatchReorder(tx, {
         table: driveRoles,
@@ -160,6 +187,7 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
         scopeWhere: eq(driveRoles.driveId, drive.id),
         plan: planOne,
       });
+      await tx.execute(sql`SELECT pg_sleep(0.3)`);
     });
     const runTwo = db.transaction(async (tx) => {
       await lockedBatchReorder(tx, {
@@ -169,13 +197,15 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
         scopeWhere: eq(driveRoles.driveId, drive.id),
         plan: planTwo,
       });
+      await tx.execute(sql`SELECT pg_sleep(0.3)`);
     });
 
     // The deadlock-absence proof: firing both concurrently against overlapping
-    // rows must not raise Postgres error 40P01 (deadlock detected). One
-    // transaction may block briefly behind the other's row lock — that's
-    // correct serialization, not a failure — but neither may be aborted by
-    // the deadlock detector.
+    // rows — with the forced hold above guaranteeing they genuinely contend —
+    // must not raise Postgres error 40P01 (deadlock detected). One
+    // transaction blocking behind the other's row lock is correct
+    // serialization, not a failure — but neither may be aborted by the
+    // deadlock detector.
     await Promise.all([runOne, runTwo]);
 
     const updated = await db.select().from(driveRoles).where(eq(driveRoles.driveId, drive.id));
