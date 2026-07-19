@@ -58,8 +58,9 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
       { id: roles[1].id, position: 12 },
     ]);
 
+    let lockedIds: string[] = [];
     await db.transaction(async (tx) => {
-      await lockedBatchReorder(tx, {
+      lockedIds = await lockedBatchReorder(tx, {
         table: driveRoles,
         idColumn: driveRoles.id,
         positionColumn: driveRoles.position,
@@ -68,11 +69,53 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
       });
     });
 
+    expect([...lockedIds].sort()).toEqual([...plan.orderedIds].sort());
+
     const updated = await db.select().from(driveRoles).where(eq(driveRoles.driveId, drive.id));
     const positionById = new Map(updated.map((r) => [r.id, r.position]));
     expect(positionById.get(roles[0].id)).toBe(11);
     expect(positionById.get(roles[1].id)).toBe(12);
     expect(positionById.get(roles[2].id)).toBe(10);
+  });
+
+  it('returns only the ids that actually existed in scope, leaving out-of-scope ids un-updated', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const otherDrive = await factories.createDrive(owner.id);
+    const [inScope] = await db
+      .insert(driveRoles)
+      .values([{ driveId: drive.id, name: 'role-in-scope', permissions: {}, position: 0 }])
+      .returning();
+    const [outOfScope] = await db
+      .insert(driveRoles)
+      .values([{ driveId: otherDrive.id, name: 'role-out-of-scope', permissions: {}, position: 0 }])
+      .returning();
+
+    // Plan names a real row from another drive alongside the in-scope one —
+    // scopeWhere excludes it, so it must not be reported as locked or updated.
+    const plan = computeReorderPlan([
+      { id: inScope.id, position: 5 },
+      { id: outOfScope.id, position: 6 },
+    ]);
+
+    let lockedIds: string[] = [];
+    await db.transaction(async (tx) => {
+      lockedIds = await lockedBatchReorder(tx, {
+        table: driveRoles,
+        idColumn: driveRoles.id,
+        positionColumn: driveRoles.position,
+        scopeWhere: eq(driveRoles.driveId, drive.id),
+        plan,
+      });
+    });
+
+    expect(lockedIds).toEqual([inScope.id]);
+
+    const [updatedInScope] = await db.select().from(driveRoles).where(eq(driveRoles.id, inScope.id));
+    const [updatedOutOfScope] = await db.select().from(driveRoles).where(eq(driveRoles.id, outOfScope.id));
+    expect(updatedInScope.position).toBe(5);
+    expect(updatedOutOfScope.position).toBe(0);
   });
 
   it('two concurrent reorders touching overlapping rows in different orders never deadlock', async () => {

@@ -27,7 +27,14 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
 /**
  * Apply a reorder plan inside the caller's transaction: lock every target
  * row `FOR UPDATE` in ascending-id order, then write every position as one
- * batched `UPDATE ... FROM (VALUES ...)` statement.
+ * batched `UPDATE ... FROM (VALUES ...)` statement. Returns the ids from the
+ * plan that actually existed within `scopeWhere` (and were therefore locked
+ * and updated) — ids in the plan that don't exist in scope are silently
+ * skipped by the batched `UPDATE`'s `WHERE`, so this is the caller's signal
+ * to detect that and decide how to react (e.g. `reorderDriveRoles` currently
+ * rejects the whole request when any submitted id doesn't belong to the
+ * drive; a caller adopting this primitive can reproduce that by comparing
+ * this return value against `plan.orderedIds`).
  *
  * Locking in ascending-id order (the order `computeReorderPlan` already
  * produces) is what prevents two concurrent, overlapping reorders from
@@ -40,19 +47,20 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
 export async function lockedBatchReorder<T extends PgTable>(
   tx: Tx,
   opts: LockedBatchReorderOptions<T>
-): Promise<void> {
+): Promise<string[]> {
   const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [] } = opts;
 
   if (plan.orderedIds.length === 0) {
-    return;
+    return [];
   }
 
-  await tx
+  const locked = await tx
     .select({ id: idColumn })
     .from(table)
     .where(and(scopeWhere, inArray(idColumn, plan.orderedIds)))
     .orderBy(asc(idColumn))
     .for('update');
+  const lockedIds = locked.map((row) => row.id as string);
 
   const values = sql.join(
     plan.orderedIds.map(
@@ -75,4 +83,6 @@ export async function lockedBatchReorder<T extends PgTable>(
     FROM (VALUES ${values}) AS v(id, position)
     WHERE ${idColumn} = v.id AND ${scopeWhere}
   `);
+
+  return lockedIds;
 }

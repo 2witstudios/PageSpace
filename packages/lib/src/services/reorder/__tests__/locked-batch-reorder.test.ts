@@ -13,7 +13,7 @@ describe('lockedBatchReorder (empty-plan no-op)', () => {
     // locked-batch-reorder.integration.test.ts.
     const tx = { select, execute } as unknown as Parameters<typeof lockedBatchReorder>[0];
 
-    await lockedBatchReorder(tx, {
+    const lockedIds = await lockedBatchReorder(tx, {
       table: driveRoles,
       idColumn: driveRoles.id,
       positionColumn: driveRoles.position,
@@ -23,5 +23,6 @@ describe('lockedBatchReorder (empty-plan no-op)', () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
+    expect(lockedIds).toEqual([]);
   });
 });
