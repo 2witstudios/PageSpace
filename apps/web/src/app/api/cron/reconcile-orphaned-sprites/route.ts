@@ -1,5 +1,6 @@
 import { reconcileOrphanSprites } from '@pagespace/lib/services/machines/machine-orphan-reconcile';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { defaultReconcileOrphanSpritesDeps } from '@/lib/machines/machine-orphan-reconcile-runtime';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
@@ -73,7 +74,7 @@ export async function GET(request: Request) {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error reconciling orphaned sprites:', error);
+    loggers.system.error('[Cron] Error reconciling orphaned sprites', error as Error);
     return NextResponse.json(
       {
         success: false,

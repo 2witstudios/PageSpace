@@ -279,6 +279,10 @@
       "types": "./dist/schema/email-broadcasts.d.ts",
       "default": "./dist/schema/email-broadcasts.js"
     },
+    "./schema/channel-webhooks": {
+      "types": "./dist/schema/channel-webhooks.d.ts",
+      "default": "./dist/schema/channel-webhooks.js"
+    },
     "./schema/oauth": {
       "types": "./dist/schema/oauth.d.ts",
       "default": "./dist/schema/oauth.js"

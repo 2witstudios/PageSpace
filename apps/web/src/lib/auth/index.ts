@@ -803,6 +803,7 @@ export {
   canPrincipalEditPage,
   canPrincipalDeletePage,
   canPrincipalSharePage,
+  canManageChannelWebhooks,
   isPrincipalDriveMember,
   getPrincipalDriveAccess,
   isPrincipalDriveOwnerOrAdmin,

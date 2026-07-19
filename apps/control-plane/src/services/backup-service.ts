@@ -16,6 +16,8 @@ export type BackupFs = {
   unlink(path: string): Promise<void>
 }
 
+export type BackupFailureAlert = { tenantId: string; slug: string; errorMessage: string }
+
 export type BackupDeps = {
   executor: ShellExecutor
   repo: BackupServiceRepo
@@ -24,6 +26,15 @@ export type BackupDeps = {
   composePath: string
   basePath: string
   now?: () => Date
+  // control-plane has its own database (tenant/provisioning data), separate
+  // from the main app's — so a backup failure can't reach a channel alert
+  // subscription via a direct publishAlert() service import the way
+  // apps/web's own producers do. This is the DI seam for whatever transport
+  // gets it there (see alert-publish-client.ts's HTTP implementation, which
+  // posts to apps/web's signed internal alert-intake endpoint). Optional and
+  // best-effort: a missing/failing publisher must never affect the backup's
+  // own success/failure outcome or status bookkeeping.
+  alertPublisher?: (alert: BackupFailureAlert) => Promise<void>
 }
 
 function formatTimestamp(date: Date): string {
@@ -40,7 +51,7 @@ function getWeekKey(date: Date): string {
 }
 
 export function createBackupService(deps: BackupDeps) {
-  const { executor, repo, fs, backupsPath, composePath, basePath, now = () => new Date() } = deps
+  const { executor, repo, fs, backupsPath, composePath, basePath, now = () => new Date(), alertPublisher } = deps
 
   function composeCmd(slug: string, action: string): string {
     return `docker compose -p ps-${slug} -f ${composePath} --env-file ${basePath}/${slug}/.env ${action}`
@@ -102,6 +113,11 @@ export function createBackupService(deps: BackupDeps) {
           })
         } catch {
           // Best-effort status update
+        }
+        if (alertPublisher) {
+          await alertPublisher({ tenantId, slug, errorMessage: (error as Error).message }).catch(() => {
+            // Best-effort — a notification problem must never mask the real backup failure below.
+          })
         }
         throw error
       }

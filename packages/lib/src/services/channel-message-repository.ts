@@ -156,6 +156,10 @@ export interface InsertChannelMessageInput {
   fileId: string | null;
   attachmentMeta: AttachmentMeta | null;
   quotedMessageId?: string | null;
+  // Optional aiMeta passthrough — the channel webhook publisher (and any future
+  // top-level non-human-authored post) needs this the same way
+  // insertChannelThreadReply already does for replies.
+  aiMeta?: ChannelMessageAiMeta | null;
 }
 
 export type InsertChannelMessageResult =
@@ -221,6 +225,7 @@ async function insertChannelMessageWithAttachment(
         fileId: input.fileId,
         attachmentMeta: input.attachmentMeta,
         quotedMessageId: input.quotedMessageId ?? null,
+        aiMeta: input.aiMeta ?? undefined,
       })
       .returning();
 
@@ -254,6 +259,9 @@ export interface UpdateChannelMessageContentInput {
   messageId: string;
   content: string;
   editedAt: Date;
+  // Optional aiMeta replacement for non-human-authored messages whose
+  // metadata changes on edit (thread replies already support this on insert).
+  aiMeta?: ChannelMessageAiMeta | null;
 }
 
 async function updateChannelMessageContent(
@@ -261,7 +269,11 @@ async function updateChannelMessageContent(
 ): Promise<void> {
   await db
     .update(channelMessages)
-    .set({ content: input.content, editedAt: input.editedAt })
+    .set({
+      content: input.content,
+      editedAt: input.editedAt,
+      ...(input.aiMeta !== undefined ? { aiMeta: input.aiMeta } : {}),
+    })
     .where(eq(channelMessages.id, input.messageId));
 }
 

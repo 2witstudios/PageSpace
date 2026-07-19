@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
@@ -48,7 +49,7 @@ export async function GET(request: Request) {
       timestamp: now.toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error purging deleted messages:', error);
+    loggers.system.error('[Cron] Error purging deleted messages', error as Error);
     return NextResponse.json(
       {
         success: false,

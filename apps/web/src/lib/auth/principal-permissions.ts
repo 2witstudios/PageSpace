@@ -34,6 +34,9 @@ import {
   type PermissionLevel,
   type PageWithPermissions,
 } from '@pagespace/lib/permissions/permissions';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import {
   getAppAccessLevel,
   getAppDriveMembership,
@@ -167,6 +170,28 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
     return membership.role === 'ADMIN';
   }
   return isDriveOwnerOrAdmin(auth.userId, driveId);
+}
+
+/**
+ * Whether the principal may manage (create/update/delete) incoming webhooks
+ * on a channel page. Deliberately stricter than canPrincipalEditPage: CHANNEL
+ * pages are edit-by-default for any drive member (posting a message), but
+ * minting an unattended write path into a channel is reserved for the drive's
+ * owner/admin. Scoped MCP/OAuth tokens are rejected outright in v1 — this is
+ * a human console action, not something a scoped agent token should do
+ * unsupervised.
+ */
+export async function canManageChannelWebhooks(auth: AuthResult, pageId: string): Promise<boolean> {
+  if (isManageKeysOnly(auth)) return false;
+  if (isScopedMCPAuth(auth) || isScopedOAuthAuth(auth)) return false;
+
+  const page = await db.query.pages.findFirst({
+    where: eq(pages.id, pageId),
+    columns: { driveId: true },
+  });
+  if (!page?.driveId) return false;
+
+  return isDriveOwnerOrAdmin(auth.userId, page.driveId);
 }
 
 /**
