@@ -189,9 +189,15 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
     ]);
 
     // Dedicated single-connection pools, independent of the shared app
-    // pool's DB_POOL_MAX — see the file-level doc comment for why.
-    const poolOne = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
-    const poolTwo = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    // pool's DB_POOL_MAX — see the file-level doc comment for why. `ssl`
+    // mirrors packages/db/src/db.ts's basePoolConfig() exactly (not
+    // exported, so replicated here): without it, an environment that
+    // requires DATABASE_SSL=true would fail this test's connections with a
+    // TLS error instead of exercising reorder locking, even though the
+    // shared `db` pool used for setup/polling above connects fine.
+    const ssl = process.env.DATABASE_SSL === 'true' ? ({ rejectUnauthorized: false } as const) : false;
+    const poolOne = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, ssl });
+    const poolTwo = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, ssl });
     const dbOne = drizzle(poolOne, { schema });
     const dbTwo = drizzle(poolTwo, { schema });
 
