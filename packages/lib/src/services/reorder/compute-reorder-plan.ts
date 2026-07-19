@@ -1,4 +1,4 @@
-export interface TaskReorderEntry {
+export interface ReorderEntry {
   id: string;
   position: number;
 }
@@ -16,7 +16,7 @@ export interface ReorderPlan {
  * `lockDriveRolesInOrder` in drive-role-service.ts for why a consistent
  * order matters.
  */
-export function computeReorderPlan(entries: TaskReorderEntry[]): ReorderPlan {
+export function computeReorderPlan(entries: ReorderEntry[]): ReorderPlan {
   const positionById = new Map<string, number>();
   for (const entry of entries) {
     positionById.set(entry.id, entry.position);
