@@ -83,6 +83,7 @@ async function resolveUploadPosition(
   // Resolve the target from the sibling set itself, so an afterNodeId that
   // belongs to a different parent (or doesn't exist) falls back to appending
   // rather than landing at an arbitrary position.
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const siblings = await tx.query.pages.findMany({
     where: siblingWhere,
     orderBy: (p, { asc }) => [asc(p.position)],

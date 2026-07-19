@@ -1,6 +1,5 @@
 import { dirname } from "path";
 import { fileURLToPath } from "url";
-import { readFileSync } from "fs";
 import { FlatCompat } from "@eslint/eslintrc";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -10,29 +9,19 @@ const compat = new FlatCompat({
   baseDirectory: __dirname,
 });
 
-// Pre-existing db.query.<table>.findMany() call sites with no `limit`, catalogued when the
-// unbounded-findMany rule below was added (Phase 8 of the task-board crash-prevention epic).
-// Not fixed here — that's a follow-up pass. Listed so the rule can be `error` for new code
-// without failing CI on this debt today. Remove an entry once its call site gets a `limit`.
-const unboundedFindManyBaseline = JSON.parse(
-  readFileSync(
-    new URL("./eslint-unbounded-findmany-baseline.json", import.meta.url),
-    "utf-8"
-  )
-);
-
-// `files` globs treat [...] as a character class, but several baseline paths are Next.js
-// dynamic route segments with literal brackets (e.g. "[pageId]") — escape them so the glob
-// matches the literal directory name instead of a character class.
-const unboundedFindManyBaselineGlobs = unboundedFindManyBaseline.map((p) =>
-  p.replace(/[[\]]/g, "\\$&")
-);
-
+// Matches `<anything>.query.<table>.findMany(...)` — not hard-coded to a `db` identifier, so it
+// also catches the transaction/injected handles this codebase actually uses for the same
+// Drizzle relational query API (e.g. `tx.query.pages.findMany`, `database.query.pages.findMany`).
+// `ObjectExpression.arguments` uses esquery's field-name qualifier to anchor the object to the
+// call's own `arguments` position (i.e. its options object), so `:has(ObjectExpression.arguments
+// > Property[key.name='limit'])` only matches a `limit` that is a DIRECT key of that options
+// object — a `limit` nested inside a `with: { children: { limit } }` relation, or anywhere else
+// in the subtree, does not falsely satisfy the root query's own boundedness.
 const unboundedFindManyRule = {
   selector:
-    "CallExpression[callee.object.object.object.name='db'][callee.object.object.property.name='query'][callee.property.name='findMany']:not(:has(Property[key.name='limit']))",
+    "CallExpression[callee.property.name='findMany'][callee.object.object.property.name='query']:not(:has(ObjectExpression.arguments > Property[key.name='limit']))",
   message:
-    "db.query.<table>.findMany(...) needs a `limit` in its options object — unbounded findMany() OOM-crashed prod on 2026-07-18. Add `limit: <n>`, or use findFirst() if you only need one row.",
+    "<handle>.query.<table>.findMany(...) needs a `limit` as a direct key of its options object — unbounded findMany() OOM-crashed prod on 2026-07-18. Add `limit: <n>`, or use findFirst() if you only need one row.",
 };
 
 const eslintConfig = [
@@ -141,22 +130,15 @@ const eslintConfig = [
     },
   },
   {
-    // Unbounded db.query.<table>.findMany() calls: production Postgres OOM-crashed on
+    // Unbounded <handle>.query.<table>.findMany() calls: production Postgres OOM-crashed on
     // 2026-07-18 because a task-list route called findMany() with no `limit`, on a table
     // that grows without bound. This flags any NEW findMany() call whose options object
-    // (or lack of one) has no `limit` key. findFirst() is exempt — it's inherently single-row.
+    // (or lack of one) has no direct `limit` key. findFirst() is exempt — it's inherently
+    // single-row. Pre-existing violations are suppressed with a per-call-site
+    // `eslint-disable-next-line`, NOT a file- or severity-level override — so a new unbounded
+    // findMany added anywhere, including in an already-flagged file, still errors.
     rules: {
       "no-restricted-syntax": ["error", unboundedFindManyRule],
-    },
-  },
-  {
-    // Pre-existing violations of the rule above, downgraded to warn (this repo's lint script
-    // exits 0 on warnings — see the react-hooks/exhaustive-deps block below for the same
-    // pattern) so CI isn't blocked on debt this phase didn't introduce. Catalogued in
-    // eslint-unbounded-findmany-baseline.json; fixing these is a follow-up, not this change.
-    files: unboundedFindManyBaselineGlobs,
-    rules: {
-      "no-restricted-syntax": ["warn", unboundedFindManyRule],
     },
   },
   {

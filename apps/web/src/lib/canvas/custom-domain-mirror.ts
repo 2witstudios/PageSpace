@@ -384,6 +384,7 @@ export async function mirrorDriveToCustomHost(
   const publishLandingPageId = domainRow?.publishLandingPageId ?? null;
   const publishNotFoundPageId = domainRow?.publishNotFoundPageId ?? null;
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const published = await db.query.publishedPages.findMany({
     where: eq(publishedPages.driveId, driveId),
     columns: { pageId: true, path: true },

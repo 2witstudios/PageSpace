@@ -45,6 +45,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ links: [] });
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = await db.query.pages.findMany({
     where: inArray(pages.id, uniqueRefs.map(({ pageId }) => pageId)),
     columns: { id: true, driveId: true, type: true },

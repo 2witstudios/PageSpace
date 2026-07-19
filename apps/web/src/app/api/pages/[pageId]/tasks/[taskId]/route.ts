@@ -82,6 +82,7 @@ export async function PATCH(
   if (status !== undefined) {
     // Validate against task list's custom status configs
     const validStatuses = taskList
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       ? await db.query.taskStatusConfigs.findMany({
           where: eq(taskStatusConfigs.taskListId, taskList.id),
           columns: { slug: true, group: true },
@@ -239,6 +240,7 @@ export async function PATCH(
 
   // Fetch existing assignees before the transaction (for notification comparison)
   const existingAssignees = Array.isArray(assigneeIds)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     ? await db.query.taskAssignees.findMany({
         where: eq(taskAssignees.taskId, taskId),
         columns: { userId: true, agentPageId: true },

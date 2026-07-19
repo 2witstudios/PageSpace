@@ -173,6 +173,7 @@ export async function syncTaskAssignees(
 }
 
 export async function fetchEnrichedTasks(parentPageId: string) {
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const tasks = await db.query.taskItems.findMany({
     where: inArray(taskItems.pageId, db.select({ id: pages.id }).from(pages).where(and(
       eq(pages.parentId, parentPageId),
@@ -439,6 +440,7 @@ export async function createTask(
 
   // Validate custom status if provided
   const resolvedStatus = status || 'pending';
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const statusConfigsForList = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList!.id),
     columns: { slug: true, group: true },

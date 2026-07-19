@@ -79,11 +79,13 @@ export async function loadAvailableCommands(
   // (this is the suggest picker's per-keystroke path).
   const entryPageColumns = { columns: { driveId: true, isTrashed: true } } as const;
   const [personalRows, driveRows] = await Promise.all([
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     db.query.commands.findMany({
       where: and(eq(commands.userId, userId), eq(commands.enabled, true)),
       with: { entryPage: entryPageColumns },
     }),
     driveId
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       ? db.query.commands.findMany({
           where: and(eq(commands.driveId, driveId), eq(commands.enabled, true)),
           with: { entryPage: entryPageColumns },

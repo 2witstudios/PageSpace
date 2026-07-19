@@ -65,6 +65,7 @@ export async function GET(request: Request) {
 
     const memberDriveIds = filterDrivesByMCPScope(auth, await getMemberDriveIds(userId));
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const visible = await db.query.commands.findMany({
       where: memberDriveIds.length
         ? or(eq(commands.userId, userId), inArray(commands.driveId, memberDriveIds))
@@ -76,6 +77,7 @@ export async function GET(request: Request) {
     // Enrich for the settings lists: entry page title + availability, author name.
     const pageIds = Array.from(new Set(sorted.map((command) => command.entryPageId)));
     const entryPages = pageIds.length
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       ? await db.query.pages.findMany({
           where: inArray(pages.id, pageIds),
           columns: { id: true, title: true, driveId: true, isTrashed: true },
@@ -104,6 +106,7 @@ export async function GET(request: Request) {
       )
     );
     const authors = authorIds.length
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       ? await db.query.users.findMany({
           where: inArray(users.id, authorIds),
           columns: { id: true, name: true },

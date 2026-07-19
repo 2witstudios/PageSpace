@@ -51,6 +51,7 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     });
   } else {
     // Ensure status configs exist for existing task lists (migration path)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const existingConfigs = await db.query.taskStatusConfigs.findMany({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
     });
@@ -110,6 +111,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const sortOrder = url.searchParams.get('sortOrder') || 'asc';
 
   // Fetch status configs for this task list
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const statusConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
@@ -145,6 +147,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
 
   // Build query - include assignees relation
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const query = db.query.taskItems.findMany({
     where: and(
       inArray(taskItems.pageId, childPageIds),
@@ -413,6 +416,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Validate status against task list's status configs
   let initialCompletedAt: Date | null = null;
   if (status) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const validStatuses = await db.query.taskStatusConfigs.findMany({
       where: eq(taskStatusConfigs.taskListId, taskList.id),
       columns: { slug: true, group: true },

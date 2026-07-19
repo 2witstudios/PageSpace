@@ -44,6 +44,7 @@ async function fanOutChannelInboxUpdate(
 ): Promise<Set<string>> {
   const { pageId, driveId, driveOwnerId, senderUserId } = input;
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const driveMembersRows = await db.query.driveMembers.findMany({
     where: eq(driveMembers.driveId, driveId),
     columns: { userId: true },
