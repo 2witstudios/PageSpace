@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, inArray, count, isNotNull } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, count, isNotNull, ilike, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
@@ -16,6 +16,7 @@ import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
+import { parseTaskQuerySpec } from './query-spec';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -102,12 +103,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Get or create task list (also ensures default status configs)
   const taskList = await getOrCreateTaskListForPage(pageId, userId);
 
-  // Parse query params for filtering
+  // Parse query params for filtering + pagination bounds
   const url = new URL(req.url);
-  const status = url.searchParams.get('status');
-  const assigneeId = url.searchParams.get('assigneeId');
-  const search = url.searchParams.get('search');
-  const sortOrder = url.searchParams.get('sortOrder') || 'asc';
+  const { status, assigneeId, search, sortOrder, limit, offset } = parseTaskQuerySpec(url.searchParams);
 
   // Fetch status configs for this task list
   const statusConfigs = await db.query.taskStatusConfigs.findMany({
@@ -144,13 +142,43 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // path that skipped the sync) gets backfilled here so it always shows up as a task.
   await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
 
-  // Build query - include assignees relation
-  const query = db.query.taskItems.findMany({
-    where: and(
+  // Phase 1: a lightweight join resolves the ordered (by page.position, source of
+  // truth, falling back to task.position), filtered, bounded set of task ids —
+  // this is what keeps the query from pulling every task into memory (the OOM
+  // crash this route caused). Phase 2 hydrates only those ids' relations.
+  const positionExpr = sql`coalesce(${pages.position}, ${taskItems.position})`;
+  const orderedIdRows = await db
+    .select({ id: taskItems.id })
+    .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(and(
       inArray(taskItems.pageId, childPageIds),
       status ? eq(taskItems.status, status) : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
-    ),
+      search ? ilike(pages.title, `%${search}%`) : undefined,
+    ))
+    .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr))
+    .limit(limit)
+    .offset(offset);
+  const boundedTaskIds = orderedIdRows.map(r => r.id);
+
+  if (boundedTaskIds.length === 0) {
+    return NextResponse.json({
+      taskList: {
+        id: taskList.id,
+        title: taskList.title,
+        description: taskList.description,
+        status: taskList.status,
+        updatedAt: taskList.updatedAt,
+      },
+      tasks: [],
+      statusConfigs,
+    });
+  }
+
+  // Phase 2: hydrate the 5 relations only for the bounded page of ids from phase 1.
+  const query = db.query.taskItems.findMany({
+    where: inArray(taskItems.id, boundedTaskIds),
     columns: {
       id: true,
       userId: true,
