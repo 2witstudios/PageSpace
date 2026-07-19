@@ -49,6 +49,33 @@ No correctness, security, or test-coverage defects found:
 - Typecheck: root `bun run typecheck` (turbo, full graph) — 16/16 tasks green.
 - No TODO/FIXME or stub logic left in scope.
 
+## /simplify pass (4 parallel angles: reuse, simplification, efficiency, altitude)
+
+- **Reuse**: no violations — no existing clamp/pagination helper duplicated. Noted
+  (not fixed, out of scope): `apps/web/src/app/api/user/recents/route.ts:54-56` and
+  `apps/web/src/app/api/channels/[pageId]/messages/route.ts:145` hand-roll the same
+  clamp pattern without going through `parseBoundedIntParam` — pre-existing debt,
+  not introduced by this PR. Filed as a follow-up in the PR description.
+- **Simplification**: the two-function split (`parseBoundedIntParam` generic,
+  `resolveBoundedLimit` policy-based with min defaulting to 1) is not redundant —
+  verified `apps/web/src/app/api/ai/page-agents/[agentId]/conversations/route.ts:65-69`
+  genuinely needs `min: 0` for a page index, so the generic function can't collapse
+  into the stricter one. Two sub-findings considered and both skipped as
+  non-issues: (a) `resolveBoundedLimit` currently has zero callers — expected and
+  correct for a Phase-1-only PR whose explicit deliverable is the primitive itself,
+  ahead of phases 2-8 that will call it; (b) the `'0'` and `'-10'` test cases hit
+  the same clamp branch — kept anyway because the task's acceptance criteria
+  explicitly enumerate 0/negative/non-numeric as distinct required cases, not just
+  branch coverage.
+- **Efficiency**: no issues — pure arithmetic, no loops/I/O/closures.
+- **Altitude**: correct depth for Phase 1 confirmed (a generic `findMany` wrapper
+  would need per-table policy knowledge and would be the over-engineering the task
+  explicitly warned against). One soft spot noted: the `query-params.ts` re-export
+  shim has no explicit tracked cleanup step in the epic — filed as a follow-up in
+  the PR description rather than fixed now (fixing it would mean touching ~15
+  call sites, expanding this PR beyond its stated scope).
+
 ## Verdict
 
 0 blockers / 0 majors / 0 minor / 0 nit — merge-ready pending final green CI.
+Two out-of-scope follow-ups documented in the PR description, not fixed here.
