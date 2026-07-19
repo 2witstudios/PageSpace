@@ -71,4 +71,3 @@ export function ChatErrorBanner({
   );
 }
 
-export default ChatErrorBanner;

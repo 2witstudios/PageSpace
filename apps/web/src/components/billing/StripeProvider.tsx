@@ -39,10 +39,3 @@ export function StripeProvider({ children, options }: StripeProviderProps) {
   );
 }
 
-/**
- * Hook to get the Stripe promise for manual Stripe.js initialization.
- * Useful when you need Stripe outside of Elements context.
- */
-export function useStripePromise() {
-  return getStripe();
-}

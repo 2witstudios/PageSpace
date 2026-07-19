@@ -81,5 +81,3 @@ export function InputActions({
     </motion.div>
   );
 }
-
-export default InputActions;

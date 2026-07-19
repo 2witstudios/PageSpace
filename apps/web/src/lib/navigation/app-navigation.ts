@@ -50,30 +50,6 @@ export async function openExternalUrl(url: string): Promise<void> {
 }
 
 /**
- * Navigate to internal URL using router
- * Avoids target="_blank" which escapes WebView on mobile
- */
-export function navigateInternal(url: string, routerPush: (url: string) => void): void {
-  routerPush(url);
-}
-
-/**
- * Handle a link click with appropriate navigation
- * - Internal links: Uses router.push (stays in WebView on Capacitor)
- * - External links: Uses Browser.open on mobile (Safari View Controller)
- */
-export async function handleLinkNavigation(
-  url: string,
-  routerPush: (url: string) => void
-): Promise<void> {
-  if (isInternalUrl(url)) {
-    routerPush(url);
-  } else {
-    await openExternalUrl(url);
-  }
-}
-
-/**
  * Custom navigation event type for TipTap mentions and other vanilla DOM components
  */
 export interface NavigationEventDetail {

@@ -5,17 +5,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function slugify(text: string): string {
-  return text
-    .toString()
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]+/g, '')
-    .replace(/--+/g, '-')
-    .replace(/^-+/, '')
-    .replace(/-+$/, '');
-}
-
 export function formatBytes(bytes: number, decimals = 2): string {
   if (bytes === 0) return '0 Bytes';
 
@@ -47,8 +36,6 @@ export const ROLE_COLORS = [
   { name: 'pink', class: 'bg-pink-500' },
   { name: 'cyan', class: 'bg-cyan-500' },
 ] as const;
-
-export type RoleColorName = typeof ROLE_COLORS[number]['name'];
 
 /**
  * Get Tailwind classes for a role color badge

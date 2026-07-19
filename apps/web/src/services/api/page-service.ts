@@ -875,5 +875,3 @@ export const pageService = {
     };
   },
 };
-
-export type PageService = typeof pageService;

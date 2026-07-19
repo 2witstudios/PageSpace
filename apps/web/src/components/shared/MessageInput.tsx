@@ -135,5 +135,3 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
     );
   },
 );
-
-export default MessageInput;

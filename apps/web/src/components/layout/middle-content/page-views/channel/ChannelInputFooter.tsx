@@ -300,5 +300,3 @@ export function ChannelInputFooter({
     </div>
   );
 }
-
-export default ChannelInputFooter;

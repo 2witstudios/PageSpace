@@ -68,14 +68,3 @@ async function fetchJSON<T>(url: string, options: RequestInit = {}): Promise<T> 
   return res.json();
 }
 
-export async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
-  return fetchJSON<T>(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-}
-
-export async function del<T = unknown>(url: string): Promise<T> {
-  return fetchJSON<T>(url, { method: 'DELETE' });
-}

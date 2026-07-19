@@ -331,5 +331,3 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
 );
 
 ChatLayout.displayName = 'ChatLayout';
-
-export default ChatLayout;

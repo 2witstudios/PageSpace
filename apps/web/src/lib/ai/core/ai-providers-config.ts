@@ -353,9 +353,6 @@ export function getModelDisplayName(provider: string, model: string): string {
   return providerConfig.models[model as keyof typeof providerConfig.models] || model;
 }
 
-export type AIProvider = keyof typeof AI_PROVIDERS;
-export type AIModel<T extends AIProvider> = keyof typeof AI_PROVIDERS[T]['models'];
-
 /**
  * User-facing display name for an AI (provider, model) pair. Returns the real
  * model display name from the catalog, falling back to the raw model id.

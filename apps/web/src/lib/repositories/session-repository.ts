@@ -247,5 +247,3 @@ export const sessionRepository = {
     return txClient ? run(txClient) : db.transaction(run);
   },
 };
-
-export type SessionRepository = typeof sessionRepository;

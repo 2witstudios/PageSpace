@@ -50,7 +50,7 @@ export interface FetchProxyResponseError {
 }
 
 /** All possible fetch proxy response message types */
-export type FetchProxyResponse =
+type FetchProxyResponse =
   | FetchProxyResponseStart
   | FetchProxyResponseChunk
   | FetchProxyResponseEnd

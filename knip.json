@@ -550,6 +550,9 @@
         "eslint",
         "@next/eslint-plugin-next",
         "eslint-plugin-react-hooks"
+      ],
+      "ignore": [
+        "src/components/ui/**"
       ]
     }
   },

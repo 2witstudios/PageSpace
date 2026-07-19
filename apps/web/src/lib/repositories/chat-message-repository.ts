@@ -228,5 +228,3 @@ export const chatMessageRepository = {
     return result.length;
   },
 };
-
-export type ChatMessageRepository = typeof chatMessageRepository;

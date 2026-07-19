@@ -159,5 +159,3 @@ export function CommandPickerPanel({
     </div>
   );
 }
-
-export default CommandPickerPanel;
