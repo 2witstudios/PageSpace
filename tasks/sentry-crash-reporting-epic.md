@@ -2,7 +2,7 @@
 
 **Live tracking**: PageSpace `Sentry` task list — page `h6z6jafz5no84iu0sjou2kl8` in drive `lng6q95adrfndmdnnf9z8g6p` (`pagespace tasks list h6z6jafz5no84iu0sjou2kl8`). This file is the durable narrative/reference copy; check the PageSpace board for current status.
 
-**Status**: 📋 PLANNED
+**Status**: ✅ CODE COMPLETE — PR #2131 OPEN; Phase 6 (control-plane) blocked on tenant-provisioning owner deploy decision; Phase 8 is owner-run verification after Fly secrets are set (see PR checklist)
 **Goal**: Fix apps/web's Sentry (currently sends zero alerts in production) and extend crash reporting to realtime, processor, control-plane, and admin, with a fail-loud env check so this can never silently regress.
 
 ## Overview
