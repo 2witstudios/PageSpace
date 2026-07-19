@@ -10,9 +10,10 @@ vi.mock('@/lib/auth', () => ({
     (req: Request, ctx: T) => handler({ id: 'admin-1' }, req, ctx),
 }));
 
-const { dbSelectMock, revokeAllUserSessionsMock } = vi.hoisted(() => ({
+const { dbSelectMock, revokeAllUserSessionsMock, notifyUserSessionsRevokedMock } = vi.hoisted(() => ({
   dbSelectMock: vi.fn(),
   revokeAllUserSessionsMock: vi.fn().mockResolvedValue(2),
+  notifyUserSessionsRevokedMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -27,6 +28,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: { revokeAllUserSessions: revokeAllUserSessionsMock },
+}));
+
+vi.mock('@pagespace/lib/auth/session-revocation-notify', () => ({
+  notifyUserSessionsRevoked: notifyUserSessionsRevokedMock,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -61,6 +66,7 @@ describe('/api/admin/users/[userId]/sessions', () => {
     vi.clearAllMocks();
     dbSelectMock.mockReset();
     revokeAllUserSessionsMock.mockResolvedValue(2);
+    notifyUserSessionsRevokedMock.mockResolvedValue(undefined);
   });
 
   it('revokes every session for the target user and audits', async () => {
@@ -73,6 +79,7 @@ describe('/api/admin/users/[userId]/sessions', () => {
     expect(body.success).toBe(true);
     expect(body.revokedSessions).toBe(2);
     expect(revokeAllUserSessionsMock).toHaveBeenCalledWith('user-1', 'admin_force_logout');
+    expect(notifyUserSessionsRevokedMock).toHaveBeenCalledWith('user-1', 'admin_force_logout');
 
     expect(auditRequest).toHaveBeenCalledWith(
       expect.any(Request),
@@ -114,6 +121,7 @@ describe('/api/admin/users/[userId]/sessions', () => {
     expect(res.status).toBe(200);
     expect(body.revokedSessions).toBe(0);
     expect(body.message).toContain('no active sessions');
+    expect(notifyUserSessionsRevokedMock).not.toHaveBeenCalled();
   });
 
   it('blocks revoking your own sessions', async () => {

@@ -5,6 +5,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { withAdminAuth } from '@/lib/auth';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { notifyUserSessionsRevoked } from '@pagespace/lib/auth/session-revocation-notify';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -49,6 +50,12 @@ export const DELETE = withAdminAuth<RouteContext>(async (adminUser, request, con
     }
 
     const revokedSessions = await sessionService.revokeAllUserSessions(targetUserId, 'admin_force_logout');
+
+    // A revoked DB session must not leave an already-open socket connected —
+    // notify realtime so it disconnects the target's live sockets right now.
+    if (revokedSessions > 0) {
+      await notifyUserSessionsRevoked(targetUserId, 'admin_force_logout');
+    }
 
     // Free-text reason stays in the audit event only — not in general API logs.
     loggers.api.info('Admin revoked all user sessions', {

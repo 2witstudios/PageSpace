@@ -11,13 +11,14 @@ vi.mock('@/lib/auth', () => ({
     (req: Request, ctx: T) => handler({ id: 'admin-1' }, req, ctx),
 }));
 
-const { dbSelectMock, dbUpdateMock, setSpy, revokeAllUserSessionsMock } = vi.hoisted(() => {
+const { dbSelectMock, dbUpdateMock, setSpy, revokeAllUserSessionsMock, notifyUserSessionsRevokedMock } = vi.hoisted(() => {
   const setSpy = vi.fn((_values: Record<string, unknown>) => ({ where: () => Promise.resolve() }));
   return {
     dbSelectMock: vi.fn(),
     dbUpdateMock: vi.fn(() => ({ set: setSpy })),
     setSpy,
     revokeAllUserSessionsMock: vi.fn().mockResolvedValue(3),
+    notifyUserSessionsRevokedMock: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -33,6 +34,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: { revokeAllUserSessions: revokeAllUserSessionsMock },
+}));
+
+vi.mock('@pagespace/lib/auth/session-revocation-notify', () => ({
+  notifyUserSessionsRevoked: notifyUserSessionsRevokedMock,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -67,6 +72,7 @@ describe('/api/admin/users/[userId]/suspend', () => {
     vi.clearAllMocks();
     dbSelectMock.mockReset();
     revokeAllUserSessionsMock.mockResolvedValue(3);
+    notifyUserSessionsRevokedMock.mockResolvedValue(undefined);
   });
 
   describe('POST (suspend)', () => {
@@ -85,6 +91,7 @@ describe('/api/admin/users/[userId]/suspend', () => {
       expect(setArgs.suspendedReason).toBe('ToS violation');
 
       expect(revokeAllUserSessionsMock).toHaveBeenCalledWith('user-1', 'admin_suspension');
+      expect(notifyUserSessionsRevokedMock).toHaveBeenCalledWith('user-1', 'admin_suspension');
 
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),

@@ -629,6 +629,55 @@ function validateAndLogWebSocketOrigin(
   return false;
 }
 
+/**
+ * Internal POST endpoints (/api/broadcast, /api/kick, /api/terminal-activity)
+ * accept small, fixed-shape JSON payloads from trusted backend callers. HMAC
+ * signature verification only runs AFTER the body is fully buffered, so an
+ * unbounded `body += chunk` would let a caller without the shared secret
+ * still exhaust server memory before ever failing auth. 1MB is generous for
+ * every payload shape these routes accept.
+ */
+const MAX_INTERNAL_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Buffers a request body up to `maxBytes`, rejecting with 413 and destroying
+ * the connection the moment the limit is exceeded (rather than after the
+ * full body has already been read into memory).
+ */
+function readBodyWithLimit(
+    req: IncomingMessage,
+    res: ServerResponse,
+    maxBytes: number,
+    onComplete: (body: string) => void
+): void {
+    let body = '';
+    let bytes = 0;
+    let rejected = false;
+
+    req.on('data', (chunk: Buffer) => {
+        if (rejected) return;
+        bytes += chunk.length;
+        if (bytes > maxBytes) {
+            rejected = true;
+            loggers.realtime.warn('Request body exceeded size limit', {
+                url: req.url,
+                ip: req.socket.remoteAddress,
+                maxBytes,
+            });
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Payload too large' }));
+            req.destroy();
+            return;
+        }
+        body += chunk.toString();
+    });
+
+    req.on('end', () => {
+        if (rejected) return;
+        onComplete(body);
+    });
+}
+
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
     // Helper to verify signature (shared by broadcast and kick)
     const verifySignature = (signatureHeader: string | undefined, body: string): boolean => {
@@ -656,11 +705,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
     };
 
     if (req.method === 'POST' && req.url === '/api/broadcast') {
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        req.on('end', () => {
+        readBodyWithLimit(req, res, MAX_INTERNAL_BODY_BYTES, (body) => {
             try {
                 const signatureHeader = req.headers['x-broadcast-signature'] as string;
                 if (!verifySignature(signatureHeader, body)) {
@@ -723,11 +768,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         // Streams an agent's bash run into a live Terminal's PTY/output feed
         // (Terminal Epic 1 T1.5, activity visibility). Best-effort: a live
         // session may not exist (nobody watching), which is not an error.
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        req.on('end', () => {
+        readBodyWithLimit(req, res, MAX_INTERNAL_BODY_BYTES, (body) => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
             if (!verifySignature(signatureHeader, body)) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -763,11 +804,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        req.on('end', () => {
+        readBodyWithLimit(req, res, MAX_INTERNAL_BODY_BYTES, (body) => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
             if (!verifySignature(signatureHeader, body)) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -779,6 +816,23 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
             res.writeHead(result.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result.body));
         });
+    } else if (req.method === 'GET' && req.url === '/health') {
+        // Liveness/readiness probe. Unauthenticated (matches the processor's
+        // /health) — reports the io server's actual live connection count and
+        // process stats rather than a hardcoded "healthy", so a wedged event
+        // loop (accepting no new connections) or leaked FDs surface here.
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            status: 'healthy',
+            service: 'realtime',
+            timestamp: new Date().toISOString(),
+            connections: io.engine.clientsCount,
+            memory: {
+                used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+                rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+            },
+        }));
     } else {
         res.writeHead(404);
         res.end();
@@ -914,6 +968,49 @@ io.use(async (socket: AuthSocket, next) => {
   loggers.realtime.warn('Socket.IO: Unknown token format', { tokenPrefix: token.substring(0, 8) });
   return next(new Error('Authentication error: Invalid token format.'));
 });
+
+/**
+ * Broadcasts a page's viewer list to the page room (already page-access-gated
+ * at join_channel time) and, separately, to the DRIVE room's recipients — but
+ * ONLY those who are individually authorized for this specific page.
+ *
+ * `drive:<id>` membership (join_drive) proves DRIVE-level access alone; a
+ * page can carry a narrower, page-level permission than its drive, so a
+ * sidebar-tree viewer who lacks that page's own access must not learn who is
+ * viewing it. The page room's blanket `io.to(room).emit` is fine (join_channel
+ * already checked this exact page); the drive room's is not, so each of its
+ * sockets is re-checked here before delivery.
+ */
+async function broadcastPresenceUpdate(
+  pageId: string,
+  driveId: string | null | undefined,
+  uniqueViewers: PresenceViewer[]
+): Promise<void> {
+  const payload = { pageId, viewers: uniqueViewers };
+
+  io.to(pageId).emit('presence:page_viewers', payload);
+
+  if (!driveId) return;
+
+  const driveRoom = `drive:${driveId}`;
+  const driveSockets = await io.in(driveRoom).fetchSockets();
+  const accessByUserId = new Map<string, boolean>();
+
+  await Promise.all(driveSockets.map(async (driveSocket) => {
+    const userId = (driveSocket.data as { user?: { id?: string } } | undefined)?.user?.id;
+    if (!userId) return;
+
+    let hasAccess = accessByUserId.get(userId);
+    if (hasAccess === undefined) {
+      hasAccess = !!(await getUserAccessLevel(userId, pageId));
+      accessByUserId.set(userId, hasAccess);
+    }
+
+    if (hasAccess) {
+      driveSocket.emit('presence:page_viewers', payload);
+    }
+  }));
+}
 
 io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
@@ -1246,17 +1343,7 @@ io.on('connection', (socket: AuthSocket) => {
       presenceTracker.addViewer(pageId, driveId, presenceUser);
       const uniqueViewers = presenceTracker.getUniqueViewers(pageId);
 
-      // Broadcast to the page room (for the content header)
-      io.to(pageId).emit('presence:page_viewers', {
-        pageId,
-        viewers: uniqueViewers,
-      });
-
-      // Broadcast to the drive room (for the sidebar page tree)
-      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
-        pageId,
-        viewers: uniqueViewers,
-      });
+      await broadcastPresenceUpdate(pageId, driveId, uniqueViewers);
 
       loggers.realtime.debug('User joined page presence', {
         userId: user.id,
@@ -1269,7 +1356,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   // Presence tracking: leave a page
-  socket.on('presence:leave_page', (payload: unknown) => {
+  socket.on('presence:leave_page', async (payload: unknown) => {
     if (!user?.id) return;
 
     const pageValidation = validatePresencePagePayload(payload);
@@ -1283,19 +1370,7 @@ io.on('connection', (socket: AuthSocket) => {
     presenceTracker.removeViewer(socket.id, pageId);
     const uniqueViewers = presenceTracker.getUniqueViewers(pageId);
 
-    // Broadcast updated viewer list to page room
-    io.to(pageId).emit('presence:page_viewers', {
-      pageId,
-      viewers: uniqueViewers,
-    });
-
-    // Broadcast to drive room if we know the driveId
-    if (driveId) {
-      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
-        pageId,
-        viewers: uniqueViewers,
-      });
-    }
+    await broadcastPresenceUpdate(pageId, driveId, uniqueViewers);
 
     loggers.realtime.debug('User left page presence', {
       userId: user.id,
@@ -1394,25 +1469,14 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('agent-terminal:resize', (payload) => agentTerminalHandlers.onResize(payload));
   socket.on('agent-terminal:disconnect', (payload) => agentTerminalHandlers.onDisconnect(payload));
 
-  socket.on('disconnect', (reason) => {
+  socket.on('disconnect', async (reason) => {
     agentTerminalHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
-    for (const { pageId, driveId } of affectedPages) {
+    await Promise.all(affectedPages.map(({ pageId, driveId }) => {
       const uniqueViewers = presenceTracker.getUniqueViewers(pageId);
-
-      io.to(pageId).emit('presence:page_viewers', {
-        pageId,
-        viewers: uniqueViewers,
-      });
-
-      if (driveId) {
-        io.to(`drive:${driveId}`).emit('presence:page_viewers', {
-          pageId,
-          viewers: uniqueViewers,
-        });
-      }
-    }
+      return broadcastPresenceUpdate(pageId, driveId, uniqueViewers);
+    }));
 
     // Unregister socket from registry (cleans up all room tracking)
     socketRegistry.unregisterSocket(socket.id);

@@ -20,7 +20,15 @@ export interface KickPayload {
     driveId?: string;
     pageId?: string;
     driveName?: string;
+    revocationReason?: string;
   };
+  /**
+   * When true, forcibly terminate every one of the user's live sockets
+   * instead of just evicting them from rooms matching `roomPattern` — a
+   * session revocation invalidates the socket's own auth, not merely its
+   * room memberships, so leaving rooms alone would let it keep working.
+   */
+  disconnect?: boolean;
 }
 
 export interface KickResult {
@@ -116,6 +124,50 @@ export function getRoomsForPageKick(pageId: string): string[] {
 }
 
 /**
+ * Forcibly disconnect every socket belonging to `userId` (session revocation)
+ * rather than evicting it from specific rooms. The socket's own `disconnect`
+ * handler (registered in index.ts) takes care of registry/presence cleanup,
+ * so this only needs to notify the client and close the connection.
+ */
+function executeSessionDisconnect(
+  io: Server,
+  userSocketIds: string[],
+  payload: KickPayload
+): KickResult {
+  const { reason, metadata } = payload;
+  const affectedRooms = new Set<string>();
+  let kickedCount = 0;
+
+  for (const socketId of userSocketIds) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (!socket) continue;
+
+    for (const room of socketRegistry.getRoomsForSocket(socketId)) {
+      affectedRooms.add(room);
+    }
+
+    socket.emit('access_revoked', { room: '*', reason, metadata });
+    socket.disconnect(true);
+    kickedCount++;
+  }
+
+  const rooms = Array.from(affectedRooms);
+
+  loggers.realtime.info('User sessions disconnected', {
+    userId: payload.userId,
+    reason,
+    kickedCount,
+    socketCount: userSocketIds.length,
+  });
+
+  return {
+    success: true,
+    kickedCount,
+    rooms,
+  };
+}
+
+/**
  * Execute the kick operation - remove user's sockets from matching rooms
  */
 export function executeKick(
@@ -138,6 +190,10 @@ export function executeKick(
       kickedCount: 0,
       rooms: [],
     };
+  }
+
+  if (payload.disconnect) {
+    return executeSessionDisconnect(io, userSocketIds, payload);
   }
 
   const kickedRooms = new Set<string>();

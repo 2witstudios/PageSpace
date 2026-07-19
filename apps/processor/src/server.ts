@@ -176,8 +176,15 @@ app.get('/health', async (req, res) => {
     sources: {},
   };
 
+  // The SIEM cursor refresh sets `siem.error` on a DB failure (see
+  // doRefreshSiemCursorCache) but the response used to report `status:
+  // 'healthy'` regardless — an operator's liveness probe would never learn
+  // the SIEM subsystem was down. Still 200 (a transient SIEM blip should not
+  // flap k8s liveness), but the status field itself must not lie.
+  const status = siem.error ? 'degraded' : 'healthy';
+
   res.json({
-    status: 'healthy',
+    status,
     service: 'processor',
     timestamp: new Date().toISOString(),
     memory: {

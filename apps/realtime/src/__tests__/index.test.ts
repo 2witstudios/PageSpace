@@ -237,9 +237,12 @@ vi.mock('http', () => ({
 }));
 
 // Mocked io object - tracks calls to use() and on()
+const mockFetchSockets = vi.fn().mockResolvedValue([]);
 const mockIo = {
   to: vi.fn().mockReturnThis(),
+  in: vi.fn().mockReturnValue({ fetchSockets: mockFetchSockets }),
   emit: vi.fn(),
+  engine: { clientsCount: 0 },
   sockets: { sockets: new Map() },
   use: vi.fn((cb: (socket: unknown, next: (err?: Error) => void) => Promise<void>) => {
     capturedIoUseCallback = cb;
@@ -340,6 +343,7 @@ function createMockReq(overrides: Partial<{
       listeners[event] = listeners[event] || [];
       listeners[event].push(cb);
     }),
+    destroy: vi.fn(),
     _listeners: listeners,
     _emit: (event: string, data?: unknown) => {
       (listeners[event] || []).forEach(cb => cb(data as Parameters<typeof cb>[0]));
@@ -745,6 +749,42 @@ describe('requestListener - 404', () => {
     capturedRequestListener!(req, res);
 
     expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+});
+
+describe('requestListener - GET /health', () => {
+  it('should return 200 with service status and connection count', () => {
+    mockIo.engine.clientsCount = 3;
+
+    const req = createMockReq({ method: 'GET', url: '/health' });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    const responseBody = JSON.parse((res.end as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(responseBody.status).toBe('healthy');
+    expect(responseBody.service).toBe('realtime');
+    expect(responseBody.connections).toBe(3);
+    expect(typeof responseBody.memory.used).toBe('number');
+  });
+});
+
+describe('requestListener - internal POST body size limit', () => {
+  it('given a body over the size limit, should return 413 and stop reading', () => {
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/kick',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    // 1MB limit — a single 2MB chunk exceeds it immediately.
+    req._emit('data', Buffer.alloc(2 * 1024 * 1024));
+
+    expect(res.writeHead).toHaveBeenCalledWith(413, { 'Content-Type': 'application/json' });
+    expect(JSON.parse((res.end as ReturnType<typeof vi.fn>).mock.calls[0][0])).toEqual({ error: 'Payload too large' });
   });
 });
 
@@ -1518,6 +1558,33 @@ describe('Socket.IO connection handler', () => {
       expect(mockIo.to).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
     });
 
+    it('given viewers in the drive room, should only broadcast to sockets individually authorized for this page', async () => {
+      const pageId = 'athmieqpwr4ax1t2e0i4lmor';
+      vi.mocked(getUserAccessLevel).mockImplementation(async (userId: string) => {
+        if (userId === 'user-1' || userId === 'authorized-viewer') {
+          return { canView: true, canEdit: true, canShare: false, canDelete: false };
+        }
+        // In the drive room (drive-level access) but NOT authorized for this
+        // specific, narrower-permissioned page.
+        return null;
+      });
+      mockDbLimit.mockResolvedValue([{ driveId: 'drive-1' }]);
+      mockPresenceTracker.getUniqueViewers.mockReturnValue([]);
+
+      const authorizedRemoteSocket = { data: { user: { id: 'authorized-viewer' } }, emit: vi.fn() };
+      const unauthorizedRemoteSocket = { data: { user: { id: 'unauthorized-viewer' } }, emit: vi.fn() };
+      mockFetchSockets.mockResolvedValueOnce([authorizedRemoteSocket, unauthorizedRemoteSocket]);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'Test', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('presence:join_page', { pageId });
+
+      expect(mockIo.in).toHaveBeenCalledWith('drive:drive-1');
+      expect(authorizedRemoteSocket.emit).toHaveBeenCalledWith('presence:page_viewers', { pageId, viewers: [] });
+      expect(unauthorizedRemoteSocket.emit).not.toHaveBeenCalled();
+    });
+
     it('given no access, should not add viewer', async () => {
       vi.mocked(getUserAccessLevel).mockResolvedValue(null);
 
@@ -1606,7 +1673,7 @@ describe('Socket.IO connection handler', () => {
   });
 
   describe('disconnect event', () => {
-    it('given disconnect, should remove socket from presence tracker and unregister', () => {
+    it('given disconnect, should remove socket from presence tracker and unregister', async () => {
       mockPresenceTracker.removeSocket.mockReturnValue([
         { pageId: 'page-1', driveId: 'drive-1' },
       ]);
@@ -1615,20 +1682,20 @@ describe('Socket.IO connection handler', () => {
       const socket = createMockSocket({ id: 'socket-dc', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
       capturedIoConnectionCallback!(socket);
 
-      socket._trigger('disconnect', 'transport close');
+      await socket._trigger('disconnect', 'transport close');
 
       expect(mockPresenceTracker.removeSocket).toHaveBeenCalledWith('socket-dc');
       expect(mockSocketRegistry.unregisterSocket).toHaveBeenCalledWith('socket-dc');
       expect(mockIo.to).toHaveBeenCalledWith('page-1');
     });
 
-    it('given disconnect with no affected pages, should still unregister socket', () => {
+    it('given disconnect with no affected pages, should still unregister socket', async () => {
       mockPresenceTracker.removeSocket.mockReturnValue([]);
 
       const socket = createMockSocket({ id: 'socket-dc2', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
       capturedIoConnectionCallback!(socket);
 
-      socket._trigger('disconnect', 'transport close');
+      await socket._trigger('disconnect', 'transport close');
 
       expect(mockSocketRegistry.unregisterSocket).toHaveBeenCalledWith('socket-dc2');
     });

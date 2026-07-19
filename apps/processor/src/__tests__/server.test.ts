@@ -929,7 +929,10 @@ describe('GET /health', () => {
     await getHealthHandler()(req, res);
 
     expect(statusCode.value).toBe(200);
-    const { siem } = jsonMock.mock.calls[0][0];
+    const { status, siem } = jsonMock.mock.calls[0][0];
+    // 200 so a transient SIEM blip doesn't flap k8s liveness, but the status
+    // field itself must not claim healthy while the SIEM subsystem is down.
+    expect(status).toBe('degraded');
     expect(siem.enabled).toBe(true);
     expect(siem.error).toBe('health check db error');
     expect(siem.sources).toEqual({});

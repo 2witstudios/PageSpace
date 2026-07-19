@@ -46,7 +46,7 @@ import { socketRegistry } from '../socket-registry';
 import type { Server } from 'socket.io';
 
 // Helper to create a mock Socket.IO Server
-function createMockIo(sockets: Map<string, { leave: ReturnType<typeof vi.fn>; emit: ReturnType<typeof vi.fn> }>) {
+function createMockIo(sockets: Map<string, { leave: ReturnType<typeof vi.fn>; emit: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }>) {
   return {
     sockets: {
       sockets: sockets,
@@ -59,6 +59,7 @@ function createMockSocket() {
   return {
     leave: vi.fn(),
     emit: vi.fn(),
+    disconnect: vi.fn(),
   };
 }
 
@@ -287,6 +288,61 @@ describe('executeKick', () => {
     expect(result.rooms).toEqual([]);
     expect(mockSocket.leave).not.toHaveBeenCalled();
     expect(mockSocket.emit).not.toHaveBeenCalled();
+  });
+
+  describe('given disconnect: true (session revocation)', () => {
+    it('should forcibly disconnect every socket for the user instead of leaving rooms', () => {
+      const mockSocket1 = createMockSocket();
+      const mockSocket2 = createMockSocket();
+      const socketMap = new Map([
+        ['socket-1', mockSocket1],
+        ['socket-2', mockSocket2],
+      ]);
+
+      mockedRegistry.getSocketsForUser.mockReturnValue(['socket-1', 'socket-2']);
+      mockedRegistry.getRoomsForSocket
+        .mockReturnValueOnce(['drive:drive-abc', 'notifications:user-1'])
+        .mockReturnValueOnce(['dm:conv-1']);
+
+      const payload: KickPayload = {
+        userId: 'user-1',
+        roomPattern: '*',
+        reason: 'session_revoked',
+        disconnect: true,
+      };
+
+      const io = createMockIo(socketMap);
+      const result = executeKick(io, payload);
+
+      expect(result.success).toBe(true);
+      expect(result.kickedCount).toBe(2);
+      expect(result.rooms).toEqual(expect.arrayContaining(['drive:drive-abc', 'notifications:user-1', 'dm:conv-1']));
+
+      expect(mockSocket1.emit).toHaveBeenCalledWith('access_revoked', { room: '*', reason: 'session_revoked', metadata: undefined });
+      expect(mockSocket1.disconnect).toHaveBeenCalledWith(true);
+      expect(mockSocket2.disconnect).toHaveBeenCalledWith(true);
+
+      // A full disconnect must not go through the room-leave path.
+      expect(mockSocket1.leave).not.toHaveBeenCalled();
+      expect(mockedRegistry.trackRoomLeave).not.toHaveBeenCalled();
+    });
+
+    it('given a stale socket no longer in io.sockets, should skip it', () => {
+      mockedRegistry.getSocketsForUser.mockReturnValue(['socket-gone']);
+
+      const payload: KickPayload = {
+        userId: 'user-1',
+        roomPattern: '*',
+        reason: 'session_revoked',
+        disconnect: true,
+      };
+
+      const io = createMockIo(new Map());
+      const result = executeKick(io, payload);
+
+      expect(result.success).toBe(true);
+      expect(result.kickedCount).toBe(0);
+    });
   });
 });
 
