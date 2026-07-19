@@ -2,20 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockAuthenticateRequestWithOptions = vi.fn();
 const mockIsAuthError = vi.fn();
-const mockCanManageChannelWebhooks = vi.fn();
+const mockCanManagePageWebhooks = vi.fn();
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequestWithOptions(...args),
   isAuthError: (...args: unknown[]) => mockIsAuthError(...args),
-  canManageChannelWebhooks: (...args: unknown[]) => mockCanManageChannelWebhooks(...args),
+  canManagePageWebhooks: (...args: unknown[]) => mockCanManagePageWebhooks(...args),
 }));
 
-const mockChannelWebhooksFindMany = vi.fn();
+const mockPageWebhooksFindMany = vi.fn();
 const mockPagesFindFirst = vi.fn();
 const mockInsertValues = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
-      channelWebhooks: { findMany: (...args: unknown[]) => mockChannelWebhooksFindMany(...args) },
+      pageWebhooks: { findMany: (...args: unknown[]) => mockPageWebhooksFindMany(...args) },
       pages: { findFirst: (...args: unknown[]) => mockPagesFindFirst(...args) },
     },
     insert: () => ({
@@ -26,9 +26,9 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
-vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', type: 'pages.type' } }));
-vi.mock('@pagespace/db/schema/channel-webhooks', () => ({
-  channelWebhooks: { pageId: 'channelWebhooks.pageId' },
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', isTrashed: 'pages.isTrashed' } }));
+vi.mock('@pagespace/db/schema/page-webhooks', () => ({
+  pageWebhooks: { pageId: 'pageWebhooks.pageId' },
 }));
 
 const mockEncryptField = vi.fn(async (v: string) => `encrypted(${v})`);
@@ -50,7 +50,7 @@ import { GET, POST } from '../route';
 const SESSION_AUTH = { userId: 'user-1', kind: 'session' };
 
 function makeRequest(body?: unknown): Request {
-  return new Request('https://example.com/api/channels/page-1/webhooks', {
+  return new Request('https://example.com/api/pages/page-1/webhooks', {
     method: body === undefined ? 'GET' : 'POST',
     ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
   });
@@ -62,12 +62,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockAuthenticateRequestWithOptions.mockResolvedValue(SESSION_AUTH);
   mockIsAuthError.mockReturnValue(false);
-  mockCanManageChannelWebhooks.mockResolvedValue(true);
+  mockCanManagePageWebhooks.mockResolvedValue(true);
 });
 
-describe('GET /api/channels/[pageId]/webhooks', () => {
+describe('GET /api/pages/[pageId]/webhooks', () => {
   it('lists webhooks for a manager, stripping the encrypted secret from every row', async () => {
-    mockChannelWebhooksFindMany.mockResolvedValue([
+    mockPageWebhooksFindMany.mockResolvedValue([
       { id: 'wh-1', name: 'Deploys', webhookToken: 'tok', webhookSecretEncrypted: 'secret-should-not-leak', isEnabled: true },
     ]);
     const response = await GET(makeRequest(), PARAMS);
@@ -78,10 +78,10 @@ describe('GET /api/channels/[pageId]/webhooks', () => {
   });
 
   it('rejects a non-owner/admin with 403', async () => {
-    mockCanManageChannelWebhooks.mockResolvedValue(false);
+    mockCanManagePageWebhooks.mockResolvedValue(false);
     const response = await GET(makeRequest(), PARAMS);
     expect(response.status).toBe(403);
-    expect(mockChannelWebhooksFindMany).not.toHaveBeenCalled();
+    expect(mockPageWebhooksFindMany).not.toHaveBeenCalled();
   });
 
   it('propagates an auth error unchanged', async () => {
@@ -90,13 +90,13 @@ describe('GET /api/channels/[pageId]/webhooks', () => {
     mockIsAuthError.mockReturnValue(true);
     const response = await GET(makeRequest(), PARAMS);
     expect(response.status).toBe(401);
-    expect(mockCanManageChannelWebhooks).not.toHaveBeenCalled();
+    expect(mockCanManagePageWebhooks).not.toHaveBeenCalled();
   });
 });
 
-describe('POST /api/channels/[pageId]/webhooks', () => {
+describe('POST /api/pages/[pageId]/webhooks', () => {
   it('creates a webhook, encrypts the secret at rest, and returns the plaintext secret exactly once', async () => {
-    mockPagesFindFirst.mockResolvedValue({ type: 'CHANNEL' });
+    mockPagesFindFirst.mockResolvedValue({ isTrashed: false });
     mockInsertValues.mockResolvedValue([
       { id: 'wh-1', pageId: 'page-1', name: 'Deploys', webhookToken: 'tok-abc', webhookSecretEncrypted: 'encrypted(plain)', isEnabled: true, createdBy: 'user-1' },
     ]);
@@ -111,15 +111,25 @@ describe('POST /api/channels/[pageId]/webhooks', () => {
   });
 
   it('rejects a non-owner/admin with 403 without touching the page or inserting', async () => {
-    mockCanManageChannelWebhooks.mockResolvedValue(false);
+    mockCanManagePageWebhooks.mockResolvedValue(false);
     const response = await POST(makeRequest({ name: 'Deploys' }), PARAMS);
     expect(response.status).toBe(403);
     expect(mockPagesFindFirst).not.toHaveBeenCalled();
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
-  it('rejects a page that is not a CHANNEL', async () => {
-    mockPagesFindFirst.mockResolvedValue({ type: 'DOCUMENT' });
+  it('mints for any non-trashed page type — no CHANNEL gate', async () => {
+    mockPagesFindFirst.mockResolvedValue({ isTrashed: false });
+    mockInsertValues.mockResolvedValue([
+      { id: 'wh-2', pageId: 'page-1', name: 'CI', webhookToken: 'tok-def', webhookSecretEncrypted: 'encrypted(plain)', isEnabled: true, createdBy: 'user-1' },
+    ]);
+    const response = await POST(makeRequest({ name: 'CI' }), PARAMS);
+    expect(response.status).toBe(201);
+    expect(mockInsertValues).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a trashed page with 400', async () => {
+    mockPagesFindFirst.mockResolvedValue({ isTrashed: true });
     const response = await POST(makeRequest({ name: 'Deploys' }), PARAMS);
     expect(response.status).toBe(400);
     expect(mockInsertValues).not.toHaveBeenCalled();
@@ -133,14 +143,14 @@ describe('POST /api/channels/[pageId]/webhooks', () => {
   });
 
   it('rejects an empty name', async () => {
-    mockPagesFindFirst.mockResolvedValue({ type: 'CHANNEL' });
+    mockPagesFindFirst.mockResolvedValue({ isTrashed: false });
     const response = await POST(makeRequest({ name: '   ' }), PARAMS);
     expect(response.status).toBe(400);
     expect(mockInsertValues).not.toHaveBeenCalled();
   });
 
   it('rejects a name over the length cap', async () => {
-    mockPagesFindFirst.mockResolvedValue({ type: 'CHANNEL' });
+    mockPagesFindFirst.mockResolvedValue({ isTrashed: false });
     const response = await POST(makeRequest({ name: 'x'.repeat(81) }), PARAMS);
     expect(response.status).toBe(400);
     expect(mockInsertValues).not.toHaveBeenCalled();

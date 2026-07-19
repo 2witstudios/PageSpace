@@ -11,13 +11,35 @@ const WEBHOOK = {
   webhookSecretEncrypted: 'encrypted-form-of-secret',
 };
 
+function makeChain(value: unknown) {
+  const chain: Record<string, unknown> = {
+    set: () => chain,
+    where: () => chain,
+    then: (resolve: (v: unknown) => void, reject?: (e: unknown) => void) =>
+      Promise.resolve(value).then(resolve, reject),
+    catch: (reject: (e: unknown) => void) => Promise.resolve(value).catch(reject),
+  };
+  return chain;
+}
+
 const mockFindFirst = vi.fn();
+const mockPageFindFirst = vi.fn();
+const mockUpdate = vi.fn((..._args: unknown[]) => makeChain(undefined));
 vi.mock('@pagespace/db/db', () => ({
-  db: { query: { channelWebhooks: { findFirst: (...args: unknown[]) => mockFindFirst(...args) } } },
+  db: {
+    query: {
+      pageWebhooks: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
+      pages: { findFirst: (...args: unknown[]) => mockPageFindFirst(...args) },
+    },
+    update: (...args: unknown[]) => mockUpdate(...args),
+  },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
-vi.mock('@pagespace/db/schema/channel-webhooks', () => ({
-  channelWebhooks: { webhookToken: 'channelWebhooks.webhookToken' },
+vi.mock('@pagespace/db/schema/page-webhooks', () => ({
+  pageWebhooks: { id: 'pageWebhooks.id', webhookToken: 'pageWebhooks.webhookToken' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
 }));
 
 // Real decrypt-equivalent for the test: returns the plaintext secret directly,
@@ -27,7 +49,7 @@ vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
 }));
 
 const mockPublish = vi.fn();
-vi.mock('@pagespace/lib/services/channel-webhook-service', () => ({
+vi.mock('@pagespace/lib/services/page-webhook-service', () => ({
   publishWebhookMessage: (...args: unknown[]) => mockPublish(...args),
 }));
 
@@ -42,7 +64,7 @@ function sign(body: string, timestamp: string, secret = SECRET): string {
 }
 
 function makeRequest(body: string, headers: Record<string, string> = {}): Request {
-  return new Request('https://example.com/api/webhooks/channel/tok-abc', {
+  return new Request('https://example.com/api/webhooks/tok-abc', {
     method: 'POST',
     body,
     headers: { 'content-type': 'application/json', ...headers },
@@ -62,10 +84,11 @@ const VALID_PAYLOAD = JSON.stringify({ content: 'deploy finished' });
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindFirst.mockResolvedValue(WEBHOOK);
+  mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL' });
   mockPublish.mockResolvedValue({ ok: true });
 });
 
-describe('POST /api/webhooks/channel/[token]', () => {
+describe('POST /api/webhooks/[token]', () => {
   it('accepts a validly signed request and publishes to the resolved webhook', async () => {
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
 
@@ -74,6 +97,22 @@ describe('POST /api/webhooks/channel/[token]', () => {
     const [webhookId, payload] = mockPublish.mock.calls[0];
     expect(webhookId).toBe('wh-1');
     expect(payload).toEqual({ content: 'deploy finished' });
+  });
+
+  it('rejects a body over 64KB with 413 before any lookup or parse', async () => {
+    const oversized = JSON.stringify({ content: 'x'.repeat(64 * 1024) });
+    const response = await POST(signedRequest(oversized), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).toBe(413);
+    expect(mockFindFirst).not.toHaveBeenCalled();
+    expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('accepts a body exactly at the 64KB cap', async () => {
+    // Total JSON body of exactly 65536 bytes: {"content":"…"} wrapper is 14 bytes.
+    const atCap = JSON.stringify({ content: 'x'.repeat(64 * 1024 - 14) });
+    expect(Buffer.byteLength(atCap, 'utf8')).toBe(64 * 1024);
+    const response = await POST(signedRequest(atCap), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).not.toBe(413);
   });
 
   it('rejects a request with no signature', async () => {
@@ -127,6 +166,23 @@ describe('POST /api/webhooks/channel/[token]', () => {
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(404);
     expect(mockPublish).not.toHaveBeenCalled();
+  });
+
+  it('accepts a verified delivery to a non-CHANNEL page with 202 action:none and records no-action on the row', async () => {
+    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT' });
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ accepted: true, action: 'none' });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('still requires a valid signature before the non-CHANNEL 202 path — no unauthenticated probe', async () => {
+    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT' });
+    const response = await POST(makeRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).toBe(403);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 
   it('maps a payload-validation error from the service to a 400 with the message', async () => {

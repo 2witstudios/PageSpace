@@ -1,5 +1,5 @@
 {
-  "id": "392f4006-4cac-4609-b330-f4b8a2891a53",
+  "id": "879aecee-1130-4c08-9f78-ec13de2c1bb4",
   "prevId": "3c30b20b-d230-4b60-95f2-8eecfb5d8276",
   "version": "7",
   "dialect": "postgresql",
@@ -20131,8 +20131,8 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {}
     },
-    "public.channel_webhooks": {
-      "name": "channel_webhooks",
+    "public.page_webhooks": {
+      "name": "page_webhooks",
       "schema": "",
       "columns": {
         "id": {
@@ -20199,8 +20199,8 @@
         }
       },
       "indexes": {
-        "channel_webhooks_page_id_idx": {
-          "name": "channel_webhooks_page_id_idx",
+        "page_webhooks_page_id_idx": {
+          "name": "page_webhooks_page_id_idx",
           "columns": [
             {
               "expression": "pageId",
@@ -20214,8 +20214,8 @@
           "method": "btree",
           "with": {}
         },
-        "channel_webhooks_token_idx": {
-          "name": "channel_webhooks_token_idx",
+        "page_webhooks_token_idx": {
+          "name": "page_webhooks_token_idx",
           "columns": [
             {
               "expression": "webhookToken",
@@ -20231,9 +20231,9 @@
         }
       },
       "foreignKeys": {
-        "channel_webhooks_pageId_pages_id_fk": {
-          "name": "channel_webhooks_pageId_pages_id_fk",
-          "tableFrom": "channel_webhooks",
+        "page_webhooks_pageId_pages_id_fk": {
+          "name": "page_webhooks_pageId_pages_id_fk",
+          "tableFrom": "page_webhooks",
           "tableTo": "pages",
           "columnsFrom": [
             "pageId"
@@ -20244,9 +20244,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "channel_webhooks_createdBy_users_id_fk": {
-          "name": "channel_webhooks_createdBy_users_id_fk",
-          "tableFrom": "channel_webhooks",
+        "page_webhooks_createdBy_users_id_fk": {
+          "name": "page_webhooks_createdBy_users_id_fk",
+          "tableFrom": "page_webhooks",
           "tableTo": "users",
           "columnsFrom": [
             "createdBy"
@@ -20260,8 +20260,8 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "channel_webhooks_webhookToken_unique": {
-          "name": "channel_webhooks_webhookToken_unique",
+        "page_webhooks_webhookToken_unique": {
+          "name": "page_webhooks_webhookToken_unique",
           "nullsNotDistinct": false,
           "columns": [
             "webhookToken"

@@ -5,16 +5,17 @@ import { users } from './auth';
 import { pages } from './core';
 
 /**
- * Channel Incoming Webhooks
+ * Page Incoming Webhooks
  *
- * Discord-style incoming webhooks on a CHANNEL page: mint a named webhook
- * URL+secret, POST a `{ content, username? }` payload to it, and the message
- * appears in the channel verbatim. Modeled on webhook_triggers' row shape
- * (isEnabled/lastFiredAt/lastFireError bookkeeping) but anchored to a page,
- * not an OAuth connection. Deliberately minimal: no source types, filters, or
- * dedupe — the webhook IS the routing decision.
+ * Discord-style incoming webhooks on any page: mint a named webhook URL+secret,
+ * POST a signed payload to it, and a verified delivery dispatches to the
+ * page-type's default action (e.g. CHANNEL → the payload appears as a message
+ * verbatim). Modeled on webhook_triggers' row shape (isEnabled/lastFiredAt/
+ * lastFireError bookkeeping) but anchored to a page, not an OAuth connection.
+ * Deliberately minimal: no source types, filters, or dedupe — the webhook IS
+ * the routing decision.
  */
-export const channelWebhooks = pgTable('channel_webhooks', {
+export const pageWebhooks = pgTable('page_webhooks', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
   /** Human label, and the default sender name for posted messages (a payload `username` overrides it). */
@@ -30,24 +31,24 @@ export const channelWebhooks = pgTable('channel_webhooks', {
   lastFireError: text('lastFireError'),
 }, (table) => {
   return {
-    pageIdx: index('channel_webhooks_page_id_idx').on(table.pageId),
-    tokenIdx: index('channel_webhooks_token_idx').on(table.webhookToken),
+    pageIdx: index('page_webhooks_page_id_idx').on(table.pageId),
+    tokenIdx: index('page_webhooks_token_idx').on(table.webhookToken),
   };
 });
 
-export const channelWebhooksRelations = relations(channelWebhooks, ({ one }) => ({
+export const pageWebhooksRelations = relations(pageWebhooks, ({ one }) => ({
   page: one(pages, {
-    fields: [channelWebhooks.pageId],
+    fields: [pageWebhooks.pageId],
     references: [pages.id],
   }),
   createdByUser: one(users, {
-    fields: [channelWebhooks.createdBy],
+    fields: [pageWebhooks.createdBy],
     references: [users.id],
   }),
 }));
 
-export type ChannelWebhook = typeof channelWebhooks.$inferSelect;
-export type NewChannelWebhook = typeof channelWebhooks.$inferInsert;
+export type PageWebhook = typeof pageWebhooks.$inferSelect;
+export type NewPageWebhook = typeof pageWebhooks.$inferInsert;
 
 /** Dedicated system-sender identity for webhook-posted messages (channel_messages.userId is NOT NULL); seeded via migration. */
 export const SYSTEM_WEBHOOKS_USER_ID = 'system-webhooks';

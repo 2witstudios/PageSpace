@@ -174,14 +174,14 @@ export async function isPrincipalDriveOwnerOrAdmin(auth: AuthResult, driveId: st
 
 /**
  * Whether the principal may manage (create/update/delete) incoming webhooks
- * on a channel page. Deliberately stricter than canPrincipalEditPage: CHANNEL
- * pages are edit-by-default for any drive member (posting a message), but
- * minting an unattended write path into a channel is reserved for the drive's
+ * on a page. Deliberately stricter than canPrincipalEditPage: a page may be
+ * edit-by-default for any drive member (e.g. posting a channel message), but
+ * minting an unattended write path into a page is reserved for the drive's
  * owner/admin. Scoped MCP/OAuth tokens are rejected outright in v1 — this is
  * a human console action, not something a scoped agent token should do
  * unsupervised.
  */
-export async function canManageChannelWebhooks(auth: AuthResult, pageId: string): Promise<boolean> {
+export async function canManagePageWebhooks(auth: AuthResult, pageId: string): Promise<boolean> {
   if (isManageKeysOnly(auth)) return false;
   if (isScopedMCPAuth(auth) || isScopedOAuthAuth(auth)) return false;
 

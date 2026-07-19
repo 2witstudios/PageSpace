@@ -6,7 +6,7 @@ import {
   formatWebhookSenderIdentity,
   WEBHOOK_CONTENT_MAX_LENGTH,
   WEBHOOK_USERNAME_MAX_LENGTH,
-} from '../channel-webhook-core';
+} from '../page-webhook-core';
 
 describe('validateWebhookPayload', () => {
   it('accepts a minimal valid payload and returns its content verbatim', () => {
@@ -111,9 +111,9 @@ describe('formatWebhookSenderIdentity', () => {
   });
 });
 
-describe('channel-webhook-core purity', () => {
+describe('page-webhook-core purity', () => {
   it('imports no db client, fetch, or clock — it is a pure decision layer', () => {
-    const src = readFileSync(fileURLToPath(new URL('../channel-webhook-core.ts', import.meta.url)), 'utf8');
+    const src = readFileSync(fileURLToPath(new URL('../page-webhook-core.ts', import.meta.url)), 'utf8');
     expect(src).not.toMatch(/from ['"][^'"]*\/db['"]/);
     expect(src).not.toMatch(/\bfetch\(/);
     expect(src).not.toMatch(/process\.env/);

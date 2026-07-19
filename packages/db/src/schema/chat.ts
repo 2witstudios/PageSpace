@@ -19,8 +19,8 @@ export interface ChannelCommandExecution {
 
 /**
  * AI sender metadata: set when a channel message is posted by a non-human
- * sender — an AI tool, or an incoming channel webhook ('webhook', see
- * channel-webhooks.ts; senderName carries the resolved display name, i.e. the
+ * sender — an AI tool, or an incoming page webhook ('webhook', see
+ * page-webhooks.ts; senderName carries the resolved display name, i.e. the
  * payload's username override or the webhook's configured name).
  */
 export interface ChannelMessageAiMeta {

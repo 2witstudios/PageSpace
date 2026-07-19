@@ -4,12 +4,12 @@ import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { channelWebhooks } from '@pagespace/db/schema/channel-webhooks';
+import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { encryptField } from '@pagespace/lib/encryption/field-crypto';
-import { WEBHOOK_USERNAME_MAX_LENGTH } from '@pagespace/lib/services/channel-webhook-core';
+import { WEBHOOK_USERNAME_MAX_LENGTH } from '@pagespace/lib/services/page-webhook-core';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { authenticateRequestWithOptions, isAuthError, canManageChannelWebhooks } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, canManagePageWebhooks } from '@/lib/auth';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -21,35 +21,35 @@ const createSchema = z.object({
 });
 
 /** Strip the encrypted secret from every response — it is returned in plaintext exactly once, at creation. */
-function toPublicWebhook(row: typeof channelWebhooks.$inferSelect) {
+function toPublicWebhook(row: typeof pageWebhooks.$inferSelect) {
   const { webhookSecretEncrypted: _webhookSecretEncrypted, ...publicRow } = row;
   return publicRow;
 }
 
-// GET /api/channels/[pageId]/webhooks — list a channel's incoming webhooks
+// GET /api/pages/[pageId]/webhooks — list a page's incoming webhooks
 export async function GET(request: Request, context: { params: Promise<{ pageId: string }> }) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
     const { pageId } = await context.params;
 
-    const canManage = await canManageChannelWebhooks(auth, pageId);
+    const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage channel webhooks' }, { status: 403 });
+      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
     }
 
-    const rows = await db.query.channelWebhooks.findMany({
-      where: eq(channelWebhooks.pageId, pageId),
+    const rows = await db.query.pageWebhooks.findMany({
+      where: eq(pageWebhooks.pageId, pageId),
     });
 
     return NextResponse.json({ webhooks: rows.map(toPublicWebhook) });
   } catch (error) {
-    loggers.api.error('Error listing channel webhooks', error as Error);
+    loggers.api.error('Error listing page webhooks', error as Error);
     return NextResponse.json({ error: 'Failed to list webhooks' }, { status: 500 });
   }
 }
 
-// POST /api/channels/[pageId]/webhooks — mint a new incoming webhook for a channel
+// POST /api/pages/[pageId]/webhooks — mint a new incoming webhook for a page
 export async function POST(request: Request, context: { params: Promise<{ pageId: string }> }) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
@@ -57,15 +57,18 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
     const { userId } = auth;
     const { pageId } = await context.params;
 
-    const canManage = await canManageChannelWebhooks(auth, pageId);
+    const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage channel webhooks' }, { status: 403 });
+      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
     }
 
-    const page = await db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { type: true } });
+    // Any page type may mint a webhook — what a delivery *does* is a dispatch
+    // decision at intake time, not a minting restriction. Trashed pages are the
+    // one exception: no new unattended write paths into the trash.
+    const page = await db.query.pages.findFirst({ where: eq(pages.id, pageId), columns: { isTrashed: true } });
     if (!page) return NextResponse.json({ error: 'Page not found' }, { status: 404 });
-    if (page.type !== 'CHANNEL') {
-      return NextResponse.json({ error: 'Webhooks can only be attached to CHANNEL pages' }, { status: 400 });
+    if (page.isTrashed) {
+      return NextResponse.json({ error: 'Webhooks cannot be attached to a trashed page' }, { status: 400 });
     }
 
     let body: unknown;
@@ -82,14 +85,14 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
     const webhookSecretEncrypted = await encryptField(webhookSecretPlaintext);
 
     const [row] = await db
-      .insert(channelWebhooks)
+      .insert(pageWebhooks)
       .values({ pageId, name: validation.data.name, webhookSecretEncrypted, createdBy: userId })
       .returning();
 
     auditRequest(request, {
       eventType: 'data.write',
       userId,
-      resourceType: 'channel_webhook',
+      resourceType: 'page_webhook',
       resourceId: row.id,
       details: { operation: 'create', pageId },
     });
@@ -100,7 +103,7 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
       webhookSecret: webhookSecretPlaintext,
     }, { status: 201 });
   } catch (error) {
-    loggers.api.error('Error creating channel webhook', error as Error);
+    loggers.api.error('Error creating page webhook', error as Error);
     return NextResponse.json({ error: 'Failed to create webhook' }, { status: 500 });
   }
 }

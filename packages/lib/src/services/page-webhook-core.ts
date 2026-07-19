@@ -1,10 +1,10 @@
 /**
- * Pure decision core for channel incoming webhooks: payload validation and
+ * Pure decision core for page incoming webhooks: payload validation and
  * sender-identity formatting. Zero I/O — no db, no fetch, no clock, no env —
- * enforced by the purity test in __tests__/channel-webhook-core.test.ts.
- * The imperative shell (channel-webhook-service.ts) owns every side effect.
+ * enforced by the purity test in __tests__/page-webhook-core.test.ts.
+ * The imperative shell (page-webhook-service.ts) owns every side effect.
  *
- * @module @pagespace/lib/services/channel-webhook-core
+ * @module @pagespace/lib/services/page-webhook-core
  */
 
 import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';

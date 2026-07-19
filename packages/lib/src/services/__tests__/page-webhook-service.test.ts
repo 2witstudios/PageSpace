@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
- * Boundary-level fakes: the channel_webhooks lookup/update goes through the
+ * Boundary-level fakes: the page_webhooks lookup/update goes through the
  * mocked db, the message insert/load goes through the mocked
  * channelMessageRepository (already a clean seam — no drizzle chains to fake
  * for the message path).
@@ -24,7 +24,7 @@ const mockUpdate = vi.fn((..._args: unknown[]) => makeChain(undefined));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    query: { channelWebhooks: { findFirst: (...args: unknown[]) => mockFindFirst(...args) } },
+    query: { pageWebhooks: { findFirst: (...args: unknown[]) => mockFindFirst(...args) } },
     update: (...args: unknown[]) => mockUpdate(...args),
   },
 }));
@@ -33,8 +33,8 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: (a: unknown, b: unknown) => ({ a, b }),
 }));
 
-vi.mock('@pagespace/db/schema/channel-webhooks', () => ({
-  channelWebhooks: { __name: 'channel_webhooks', id: 'id' },
+vi.mock('@pagespace/db/schema/page-webhooks', () => ({
+  pageWebhooks: { __name: 'page_webhooks', id: 'id' },
   SYSTEM_WEBHOOKS_USER_ID: 'system-webhooks',
 }));
 
@@ -51,7 +51,7 @@ const mockCheckRateLimit = vi.fn();
 vi.mock('../../security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: (...args: unknown[]) => mockCheckRateLimit(...args),
   DISTRIBUTED_RATE_LIMITS: {
-    CHANNEL_WEBHOOK: { maxAttempts: 30, windowMs: 60 * 1000, blockDurationMs: 60 * 1000, progressiveDelay: false },
+    PAGE_WEBHOOK: { maxAttempts: 30, windowMs: 60 * 1000, blockDurationMs: 60 * 1000, progressiveDelay: false },
   },
 }));
 
@@ -65,7 +65,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-import { publishWebhookMessage } from '../channel-webhook-service';
+import { publishWebhookMessage } from '../page-webhook-service';
 
 const WEBHOOK_ROW = {
   id: 'wh-1',
@@ -152,7 +152,7 @@ describe('publishWebhookMessage', () => {
     mockCheckRateLimit.mockResolvedValue({ allowed: false });
     const result = await publishWebhookMessage('wh-1', { content: 'hi' });
     expect(result).toEqual({ ok: false, error: 'rate_limited' });
-    expect(mockCheckRateLimit).toHaveBeenCalledWith('channel-webhook:wh-1', expect.objectContaining({ maxAttempts: 30 }));
+    expect(mockCheckRateLimit).toHaveBeenCalledWith('page-webhook:wh-1', expect.objectContaining({ maxAttempts: 30 }));
     expect(mockInsertChannelMessage).not.toHaveBeenCalled();
   });
 

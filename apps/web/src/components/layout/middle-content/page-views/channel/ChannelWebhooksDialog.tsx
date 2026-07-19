@@ -40,7 +40,7 @@ const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } 
 };
 
 export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWebhooksDialogProps) {
-  const key = open ? `/api/channels/${pageId}/webhooks` : null;
+  const key = open ? `/api/pages/${pageId}/webhooks` : null;
   const { data, isLoading, mutate: refetch } = useSWR(key, webhooksFetcher, { revalidateOnFocus: false });
 
   const [newName, setNewName] = useState('');
@@ -64,13 +64,13 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
     setCreating(true);
     try {
       const res = await post<{ webhook: WebhookRow; webhookSecret: string }>(
-        `/api/channels/${pageId}/webhooks`,
+        `/api/pages/${pageId}/webhooks`,
         { name },
       );
       await refetch();
       setNewName('');
       setRevealed({
-        webhookUrl: `${window.location.origin}/api/webhooks/channel/${res.webhook.webhookToken}`,
+        webhookUrl: `${window.location.origin}/api/webhooks/${res.webhook.webhookToken}`,
         secret: res.webhookSecret,
       });
     } catch {
@@ -83,7 +83,7 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
   const toggleWebhook = async (id: string, enabled: boolean) => {
     setBusyId(id);
     try {
-      await patch(`/api/channels/${pageId}/webhooks/${id}`, { isEnabled: enabled });
+      await patch(`/api/pages/${pageId}/webhooks/${id}`, { isEnabled: enabled });
       await refetch();
     } catch {
       toast.error('Failed to update webhook');
@@ -95,7 +95,7 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
   const removeWebhook = async (id: string) => {
     setBusyId(id);
     try {
-      await del(`/api/channels/${pageId}/webhooks/${id}`);
+      await del(`/api/pages/${pageId}/webhooks/${id}`);
       await refetch();
     } catch {
       toast.error('Failed to delete webhook');

@@ -673,11 +673,11 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
-  // Per-webhook cap on posted channel messages (key: `channel-webhook:{webhookId}`).
+  // Per-webhook cap on posted channel messages (key: `page-webhook:{webhookId}`).
   // Meant to blunt abuse/runaway senders, not throttle legitimate bursty use —
   // matches Discord's own per-webhook limit (30 posts/min). A flooding caller
   // just gets error results; there is deliberately no dedupe/summary machinery.
-  CHANNEL_WEBHOOK: {
+  PAGE_WEBHOOK: {
     maxAttempts: 30,
     windowMs: 60 * 1000,
     blockDurationMs: 60 * 1000,

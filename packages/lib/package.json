@@ -772,15 +772,15 @@
       "import": "./dist/services/channel-message-repository.js",
       "require": "./dist/services/channel-message-repository.js"
     },
-    "./services/channel-webhook-service": {
-      "types": "./dist/services/channel-webhook-service.d.ts",
-      "import": "./dist/services/channel-webhook-service.js",
-      "require": "./dist/services/channel-webhook-service.js"
+    "./services/page-webhook-service": {
+      "types": "./dist/services/page-webhook-service.d.ts",
+      "import": "./dist/services/page-webhook-service.js",
+      "require": "./dist/services/page-webhook-service.js"
     },
-    "./services/channel-webhook-core": {
-      "types": "./dist/services/channel-webhook-core.d.ts",
-      "import": "./dist/services/channel-webhook-core.js",
-      "require": "./dist/services/channel-webhook-core.js"
+    "./services/page-webhook-core": {
+      "types": "./dist/services/page-webhook-core.d.ts",
+      "import": "./dist/services/page-webhook-core.js",
+      "require": "./dist/services/page-webhook-core.js"
     },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",

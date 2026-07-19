@@ -47,7 +47,7 @@ import {
   getPrincipalDriveIds,
   getPrincipalAccessiblePagesInDrive,
   getPrincipalBatchPagePermissions,
-  canManageChannelWebhooks,
+  canManagePageWebhooks,
 } from '../principal-permissions';
 import type { AuthResult } from '../index';
 import {
@@ -477,7 +477,7 @@ describe('manage-keys-only credential — deny-first short-circuit', () => {
   });
 });
 
-describe('canManageChannelWebhooks', () => {
+describe('canManagePageWebhooks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPagesFindFirst.mockResolvedValue({ driveId: DRIVE_ID });
@@ -485,43 +485,43 @@ describe('canManageChannelWebhooks', () => {
 
   it('session principal who is drive owner/admin is allowed', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
-    expect(await canManageChannelWebhooks(sessionAuth, PAGE_ID)).toBe(true);
+    expect(await canManagePageWebhooks(sessionAuth, PAGE_ID)).toBe(true);
     expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
   });
 
   it('session principal who is a plain drive member is denied', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
-    expect(await canManageChannelWebhooks(sessionAuth, PAGE_ID)).toBe(false);
+    expect(await canManagePageWebhooks(sessionAuth, PAGE_ID)).toBe(false);
   });
 
   it('a scoped MCP token is rejected outright — never even resolves the drive', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true); // the owning user IS admin — must not leak through
-    expect(await canManageChannelWebhooks(scopedMcpAuth, PAGE_ID)).toBe(false);
+    expect(await canManagePageWebhooks(scopedMcpAuth, PAGE_ID)).toBe(false);
     expect(mockPagesFindFirst).not.toHaveBeenCalled();
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
   });
 
   it('a scoped OAuth token is rejected outright — never even resolves the drive', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
-    expect(await canManageChannelWebhooks(scopedOAuthAuth, PAGE_ID)).toBe(false);
+    expect(await canManagePageWebhooks(scopedOAuthAuth, PAGE_ID)).toBe(false);
     expect(mockPagesFindFirst).not.toHaveBeenCalled();
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
   });
 
   it('an unscoped MCP token (acts as the full user) is evaluated on the user\'s own drive role', async () => {
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
-    expect(await canManageChannelWebhooks(unscopedMcpAuth, PAGE_ID)).toBe(true);
+    expect(await canManagePageWebhooks(unscopedMcpAuth, PAGE_ID)).toBe(true);
     expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
   });
 
   it('a manage-keys-only credential is denied without resolving the page', async () => {
-    expect(await canManageChannelWebhooks(manageKeysScopedAuthResult(), PAGE_ID)).toBe(false);
+    expect(await canManagePageWebhooks(manageKeysScopedAuthResult(), PAGE_ID)).toBe(false);
     expect(mockPagesFindFirst).not.toHaveBeenCalled();
   });
 
   it('a page with no resolvable drive is denied', async () => {
     mockPagesFindFirst.mockResolvedValue(null);
-    expect(await canManageChannelWebhooks(sessionAuth, PAGE_ID)).toBe(false);
+    expect(await canManagePageWebhooks(sessionAuth, PAGE_ID)).toBe(false);
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
   });
 });

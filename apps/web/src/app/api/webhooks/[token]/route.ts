@@ -2,13 +2,18 @@ import { NextResponse } from 'next/server';
 import { createHmac } from 'crypto';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { channelWebhooks } from '@pagespace/db/schema/channel-webhooks';
+import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
+import { pages } from '@pagespace/db/schema/core';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
-import { publishWebhookMessage } from '@pagespace/lib/services/channel-webhook-service';
+import { publishWebhookMessage } from '@pagespace/lib/services/page-webhook-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const REPLAY_WINDOW_MS = 5 * 60 * 1000;
+
+// Arbitrary-JSON envelope cap — checked on the raw bytes BEFORE JSON.parse so
+// an oversized body never costs a parse.
+const MAX_BODY_BYTES = 64 * 1024;
 
 /**
  * Verify `x-pagespace-signature`/`x-pagespace-timestamp` the same way the
@@ -30,14 +35,18 @@ function verifySignature(signature: string | null, timestamp: string | null, raw
 
 const NOT_FOUND = () => NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-// POST /api/webhooks/channel/[token] — signed intake for a channel incoming webhook.
+// POST /api/webhooks/[token] — signed intake for a page incoming webhook.
 export async function POST(request: Request, context: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await context.params;
     const rawBody = await request.text();
 
-    const webhook = await db.query.channelWebhooks.findFirst({
-      where: eq(channelWebhooks.webhookToken, token),
+    if (Buffer.byteLength(rawBody, 'utf8') > MAX_BODY_BYTES) {
+      return NextResponse.json({ error: 'Payload too large' }, { status: 413 });
+    }
+
+    const webhook = await db.query.pageWebhooks.findFirst({
+      where: eq(pageWebhooks.webhookToken, token),
     });
 
     // A single generic 404 whether the token never existed or is disabled —
@@ -51,6 +60,22 @@ export async function POST(request: Request, context: { params: Promise<{ token:
     const timestamp = request.headers.get('x-pagespace-timestamp');
     if (!verifySignature(signature, timestamp, rawBody, secret)) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
+    }
+
+    // Behavioral stub until the dispatch map lands: only CHANNEL pages have a
+    // default action today. A verified delivery to any other page type is
+    // accepted (the sender never breaks while wiring is in progress) but does
+    // nothing, recorded on the row for the settings UI to surface.
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, webhook.pageId),
+      columns: { type: true },
+    });
+    if (page?.type !== 'CHANNEL') {
+      await db
+        .update(pageWebhooks)
+        .set({ lastFireError: 'no action configured' })
+        .where(eq(pageWebhooks.id, webhook.id));
+      return NextResponse.json({ accepted: true, action: 'none' }, { status: 202 });
     }
 
     let body: unknown;
@@ -78,7 +103,7 @@ export async function POST(request: Request, context: { params: Promise<{ token:
         return NextResponse.json({ error: result.error }, { status: 400 });
     }
   } catch (error) {
-    loggers.api.error('Error handling inbound channel webhook', error as Error);
+    loggers.api.error('Error handling inbound page webhook', error as Error);
     return NextResponse.json({ error: 'Internal error' }, { status: 500 });
   }
 }
