@@ -912,6 +912,11 @@
       "import": "./dist/email-templates/render-email.js",
       "require": "./dist/email-templates/render-email.js"
     },
+    "./email-templates/PaymentReceiptEmail": {
+      "types": "./dist/email-templates/PaymentReceiptEmail.d.ts",
+      "import": "./dist/email-templates/PaymentReceiptEmail.js",
+      "require": "./dist/email-templates/PaymentReceiptEmail.js"
+    },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
       "import": "./dist/auth/secure-compare.js",
@@ -2027,6 +2032,9 @@
       ],
       "email-templates/SdkCliLaunchEmail": [
         "./dist/email-templates/SdkCliLaunchEmail.d.ts"
+      ],
+      "email-templates/PaymentReceiptEmail": [
+        "./dist/email-templates/PaymentReceiptEmail.d.ts"
       ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"
