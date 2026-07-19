@@ -88,7 +88,7 @@ jobs:
       # independently of CI — a new one-off scripts/__tests__ file must be
       # added to this list by hand to actually run here.
       - name: Run backfill script tests
-        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts
+        run: cd scripts && bunx vitest run __tests__/backfill-home-drives.test.ts __tests__/backfill-task-verb-tools.test.ts __tests__/backfill-trash-verb-tools.test.ts __tests__/backfill-legacy-ciphertext-reencrypt.test.ts __tests__/promote-admin.test.ts __tests__/setup-onprem-admin.test.ts __tests__/coverage-ratchet-sentinel.test.ts __tests__/quality-gate.test.ts __tests__/send-sdk-launch-notifications.test.ts __tests__/send-sdk-launch-broadcast-loop.test.ts
 
       - name: Coverage report
         if: always()
@@ -123,3 +123,11 @@ jobs:
 
       - name: Run TypeScript check
         run: bun run typecheck
+
+      # Quality ratchet: strict rule set (no-any, complexity, function size,
+      # purity) counted per file against quality-baseline.json. Existing debt
+      # is frozen; any NEW violation — or new eslint-disable directive — fails
+      # here. Lock in improvements with `bun run quality:update`.
+      # See docs/QUALITY.md.
+      - name: Quality gate (baseline ratchet)
+        run: bun run quality

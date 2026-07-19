@@ -19,7 +19,7 @@ scripts/          Backfill scripts, changelog generator, coverage tools
 - **bun only**. Never npm/pnpm. Bun workspace breaks otherwise.
 - **Next.js 15 async params**: `params` in dynamic routes are Promises. Always `await context.params`. Destructuring without await = silent runtime bug.
 - **Migrations**: Never edit SQL in `packages/db/drizzle/`. Run `bun run db:generate` from schema changes.
-- **No `any` types**. TypeScript strict mode.
+- **No `any` types**. TypeScript strict mode. Enforced (with complexity/function-size/purity rules) by the quality ratchet — `bun run quality` fails CI on any new violation vs `quality-baseline.json`. See `docs/QUALITY.md`.
 - **Message content**: Use `parts` array structure. See `packages/lib/src/types.ts`.
 - **Permissions**: Use centralized functions from `packages/lib/src/permissions/`. Never roll your own.
 - **UI refresh protection**: Components editing/streaming content must register with `useEditingStore` (`apps/web/src/stores/useEditingStore.ts`) to prevent SWR clobbering and auth refresh interruption.
@@ -62,6 +62,8 @@ bun run lint               # All apps
 bun run test               # All tests (with DB setup)
 bun run test:unit          # Unit tests only
 bun run test:security      # Security tests
+bun run quality            # Quality ratchet vs quality-baseline.json (CI gate)
+bun run quality:update     # Lock in quality gains / absorb justified exceptions
 bun run db:generate        # Generate Drizzle migrations
 bun run db:migrate         # Run migrations
 bun run changelog:generate # Generate changelog from merged PRs
