@@ -230,43 +230,72 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
       const runOne = makeRun('one', dbOne, planOne);
       const runTwo = makeRun('two', dbTwo, planTwo);
 
-      // Backend pids are assigned before either side's locking select, so
-      // this resolves almost immediately — not a contention wait.
-      while (pids.one === null || pids.two === null) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
+      // If either side rejects (e.g. a connection failure) before the PID
+      // barrier or contention poll below would otherwise notice, this wins
+      // the race and surfaces the real error immediately — instead of the
+      // barrier/poll spinning until Vitest's test timeout, hiding the actual
+      // cause behind a generic "timed out" failure.
+      const earlyFailure: Promise<never> = Promise.race([runOne, runTwo]).then(
+        () => new Promise<never>(() => {}), // a resolution here is not a failure; never let it win the race
+        (err) => {
+          throw err;
+        }
+      );
 
-      // The deterministic contention proof: poll until whichever side didn't
-      // win the lock race shows as genuinely blocked on a Postgres lock.
-      // Fails the test (via the assertion below) rather than timing out
-      // silently if that's never observed.
       let observedBlockedPid: number | null = null;
-      for (let i = 0; i < 150 && observedBlockedPid === null; i++) {
-        const activity = await db.execute(sql`
-          SELECT pid, wait_event_type FROM pg_stat_activity
-          WHERE pid IN (${pids.one}, ${pids.two})
-        `);
-        for (const row of activity.rows as { pid: number; wait_event_type: string | null }[]) {
-          if (row.wait_event_type === 'Lock') {
-            observedBlockedPid = row.pid;
-            break;
+      try {
+        // Backend pids are assigned before either side's locking select, so
+        // this resolves almost immediately — not a contention wait.
+        const waitForPids = (async () => {
+          while (pids.one === null || pids.two === null) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
           }
-        }
-        if (observedBlockedPid === null) {
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
+        })();
+        await Promise.race([waitForPids, earlyFailure]);
+
+        // The deterministic contention proof: poll until whichever side
+        // didn't win the lock race shows as genuinely blocked on a Postgres
+        // lock. The assertion below fails the test if that's never observed,
+        // rather than the loop spinning silently forever.
+        const pollForContention = (async () => {
+          for (let i = 0; i < 150 && observedBlockedPid === null; i++) {
+            const activity = await db.execute(sql`
+              SELECT pid, wait_event_type FROM pg_stat_activity
+              WHERE pid IN (${pids.one}, ${pids.two})
+            `);
+            for (const row of activity.rows as { pid: number; wait_event_type: string | null }[]) {
+              if (row.wait_event_type === 'Lock') {
+                observedBlockedPid = row.pid;
+                break;
+              }
+            }
+            if (observedBlockedPid === null) {
+              await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+          }
+        })();
+        await Promise.race([pollForContention, earlyFailure]);
+
+        expect(observedBlockedPid).not.toBeNull();
+      } finally {
+        // Always release the winner — whether contention was observed, the
+        // poll ran out, the assertion above threw, or either side rejected
+        // early — so its transaction can settle instead of hanging forever
+        // on `releaseSignal`, which would otherwise leave its connection
+        // permanently checked out and make `poolOne.end()`/`poolTwo.end()`
+        // below hang too, turning a useful failure into an opaque timeout.
+        releaseFirst!();
       }
-
-      expect(observedBlockedPid).not.toBeNull();
-
-      // Release whichever side won the race to lock first.
-      releaseFirst!();
 
       // The deadlock-absence proof: with genuine contention already proven
       // above, both transactions must still resolve without Postgres error
       // 40P01 (deadlock detected). The side that was blocked simply proceeds
       // once the winner commits — correct serialization, not a failure.
-      await Promise.all([runOne, runTwo]);
+      // Settled (not `Promise.all`) so both always finish releasing their
+      // connections before the pools close below, even if one rejects.
+      const [resultOne, resultTwo] = await Promise.allSettled([runOne, runTwo]);
+      if (resultOne.status === 'rejected') throw resultOne.reason;
+      if (resultTwo.status === 'rejected') throw resultTwo.reason;
     } finally {
       await poolOne.end();
       await poolTwo.end();
