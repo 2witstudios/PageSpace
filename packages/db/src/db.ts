@@ -18,11 +18,26 @@ function basePoolConfig() {
   };
 }
 
+// statement_timeout/lock_timeout for the main pool ONLY — every application
+// query goes through `db`, so a runaway query or a lock-wait pileup fails
+// fast instead of holding a connection (and locks) indefinitely. Deliberately
+// NOT part of basePoolConfig(): the advisory-lock pool below must never get
+// lock_timeout (see its doc comment). A call site that legitimately needs
+// longer than statement_timeout can still opt out per-transaction via
+// `set_config('statement_timeout', ..., true)` — see drive-search-service.ts.
+const APP_STATEMENT_TIMEOUT_MS = 15000;
+const APP_LOCK_TIMEOUT_MS = 5000;
+
+export function buildAppPoolOptions(): string {
+  return `-c statement_timeout=${APP_STATEMENT_TIMEOUT_MS} -c lock_timeout=${APP_LOCK_TIMEOUT_MS}`;
+}
+
 // Exported for the adminDb break-glass path (admin-db.ts), which binds an
 // admin-schema client over this same pool — no second connection pool.
 export const pool = new Pool({
   ...basePoolConfig(),
   max: process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 10,
+  options: buildAppPoolOptions(),
 });
 
 // Prevent uncaughtException spam when Fly's network drops idle connections
