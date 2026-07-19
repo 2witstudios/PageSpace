@@ -9,6 +9,15 @@ import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
+/**
+ * lockedBatchReorder's batched `UPDATE ... FROM (VALUES ...)` binds 2
+ * parameters per row plus 1 scope parameter, so an unbounded orderedIds
+ * array can cross PostgreSQL's 65,535-parameter-per-statement ceiling and
+ * 500 instead of failing cleanly. Favorites lists are never legitimately
+ * this large — reject oversized requests up front.
+ */
+const MAX_REORDER_BATCH = 5000;
+
 export async function PATCH(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
@@ -22,6 +31,10 @@ export async function PATCH(req: Request) {
 
     if (!Array.isArray(orderedIds)) {
       return NextResponse.json({ error: 'orderedIds must be an array' }, { status: 400 });
+    }
+
+    if (orderedIds.length > MAX_REORDER_BATCH) {
+      return NextResponse.json({ error: `orderedIds must not exceed ${MAX_REORDER_BATCH} entries` }, { status: 400 });
     }
 
     // Verify all favorites belong to this user
