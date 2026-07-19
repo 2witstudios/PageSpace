@@ -257,18 +257,36 @@ export function withLogging<T extends (...args: unknown[]) => Promise<unknown>>(
 }
 
 /**
- * Log unhandled errors
+ * Log unhandled errors and exit. Node (15+) crashes the process by default on
+ * BOTH uncaughtException and unhandledRejection — but registering a listener
+ * for either event, for any reason, suppresses that default. Since a state-
+ * corrupting failure that leaves the process silently running unsupervised is
+ * worse than one that gets restarted, this handler always exits after
+ * logging, matching the default it's overriding. An optional onFatalError
+ * hook (e.g. Sentry capture + flush) is awaited before that exit; the hook's
+ * own errors are swallowed so a broken hook never blocks shutdown or masks
+ * the original error.
  */
-export function setupErrorHandlers(): void {
-  process.on('uncaughtException', (error: Error) => {
-    loggers.system.fatal('Uncaught exception', error);
+export function setupErrorHandlers(onFatalError?: (error: unknown) => Promise<void> | void): void {
+  const handleFatal = async (error: unknown) => {
+    if (onFatalError) {
+      try {
+        await onFatalError(error);
+      } catch { /* never let the hook block shutdown */ }
+    }
     process.exit(1);
+  };
+
+  process.on('uncaughtException', async (error: Error) => {
+    loggers.system.fatal('Uncaught exception', error);
+    await handleFatal(error);
   });
 
-  process.on('unhandledRejection', (reason: unknown) => {
+  process.on('unhandledRejection', async (reason: unknown) => {
     loggers.system.error('Unhandled rejection', undefined, {
       reason: String(reason),
     });
+    await handleFatal(reason);
   });
 }
 
@@ -296,9 +314,9 @@ export function logPerformanceDecorator(target: object, propertyName: string, de
 /**
  * Initialize logging for the application
  */
-export function initializeLogging(): void {
+export function initializeLogging(onFatalError?: (error: unknown) => Promise<void> | void): void {
   // Set up error handlers
-  setupErrorHandlers();
+  setupErrorHandlers(onFatalError);
   
   // Log startup
   loggers.system.info('Application starting', {

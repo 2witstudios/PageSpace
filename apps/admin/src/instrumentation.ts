@@ -9,8 +9,15 @@
  * also drain the insert buffers on shutdown so deploys don't lose the
  * in-memory window (up to 500 rows/table).
  */
+import * as Sentry from '@sentry/nextjs';
+
 export async function register() {
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    await import('../sentry.server.config');
+
+    const { requireSentryDsn } = await import('@pagespace/lib/config/env-validation');
+    requireSentryDsn('admin');
+
     const { probeClickHouseStartup } = await import('@pagespace/lib/observability/clickhouse-client');
     const chMode = probeClickHouseStartup();
     console.log(`[Instrumentation] ClickHouse analytics tier: ${chMode.mode}`);
@@ -26,4 +33,10 @@ export async function register() {
     // without ever exiting.
     await import('@pagespace/lib/logging/logger');
   }
+
+  if (process.env.NEXT_RUNTIME === 'edge') {
+    await import('../sentry.edge.config');
+  }
 }
+
+export const onRequestError = Sentry.captureRequestError;

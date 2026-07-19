@@ -59,6 +59,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  initializeLogging: vi.fn(),
+}));
+
+// instrument.ts (Sentry init) is a side-effecting module-load-time import —
+// stub it so index.ts's `import './instrument'` doesn't hit the real SDK.
+vi.mock('../instrument', () => ({}));
+vi.mock('@sentry/node', () => ({
+  captureException: vi.fn(),
+  flush: vi.fn(async () => true),
 }));
 
 // broadcast-auth mock

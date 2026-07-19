@@ -121,13 +121,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Secrets cannot be referenced in strategy.matrix — inject them here
-          # for the web service only; empty strings are ignored by buildx.
+          # for the web/admin services only; empty strings are ignored by buildx.
+          # Admin gets its own Sentry project (NEXT_PUBLIC_SENTRY_DSN_ADMIN /
+          # SENTRY_PROJECT_ADMIN secrets) so its issue stream stays separate
+          # from web's, reusing the shared SENTRY_ORG/SENTRY_AUTH_TOKEN.
           build-args: |
             ${{ matrix.build_args }}
             ${{ matrix.service == 'web' && format('NEXT_PUBLIC_SENTRY_DSN={0}', secrets.NEXT_PUBLIC_SENTRY_DSN) || '' }}
             ${{ matrix.service == 'web' && format('SENTRY_AUTH_TOKEN={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
             ${{ matrix.service == 'web' && format('SENTRY_ORG={0}', secrets.SENTRY_ORG) || '' }}
             ${{ matrix.service == 'web' && format('SENTRY_PROJECT={0}', secrets.SENTRY_PROJECT) || '' }}
+            ${{ matrix.service == 'admin' && format('NEXT_PUBLIC_SENTRY_DSN={0}', secrets.NEXT_PUBLIC_SENTRY_DSN_ADMIN) || '' }}
+            ${{ matrix.service == 'admin' && format('SENTRY_AUTH_TOKEN={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
+            ${{ matrix.service == 'admin' && format('SENTRY_ORG={0}', secrets.SENTRY_ORG) || '' }}
+            ${{ matrix.service == 'admin' && format('SENTRY_PROJECT={0}', secrets.SENTRY_PROJECT_ADMIN) || '' }}
 
   deploy-fly:
     name: Deploy to Fly.io

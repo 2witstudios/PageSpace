@@ -678,6 +678,7 @@ describe('setupErrorHandlers', () => {
       return process;
     }) as any);
     const systemErrorSpy = vi.spyOn(loggers.system, 'error').mockImplementation(() => {});
+    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
     setupErrorHandlers();
     handlers['unhandledRejection']('some reason');
@@ -689,6 +690,134 @@ describe('setupErrorHandlers', () => {
     );
 
     systemErrorSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it('unhandledRejection handler calls process.exit(1) — registering ANY listener suppresses Node\'s own crash-on-unhandled-rejection default (Node 15+), so this handler must reproduce it explicitly or a state-corrupting failure leaves the process running unsupervised', () => {
+    const handlers: Record<string, Function> = {};
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
+      handlers[event] = handler;
+      return process;
+    }) as any);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    vi.spyOn(loggers.system, 'error').mockImplementation(() => {});
+
+    setupErrorHandlers();
+    handlers['unhandledRejection']('some reason');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    vi.restoreAllMocks();
+  });
+
+  it('given an onFatalError hook, uncaughtException awaits it before exiting', async () => {
+    const handlers: Record<string, Function> = {};
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
+      handlers[event] = handler;
+      return process;
+    }) as any);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    vi.spyOn(loggers.system, 'fatal').mockImplementation(() => {});
+
+    const callOrder: string[] = [];
+    const hook = vi.fn(async () => {
+      callOrder.push('hook');
+    });
+
+    setupErrorHandlers(hook);
+    const err = new Error('uncaught!');
+    await handlers['uncaughtException'](err);
+    callOrder.push('exit-check');
+
+    expect(hook).toHaveBeenCalledWith(err);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(callOrder).toEqual(['hook', 'exit-check']);
+
+    vi.restoreAllMocks();
+  });
+
+  it('given an onFatalError hook that throws, uncaughtException still exits (hook errors are swallowed)', async () => {
+    const handlers: Record<string, Function> = {};
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
+      handlers[event] = handler;
+      return process;
+    }) as any);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    vi.spyOn(loggers.system, 'fatal').mockImplementation(() => {});
+
+    const hook = vi.fn(async () => {
+      throw new Error('hook blew up');
+    });
+
+    setupErrorHandlers(hook);
+    await handlers['uncaughtException'](new Error('uncaught!'));
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    vi.restoreAllMocks();
+  });
+
+  it('given an onFatalError hook, unhandledRejection awaits it before exiting', async () => {
+    const handlers: Record<string, Function> = {};
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
+      handlers[event] = handler;
+      return process;
+    }) as any);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    vi.spyOn(loggers.system, 'error').mockImplementation(() => {});
+
+    const callOrder: string[] = [];
+    const hook = vi.fn(async () => {
+      callOrder.push('hook');
+    });
+
+    setupErrorHandlers(hook);
+    await handlers['unhandledRejection']('some reason');
+    callOrder.push('exit-check');
+
+    expect(hook).toHaveBeenCalledWith('some reason');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(callOrder).toEqual(['hook', 'exit-check']);
+
+    vi.restoreAllMocks();
+  });
+
+  it('given an onFatalError hook that throws, unhandledRejection still exits (hook errors are swallowed)', async () => {
+    const handlers: Record<string, Function> = {};
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
+      handlers[event] = handler;
+      return process;
+    }) as any);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    vi.spyOn(loggers.system, 'error').mockImplementation(() => {});
+
+    const hook = vi.fn(async () => {
+      throw new Error('hook blew up');
+    });
+
+    setupErrorHandlers(hook);
+    await handlers['unhandledRejection']('some reason');
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    vi.restoreAllMocks();
+  });
+
+  it('given no onFatalError hook, behavior is unchanged (backward compatible)', () => {
+    const handlers: Record<string, Function> = {};
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: Function) => {
+      handlers[event] = handler;
+      return process;
+    }) as any);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const systemFatalSpy = vi.spyOn(loggers.system, 'fatal').mockImplementation(() => {});
+
+    setupErrorHandlers();
+    handlers['uncaughtException'](new Error('uncaught!'));
+
+    expect(systemFatalSpy).toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
     vi.restoreAllMocks();
   });
 });

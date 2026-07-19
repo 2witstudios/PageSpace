@@ -92,6 +92,11 @@
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
     },
+    "./observability/sentry-env": {
+      "types": "./dist/observability/sentry-env.d.ts",
+      "import": "./dist/observability/sentry-env.js",
+      "require": "./dist/observability/sentry-env.js"
+    },
     "./observability/clickhouse-buffer": {
       "types": "./dist/observability/clickhouse-buffer.d.ts",
       "import": "./dist/observability/clickhouse-buffer.js",
@@ -2049,6 +2054,9 @@
       ],
       "config/env-validation": [
         "./dist/config/env-validation.d.ts"
+      ],
+      "observability/sentry-env": [
+        "./dist/observability/sentry-env.d.ts"
       ],
       "services/page-content-store": [
         "./dist/services/page-content-store.d.ts"

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import * as Sentry from '@sentry/nextjs';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -19,6 +20,7 @@ interface ErrorPageProps {
 export default function ErrorPage({ error, reset }: ErrorPageProps) {
   useEffect(() => {
     console.error('Global error boundary caught:', error);
+    Sentry.captureException(error);
   }, [error]);
 
   return (

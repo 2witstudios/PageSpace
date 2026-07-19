@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getSentryOptions } from '../config';
+import { getSentryOptions } from '../sentry-env';
 
 describe('getSentryOptions', () => {
   it('sets tracesSampleRate to 1.0 in development', () => {

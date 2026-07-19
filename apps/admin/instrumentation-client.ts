@@ -7,9 +7,6 @@ Sentry.init({
     dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
     sendDefaultPii: process.env.NEXT_PUBLIC_SENTRY_SEND_DEFAULT_PII === 'true',
   }),
-  integrations: [Sentry.replayIntegration()],
-  replaysSessionSampleRate: 0.1,
-  replaysOnErrorSampleRate: 1.0,
 });
 
 export const onRouterTransitionStart = Sentry.captureRouterTransitionStart;
