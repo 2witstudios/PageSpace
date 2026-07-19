@@ -18,8 +18,16 @@ const nextConfig: NextConfig = {
   },
   transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
   serverExternalPackages: ["pg"],
-  webpack: (config, { isServer }) => {
-    if (isServer) {
+  webpack: (config, { isServer, nextRuntime }) => {
+    // Scoped to the nodejs runtime only — admin has edge middleware
+    // (src/middleware.ts) and an edge instrumentation path (sentry.edge.config.ts),
+    // and the Edge runtime has no require(). Externalizing here unconditionally
+    // for isServer (nodejs AND edge) would emit `require('@pagespace/lib/...')`
+    // into the edge bundle, breaking it at runtime the same way apps/web's
+    // middleware broke in PR #1932 (see apps/web/next.config.ts's
+    // edgeNodeOnlyGuard doc comment) — edge-reachable @pagespace/lib imports
+    // must be bundled from source, not externalized.
+    if (isServer && nextRuntime === 'nodejs') {
       const bunWorkspaceExternals = (
         { request }: { context: string; request: string },
         callback: (err?: Error | null, result?: string) => void
