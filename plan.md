@@ -8,7 +8,6 @@
 - [Fly.io Upload Infrastructure](tasks/fly-upload-infra.md) — migrate from local VPS filesystem to Tigris S3, presigned URL delivery, remove memory monitor, raise limits for video support, batch upload in channels/DMs.
 - [Agent Conversation Privacy](tasks/agent-conversation-privacy.md) — User-scoped conversation history for AI Chat pages; private by default, opt-in multiplayer sharing.
 - [AI Chat Co-mount Fix](tasks/ai-chat-comount-fix.md) — Fix message stealing and stream-abort conflicts when the same AI agent is open in both the middle panel and right sidebar.
-- [Finishing Sweep: Dead-Code Deletion Backlog](tasks/finishing-sweep-dead-code.md) — triage every `bun run knip` finding (99 unused files, 55 unused deps, 222+141 unused exports/types) into DELETE or KEEP-WITH-DOCUMENTED-REASON across 10 PRs; land before any knip-ci CI-gate baseline snapshot freezes the current backlog.
 
 - [OpenAI API v1 Follow-Up](tasks/openai-api-v1-followup.md) — Token usage tracking in `onFinish` + `GET /api/v1/models` discovery endpoint.
 - [Zoom Transcript Integration](tasks/zoom-transcript-integration.md) — Auto-save Zoom meeting transcripts as Document pages in a user-configured drive; webhook-driven, AI summary + action items, cloud-only.
