@@ -177,8 +177,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   // Phase 2: hydrate the 5 relations only for the bounded page of ids from phase 1.
+  // The explicit `limit` is redundant with `boundedTaskIds` already being capped at phase 1
+  // — kept as defense-in-depth so this call stays bounded even if that invariant is ever
+  // broken upstream, and so it stays self-evidently bounded to a lint rule scanning for one.
   const query = db.query.taskItems.findMany({
     where: inArray(taskItems.id, boundedTaskIds),
+    limit: boundedTaskIds.length,
     columns: {
       id: true,
       userId: true,

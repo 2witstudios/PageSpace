@@ -572,6 +572,9 @@ describe('Task API Routes', () => {
       expect(response.status).toBe(200);
       expect(body.tasks).toHaveLength(2);
       expect(body.tasks.map((t: { id: string }) => t.id)).toEqual(['task-1', 'task-2']);
+      // Defense-in-depth: the hydrate call itself carries an explicit `limit`, not just
+      // an `inArray` scoped to an already-bounded id list.
+      expect(vi.mocked(db.query.taskItems.findMany).mock.calls[0]?.[0]).toMatchObject({ limit: 2 });
     });
   });
 
