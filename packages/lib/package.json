@@ -27,6 +27,11 @@
       "import": "./dist/commands/command-core.js",
       "require": "./dist/commands/command-core.js"
     },
+    "./db/bounded-query": {
+      "types": "./dist/db/bounded-query.d.ts",
+      "import": "./dist/db/bounded-query.js",
+      "require": "./dist/db/bounded-query.js"
+    },
     "./ai/normalize-parts": {
       "types": "./dist/ai/normalize-parts.d.ts",
       "import": "./dist/ai/normalize-parts.js",
