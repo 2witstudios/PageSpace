@@ -41,7 +41,8 @@
         "src/lib/auth/platform-storage/ios-storage.ts",
         "src/lib/auth/platform-storage/web-storage.ts",
         "src/test/next-server-stub.ts",
-        "src/__fixtures__/eslint-unbounded-findmany/**"
+        "src/__fixtures__/eslint-unbounded-findmany/**",
+        "src/components/ai/ui/web-preview.tsx"
       ],
       "ignoreDependencies": [
         "eslint-config-next",
@@ -508,8 +509,7 @@
       "ignoreDependencies": [
         "server-only",
         "@react-email/preview-server",
-        "@types/xlsx",
-        "react-dom"
+        "@types/xlsx"
       ]
     },
     "apps/android": {
