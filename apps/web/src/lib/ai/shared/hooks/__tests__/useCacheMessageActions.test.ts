@@ -3,7 +3,6 @@ import { renderHook, act } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useCacheMessageActions, type UseCacheMessageActionsOptions } from '../useCacheMessageActions';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
-import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 
 // vi.mock factories are hoisted above module-scope declarations — a plain `let` here would
 // throw a TDZ ReferenceError at transform time. vi.hoisted lifts this state alongside the mock.
