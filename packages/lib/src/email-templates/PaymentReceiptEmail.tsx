@@ -19,7 +19,7 @@ interface PaymentReceiptLineItem {
   amountFormatted: string;
 }
 
-interface PaymentReceiptEmailProps {
+export interface PaymentReceiptEmailProps {
   userName: string;
   description: string;
   dateFormatted: string;

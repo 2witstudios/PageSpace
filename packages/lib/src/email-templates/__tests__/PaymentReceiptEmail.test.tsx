@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { PaymentReceiptEmail } from '../PaymentReceiptEmail';
+import { PaymentReceiptEmail, type PaymentReceiptEmailProps } from '../PaymentReceiptEmail';
 import { renderEmailToHtml } from '../render-email';
 
-const PROPS = {
+const PROPS: PaymentReceiptEmailProps = {
   userName: 'Ada',
   description: 'PageSpace Pro — monthly renewal',
   dateFormatted: 'Jul 18, 2026',
@@ -11,7 +11,7 @@ const PROPS = {
   billingSettingsUrl: 'https://app.pagespace.ai/settings/billing',
 };
 
-const render = (props: Partial<typeof PROPS> = {}) =>
+const render = (props: Partial<PaymentReceiptEmailProps> = {}) =>
   renderEmailToHtml(PaymentReceiptEmail({ ...PROPS, ...props }));
 
 describe('PaymentReceiptEmail', () => {
