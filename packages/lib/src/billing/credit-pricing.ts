@@ -185,9 +185,11 @@ export const MACHINE_HOLD_ESTIMATE_CENTS = envInt('MACHINE_HOLD_ESTIMATE_CENTS',
  * `MACHINE_MAX_INFLIGHT × the real settled cost of a single run` — a payer's
  * multiple agent tool calls and/or interactive PTY sessions can run concurrently
  * across different machines, so this is generous enough for legitimate multi-machine
- * use. Default 4.
+ * use. Set to match the top subscription tier's `quota.ts` concurrency ceiling
+ * (business, 50) so that per-tier semaphore — not this flat cap — is always the
+ * binding constraint. Default 50.
  */
-export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 4);
+export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 50);
 
 /**
  * Absolute floor for {@link MACHINE_MARKUP_BPS} — 15000bps (1.5x). The whole

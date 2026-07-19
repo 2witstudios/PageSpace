@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   acquireCodeExecutionSlot,
   releaseCodeExecutionSlot,
@@ -31,8 +31,21 @@ describe('code execution concurrency semaphore', () => {
 
   it('should scale the concurrent-run limit by subscription tier', () => {
     expect(getCodeExecutionConcurrencyLimit('free')).toBeLessThan(
+      getCodeExecutionConcurrencyLimit('pro'),
+    );
+    expect(getCodeExecutionConcurrencyLimit('pro')).toBeLessThan(
+      getCodeExecutionConcurrencyLimit('founder'),
+    );
+    expect(getCodeExecutionConcurrencyLimit('founder')).toBeLessThan(
       getCodeExecutionConcurrencyLimit('business'),
     );
+  });
+
+  it('should default each tier to its documented ceiling', () => {
+    expect(getCodeExecutionConcurrencyLimit('free')).toBe(1);
+    expect(getCodeExecutionConcurrencyLimit('pro')).toBe(10);
+    expect(getCodeExecutionConcurrencyLimit('founder')).toBe(20);
+    expect(getCodeExecutionConcurrencyLimit('business')).toBe(50);
   });
 
   it('should deny acquiring a slot once the per-tier limit is reached', () => {
@@ -50,6 +63,43 @@ describe('code execution concurrency semaphore', () => {
   it('should track concurrency independently per user', () => {
     acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' });
     expect(canAcquireCodeExecutionSlot({ userId: 'u2', tier: 'free' })).toBe(true);
+  });
+});
+
+// CONCURRENCY_LIMITS is computed at module-import time from env vars, so each
+// test re-imports the module with different env conditions (same pattern as
+// MACHINE_MARKUP_BPS in credit-pricing.test.ts).
+describe('CONCURRENCY_LIMITS env overrides', () => {
+  const ENV_KEYS = [
+    'CODE_EXEC_CONCURRENCY_FREE',
+    'CODE_EXEC_CONCURRENCY_PRO',
+    'CODE_EXEC_CONCURRENCY_FOUNDER',
+    'CODE_EXEC_CONCURRENCY_BUSINESS',
+  ] as const;
+  const original = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+
+  beforeEach(() => {
+    vi.resetModules();
+    for (const key of ENV_KEYS) delete process.env[key];
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (original[key] === undefined) delete process.env[key];
+      else process.env[key] = original[key];
+    }
+  });
+
+  it('uses an env override when set', async () => {
+    process.env.CODE_EXEC_CONCURRENCY_BUSINESS = '75';
+    const { getCodeExecutionConcurrencyLimit: getLimit } = await import('../quota');
+    expect(getLimit('business')).toBe(75);
+  });
+
+  it('falls back to the default when the env value is invalid', async () => {
+    process.env.CODE_EXEC_CONCURRENCY_FOUNDER = 'not-a-number';
+    const { getCodeExecutionConcurrencyLimit: getLimit } = await import('../quota');
+    expect(getLimit('founder')).toBe(20);
   });
 });
 
