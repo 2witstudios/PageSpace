@@ -972,6 +972,11 @@
       "import": "./dist/services/invites/index.js",
       "require": "./dist/services/invites/index.js"
     },
+    "./services/reorder": {
+      "types": "./dist/services/reorder/index.d.ts",
+      "import": "./dist/services/reorder/index.js",
+      "require": "./dist/services/reorder/index.js"
+    },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
       "import": "./dist/validators/id-validators.js",
@@ -2059,6 +2064,9 @@
       ],
       "services/invites": [
         "./dist/services/invites/index.d.ts"
+      ],
+      "services/reorder": [
+        "./dist/services/reorder/index.d.ts"
       ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"
