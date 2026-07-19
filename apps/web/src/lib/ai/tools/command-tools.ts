@@ -344,6 +344,7 @@ export const commandTools = {
 
         const memberDriveIds = driveId ? [driveId] : allMemberDriveIds;
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         const visible = await db.query.commands.findMany({
           where: memberDriveIds.length
             ? or(eq(commands.userId, userId), inArray(commands.driveId, memberDriveIds))

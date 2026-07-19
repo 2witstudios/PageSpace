@@ -2,6 +2,7 @@
 
 ## Active Epics
 
+- [Sentry Crash Reporting](tasks/sentry-crash-reporting-epic.md) — fix apps/web's Sentry (SENTRY_DSN never set anywhere in the deploy pipeline, so it silently sends nothing) and extend crash reporting to realtime, processor, control-plane, and admin, plus a fail-loud env check (onprem-exempt) so this can't silently regress again.
 - [Docs Routing & Domain Landing Pages](tasks/docs-routing-domain-landing-pages-epic.md) — flip Caddy so `pagespace.ai/docs` mirrors `/prism` onto published Canvas content, then generalize into a self-service per-domain landing/404-page override on `custom_domains` (path-prefix multi-site mounting deferred to a future epic).
 - [Prepaid AI Credits Billing Bridge](tasks/prepaid-credits-billing.md) — prepaid usage-based AI billing on our own Stripe account (decoupled from the stalled Parallel Drive/Polar move); monthly credit allowance that resets + never-expiring top-up packs, consumed at real cost ×1.5, hard-gated so we never front unpaid AI; Stripe collects money only, local two-bucket ledger is source of truth; strict TDD + pure `credit-core.ts` decision layer.
 - [Fly.io Upload Infrastructure](tasks/fly-upload-infra.md) — migrate from local VPS filesystem to Tigris S3, presigned URL delivery, remove memory monitor, raise limits for video support, batch upload in channels/DMs.

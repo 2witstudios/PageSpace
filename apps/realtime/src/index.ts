@@ -1,3 +1,5 @@
+import './instrument';
+import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
@@ -62,7 +64,7 @@ import {
   validatePresencePagePayload,
   emitValidationError,
 } from './validation';
-import { loggers } from '@pagespace/lib/logging/logger-config';
+import { loggers, initializeLogging } from '@pagespace/lib/logging/logger-config';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { socketRegistry } from './socket-registry';
@@ -72,6 +74,13 @@ import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
 
 dotenv.config({ path: '../../.env' });
+
+// realtime's first-ever global crash visibility: an uncaught exception or
+// unhandled rejection used to just kill the process with no record anywhere.
+initializeLogging(async (error) => {
+  Sentry.captureException(error);
+  await Sentry.flush(2000);
+});
 
 // One map for every agent terminal (Terminal — universal scope reshape): a
 // Sprite (the owning Machine's own persistent one, for machine/project scope,

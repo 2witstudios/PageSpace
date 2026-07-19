@@ -35,6 +35,7 @@ export async function provisionHomeDriveIfNeeded(
   return db.transaction(async (tx: TransactionType) => {
     await tx.execute(sql`SELECT 1 FROM ${users} WHERE ${users.id} = ${userId} FOR UPDATE`);
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const ownedDrives = await tx.query.drives.findMany({
       where: eq(drives.ownerId, userId),
       columns: { id: true, kind: true, slug: true },

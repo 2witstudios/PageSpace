@@ -388,9 +388,11 @@ export const pageService = {
 
     // Fetch related data in parallel
     const [children, messages] = await Promise.all([
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       db.query.pages.findMany({
         where: eq(pages.parentId, pageId)
       }),
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
         with: { user: { columns: { id: true, name: true, email: true, image: true } } },
@@ -496,9 +498,11 @@ export const pageService = {
       db.query.pages.findFirst({
         where: eq(pages.id, pageId),
       }),
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       db.query.pages.findMany({
         where: eq(pages.parentId, pageId)
       }),
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       db.query.chatMessages.findMany({
         where: and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)),
         with: { user: { columns: { id: true, name: true, email: true, image: true } } },

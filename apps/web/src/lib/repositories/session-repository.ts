@@ -89,6 +89,7 @@ export const sessionRepository = {
   async findDrivesByIds(
     driveIds: string[]
   ): Promise<{ id: string; name: string }[]> {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     return db.query.drives.findMany({
       where: inArray(drives.id, driveIds),
       columns: { id: true, name: true },
@@ -100,6 +101,7 @@ export const sessionRepository = {
    * Filters out scopes where the drive has been deleted.
    */
   async findUserMcpTokensWithDrives(userId: string) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const tokens = await db.query.mcpTokens.findMany({
       where: (tokens, { eq, isNull, and }) =>
         and(eq(tokens.userId, userId), isNull(tokens.revokedAt)),

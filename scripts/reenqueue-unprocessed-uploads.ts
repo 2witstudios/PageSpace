@@ -1,11 +1,15 @@
 import 'dotenv/config';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { and, eq, isNotNull, sql } from '@pagespace/db/operators';
 import {
   createUploadServiceToken,
   isPermissionDeniedError,
 } from '@pagespace/lib/services/validated-service-token';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 /**
  * Re-enqueue processor ingestion for FILE pages whose post-upload enqueue was

@@ -131,6 +131,18 @@ vi.mock('@pagespace/lib/billing/credit-funding', () => ({
   applyStripeFunding: mockApplyStripeFunding,
 }));
 
+// The receipt sender does its own I/O (Resend, optional Stripe payment-intent lookup)
+// and is unit-tested in isolation at send-payment-receipt-email.test.ts; here we only
+// assert the webhook calls it (or doesn't) with the right arguments.
+const { mockSendSubscriptionReceiptEmail, mockSendTopupReceiptEmail } = vi.hoisted(() => ({
+  mockSendSubscriptionReceiptEmail: vi.fn().mockResolvedValue(undefined),
+  mockSendTopupReceiptEmail: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/billing/send-payment-receipt-email', () => ({
+  sendSubscriptionReceiptEmail: mockSendSubscriptionReceiptEmail,
+  sendTopupReceiptEmail: mockSendTopupReceiptEmail,
+}));
+
 // Import after mocks
 import { POST } from '../route';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -257,9 +269,13 @@ const mockCheckoutSession = (overrides: Partial<{
 const mockUser = (overrides: Partial<{
   id: string;
   stripeCustomerId: string;
+  name: string;
+  email: string;
 }> = {}) => ({
   id: overrides.id ?? 'user_123',
   stripeCustomerId: overrides.stripeCustomerId ?? 'cus_123',
+  name: overrides.name ?? 'Test User',
+  email: overrides.email ?? 'test@example.com',
 });
 
 describe('POST /api/stripe/webhook', () => {
@@ -770,6 +786,91 @@ describe('POST /api/stripe/webhook', () => {
       // withFundingRetry rethrows so the route 500s and Stripe redelivers.
       expect(response.status).toBe(500);
     });
+
+    it('sends a payment receipt on invoice.paid', async () => {
+      const invoice = mockInvoice({ amountPaid: 1500 });
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockSendSubscriptionReceiptEmail).toHaveBeenCalledTimes(1);
+      expect(mockSendSubscriptionReceiptEmail).toHaveBeenCalledWith({
+        invoice,
+        email: 'test@example.com',
+        userName: 'Test User',
+        eventId: event.id,
+      });
+    });
+
+    it('does not send a receipt for a $0 invoice (proration/trial)', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 0 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
+    });
+
+    it('does not send a receipt when no user is found for the customer', async () => {
+      mockSelectLimit.mockResolvedValue([]);
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
+    });
+
+    it('still acks 200 (funding already committed) when the refilled-user lookup for the receipt throws', async () => {
+      // First select is handleInvoicePaid's own user lookup (inside withFundingRetry);
+      // second is the post-funding refilled-user lookup that feeds the receipt send.
+      mockSelectLimit
+        .mockResolvedValueOnce([mockUser()])
+        .mockRejectedValueOnce(new Error('pool timeout'));
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // A failure in the post-commit receipt lookup must NOT escape to the outer
+      // catch: that would mark the event processedAt/error and make a Stripe
+      // redelivery classify as duplicate-ack, permanently skipping the receipt even
+      // though funding already succeeded.
+      expect(response.status).toBe(200);
+      expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Could not look up refilled user for subscription receipt',
+        expect.objectContaining({ eventId: event.id }),
+      );
+    });
   });
 
   describe('Checkout Session Events', () => {
@@ -872,6 +973,122 @@ describe('POST /api/stripe/webhook', () => {
       expect(response.status).toBe(200);
       expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event);
+    });
+
+    it('sends a payment receipt on a credit-pack checkout, resolving the pack label', async () => {
+      const session = mockCheckoutSession({
+        mode: 'payment',
+        customerEmail: 'buyer@example.com',
+        metadata: { kind: 'credit_pack', packId: 'pack_25', packCents: '2500', userId: 'user_123' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockSendTopupReceiptEmail).toHaveBeenCalledTimes(1);
+      expect(mockSendTopupReceiptEmail).toHaveBeenCalledWith({
+        session,
+        packLabel: '$25 credits',
+        email: 'buyer@example.com',
+        userName: 'Test User',
+        eventId: event.id,
+      });
+    });
+
+    it('falls back to a generic pack label for an unresolvable/custom packId', async () => {
+      const session = mockCheckoutSession({
+        mode: 'payment',
+        metadata: { kind: 'credit_pack', packId: 'custom', packCents: '1234', userId: 'user_123' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(mockSendTopupReceiptEmail).toHaveBeenCalledWith(
+        expect.objectContaining({ packLabel: 'Credit top-up' }),
+      );
+    });
+
+    it('does not send a receipt for a subscription-mode checkout session', async () => {
+      const session = mockCheckoutSession({ mode: 'subscription' });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      await POST(request);
+
+      expect(mockSendTopupReceiptEmail).not.toHaveBeenCalled();
+    });
+
+    it('does not send a receipt when the checkout session has no buyer email', async () => {
+      const session = mockCheckoutSession({
+        mode: 'payment',
+        metadata: { kind: 'credit_pack', packCents: '2500', userId: 'user_123' },
+      });
+      (session as { customer_details: unknown }).customer_details = null;
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockSendTopupReceiptEmail).not.toHaveBeenCalled();
+    });
+
+    it('still acks 200 (funding already committed) when the buyer lookup for the receipt throws', async () => {
+      mockSelectLimit.mockRejectedValueOnce(new Error('pool timeout'));
+      const session = mockCheckoutSession({
+        mode: 'payment',
+        customerEmail: 'buyer@example.com',
+        metadata: { kind: 'credit_pack', packId: 'pack_25', packCents: '2500', userId: 'user_123' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // Same protection as the invoice.paid path: a failure in the post-commit
+      // buyer lookup must not escape to the outer catch and mark the event
+      // processed-with-error, or a Stripe redelivery would permanently skip the
+      // receipt (duplicate-ack) even though funding already succeeded.
+      expect(response.status).toBe(200);
+      expect(mockSendTopupReceiptEmail).not.toHaveBeenCalled();
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Could not look up buyer for top-up receipt',
+        expect.objectContaining({ eventId: event.id }),
+      );
     });
   });
 

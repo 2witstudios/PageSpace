@@ -24,10 +24,14 @@
  *   --dry-run   Report what would change without writing to the database.
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { eq, sql } from '@pagespace/db/operators';
 import { addTaskVerbTools, TRIGGER_TOOL } from './lib/task-verb-tools';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 async function backfill(dryRun: boolean): Promise<void> {
   console.log(

@@ -19,14 +19,21 @@
  * Usage:
  *   bun run --filter '@pagespace/db' migrate-pending-invites
  *   bun run --filter '@pagespace/db' migrate-pending-invites -- --dry-run
+ *
+ * Runs on getMigrationPool(), NOT the app-throttled `db` — this is a one-shot
+ * ops script, not request-serving traffic, and the bulk select/delete below
+ * can legitimately run past the app pool's statement_timeout on a large
+ * drive_members table (see getMigrationPool()'s doc comment in db.ts).
  */
 
-import { db } from './db';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { getMigrationPool } from './db';
 import { driveMembers } from './schema/members';
 import { users, passkeys } from './schema/auth';
 import { and, eq, inArray, isNull, sql } from './operators';
 
 const dryRun = process.argv.includes('--dry-run');
+const db = drizzle(getMigrationPool());
 
 async function main() {
   const wiped: Array<{ driveId: string; email: string }> = [];

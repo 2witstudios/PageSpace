@@ -9,6 +9,29 @@ const compat = new FlatCompat({
   baseDirectory: __dirname,
 });
 
+// Matches `<anything>.query.<table>.findMany(...)` — not hard-coded to a `db` identifier, so it
+// also catches the transaction/injected handles this codebase actually uses for the same
+// Drizzle relational query API (e.g. `tx.query.pages.findMany`, `database.query.pages.findMany`).
+// `ObjectExpression.arguments` uses esquery's field-name qualifier to anchor the object to the
+// call's own `arguments` position (i.e. its options object), so `:has(ObjectExpression.arguments
+// > Property[key.name='limit'])` only matches a `limit` that is a DIRECT key of that options
+// object — a `limit` nested inside a `with: { children: { limit } }` relation, or anywhere else
+// in the subtree, does not falsely satisfy the root query's own boundedness.
+//
+// Known limitation: this is a syntactic AST pattern, not a type-aware check, so it only
+// catches the call written out as `<handle>.query.<table>.findMany(...)` at the call site.
+// Aliasing the query object first (`const q = db.query.taskItems; q.findMany(...)`) evades
+// it, the same way the original `db`-only selector missed `tx`/`database` until reviewed.
+// If that pattern shows up in practice, the durable fix is a typed wrapper in packages/db
+// that makes `limit` a required parameter — immune to call-shape variation entirely — not
+// another AST special case here.
+const unboundedFindManyRule = {
+  selector:
+    "CallExpression[callee.property.name='findMany'][callee.object.object.property.name='query']:not(:has(ObjectExpression.arguments > Property[key.name='limit']))",
+  message:
+    "<handle>.query.<table>.findMany(...) needs a `limit` as a direct key of its options object — unbounded findMany() OOM-crashed prod on 2026-07-18. Add `limit: <n>`, or use findFirst() if you only need one row.",
+};
+
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
@@ -112,6 +135,18 @@ const eslintConfig = [
           ],
         },
       ],
+    },
+  },
+  {
+    // Unbounded <handle>.query.<table>.findMany() calls: production Postgres OOM-crashed on
+    // 2026-07-18 because a task-list route called findMany() with no `limit`, on a table
+    // that grows without bound. This flags any NEW findMany() call whose options object
+    // (or lack of one) has no direct `limit` key. findFirst() is exempt — it's inherently
+    // single-row. Pre-existing violations are suppressed with a per-call-site
+    // `eslint-disable-next-line`, NOT a file- or severity-level override — so a new unbounded
+    // findMany added anywhere, including in an already-flagged file, still errors.
+    rules: {
+      "no-restricted-syntax": ["error", unboundedFindManyRule],
     },
   },
   {

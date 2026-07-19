@@ -143,6 +143,7 @@ Agent Triggers:
         }
 
         // Fetch status configs for rollup and validation
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         const validConfigs = await db.query.taskStatusConfigs.findMany({
           where: eq(taskStatusConfigs.taskListId, taskList.id),
           columns: { slug: true, group: true },
@@ -562,6 +563,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         }
 
         // Query tasks assigned to the agent (task list membership derived from pages.parentId)
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         const tasks = await db.query.taskItems.findMany({
           where: and(...conditions),
           orderBy: [asc(taskItems.position)],
@@ -583,12 +585,14 @@ This helps agents understand their responsibilities and coordinate work with oth
         // Fetch page info (driveId) and task list records for those parent pages
         const [taskListPagesInfo, taskListsInfo] = await Promise.all([
           taskListPageIds.length > 0
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             ? db.query.pages.findMany({
                 where: inArray(pages.id, taskListPageIds),
                 columns: { id: true, driveId: true },
               })
             : Promise.resolve([]),
           taskListPageIds.length > 0
+            // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
             ? db.query.taskLists.findMany({
                 where: inArray(taskLists.pageId, taskListPageIds),
                 columns: { id: true, pageId: true, title: true },
@@ -636,6 +640,7 @@ This helps agents understand their responsibilities and coordinate work with oth
         // Build group lookup from status configs across all task lists
         const uniqueTaskListIds = taskListsInfo.map(tl => tl.id);
         const allConfigs = uniqueTaskListIds.length > 0
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           ? await db.query.taskStatusConfigs.findMany({
               where: inArray(taskStatusConfigs.taskListId, uniqueTaskListIds),
             })

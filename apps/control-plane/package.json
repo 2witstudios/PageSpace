@@ -18,6 +18,7 @@
   "dependencies": {
     "@pagespace/lib": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
+    "@sentry/node": "^10.56.0",
     "drizzle-orm": "^0.32.2",
     "fastify": "^5.3.3",
     "fastify-plugin": "^5.1.0",

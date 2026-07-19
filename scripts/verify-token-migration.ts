@@ -17,8 +17,12 @@
  *   2 - Error during verification
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { sql } from 'drizzle-orm';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 export interface VerificationResult {
   table: string;

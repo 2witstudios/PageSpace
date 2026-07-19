@@ -1,3 +1,5 @@
+import './instrument';
+import * as Sentry from '@sentry/node';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -19,6 +21,7 @@ import { requireResourceBinding, requirePageBinding } from './middleware/resourc
 import { validateCorsOrigin } from './utils/cors-validation';
 import { loadSiemConfig, type AuditLogSource } from './services/siem-adapter';
 import { probeClickHouseStartup } from '@pagespace/lib/observability/clickhouse-client';
+import { setupErrorHandlers } from '@pagespace/lib/logging/logger-config';
 import { drainAnalyticsInserts } from '@pagespace/lib/observability/analytics-inserts';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from './services/siem-sources';
 import { buildSiemHealth, type SiemHealthResponse } from './services/siem-health-builder';
@@ -51,6 +54,15 @@ const SIEM_SOURCE_SET: ReadonlySet<string> = new Set(SIEM_SOURCES);
 
 // Load environment variables
 dotenv.config();
+
+// processor's first-ever uncaughtException/unhandledRejection visibility —
+// previously only SIGTERM/SIGINT were handled, so a genuine crash left no
+// record anywhere. Independent of processor's own console logging; only
+// needs packages/lib's shared loggers.system.
+setupErrorHandlers(async (error) => {
+  Sentry.captureException(error);
+  await Sentry.flush(2000);
+});
 
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -360,6 +372,8 @@ app.use('/siem', authenticateService, (req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
+Sentry.setupExpressErrorHandler(app);
+
 // Error handling
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Error:', err);
@@ -436,6 +450,13 @@ async function start() {
 
   } catch (error) {
     console.error('Failed to start processor service:', error);
+    // This explicit exit path (bad config, DB/queue init failure) is the most
+    // common real-world startup failure — but it exits directly rather than
+    // throwing, so setupErrorHandlers' uncaughtException listener never sees
+    // it. Report + flush here too, or "first-ever crash visibility" misses
+    // exactly the failures ops hits most.
+    Sentry.captureException(error);
+    await Sentry.flush(2000);
     process.exit(1);
   }
 }

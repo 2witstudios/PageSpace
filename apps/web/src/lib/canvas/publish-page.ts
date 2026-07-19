@@ -515,6 +515,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
 export async function republishDriveCanonical(driveId: string, userId: string): Promise<number> {
   if (!isPublishConfigured()) return 0;
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const published = await db.query.publishedPages.findMany({
     where: eq(publishedPages.driveId, driveId),
     columns: { pageId: true, path: true },
@@ -602,6 +603,7 @@ export async function changePublishSubdomain(
 
   try {
     // Re-render all published pages under the new subdomain prefix.
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const publishedRows = await db.query.publishedPages.findMany({
       where: eq(publishedPages.driveId, driveId),
       columns: { pageId: true },
@@ -779,6 +781,7 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
     const primaryHost = resolvePrimaryPublishedHost({ subdomain, publishHost: PUBLISH_HOST, activeDomains });
     const origin = `https://${primaryHost}`;
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const allPublished = await db.query.publishedPages.findMany({
       where: eq(publishedPages.driveId, driveId),
       columns: { pageId: true, path: true, updatedAt: true, noindex: true },

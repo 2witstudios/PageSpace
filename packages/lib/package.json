@@ -27,6 +27,11 @@
       "import": "./dist/commands/command-core.js",
       "require": "./dist/commands/command-core.js"
     },
+    "./db/bounded-query": {
+      "types": "./dist/db/bounded-query.d.ts",
+      "import": "./dist/db/bounded-query.js",
+      "require": "./dist/db/bounded-query.js"
+    },
     "./ai/normalize-parts": {
       "types": "./dist/ai/normalize-parts.d.ts",
       "import": "./dist/ai/normalize-parts.js",
@@ -86,6 +91,11 @@
       "types": "./dist/logging/ai-usage-purge.d.ts",
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
+    },
+    "./observability/sentry-env": {
+      "types": "./dist/observability/sentry-env.d.ts",
+      "import": "./dist/observability/sentry-env.js",
+      "require": "./dist/observability/sentry-env.js"
     },
     "./observability/clickhouse-buffer": {
       "types": "./dist/observability/clickhouse-buffer.d.ts",
@@ -892,6 +902,11 @@
       "import": "./dist/email-templates/render-email.js",
       "require": "./dist/email-templates/render-email.js"
     },
+    "./email-templates/PaymentReceiptEmail": {
+      "types": "./dist/email-templates/PaymentReceiptEmail.d.ts",
+      "import": "./dist/email-templates/PaymentReceiptEmail.js",
+      "require": "./dist/email-templates/PaymentReceiptEmail.js"
+    },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
       "import": "./dist/auth/secure-compare.js",
@@ -956,6 +971,11 @@
       "types": "./dist/services/invites/index.d.ts",
       "import": "./dist/services/invites/index.js",
       "require": "./dist/services/invites/index.js"
+    },
+    "./services/reorder": {
+      "types": "./dist/services/reorder/index.d.ts",
+      "import": "./dist/services/reorder/index.js",
+      "require": "./dist/services/reorder/index.js"
     },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
@@ -1997,6 +2017,9 @@
       "email-templates/SdkCliLaunchEmail": [
         "./dist/email-templates/SdkCliLaunchEmail.d.ts"
       ],
+      "email-templates/PaymentReceiptEmail": [
+        "./dist/email-templates/PaymentReceiptEmail.d.ts"
+      ],
       "email-templates/render-email": [
         "./dist/email-templates/render-email.d.ts"
       ],
@@ -2024,6 +2047,9 @@
       "config/env-validation": [
         "./dist/config/env-validation.d.ts"
       ],
+      "observability/sentry-env": [
+        "./dist/observability/sentry-env.d.ts"
+      ],
       "services/page-content-store": [
         "./dist/services/page-content-store.d.ts"
       ],
@@ -2038,6 +2064,9 @@
       ],
       "services/invites": [
         "./dist/services/invites/index.d.ts"
+      ],
+      "services/reorder": [
+        "./dist/services/reorder/index.d.ts"
       ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"
@@ -2384,10 +2413,12 @@
     "@types/diff-match-patch": "^1.0.36",
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",
+    "@types/pg": "^8.15.4",
     "@types/react": "^19.1.13",
     "@types/sanitize-html": "^2.16.1",
     "@types/xlsx": "^0.0.36",
     "eslint": "^9.36.0",
+    "pg": "^8.16.3",
     "typescript-eslint": "^8.59.0"
   }
 }
