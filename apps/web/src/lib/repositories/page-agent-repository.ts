@@ -260,5 +260,3 @@ export interface UpdatedAgent {
   type: string;
   driveId: string;
 }
-
-export type PageAgentRepository = typeof pageAgentRepository;

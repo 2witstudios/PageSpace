@@ -216,5 +216,3 @@ export function MessageReactions({
     </div>
   );
 }
-
-export default MessageReactions;

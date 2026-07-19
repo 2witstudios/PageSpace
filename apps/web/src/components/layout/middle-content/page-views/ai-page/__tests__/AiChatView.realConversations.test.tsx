@@ -268,7 +268,9 @@ const CONV_A = 'conv-a-recent';
 const CONV_B = 'conv-b-older';
 const CONVERSATIONS_URL = `/api/ai/page-agents/${PAGE_ID}/conversations`;
 const MESSAGES_URL_A = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_A}/messages`;
-const MESSAGES_URL_B = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_B}/messages`;
+// CONV_B is picked from history — the load-on-select effect's network path (loadMessagesForConversation,
+// not the init prefetch) appends ?limit=50 (epic leaf 6.6).
+const MESSAGES_URL_B = `/api/ai/page-agents/${PAGE_ID}/conversations/${CONV_B}/messages?limit=50`;
 const AGENT_CONFIG_URL = `/api/pages/${PAGE_ID}/agent-config`;
 const PERMISSIONS_URL = `/api/pages/${PAGE_ID}/permissions/check`;
 

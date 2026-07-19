@@ -71,9 +71,26 @@ export {
   drivesRestoreHandler,
   drivesSetHomePageHandler,
   drivesTrashHandler,
+  drivesUpdateContextHandler,
   renderDrive,
   renderDrivesList,
 } from './commands/drives.js';
+
+// Roles verbs — thin projections over the `roles.*` SDK operations (the
+// complete CRUD + per-page/drive-wide permission family, matching how
+// drives/pages/tasks each already have a full command set).
+export {
+  renderRole,
+  renderRolesList,
+  rolesCreateHandler,
+  rolesDeleteHandler,
+  rolesGetHandler,
+  rolesListHandler,
+  rolesRemovePagePermissionsHandler,
+  rolesSetDriveWidePermissionsHandler,
+  rolesSetPagePermissionsHandler,
+  rolesUpdateHandler,
+} from './commands/roles.js';
 export {
   pagesCreateHandler,
   pagesListHandler,

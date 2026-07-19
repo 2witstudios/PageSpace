@@ -6,7 +6,9 @@
 export * from './chat-types';
 
 // Utilities
-export * from './error-messages';
+export * from './aiErrorCause';
+export * from './toErrorCause';
+export * from './parseLegacyErrorMessage';
 export * from './agent-conversations';
 export * from './conversation-identity';
 

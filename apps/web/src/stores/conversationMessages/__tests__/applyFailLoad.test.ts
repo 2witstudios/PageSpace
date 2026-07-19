@@ -11,7 +11,7 @@ describe('applyFailLoad', () => {
   // changes — but the "never clear cached messages on failure" guarantee stands.
   it('given an entry with existing messages, should mark loadStatus error and keep them unchanged (never clear to empty on a failed reload)', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [msg('m1'), msg('m2')], optimisticSends: [msg('opt1')], loadGeneration: 2, pendingMutationsSinceLoad: [], loadStatus: 'loading' },
+      c1: { messages: [msg('m1'), msg('m2')], optimisticSends: [msg('opt1')], loadGeneration: 2, pendingMutationsSinceLoad: [], loadStatus: 'loading', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyFailLoad(initial, { conversationId: 'c1', generation: 2 });
     expect(result.c1.loadStatus).toBe('error');
@@ -21,7 +21,7 @@ describe('applyFailLoad', () => {
 
   it('given a stale generation, should keep prior state fully unchanged (the newer load owns the status)', () => {
     const initial: ConversationMessagesById = {
-      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [], loadStatus: 'loading' },
+      c1: { messages: [msg('m1')], optimisticSends: [], loadGeneration: 3, pendingMutationsSinceLoad: [], loadStatus: 'loading', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false },
     };
     const result = applyFailLoad(initial, { conversationId: 'c1', generation: 1 });
     expect(result).toBe(initial);

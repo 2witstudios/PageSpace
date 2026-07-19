@@ -1,6 +1,7 @@
 'use client';
 
 import React, { Component, ReactNode } from 'react';
+import * as Sentry from '@sentry/nextjs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertTriangle, RefreshCw, Home, Bug } from 'lucide-react';
@@ -46,7 +47,8 @@ export class LayoutErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('Layout Error Boundary caught an error:', error, errorInfo);
-    
+    Sentry.captureException(error);
+
     this.setState({
       error,
       errorInfo
@@ -291,49 +293,3 @@ ${errorReport.componentStack}
   }
 }
 
-/**
- * Hook-based error boundary for functional components
- */
-export function useErrorHandler() {
-  const [error, setError] = React.useState<Error | null>(null);
-
-  const resetError = React.useCallback(() => {
-    setError(null);
-  }, []);
-
-  const handleError = React.useCallback((error: Error) => {
-    console.error('Handled error:', error);
-    setError(error);
-  }, []);
-
-  React.useEffect(() => {
-    if (error) {
-      // Report error
-      console.error('Error caught by useErrorHandler:', error);
-    }
-  }, [error]);
-
-  if (error) {
-    throw error; // Let the error boundary handle it
-  }
-
-  return { handleError, resetError };
-}
-
-/**
- * Higher-order component for adding error boundary
- */
-export function withErrorBoundary<P extends object>(
-  Component: React.ComponentType<P>,
-  errorFallback?: ReactNode
-) {
-  const WrappedComponent = (props: P) => (
-    <LayoutErrorBoundary fallback={errorFallback}>
-      <Component {...props} />
-    </LayoutErrorBoundary>
-  );
-
-  WrappedComponent.displayName = `withErrorBoundary(${Component.displayName || Component.name})`;
-
-  return WrappedComponent;
-}

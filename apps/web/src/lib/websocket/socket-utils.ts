@@ -17,7 +17,6 @@ export type DriveOperation = 'created' | 'updated' | 'deleted';
 export type DriveMemberOperation = 'member_added' | 'member_role_changed' | 'member_removed';
 export type TaskOperation = 'task_list_created' | 'task_added' | 'task_updated' | 'task_completed' | 'task_deleted' | 'tasks_reordered';
 export type CreditsOperation = 'updated';
-export type ActivityOperation = 'logged';
 export type KickReason = 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked' | 'page_private';
 export type InboxOperation = 'dm_updated' | 'channel_updated' | 'read_status_changed' | 'thread_updated';
 

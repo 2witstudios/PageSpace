@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
@@ -8,6 +8,7 @@ import { canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -64,14 +65,48 @@ export async function PATCH(
     }
   }
 
-  // Update positions in a transaction
-  await db.transaction(async (tx) => {
-    for (const task of tasks) {
-      await tx.update(taskItems)
-        .set({ position: task.position })
-        .where(eq(taskItems.id, task.id));
+  // Update positions via the locked-batch primitive (Phase 3): locks every
+  // target row FOR UPDATE in ascending-id order, then writes all positions in
+  // one batched statement — replaces the N-sequential-unordered-update loop
+  // that deadlocked production Postgres on 2026-07-18.
+  const plan = computeReorderPlan(tasks);
+  if (plan.orderedIds.length > 0) {
+    // task_items has no direct FK to its task list — membership is derived
+    // the same way GET does, via pages that are direct TASK_LIST children of
+    // this list's page. Scoping the write to that set closes a gap the old
+    // per-row loop never checked (it trusted every submitted id blindly).
+    const childPages = await db
+      .select({ id: pages.id })
+      .from(pages)
+      .where(and(
+        eq(pages.parentId, pageId),
+        eq(pages.type, 'TASK_LIST'),
+        eq(pages.isTrashed, false),
+      ));
+    const childPageIds = childPages.map(p => p.id);
+
+    try {
+      await db.transaction(async (tx) => {
+        const lockedIds = await lockedBatchReorder(tx, {
+          table: taskItems,
+          idColumn: taskItems.id,
+          positionColumn: taskItems.position,
+          scopeWhere: inArray(taskItems.pageId, childPageIds),
+          plan,
+          touchColumns: [taskItems.updatedAt],
+        });
+
+        if (lockedIds.length !== plan.orderedIds.length) {
+          throw new Error('Invalid task IDs');
+        }
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Invalid task IDs') {
+        return NextResponse.json({ error: 'Invalid task IDs' }, { status: 400 });
+      }
+      throw error;
     }
-  });
+  }
 
   // Broadcast reorder event
   await broadcastTaskEvent({

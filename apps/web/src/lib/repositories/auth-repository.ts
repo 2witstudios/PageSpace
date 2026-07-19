@@ -113,5 +113,3 @@ export const authRepository = {
     await db.update(users).set(await prepareUserWrite(fields)).where(eq(users.id, userId));
   },
 };
-
-export type AuthRepository = typeof authRepository;

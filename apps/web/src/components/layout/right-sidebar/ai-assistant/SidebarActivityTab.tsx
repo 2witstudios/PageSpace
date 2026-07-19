@@ -35,7 +35,7 @@ import { getUserFacingModelName } from '@/lib/ai/core/ai-providers-config';
 import { RollbackConfirmDialog } from '@/components/activity/RollbackConfirmDialog';
 import { RollbackToPointDialog, type RollbackToPointContext } from '@/components/activity/RollbackToPointDialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { useActivitySocket, type ActivityContext } from '@/hooks/useActivitySocket';
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog, ActivityGroup } from '@/components/activity/types';
@@ -164,7 +164,6 @@ const operationLabels: Record<string, string> = {
 export default function SidebarActivityTab() {
   const params = useParams();
   const pathname = usePathname();
-  const { toast } = useToast();
 
   const [activities, setActivities] = useState<ActivityItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -270,11 +269,7 @@ export default function SidebarActivityTab() {
       });
       setPreview(data.preview ?? null);
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof Error ? err.message : 'Failed to load rollback preview',
-        variant: 'destructive',
-      });
+      toast.error(err instanceof Error ? err.message : 'Failed to load rollback preview');
       setPreview({
         action: 'rollback',
         canExecute: false,
@@ -291,7 +286,7 @@ export default function SidebarActivityTab() {
       });
     }
     setShowRollbackConfirm(true);
-  }, [rollbackContext, toast]);
+  }, [rollbackContext]);
 
   // Handle confirmed rollback
   const handleConfirmAction = useCallback(async (force: boolean): Promise<ActivityActionResult> => {
@@ -305,24 +300,17 @@ export default function SidebarActivityTab() {
         force,
       });
 
-      toast({
-        title: 'Success',
-        description: result.message || 'Action completed',
-      });
+      toast.success(result.message || 'Action completed');
 
       // Refresh the activity list
       loadActivities();
 
       return result;
     } catch (err) {
-      toast({
-        title: 'Error',
-        description: err instanceof Error ? err.message : 'Failed to rollback',
-        variant: 'destructive',
-      });
+      toast.error(err instanceof Error ? err.message : 'Failed to rollback');
       throw err;
     }
-  }, [selectedActivityForRollback, rollbackContext, toast, loadActivities]);
+  }, [selectedActivityForRollback, rollbackContext, loadActivities]);
 
   // Filter activities based on search query
   const filteredActivities = useMemo(() => {

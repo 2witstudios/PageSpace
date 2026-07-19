@@ -122,5 +122,3 @@ export function MessageDropZone({
     </div>
   );
 }
-
-export default MessageDropZone;

@@ -102,40 +102,6 @@ The mentioned documents provide critical context for answering the user's questi
 }
 
 /**
- * Create tool calls for reading mentioned pages
- * This helps the AI automatically read mentioned documents
- * 
- * @param pageIds - Array of page IDs to read
- * @param mentions - Array of processed mentions for context
- * @returns Instructions for the AI to execute read_page tools
- */
-export function createMentionToolInstructions(pageIds: string[], mentions: ProcessedMention[]): string {
-  if (pageIds.length === 0) {
-    return '';
-  }
-  
-  const mentionMap = new Map(mentions.map(m => [m.id, m]));
-  
-  const instructions = pageIds
-    .map(id => {
-      const mention = mentionMap.get(id);
-      if (!mention) return null;
-      
-      // Build a path hint for the AI (it may not be accurate but helps with context)
-      const pathHint = `/${mention.label}`;
-      
-      return `read_page(path: "${pathHint}", pageId: "${id}")`;
-    })
-    .filter(Boolean)
-    .join('\n');
-  
-  return `
-Before responding, execute these tool calls to read the mentioned documents:
-${instructions}
-`;
-}
-
-/**
  * Check if a message contains any @mentions
  * 
  * @param content - The message content to check

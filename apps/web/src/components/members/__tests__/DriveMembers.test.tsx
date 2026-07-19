@@ -10,9 +10,9 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: (...a: unknown[]) => mockDel(...a),
   post: (...a: unknown[]) => mockPost(...a),
 }));
-const stableToast = vi.fn();
-vi.mock('@/hooks/useToast', () => ({
-  useToast: () => ({ toast: stableToast }),
+const mocks = vi.hoisted(() => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: { error: mocks.toastError, success: mocks.toastSuccess },
 }));
 
 type SocketHandler = (p: { driveId: string }) => void;

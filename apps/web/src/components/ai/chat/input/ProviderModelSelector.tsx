@@ -443,5 +443,3 @@ export function ProviderModelSelector({
     </div>
   );
 }
-
-export default ProviderModelSelector;

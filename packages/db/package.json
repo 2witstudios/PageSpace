@@ -47,10 +47,6 @@
       "types": "./dist/schema/drafts.d.ts",
       "default": "./dist/schema/drafts.js"
     },
-    "./schema/sandbox-sessions": {
-      "types": "./dist/schema/sandbox-sessions.d.ts",
-      "default": "./dist/schema/sandbox-sessions.js"
-    },
     "./schema/machine-sessions": {
       "types": "./dist/schema/machine-sessions.d.ts",
       "default": "./dist/schema/machine-sessions.js"

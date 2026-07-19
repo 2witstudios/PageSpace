@@ -171,5 +171,3 @@ export function MessageHoverToolbar({
     </div>
   );
 }
-
-export default MessageHoverToolbar;

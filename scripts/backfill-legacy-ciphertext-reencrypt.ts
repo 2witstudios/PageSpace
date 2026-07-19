@@ -49,10 +49,15 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-import { db as defaultDb } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { eq, gt, asc, and } from '@pagespace/db/operators';
 import { planLegacyCiphertextReencrypt } from '@pagespace/lib/encryption/legacy-ciphertext-reencrypt';
+
+// One-shot backfill script — runs on the unthrottled migration pool, not the
+// app-throttled `db`, so a slow full-table scan/rewrite can't be aborted by
+// the app pool's statement_timeout.
+const defaultDb = getMigrationDb();
 
 const BATCH_SIZE = 500;
 

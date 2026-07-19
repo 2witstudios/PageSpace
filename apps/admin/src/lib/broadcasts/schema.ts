@@ -136,5 +136,3 @@ export const templateCreateSchema = z.object({
   bodyMarkdown: z.string().trim().min(1).max(100000),
   isActive: z.boolean().default(true),
 });
-
-export type TemplateCreateInput = z.infer<typeof templateCreateSchema>;

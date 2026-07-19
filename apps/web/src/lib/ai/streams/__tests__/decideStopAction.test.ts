@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decideStopAction } from '../decideStopAction';
+import { decideStopAction, shouldRunLocalStop } from '../decideStopAction';
 
 describe('decideStopAction', () => {
   // The normal case, and the one the old machinery got wrong the most: a stream the store
@@ -94,5 +94,30 @@ describe('decideStopAction', () => {
   it('given no live stream and no pending send, should do nothing', () => {
     expect(decideStopAction({ activeStream: undefined, pendingSendConversationId: null }))
       .toEqual({ type: 'none' });
+  });
+});
+
+// The local-stop gate (dual-stream fix): with conversation-scoped consuming, one chat can be
+// locally consuming conversation B while conversation A renders via the socket on the same
+// surface — Stop on A must not cancel B's live local read.
+describe('shouldRunLocalStop', () => {
+  it('given no latch (idle chat), should run the local stop (harmless no-op, never suppressed)', () => {
+    expect(shouldRunLocalStop({ localSendConversationId: undefined, targetConversationId: 'conv-1' })).toBe(true);
+  });
+
+  it('given the latch names the conversation being stopped, should run the local stop', () => {
+    expect(shouldRunLocalStop({ localSendConversationId: 'conv-1', targetConversationId: 'conv-1' })).toBe(true);
+  });
+
+  it('given the latch names ANOTHER conversation, should skip the local stop', () => {
+    expect(shouldRunLocalStop({ localSendConversationId: 'conv-2', targetConversationId: 'conv-1' })).toBe(false);
+  });
+
+  it('given an empty-string latch (unresolved-identity placeholder), should run the local stop', () => {
+    expect(shouldRunLocalStop({ localSendConversationId: '', targetConversationId: 'conv-1' })).toBe(true);
+  });
+
+  it('given no target conversation, should run the local stop (no basis to withhold it)', () => {
+    expect(shouldRunLocalStop({ localSendConversationId: 'conv-2', targetConversationId: null })).toBe(true);
   });
 });

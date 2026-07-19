@@ -4,7 +4,14 @@ import {
   getEnvErrors,
   isEnvValid,
   serverEnvSchema,
+  requireSentryDsn,
 } from '../env-validation';
+
+vi.mock('../../deployment-mode', () => ({
+  isOnPrem: vi.fn(() => false),
+}));
+
+import { isOnPrem } from '../../deployment-mode';
 
 describe('env-validation', () => {
   const originalEnv = process.env;
@@ -13,10 +20,12 @@ describe('env-validation', () => {
     vi.resetModules();
     // Reset to minimal deterministic env to avoid host pollution
     process.env = { NODE_ENV: 'test' };
+    vi.mocked(isOnPrem).mockReturnValue(false);
   });
 
   afterEach(() => {
     process.env = originalEnv;
+    vi.mocked(isOnPrem).mockReset();
   });
 
   describe('serverEnvSchema', () => {
@@ -158,6 +167,7 @@ describe('env-validation', () => {
         CSRF_SECRET: 'b'.repeat(32),
         ENCRYPTION_KEY: 'c'.repeat(32),
         NODE_ENV: 'production',
+        SENTRY_DSN: 'https://abc123@o0.ingest.sentry.io/0',
       };
 
       const result = serverEnvSchema.safeParse(prodEnv);
@@ -191,6 +201,98 @@ describe('env-validation', () => {
       if (!result.success) {
         expect(result.error.issues.some((i) => i.path.includes('CSRF_SECRET'))).toBe(true);
       }
+    });
+  });
+
+  describe('SENTRY_DSN fail-loud validation (onprem-exempt)', () => {
+    const prodEnv = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+      CSRF_SECRET: 'b'.repeat(32),
+      ENCRYPTION_KEY: 'c'.repeat(32),
+    };
+
+    it('given NODE_ENV=production, cloud/tenant (isOnPrem false), and SENTRY_DSN unset, should fail validation', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+
+      const result = serverEnvSchema.safeParse(prodEnv);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.path.includes('SENTRY_DSN'))).toBe(true);
+      }
+    });
+
+    it('given NODE_ENV=production and SENTRY_DSN set, should parse successfully', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+
+      const result = serverEnvSchema.safeParse({
+        ...prodEnv,
+        SENTRY_DSN: 'https://abc123@o0.ingest.sentry.io/0',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given NODE_ENV=production and isOnPrem() true, should parse successfully even with SENTRY_DSN unset (onprem exempt)', () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+
+      const result = serverEnvSchema.safeParse(prodEnv);
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given NODE_ENV=development and SENTRY_DSN unset, should parse successfully (only production is fail-loud)', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+
+      const result = serverEnvSchema.safeParse({
+        ...prodEnv,
+        NODE_ENV: 'development',
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it('given NODE_ENV=test and SENTRY_DSN unset, should parse successfully', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+
+      const result = serverEnvSchema.safeParse({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/db',
+        NODE_ENV: 'test',
+      });
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe('requireSentryDsn', () => {
+    it('given NODE_ENV=production, isOnPrem() false, and SENTRY_DSN unset, should throw naming the service', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+      process.env = { NODE_ENV: 'production' };
+
+      expect(() => requireSentryDsn('realtime')).toThrow(/realtime/);
+      expect(() => requireSentryDsn('realtime')).toThrow(/SENTRY_DSN/);
+    });
+
+    it('given NODE_ENV=production, isOnPrem() false, and SENTRY_DSN set, should not throw', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+      process.env = { NODE_ENV: 'production', SENTRY_DSN: 'https://abc123@o0.ingest.sentry.io/0' };
+
+      expect(() => requireSentryDsn('processor')).not.toThrow();
+    });
+
+    it('given NODE_ENV=production and isOnPrem() true, should not throw even with SENTRY_DSN unset', () => {
+      vi.mocked(isOnPrem).mockReturnValue(true);
+      process.env = { NODE_ENV: 'production' };
+
+      expect(() => requireSentryDsn('admin')).not.toThrow();
+    });
+
+    it('given NODE_ENV=development and SENTRY_DSN unset, should not throw', () => {
+      vi.mocked(isOnPrem).mockReturnValue(false);
+      process.env = { NODE_ENV: 'development' };
+
+      expect(() => requireSentryDsn('control-plane')).not.toThrow();
     });
   });
 

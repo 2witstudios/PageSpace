@@ -4,11 +4,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
 import type { MentionSuggestion, MentionType } from '@/types/mentions';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
@@ -243,47 +238,3 @@ export function MentionPicker({
     />
   );
 }
-
-// ---------------------------------------------------------------------------
-// MentionPickerPopover — Radix Popover wrapper (for use cases where the
-// caller manages the trigger element and Popover open state externally)
-// ---------------------------------------------------------------------------
-
-export interface MentionPickerPopoverProps extends MentionPickerProps {
-  children: React.ReactNode;
-  side?: 'top' | 'bottom' | 'left' | 'right';
-  align?: 'start' | 'center' | 'end';
-  open?: boolean;
-  onOpenChange?: (open: boolean) => void;
-}
-
-export function MentionPickerPopover({
-  children,
-  side = 'top',
-  align = 'start',
-  open,
-  onOpenChange,
-  onMentionSelect,
-  ...pickerProps
-}: MentionPickerPopoverProps) {
-  const handleSelect = (suggestion: MentionSuggestion) => {
-    onMentionSelect(suggestion);
-    onOpenChange?.(false);
-  };
-
-  return (
-    <Popover open={open} onOpenChange={onOpenChange}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent
-        side={side}
-        align={align}
-        className="w-auto p-0"
-        sideOffset={8}
-      >
-        <MentionPicker {...pickerProps} onMentionSelect={handleSelect} />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-export default MentionPicker;

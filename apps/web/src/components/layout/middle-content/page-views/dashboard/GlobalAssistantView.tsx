@@ -42,6 +42,7 @@
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import type { UIMessage } from 'ai';
 import { useChat } from '@ai-sdk/react';
+import { toast } from 'sonner';
 import { usePathname } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Activity, Plus, History } from 'lucide-react';
@@ -63,8 +64,11 @@ import {
   useProviderSettings,
   useChatTransport,
   useSendHandoff,
-  useStreamRecovery,
-  useAskUserAnswering,
+  useConversationSendHandoff,
+  HANDOFF_REFUSED_MESSAGE,
+  useResumeBootstrap,
+  useAnswerAskUser,
+  useChatErrorCause,
   buildChatConfig,
   AGENT_CHAT_ID,
   LocationContext,
@@ -72,14 +76,8 @@ import {
 } from '@/lib/ai/shared';
 import { buildContextRef, type ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
-import { useAppStateRecovery } from '@/hooks/useAppStateRecovery';
-import { isCapacitorApp } from '@/hooks/useCapacitor';
-import { resolveResumeAction } from '@/lib/ai/streams/resolveResumeAction';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentChannelMultiplayer } from '@/hooks/useAgentChannelMultiplayer';
-import { decideRecovery } from '@/lib/ai/streams/decideRecovery';
-import { canConcludeTurnIsLost, type RecoveryAttempt } from '@/lib/ai/streams/recoveryAttempt';
-import { evictStalePartial, canEvictStalePartial } from '@/lib/ai/streams/evictStalePartial';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import {
@@ -97,13 +95,19 @@ import { useAuth } from '@/hooks/useAuth';
 import { useConversationActiveStream, useActiveStream } from '@/hooks/useActiveStream';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useRenderedMessages, useConversationLoadState } from '@/hooks/useRenderedMessages';
+import { useRenderedMessages, useConversationLoadState, useConversationOlderPageState } from '@/hooks/useRenderedMessages';
 import { conversationMessagesActions } from '@/hooks/conversationMessagesActions';
 import {
   loadGlobalConversationMessages,
   loadAgentConversationMessages,
+  loadOlderGlobalConversationMessages,
+  loadOlderAgentConversationMessages,
 } from '@/hooks/conversationMessagesLoaders';
 import { buildUserMessage } from '@/lib/ai/streams/buildUserMessage';
+import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimisticSendOnFailure';
+import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
+import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
+import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { createId } from '@paralleldrive/cuid2';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
@@ -181,33 +185,19 @@ const GlobalAssistantView: React.FC = () => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
+  const { attachments, addFiles, removeFile, getFilesForSend } = useImageAttachments();
 
   // Refs
   const chatLayoutRef = useRef<ChatLayoutRef>(null);
   const inputRef = useRef<ChatInputRef>(null);
-  // Populated after useAgentChannelMultiplayer runs (called further down); used
-  // in tryRecover via ref so the callback doesn't depend on hook ordering.
+  // Populated after useAgentChannelMultiplayer runs (called further down); used by
+  // rejoinActiveMode via ref so that callback doesn't depend on hook ordering.
   const rejoinAgentStreamRef = useRef<() => void>(() => {});
-  // The conversation currently on screen, mirrored on every render. Read after an await to
-  // decide whether a response that just resolved is still wanted.
-  //
-  // Deliberately NOT the "id the load was requested for" ref that AiChatView and
-  // SidebarChatTab use. That pattern only works because in those components every load path
-  // funnels through the one loader that advances the ref, so switching conversation advances
-  // it. Here it would not: this surface loads on select via the globalInitialMessages /
-  // agent-load-signal effects, which do NOT go through handlePullUpRefresh. A
-  // "requested id" ref written only by handlePullUpRefresh would still equal the id its own
-  // in-flight fetch was issued for, so the guard would always pass and a response for the
-  // conversation the user just left would be applied to the one they switched to. Comparing
-  // against the LIVE conversation is the invariant that actually holds here.
-  const currentConversationIdRef = useRef<string | null>(null);
 
   // ============================================
   // SHARED HOOKS
   // ============================================
   const currentConversationId = selectedAgent ? agentConversationId : globalConversationId;
-  currentConversationIdRef.current = currentConversationId;
 
   const { isLoading: isLoadingProviders, isAnyProviderConfigured, needsSetup } =
     useProviderSettings();
@@ -362,10 +352,6 @@ const GlobalAssistantView: React.FC = () => {
   const rawStop = selectedAgent ? agentStop : globalStop;
   const addToolResult = selectedAgent ? agentAddToolResult : globalAddToolResult;
   const isStreaming = status === 'submitted' || status === 'streaming';
-  // Mirrored so the resume handler can read it AFTER its awaits. Its own closure captured the
-  // pre-background value, which cannot tell it whether a generation has since restarted.
-  const isStreamingRef = useRef(false);
-  isStreamingRef.current = isStreaming;
 
   // ============================================
   // STREAM/STOP — one selector read per mode (PR 5A)
@@ -405,7 +391,6 @@ const GlobalAssistantView: React.FC = () => {
     activeStream?.isOwn === true,
   );
 
-  const stop = useStopStream({ activeStream, pendingSendConversationId, rawStop });
 
   // "Is MY OWN stream live for the conversation on screen", per chat. The #2061 clobber
   // guards that used to consume these died with PR 5B (merge-at-render made them
@@ -455,23 +440,11 @@ const GlobalAssistantView: React.FC = () => {
   // isMessagesLoading and the dashboard store's isConversationMessagesLoading).
   const messagesLoadState = useConversationLoadState(currentConversationId);
 
-  const streamingAssistantText = useMemo(() => {
-    if (!isStreaming) return null;
-    const last = plainMessages[plainMessages.length - 1];
-    if (!last || last.role !== 'assistant') return null;
-    return (last.parts ?? [])
-      .filter((p) => p.type === 'text')
-      .map((p) => (p as { type: 'text'; text: string }).text)
-      .join('');
-  }, [plainMessages, isStreaming]);
-  // Synchronously updated each render — lets tryRecover read the CURRENT
-  // CONVERSATION's rendered rows without adding them to its useCallback deps.
-  // plainMessages, not the transport array (CR1, CodeRabbit round 2): the
-  // transport accumulates rows across conversation switches and is never
-  // seeded from loads post-cutover, so its last-user id could belong to a
-  // different conversation and defeat the persisted-reply check.
-  const currentMessagesRef = useRef(plainMessages);
-  currentMessagesRef.current = plainMessages;
+  // Voice's live-stream text (epic leaf 6.4) — one selector, three consumers.
+  const streamingAssistantText = useMemo(
+    () => selectVoiceStreamText(renderedMessages),
+    [renderedMessages],
+  );
   // TRANSITIONAL (see useOwnStreamMirror) — copies each chat's own live assistant reply from
   // useChat's local state into usePendingStreamsStore, so this surface's own streams are present
   // in the store the same way a bootstrapped or remote one is. Everything above derives from
@@ -488,7 +461,7 @@ const GlobalAssistantView: React.FC = () => {
   // undefined unless the last message is an assistant's — during the submitted window the last
   // message is the user's own, which is exactly why no store entry exists in that window (and why
   // Stop falls back to the send-time conversationId there).
-  useOwnStreamMirror({
+  const { getLatchedConversationId: getAgentLatchedConversationId } = useOwnStreamMirror({
     status: agentStatus,
     ownMessages: agentMessages,
     pageId: selectedAgent?.id ?? '',
@@ -496,12 +469,44 @@ const GlobalAssistantView: React.FC = () => {
     triggeredBy: mirrorTriggeredBy,
   });
 
-  useOwnStreamMirror({
+  const { getLatchedConversationId: getGlobalLatchedConversationId } = useOwnStreamMirror({
     status: globalStatus,
     ownMessages: globalLocalMessages,
     pageId: channelIdForGlobal ?? '',
     conversationId: globalConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,
+  });
+
+  // Pre-send handoff, PER CHAT like the mirrors: a send into a different conversation than the
+  // one a chat is consuming for must first stop the local read and hand the in-flight stream to
+  // the socket path — the SDK's Chat cannot consume two response bodies at once, and a second
+  // concurrent send is how chat 1's stream ended up rendering inside chat 2. See
+  // useConversationSendHandoff.
+  // Through the ref: useAgentChannelMultiplayer mounts further down, and the ref is its standing
+  // late-binding (same pattern as the recovery path's rejoinAgentStreamRef.current() call).
+  const rejoinAgentStreamLate = useCallback(() => { rejoinAgentStreamRef.current(); }, []);
+  const { prepareSend: prepareAgentSend } = useConversationSendHandoff({
+    status: agentStatus,
+    stop: agentStop,
+    getLatchedConversationId: getAgentLatchedConversationId,
+    rejoin: rejoinAgentStreamLate,
+  });
+  const { prepareSend: prepareGlobalSend } = useConversationSendHandoff({
+    status: globalStatus,
+    stop: globalStop,
+    getLatchedConversationId: getGlobalLatchedConversationId,
+    rejoin: rejoinGlobalStream,
+  });
+  const prepareSendForMode = selectedAgent ? prepareAgentSend : prepareGlobalSend;
+
+  // Declared after the mirrors: the rawStop gate reads the mode-selected latch, so a Stop on a
+  // socket-attached conversation cannot abort another conversation's live local fetch.
+  const stop = useStopStream({
+    activeStream,
+    pendingSendConversationId,
+    rawStop,
+    getLocalSendConversationId: selectedAgent ? getAgentLatchedConversationId : getGlobalLatchedConversationId,
+    targetConversationId: currentConversationId,
   });
 
 
@@ -533,6 +538,18 @@ const GlobalAssistantView: React.FC = () => {
     }
   }, [currentConversationId, selectedAgent]);
 
+  // "Load older" (epic leaf 6.6, scroll-to-top) — same agent/global branch as reload.
+  const { isLoadingOlder } = useConversationOlderPageState(currentConversationId);
+  const handleScrollNearTop = useCallback(() => {
+    const conversationId = currentConversationId;
+    if (!conversationId) return;
+    if (selectedAgent) {
+      void loadOlderAgentConversationMessages(selectedAgent.id, conversationId);
+    } else {
+      void loadOlderGlobalConversationMessages(conversationId);
+    }
+  }, [currentConversationId, selectedAgent]);
+
   // ============================================
   // MESSAGE ACTIONS — shared store-first wrapper (F2/F9: actions reason over
   // SETTLED rows only; the live bubble's verb is Stop, and a synthesized
@@ -540,14 +557,29 @@ const GlobalAssistantView: React.FC = () => {
   // ============================================
   const setMessages = selectedAgent ? setAgentMessages : setGlobalLocalMessages;
   const isOwnSendLive = selectedAgent ? agentSendUnsafeToClobber : globalSendUnsafeToClobber;
+  // Read after an await (resume runs async), so a ref rather than the captured value.
+  const isOwnSendLiveRef = useRef(isOwnSendLive);
+  isOwnSendLiveRef.current = isOwnSendLive;
+  // Conversation-scoped counterpart, for consumers that must not see the OLD conversation's
+  // still-in-flight raw useChat status as "busy" (PR 6 review, CodeRabbit, same class as the
+  // AskUser fix above) — resume's isOwnStreamLive gate, unlike useCacheMessageActions' clobber
+  // guard, which is deliberately conversation-agnostic.
+  const effectiveIsStreamingRef = useRef(effectiveIsStreaming);
+  effectiveIsStreamingRef.current = effectiveIsStreaming;
 
-  const { handleEdit, handleDelete, handleRetry, stableMessages } = useCacheMessageActions({
+  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
+
+  const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
     renderedMessages,
     isOwnSendLive,
     setMessages,
     regenerate,
+    // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
+    // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
+    prepareSend: prepareSendForMode,
+    getIsOwnSendLive,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -561,176 +593,6 @@ const GlobalAssistantView: React.FC = () => {
     [plainMessages],
   );
 
-  // Rejoin-first recovery probe for useStreamRecovery.
-  // On a network error (e.g. iOS backgrounding kills the fetch):
-  //   1. Check /api/ai/chat/active-streams — if the original run is still live, rejoin it.
-  //   2. Else fetch messages from the DB — if the run already persisted a reply, surface it.
-  //   3. Only fall through to regenerate() when neither path finds anything to recover.
-  const tryRecover = useCallback(async (): Promise<RecoveryAttempt> => {
-    // `probeAnswered` is RETURNED, never stashed in a ref. tryRecover has two callers — this
-    // surface's resume handler and useStreamRecovery's network-error retry — and they can be in
-    // flight together. A single shared slot would let one caller's probe answer the other's
-    // question, which on this path means regenerating over a run we never actually asked about.
-    let probeAnswered = false;
-    let dbAnswered = false;
-    const conversationId = currentConversationId;
-    if (!conversationId) return { recovered: false, probeAnswered, dbAnswered };
-    const channelId = selectedAgent?.id ?? (user?.id ? globalChannelId(user.id) : null);
-    if (!channelId) return { recovered: false, probeAnswered, dbAnswered };
-    // Every transport write below happens after an await, into a useChat instance whose id is
-    // constant across conversation switches. Re-check the LIVE conversation before each one —
-    // otherwise a recovery for the conversation the user just left lands in the one they moved
-    // to. (The cache write is conversation-keyed and needs no such gate.)
-    const stillOnThisConversation = () =>
-      conversationId === currentConversationIdRef.current;
-
-    // Step 1: live stream check
-    try {
-      const res = await fetchWithAuth(
-        `/api/ai/chat/active-streams?channelId=${encodeURIComponent(channelId)}`,
-      );
-      if (res.ok) {
-        const data = (await res.json()) as {
-          streams?: Array<{
-            messageId: string;
-            conversationId: string;
-            parts?: unknown[];
-            triggeredBy: { userId: string };
-          }>;
-        };
-        // Only NOW do we know the server told us something. Setting this off `res.ok` alone would
-        // be a lie: res.json() can still throw on a body that dies mid-read — which is exactly the
-        // cold-radio-after-foreground case this whole path exists for — and the catch below would
-        // swallow it while we went on believing we had an answer.
-        probeAnswered = true;
-        const liveStream = (data.streams ?? []).find(
-          (s) => s.conversationId === conversationId && s.triggeredBy.userId === user?.id,
-        );
-        // decideRecovery's priority (rejoin > refetch > regenerate) is expressed by the ORDER of
-        // these steps, not by a call here: with hasLiveStream hardcoded true it could only ever
-        // answer 'rejoin', so asking would be decoration. Step 2 below is where it genuinely
-        // decides. A live stream is always rejoined, never read around.
-        if (liveStream && stillOnThisConversation()) {
-          // Evict the half-streamed assistant bubble useChat is still holding for this run. See
-          // evictStalePartial: without it the rejoined stream is deduped straight back out and
-          // renders nothing, and it is safe only when the server's checkpoint has frames the
-          // bootstrap can actually seed in its place.
-          //
-          // Ask before writing, so an unsafe checkpoint costs no state write at all; then evict
-          // through the UPDATER form, so the filter runs against the freshest message list rather
-          // than one captured before the awaits above. (Raw useChat setters: the dashboard store
-          // no longer holds a message array to keep in sync — PR 5B, leaf 5.3.)
-          const staleId = liveStream.messageId;
-          if (canEvictStalePartial(liveStream.parts)) {
-            const evict = (prev: UIMessage[]) => evictStalePartial(prev, staleId, liveStream.parts);
-            if (selectedAgent) setAgentMessages(evict);
-            else setGlobalLocalMessages(evict);
-          }
-          if (selectedAgent) {
-            rejoinAgentStreamRef.current();
-          } else {
-            rejoinGlobalStream();
-          }
-          return { recovered: true, probeAnswered, dbAnswered };
-        }
-      }
-    } catch { /* network error — fall through to DB check */ }
-
-    // Step 2: DB check for a persisted reply to the CURRENT turn.
-    try {
-      // Token BEFORE the fetch — a stale recovery snapshot must not overwrite
-      // anything fresher committed while it was in flight (CR4).
-      const snapshotToken = conversationMessagesActions.beginServerSnapshot(conversationId);
-      const url = selectedAgent
-        ? `/api/ai/page-agents/${selectedAgent.id}/conversations/${conversationId}/messages`
-        : `/api/ai/global/${conversationId}/messages`;
-      const res = await fetchWithAuth(url);
-      if (res.ok) {
-        const data = await res.json();
-        const msgs = (Array.isArray(data) ? data : (data.messages ?? [])) as Array<{
-          id: string;
-          role: string;
-        }>;
-        // Only NOW do we know what is persisted. As with the probe above, a throw or a non-ok
-        // leaves us knowing nothing — and treating that silence as "no reply exists" would let the
-        // caller regenerate over a reply that had in fact completed, which DELETES it (handleRetry
-        // removes the trailing assistant by the very id the server persisted it under).
-        dbAnswered = true;
-
-        // "Was the user's turn persisted?" asked by IDENTITY, not by counting.
-        //
-        // It used to compare user-message counts (dbUserCount >= localUserCount). That silently
-        // breaks on any conversation longer than one page: this GET is unpaginated, so the route
-        // applies its default limit of 50 and returns only the newest 50 rows, while local
-        // `messages` is the initial 50 PLUS every turn since. Past that boundary the count guard
-        // is permanently false, step 2 can never recover, and every interrupted turn on a long
-        // conversation would fall through to a regenerate that deletes the reply it should have
-        // refetched. The last local user message is by definition the newest, so it is always
-        // inside the returned window — checking for its id is both correct and pagination-proof.
-        const lastLocalUserId = [...currentMessagesRef.current]
-          .reverse()
-          .find((m) => m.role === 'user')?.id;
-        const ourTurnIsPersisted =
-          lastLocalUserId === undefined || msgs.some((m) => m.id === lastLocalUserId);
-        const hasPersistedReply =
-          msgs.length > 0 && msgs[msgs.length - 1].role === 'assistant' && ourTurnIsPersisted;
-
-        if (
-          stillOnThisConversation() &&
-          decideRecovery({ hasLiveStream: false, hasPersistedReply }) === 'refetch'
-        ) {
-          // Commit the SAME normalized array the guards above were computed from, as the
-          // conversation's loaded truth. The cache write is conversation-keyed and renders
-          // via merge-at-render — no transport write needed to surface the recovered reply
-          // (PR 5B: the refetch branch's fetch+setMessages becomes a cache commit).
-          conversationMessagesActions.applyServerSnapshot(conversationId, snapshotToken, msgs as unknown as UIMessage[]);
-          return { recovered: true, probeAnswered, dbAnswered };
-        }
-      }
-    } catch { /* network error — the caller must not treat this as "nothing is persisted" */ }
-
-    return { recovered: false, probeAnswered, dbAnswered };
-  }, [
-    currentConversationId,
-    selectedAgent,
-    user,
-    rejoinGlobalStream,
-    setAgentMessages,
-    setGlobalLocalMessages,
-  ]);
-
-  // Auto-retry on network errors — rejoin-first, regenerate only as last resort
-  // useStreamRecovery only asks "did you recover?" — the probe-reachability half of the answer is
-  // for the resume path, which is the one that would otherwise regenerate over a live run.
-  const tryRecoverForError = useCallback(async () => (await tryRecover()).recovered, [tryRecover]);
-
-  // ONE mutex across BOTH recovery paths.
-  //
-  // useStreamRecovery watches this same failure from the other side (it fires on
-  // `status === 'error'`) and regenerates too, and the two shared no lock. Either could decide to
-  // regenerate the turn while the other was still deciding — useStreamRecovery calls clearError()
-  // BEFORE running its own probes, so for the whole of its decision window the status reads
-  // `ready` and looks idle to us. Two regenerates for one turn is the double destruction the
-  // resume gate exists to prevent: the server takes over the conversation on every generation
-  // start, so the second aborts the first, and handleRetry deletes its assistant message on the
-  // way in.
-  //
-  // The lock is held across the whole of handleRetry — its message DELETEs are a network
-  // round-trip — after which the restarted generation's own `submitted` status keeps the other
-  // path out (see `nothingHasRestarted` below).
-  const regenerationInFlightRef = useRef(false);
-  const regenerateTurnOnce = useCallback(async () => {
-    if (regenerationInFlightRef.current) return;
-    regenerationInFlightRef.current = true;
-    try {
-      await handleRetry();
-    } finally {
-      regenerationInFlightRef.current = false;
-    }
-  }, [handleRetry]);
-
-  useStreamRecovery({ error, status, clearError, handleRetry: regenerateTurnOnce, maxRetries: 2, tryRecover: tryRecoverForError });
-
   // Undo restructures the conversation server-side — reload the cache entry (PR 5B,
   // leaf 5.4 W1). No transport write and no own-stream merge dance: the cache write is
   // conversation-keyed, and merge-at-render keeps a live own stream visible over any
@@ -740,141 +602,40 @@ const GlobalAssistantView: React.FC = () => {
   }, [reloadCurrentConversation]);
 
   // Pull-up / resume refresh: check for messages this surface missed (real-time may
-  // have failed, or the app was backgrounded and no live stream was found to rejoin).
-  // Same cache reload (leaf 5.4 W2) — staleness is the loader's loadGeneration gate.
+  // have failed, or the app was backgrounded). Same cache reload (leaf 5.4 W2) —
+  // staleness is the loader's loadGeneration gate.
   const handlePullUpRefresh = useCallback(async () => {
     await reloadCurrentConversation();
   }, [reloadCurrentConversation]);
 
-  // App state recovery — deterministic stream rejoin on mobile.
-  //
-  // The `enabled` gate MUST be a callback, not a render-time boolean: iOS freezes JS the
-  // moment the app backgrounds, so a boolean captured at render is whatever was true when
-  // the app went away. That is how this path was dead in exactly the case it was written
-  // for — `!isStreaming` was false (streaming), and the recovery hook was gated off.
-  //
-  // `onResume` uses `resolveResumeAction` — on native it always returns 'rejoin-and-refresh'
-  // (the local fetch is dead after backgrounding).
-  //
-  // It then delegates to `tryRecover`, the same rejoin-first probe useStreamRecovery uses on a
-  // network error — because a background/foreground cycle IS a network error on iOS, just one we
-  // are told about. Do NOT blind-refresh from the DB here: the reply is not persisted until the
-  // run completes, so while a stream is still live a DB snapshot contains no assistant message
-  // and writing it would wipe the in-progress bubble. `tryRecover` asks /active-streams first —
-  // the server's authoritative answer — and only touches the DB when nothing is live:
-  //
-  //   live stream        → rejoin it, no DB read at all
-  //   already persisted  → refetch the completed reply (the stream finished while backgrounded)
-  //   neither            → regenerate — but ONLY once both questions actually came back
-  //                         (canConcludeTurnIsLost). Never a DB refresh: see the gate below.
+  // Re-bootstrap whichever mode is on screen (epic leaf 6.2's `rejoin` step). The ref
+  // indirection is because useAgentChannelMultiplayer (below) is the one that actually
+  // produces rejoinAgentStream, and this callback is declared above that hook call.
+  const rejoinActiveMode = useCallback(() => {
+    if (selectedAgent) {
+      rejoinAgentStreamRef.current();
+    } else {
+      rejoinGlobalStream();
+    }
+  }, [selectedAgent, rejoinGlobalStream]);
+
+  // Gate on USER editing only, evaluated at fire time (callback form) — iOS freezes JS the
+  // moment the app backgrounds, so a boolean captured at render would be stale.
   const resumeEnabled = useCallback(
     () => canResumeRecovery(currentConversationId, useEditingStore.getState().isAnyEditing()),
     [currentConversationId],
   );
 
-  useAppStateRecovery({
-    onResume: useCallback(async () => {
-      const action = resolveResumeAction({ native: isCapacitorApp(), isStreaming: effectiveIsStreaming });
-      if (action === 'noop') return;
-      if (action === 'refresh') {
-        // Web, no live fetch of our own: a plain DB refresh is safe and is all we need.
-        await handlePullUpRefresh();
-        return;
-      }
-      // Native. Whether a turn of OUR OWN was in flight, for the conversation on screen, when we
-      // went away. iOS froze JS at that moment, so this render-time value is a faithful record of
-      // it — which is exactly what it is used for here, and why it is safe even though it is
-      // useless for deciding whether the TRANSPORT is still alive (that is resolveResumeAction's
-      // job, and the answer is "no").
-      //
-      // Conversation-scoped, NOT the broader effectiveIsStreaming: that also reports true for a
-      // stream still running against a conversation the user has since navigated away from (the
-      // useChat id is stable across a switch), and regenerating on the strength of it would fire
-      // a generation for the turn the user is now LOOKING at rather than the one that was
-      // actually interrupted.
-      const hadTurnInFlight = selectedAgent
-        ? isOwnAgentStreamForCurrentConversation
-        : isOwnGlobalStreamForCurrentConversation;
-      // The conversation that turn belongs to. The recovery below spans up to a few seconds of
-      // network, and the user can switch conversation inside that window — at which point
-      // regenerating would fire a generation for the turn they moved TO, not the one that was
-      // interrupted. `handleRetry` always acts on the live conversation, so the only way to keep
-      // it honest is to re-check that we are still on the one we started from.
-      const conversationAtResume = currentConversationId;
-
-      // Local-only useChat stop: it does NOT signal the server (that is done separately via
-      // abortActiveStreamByMessageId), so the run keeps generating and stays rejoinable. It also
-      // ends the dead response body, which releases this channel's `consuming` mark — without
-      // that the rejoin's bootstrap would classify the stream as one we are already reading off
-      // the POST and skip attaching it.
-      rawStop();
-      let attempt = await tryRecover();
-      if (attempt.recovered) return;
-
-      // Came up empty — but "we recovered nothing" is NOT "there was nothing to recover". Each of
-      // tryRecover's two questions can come back UNANSWERED, and silence from either one means the
-      // work we would be about to destroy might still exist:
-      //
-      //   /active-streams silent → a run may still be LIVE.       Regenerating aborts it.
-      //   messages GET silent    → the reply may already be SAVED. Regenerating deletes it.
-      //
-      // The first request after a foreground is the one most likely to fail (cold radio), so this
-      // is common on exactly this path. Re-ask until both questions come back, bounded — the radio
-      // returns well inside a few seconds.
-      for (let i = 1; !(attempt.probeAnswered && attempt.dbAnswered) && i <= 2; i++) {
-        await new Promise((resolve) => setTimeout(resolve, i * 1000));
-        attempt = await tryRecover();
-        if (attempt.recovered) return;
-      }
-
-      // Regenerate ONLY once BOTH questions came back, and only for a turn of ours that really was
-      // in flight (canConcludeTurnIsLost).
-      //
-      // The regenerate is needed BECAUSE of the stop above: aborting the fetch settles useChat at
-      // `ready` with NO `error`, and useStreamRecovery only fires on `status === 'error'`. Without
-      // it, a turn whose POST died on the background transition would find no stream, no reply and
-      // no error, and the user's prompt would sit unanswered forever.
-      //
-      // But regenerating on SILENCE would be far worse than doing nothing, because regenerating is
-      // destructive twice over:
-      //   - takeOverConversationStreams runs on every generation start, so a regenerate issued
-      //     while the run is in fact still live ABORTS it — re-running write tools it had already
-      //     executed, billing its discarded tokens, stranding its partial in the DB.
-      //   - handleRetry DELETEs the trailing assistant by id before re-requesting, and that is the
-      //     same id the server persisted the reply under — so a regenerate issued when the reply
-      //     had in fact completed deletes the finished reply and pays for it again.
-      //
-      // Doing nothing on silence is safe: the stop released this channel's `consuming` mark, so a
-      // live run is picked up by the socket-reconnect bootstrap once the network returns, a
-      // persisted reply is picked up by the next load, and a genuinely dead turn leaves the user
-      // their prompt and the retry action on it.
-      const stillOnTheInterruptedConversation =
-        currentConversationIdRef.current === conversationAtResume;
-      // Belt to regenerateTurnOnce's braces. The mutex stops the two paths regenerating at the
-      // same moment; this stops us regenerating on top of a turn that has ALREADY restarted and
-      // moved on — the mutex is released as soon as handleRetry returns, but the generation it
-      // kicked off is still running. Read through a ref because the closure's copy of `isStreaming`
-      // is the value captured before we were frozen.
-      const nothingHasRestarted = !isStreamingRef.current;
-      if (
-        hadTurnInFlight &&
-        stillOnTheInterruptedConversation &&
-        nothingHasRestarted &&
-        canConcludeTurnIsLost(attempt)
-      ) {
-        await regenerateTurnOnce();
-      }
-    }, [
-      effectiveIsStreaming,
-      currentConversationId,
-      selectedAgent,
-      isOwnAgentStreamForCurrentConversation,
-      isOwnGlobalStreamForCurrentConversation,
-      rawStop,
-      tryRecover,
-      handlePullUpRefresh,
-      regenerateTurnOnce,
-    ]),
+  // App-resume = the same path as mount/socket-reconnect (epic leaf 6.2): re-bootstrap active
+  // streams, reload the conversation into the cache, and settle a frozen local transport.
+  // Nothing renders from the local fetch under store-first rendering, so there is no
+  // native/web or was-i-streaming choreography left to make — this subsumes the old
+  // tryRecover/decideRecovery probe tree, resolveResumeAction (deleted), and #2065.
+  useResumeBootstrap({
+    rejoin: rejoinActiveMode,
+    reload: handlePullUpRefresh,
+    stop: rawStop,
+    isOwnStreamLive: useCallback(() => effectiveIsStreamingRef.current, []),
     enabled: resumeEnabled,
   });
 
@@ -942,10 +703,17 @@ const GlobalAssistantView: React.FC = () => {
   // idle for a bootstrapped stream after a refresh — so the window this surface most needed SWR
   // protection in was exactly the window it declared itself not streaming.
 
+  // Typed error cause, per-conversation (epic leaf 6.5) — replaces raw `error`/getAIErrorMessage.
+  const { cause: errorCause, dismiss: dismissError } = useChatErrorCause(
+    currentConversationId,
+    error,
+    clearError,
+    pendingSendConversationId ?? currentConversationId,
+  );
   // Reset error visibility when new error occurs
   useEffect(() => {
-    if (error) setShowError(true);
-  }, [error]);
+    if (errorCause) setShowError(true);
+  }, [errorCause]);
 
   // ============================================
   // HANDLERS
@@ -973,104 +741,10 @@ const GlobalAssistantView: React.FC = () => {
     setActiveTab('history');
   };
 
-  const handleSendMessage = async () => {
-    const files = getFilesForSend();
-    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
-
-    const requestBody = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: currentConversationId,
-          selectedProvider: agentSelectedProvider,
-          selectedModel: agentSelectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          contextRef: buildFreshContextRef(),
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-          mcpTools: mcpToolSchemas,
-        });
-
-    // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
-    // silently drops any id passed alongside it, so the message would push under an
-    // SDK-generated id the conversation cache never saw. Written to the cache
-    // immediately (optimistic) because the sender's own tab never receives its own
-    // chat:user_message broadcast back — this is what makes the bubble appear the
-    // same tick the user hits Send (leaf 5.2 acceptance).
-    const userMessage = buildUserMessage({
-      id: createId(),
-      text: input.trim().length > 0 ? input : undefined,
-      files: files.length > 0 ? files : undefined,
-    }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: requestBody }));
-    setInput('');
-    clearFiles();
-    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
-  };
-
-  // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback((text: string) => {
-    if (!text.trim() || !currentConversationId) return;
-
-    const requestBody = selectedAgent
-      ? {
-          chatId: selectedAgent.id,
-          conversationId: currentConversationId,
-          selectedProvider: agentSelectedProvider,
-          selectedModel: agentSelectedModel,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          mcpTools: mcpToolSchemas.length > 0 ? mcpToolSchemas : undefined,
-        }
-      : buildGlobalChatRequestBody({
-          conversationId: currentConversationId,
-          isReadOnly,
-          webSearchEnabled,
-          imageGenEnabled,
-          showPageTree,
-          contextRef: buildFreshContextRef(),
-          selectedProvider: currentProvider,
-          selectedModel: currentModel,
-          mcpTools: mcpToolSchemas,
-        });
-
-    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
-    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
-    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
-
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    wrapSend(() => sendMessage(userMessage, { body: requestBody }));
-  }, [
-    currentConversationId,
-    selectedAgent,
-    agentSelectedProvider,
-    agentSelectedModel,
-    isReadOnly,
-    webSearchEnabled,
-    imageGenEnabled,
-    showPageTree,
-    buildFreshContextRef,
-    currentProvider,
-    currentModel,
-    mcpToolSchemas,
-    sendMessage,
-    wrapSend,
-  ]);
-
-  const buildAskUserAnswerBody = useCallback(() => {
+  // Shared by every send-shaped request (typed send, voice send, AskUser resume) — one
+  // definition means the body a resume POST carries can't drift from what a real send
+  // would have sent (epic leaf 6.3: deletes the separate buildAskUserAnswerBody).
+  const buildRequestBody = useCallback(() => {
     return selectedAgent
       ? {
           chatId: selectedAgent.id,
@@ -1108,33 +782,102 @@ const GlobalAssistantView: React.FC = () => {
     mcpToolSchemas,
   ]);
 
-  // F3 (PR #2098 review): addToolResult patches the TRANSPORT's own message array,
-  // and post-cutover nothing seeds loaded history into it — so answering an ask_user
-  // question on a conversation opened from history/reload would silently do nothing.
-  // Seed the settled rendered rows first (same imperative, action-scoped write as the
-  // retry seed; skipped while our own send is live — the array is the mirror's read
-  // source then, and a live own turn means the transport already holds the question).
-  const seededAddToolResult = useCallback<typeof addToolResult>((args) => {
-    if (!isOwnSendLive) {
-      setMessages(stableMessages);
-    }
-    return addToolResult(args);
-  }, [addToolResult, isOwnSendLive, setMessages, stableMessages]);
+  const handleSendMessage = async () => {
+    const files = getFilesForSend();
+    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
 
-  // plainMessages (store-rendered), not useChat's raw `messages`: "answerable" is
-  // decided by whether the ask_user part sits on the conversation's LAST message,
-  // and remote edits/deletes/messages update the store, not useChat's local array.
-  const askUserAnswering = useAskUserAnswering({
-    messages: plainMessages,
-    status,
-    addToolResult: seededAddToolResult,
+    const requestBody = buildRequestBody();
+
+    // Capture the draft BEFORE the handoff await below: the wait can run up to ~1.5s, and
+    // anything the user types or attaches during it must survive (Codex review, PR #2121).
+    const text = input;
+    const sendFiles = files.length > 0 ? files : undefined;
+    // The ids behind `files` — same processed filter getFilesForSend applies. Attachments are
+    // cleared per-id AFTER the handoff confirms, so a refusal loses nothing and anything
+    // attached DURING the wait (a different id) survives the clear.
+    const sentAttachmentIds = attachments.filter((a) => !a.processing && a.dataUrl).map((a) => a.id);
+
+    // Text clears immediately (typing during the wait must not merge into the old draft) and is
+    // restored on refusal ONLY if the composer is still empty — newer keystrokes win.
+    setInput('');
+
+    // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
+    // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
+    // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
+    // the latch still held): sending would re-key the new stream under the old conversation.
+    if (!(await prepareSendForMode(currentConversationId))) {
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      setInput((current) => (current === '' ? text : current));
+      return;
+    }
+    for (const id of sentAttachmentIds) removeFile(id);
+
+    // Client-minted id, parts-form send (PR 4 pattern): the `{text, files}` shorthand
+    // silently drops any id passed alongside it, so the message would push under an
+    // SDK-generated id the conversation cache never saw. Written to the cache
+    // immediately (optimistic) because the sender's own tab never receives its own
+    // chat:user_message broadcast back — this is what makes the bubble appear the
+    // same tick the user hits Send (leaf 5.2 acceptance).
+    const userMessage = buildUserMessage({
+      id: createId(),
+      text: text.trim().length > 0 ? text : undefined,
+      files: sendFiles,
+    }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, { body: requestBody })),
+      currentConversationId,
+      userMessage.id,
+    );
+    // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
+  };
+
+  // Voice mode: Send message from voice transcript
+  const handleVoiceSend = useCallback(async (text: string) => {
+    if (!text.trim() || !currentConversationId) return;
+
+    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
+    // with feedback, or the transcript would vanish silently.
+    if (!(await prepareSendForMode(currentConversationId))) {
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      return;
+    }
+
+    // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
+    const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
+    conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
+
+    // wrapSend handles pendingSend registration and cleanup when streaming starts
+    rollbackOptimisticSendOnFailure(
+      () => wrapSend(() => sendMessage(userMessage, { body: buildRequestBody() })),
+      currentConversationId,
+      userMessage.id,
+    );
+  }, [currentConversationId, sendMessage, buildRequestBody, wrapSend, prepareSendForMode]);
+
+  // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
+  // decided by whether the ask_user part sits on the conversation's LAST message, and
+  // remote edits/deletes/messages update the store, not useChat's local array.
+  // isConversationBusy replaces status==='ready'. Conversation-scoped effectiveIsStreaming,
+  // not isOwnSendLive: the latter includes raw useChat status, which stays true for the OLD
+  // conversation's still-in-flight request after a switch (PR 6 review, CodeRabbit) — that
+  // would incorrectly disable an answerable AskUser prompt in the conversation on screen now.
+  const askUserAnswering = useAnswerAskUser({
+    conversationId: currentConversationId,
+    renderedMessages,
+    isConversationBusy: effectiveIsStreaming,
+    setMessages,
+    addToolResult,
     wrapSend,
-    buildBody: buildAskUserAnswerBody,
+    buildBody: buildRequestBody,
+    // Answering re-invokes the chat — same cross-conversation handoff as every send path.
+    prepareSend: prepareSendForMode,
   });
 
-  // Track last AI response for voice mode TTS.
-  // voiceBaselineRef captures the last message ID when voice mode activates so pre-existing
-  // messages are never spoken — only genuinely new responses trigger TTS.
+  // Track last AI response for voice mode TTS (epic leaf 6.4 — baseline decision is
+  // now a shared pure helper; only the "activate once" ref bookkeeping stays here).
   useEffect(() => {
     if (!isVoiceModeActive) {
       voiceBaselineRef.current = undefined;
@@ -1146,34 +889,15 @@ const GlobalAssistantView: React.FC = () => {
     // activating voice mid-stream would leave the baseline unset and then silence
     // the in-flight response when it finishes.
     if (voiceBaselineRef.current === undefined) {
-      const assistantMsgs = plainMessages.filter((m) => m.role === 'assistant');
-      const lastOverallMsg = plainMessages[plainMessages.length - 1];
-      // During streaming the last overall message is the in-progress assistant reply;
-      // the baseline should be the previously-finalized message before it.
-      const streamingAssistantIdx =
-        isStreaming && lastOverallMsg?.role === 'assistant'
-          ? assistantMsgs.length - 1
-          : assistantMsgs.length;
-      const baselineMsg = assistantMsgs[streamingAssistantIdx - 1];
-      voiceBaselineRef.current = baselineMsg?.id ?? null;
+      voiceBaselineRef.current = selectVoiceActivationBaseline(renderedMessages);
       return;
     }
 
-    if (isStreaming) return;
+    const next = selectPostBaselineAssistantMessage(renderedMessages, voiceBaselineRef.current);
+    if (!next) return;
 
-    const lastAssistantMsg = [...plainMessages].reverse().find((m) => m.role === 'assistant');
-    if (!lastAssistantMsg) return;
-    const textParts = lastAssistantMsg.parts?.filter((p) => p.type === 'text') ?? [];
-    const text = textParts.map((p) => (p as { text: string }).text).join('');
-    if (!text.trim()) return;
-    if (lastAssistantMsg.id === voiceBaselineRef.current) return;
-
-    setLastAIResponse((current) =>
-      current?.id === lastAssistantMsg.id
-        ? current
-        : { id: lastAssistantMsg.id, text }
-    );
-  }, [plainMessages, isStreaming, isVoiceModeActive]);
+    setLastAIResponse((current) => (current?.id === next.id ? current : next));
+  }, [renderedMessages, isVoiceModeActive]);
 
   // Voice mode toggle handler
   const handleVoiceModeToggle = useCallback(() => {
@@ -1298,9 +1022,14 @@ const GlobalAssistantView: React.FC = () => {
         placeholder={selectedAgent ? `Ask ${selectedAgent.title}...` : 'Ask about your workspace...'}
         driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id}
         crossDrive={!selectedAgent}
-        error={error}
+        cause={errorCause}
         showError={showError}
-        onClearError={() => setShowError(false)}
+        onClearError={() => {
+          setShowError(false);
+          dismissError();
+        }}
+        onScrollNearTop={handleScrollNearTop}
+        isLoadingOlder={isLoadingOlder}
         welcomeTitle={
           selectedAgent
             ? `Chat with ${selectedAgent.title}`

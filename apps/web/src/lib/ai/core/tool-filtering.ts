@@ -252,26 +252,6 @@ export function filterToolsForWebSearch<T>(
 }
 
 /**
- * Combined tool filtering - applies both read-only and web search filters
- */
-export function filterTools<T>(
-  tools: Record<string, T>,
-  options: { isReadOnly?: boolean; webSearchEnabled?: boolean }
-): Record<string, T> {
-  let filtered = tools;
-
-  if (options.isReadOnly) {
-    filtered = filterToolsForReadOnly(filtered, true);
-  }
-
-  if (options.webSearchEnabled === false) {
-    filtered = filterToolsForWebSearch(filtered, false);
-  }
-
-  return filtered;
-}
-
-/**
  * Build the tool set for a Page AI request from a baseline tool registry.
  *
  * The popover toggles in the chat composer are the source of truth at request
@@ -287,66 +267,3 @@ export function buildPageAITools<T>(
   return filterToolsForWebSearch(afterReadOnly, options.webSearchEnabled);
 }
 
-/**
- * Get list of allowed tools for display purposes
- */
-export function getToolsSummary(isReadOnly: boolean, webSearchEnabled = true): {
-  allowed: string[];
-  denied: string[];
-} {
-  const allTools = [
-    // Read tools
-    'list_drive_members',
-    'list_collaborators',
-    'list_drive_roles',
-    'get_drive_role',
-    'list_drives',
-    'list_pages',
-    'read_page',
-    'list_trash',
-    'list_conversations',
-    'read_conversation',
-    'list_agents',
-    'multi_drive_list_agents',
-    'get_activity',
-    'get_assigned_tasks',
-    // Calendar read tools
-    'list_calendar_events',
-    'get_calendar_event',
-    'check_calendar_availability',
-    // Search tools
-    'regex_search',
-    'glob_search',
-    'multi_drive_search',
-    'web_search',
-    'web_fetch',
-    // Agent communication
-    'ask_agent',
-    // Model catalog (read-only)
-    'list_models',
-    // Command read
-    'list_commands',
-    // Workflow read
-    'list_workflows',
-    // Write tools
-    ...Array.from(WRITE_TOOLS),
-  ];
-
-  if (!isReadOnly && webSearchEnabled) {
-    return { allowed: allTools, denied: [] };
-  }
-
-  const allowed = allTools.filter((name) => {
-    if (isReadOnly && isWriteTool(name)) return false;
-    if (!webSearchEnabled && isWebSearchTool(name)) return false;
-    return true;
-  });
-
-  const denied = allTools.filter((name) => {
-    if (isReadOnly && isWriteTool(name)) return true;
-    if (!webSearchEnabled && isWebSearchTool(name)) return true;
-    return false;
-  });
-
-  return { allowed, denied };
-}

@@ -26,6 +26,7 @@ export type { MachinePageSummary, DriveMachineGroup };
 function buildMachineListDeps(): MachineListDeps {
   return {
     findMachinePagesInDrive: async (driveId) => {
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       const rows = await db.query.pages.findMany({
         // Covered by the pages_drive_id_is_trashed_type_idx index.
         where: and(

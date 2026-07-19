@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/nextjs";
-import { getSentryOptions } from "./src/lib/sentry/config";
+import { getSentryOptions } from "@pagespace/lib/observability/sentry-env";
 
 Sentry.init(getSentryOptions({
   nodeEnv: process.env.NODE_ENV,

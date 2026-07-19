@@ -7,5 +7,3 @@ export const ZOOM_TRIGGER_EVENT_TYPES = [
   'recording.transcript_completed',
   'recording.completed',
 ] as const;
-
-export type ZoomTriggerEventType = (typeof ZOOM_TRIGGER_EVENT_TYPES)[number];

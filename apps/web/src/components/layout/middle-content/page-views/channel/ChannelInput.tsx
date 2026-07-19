@@ -417,5 +417,3 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
 );
 
 ChannelInput.displayName = 'ChannelInput';
-
-export default ChannelInput;

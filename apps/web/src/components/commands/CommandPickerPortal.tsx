@@ -118,5 +118,3 @@ export function CommandPickerPortal({
     document.body
   );
 }
-
-export default CommandPickerPortal;
