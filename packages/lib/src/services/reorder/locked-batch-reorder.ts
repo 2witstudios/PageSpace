@@ -13,6 +13,15 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
   positionColumn: AnyPgColumn;
   scopeWhere: SQL;
   plan: ReorderPlan;
+  /**
+   * Columns to stamp with the current time on every updated row (e.g. an
+   * `updatedAt` column driven by Drizzle's `$onUpdate`). `$onUpdate` only
+   * fires through Drizzle's query builder, never through a raw `execute`, so
+   * without this a caller switching from `tx.update(...).set(...)` to this
+   * primitive would silently stop refreshing those columns. Optional: tables
+   * with no such column (e.g. `favorites`, which has no `updatedAt`) omit it.
+   */
+  touchColumns?: AnyPgColumn[];
 }
 
 /**
@@ -32,7 +41,7 @@ export async function lockedBatchReorder<T extends PgTable>(
   tx: Tx,
   opts: LockedBatchReorderOptions<T>
 ): Promise<void> {
-  const { table, idColumn, positionColumn, scopeWhere, plan } = opts;
+  const { table, idColumn, positionColumn, scopeWhere, plan, touchColumns = [] } = opts;
 
   if (plan.orderedIds.length === 0) {
     return;
@@ -52,9 +61,17 @@ export async function lockedBatchReorder<T extends PgTable>(
     sql`, `
   );
 
+  const setAssignments = sql.join(
+    [
+      sql`${sql.identifier(positionColumn.name)} = v.position`,
+      ...touchColumns.map((column) => sql`${sql.identifier(column.name)} = now()`),
+    ],
+    sql`, `
+  );
+
   await tx.execute(sql`
     UPDATE ${table}
-    SET ${sql.identifier(positionColumn.name)} = v.position
+    SET ${setAssignments}
     FROM (VALUES ${values}) AS v(id, position)
     WHERE ${idColumn} = v.id AND ${scopeWhere}
   `);

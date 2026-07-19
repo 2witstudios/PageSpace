@@ -151,4 +151,70 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
     const matchesPlanTwo = bPos === 201 && cPos === 202;
     expect(matchesPlanOne || matchesPlanTwo).toBe(true);
   });
+
+  it('stamps touchColumns with the current time, bypassing nothing Drizzle would have set', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const stale = new Date('2020-01-01T00:00:00Z');
+    const roles = await db
+      .insert(driveRoles)
+      .values([
+        { driveId: drive.id, name: 'role-x', permissions: {}, position: 0, updatedAt: stale },
+        { driveId: drive.id, name: 'role-y', permissions: {}, position: 1, updatedAt: stale },
+      ])
+      .returning();
+
+    const plan = computeReorderPlan([
+      { id: roles[0].id, position: 5 },
+      { id: roles[1].id, position: 6 },
+    ]);
+
+    const before = Date.now();
+    await db.transaction(async (tx) => {
+      await lockedBatchReorder(tx, {
+        table: driveRoles,
+        idColumn: driveRoles.id,
+        positionColumn: driveRoles.position,
+        scopeWhere: eq(driveRoles.driveId, drive.id),
+        plan,
+        touchColumns: [driveRoles.updatedAt],
+      });
+    });
+
+    const updated = await db.select().from(driveRoles).where(eq(driveRoles.driveId, drive.id));
+    for (const role of updated) {
+      expect(role.updatedAt.getTime()).toBeGreaterThan(stale.getTime());
+      expect(role.updatedAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    }
+  });
+
+  it('leaves touchColumns untouched (and thus stale) when the caller opts out', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const stale = new Date('2020-01-01T00:00:00Z');
+    const role = (
+      await db
+        .insert(driveRoles)
+        .values([{ driveId: drive.id, name: 'role-z', permissions: {}, position: 0, updatedAt: stale }])
+        .returning()
+    )[0];
+
+    const plan = computeReorderPlan([{ id: role.id, position: 9 }]);
+
+    await db.transaction(async (tx) => {
+      await lockedBatchReorder(tx, {
+        table: driveRoles,
+        idColumn: driveRoles.id,
+        positionColumn: driveRoles.position,
+        scopeWhere: eq(driveRoles.driveId, drive.id),
+        plan,
+      });
+    });
+
+    const [updated] = await db.select().from(driveRoles).where(eq(driveRoles.id, role.id));
+    expect(updated.position).toBe(9);
+    expect(updated.updatedAt.getTime()).toBe(stale.getTime());
+  });
 });
