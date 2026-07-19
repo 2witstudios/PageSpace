@@ -86,6 +86,7 @@ export async function validateAgentTrigger(
   }
 
   if (contextPageIds.length > 0) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const validPages = await database.query.pages.findMany({
       where: and(
         inArray(pages.id, contextPageIds),

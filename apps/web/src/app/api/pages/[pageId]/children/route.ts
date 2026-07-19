@@ -26,6 +26,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   try {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const children = await db.query.pages.findMany({
       where: and(
         eq(pages.parentId, pageId),

@@ -156,6 +156,7 @@ export async function GET(request: Request) {
     }
 
     // First, get all task list pages in the accessible drives
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     let taskListPages = await db.query.pages.findMany({
       where: and(
         eq(pages.type, 'TASK_LIST'),
@@ -193,6 +194,7 @@ export async function GET(request: Request) {
     }
 
     // Get task lists for status config lookup only (task membership is now via pages.parentId)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const taskListsForConfigs = await db.query.taskLists.findMany({
       where: inArray(taskLists.pageId, taskListPageIds),
       columns: { id: true, pageId: true },
@@ -205,6 +207,7 @@ export async function GET(request: Request) {
 
     // Fetch status configs, keyed by the task list PAGE ID (not the taskList row ID)
     const statusConfigRows = taskListsForConfigs.length > 0
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       ? await db.query.taskStatusConfigs.findMany({
           where: inArray(taskStatusConfigs.taskListId, taskListsForConfigs.map(tl => tl.id)),
         })

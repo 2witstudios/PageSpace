@@ -30,6 +30,7 @@ export async function GET(request: Request) {
     const now = new Date();
 
     // Find all active connections that are due for sync (filtering in SQL)
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const dueConnections = await db.query.googleCalendarConnections.findMany({
       where: and(
         eq(googleCalendarConnections.status, 'active'),

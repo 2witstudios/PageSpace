@@ -410,6 +410,7 @@ export const pageReadTools = {
           // Resolve available statuses for this task list. Falls back to
           // documented defaults when no custom configs are present so the
           // AI always sees a concrete list.
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const statusConfigs = await db.query.taskStatusConfigs.findMany({
             where: eq(taskStatusConfigs.taskListId, taskList.id),
             orderBy: [asc(taskStatusConfigs.position)],
@@ -572,6 +573,7 @@ export const pageReadTools = {
 
         // Handle CHANNEL pages - return message transcript (lineStart/lineEnd map to message numbers)
         if (page.type === 'CHANNEL') {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const messagesRaw = await db.query.channelMessages.findMany({
             where: and(
               eq(channelMessages.pageId, page.id),
@@ -1188,6 +1190,7 @@ export const pageReadTools = {
 
         const sourceAgentMap = new Map<string, string>();
         if (uniqueSourceAgentIds.length > 0) {
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const sourceAgents = await db.query.pages.findMany({
             where: inArray(pages.id, uniqueSourceAgentIds),
             columns: { id: true, title: true },

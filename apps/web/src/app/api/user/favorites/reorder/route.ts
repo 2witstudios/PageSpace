@@ -24,6 +24,7 @@ export async function PATCH(req: Request) {
     }
 
     // Verify all favorites belong to this user
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const userFavorites = await db.query.favorites.findMany({
       where: and(eq(favorites.userId, userId), inArray(favorites.id, orderedIds)),
       columns: { id: true },
