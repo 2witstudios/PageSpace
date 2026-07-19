@@ -44,3 +44,14 @@ export function parseTaskQuerySpec(params: URLSearchParams): TaskQuerySpec {
     offset,
   };
 }
+
+/**
+ * Escapes ILIKE wildcard/escape characters (`%`, `_`, `\`) in a search term so it
+ * matches as a literal substring. Postgres's default LIKE/ILIKE escape character is
+ * backslash — without this, a search term containing one of these characters (e.g.
+ * a task titled "50% off") would be interpreted as a pattern, not literal text,
+ * silently over- or under-matching against the bounded query's ilike(pages.title, ...).
+ */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}

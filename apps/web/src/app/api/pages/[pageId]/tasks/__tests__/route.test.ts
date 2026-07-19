@@ -182,7 +182,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { db } from '@pagespace/db/db';
-import { inArray } from '@pagespace/db/operators';
+import { inArray, ilike } from '@pagespace/db/operators';
 import { broadcastTaskEvent } from '@/lib/websocket';
 
 const assert = ({ given, should, actual, expected }: {
@@ -508,6 +508,22 @@ describe('Task API Routes', () => {
       expect(response.status).toBe(200);
       expect(body.tasks).toHaveLength(1);
       expect(body.tasks[0].title).toBe('Buy groceries');
+    });
+
+    it('escapes LIKE metacharacters in the search term before building the ilike pattern (regression: over-matching fix)', async () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
+
+      // A task titled "100% done" contains a literal '%' — if it reaches ilike()
+      // unescaped, Postgres reads it as a wildcard instead of a literal character.
+      const response = await GET(createRequest(`?search=${encodeURIComponent('100% done')}`), { params: mockParams });
+
+      expect(response.status).toBe(200);
+      expect(vi.mocked(ilike).mock.calls[0]?.[1]).toBe('%100\\% done%');
     });
 
     it('caps the result to the requested limit and hydrates only the bounded ids (regression: OOM crash fix)', async () => {

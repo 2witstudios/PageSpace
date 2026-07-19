@@ -16,7 +16,7 @@ import { computeHasContent } from './task-utils';
 import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
-import { parseTaskQuerySpec } from './query-spec';
+import { parseTaskQuerySpec, escapeLikePattern } from './query-spec';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -155,7 +155,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       inArray(taskItems.pageId, childPageIds),
       status ? eq(taskItems.status, status) : undefined,
       assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
-      search ? ilike(pages.title, `%${search}%`) : undefined,
+      search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
     ))
     .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr))
     .limit(limit)
