@@ -17,21 +17,20 @@ setupErrorHandlers(async (error) => {
   await Sentry.flush(2000)
 })
 
-const PORT = parseInt(process.env.CONTROL_PLANE_PORT || '3010', 10)
-
-if (Number.isNaN(PORT) || PORT < 1 || PORT > 65535) {
-  console.error(`Invalid CONTROL_PLANE_PORT: ${process.env.CONTROL_PLANE_PORT}`)
+// The explicit process.exit(1) paths below (bad config, DB connect failure,
+// listen failure) are the most common real-world startup failures — but they
+// exit directly rather than throwing, so setupErrorHandlers' uncaughtException
+// listener never sees them. Report + flush here too, or the "first-ever crash
+// visibility" this PR adds would miss exactly the failures ops hits most.
+async function reportFatalAndExit(message: string, error?: unknown): Promise<never> {
+  console.error(message, error ?? '')
+  Sentry.captureException(error instanceof Error ? error : new Error(message))
+  await Sentry.flush(2000)
   process.exit(1)
 }
 
-const DATABASE_URL = process.env.CONTROL_PLANE_DATABASE_URL
-if (!DATABASE_URL) {
-  console.error('CONTROL_PLANE_DATABASE_URL is required')
-  process.exit(1)
-}
-
-async function start() {
-  const sql = postgres(DATABASE_URL!)
+async function start(PORT: number, DATABASE_URL: string) {
+  const sql = postgres(DATABASE_URL)
   const db = drizzle(sql)
   const repo = createTenantRepository(db as unknown as TenantDb)
   const executor = createShellExecutor()
@@ -118,7 +117,20 @@ async function start() {
   console.log(`Control plane listening on port ${PORT}`)
 }
 
-start().catch((err) => {
-  console.error('Failed to start control plane:', err)
-  process.exit(1)
-})
+async function main() {
+  const PORT = parseInt(process.env.CONTROL_PLANE_PORT || '3010', 10)
+  if (Number.isNaN(PORT) || PORT < 1 || PORT > 65535) {
+    await reportFatalAndExit(`Invalid CONTROL_PLANE_PORT: ${process.env.CONTROL_PLANE_PORT}`)
+    return
+  }
+
+  const DATABASE_URL = process.env.CONTROL_PLANE_DATABASE_URL
+  if (!DATABASE_URL) {
+    await reportFatalAndExit('CONTROL_PLANE_DATABASE_URL is required')
+    return
+  }
+
+  await start(PORT, DATABASE_URL)
+}
+
+main().catch((err) => reportFatalAndExit('Failed to start control plane:', err))

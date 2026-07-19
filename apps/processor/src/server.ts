@@ -450,6 +450,13 @@ async function start() {
 
   } catch (error) {
     console.error('Failed to start processor service:', error);
+    // This explicit exit path (bad config, DB/queue init failure) is the most
+    // common real-world startup failure — but it exits directly rather than
+    // throwing, so setupErrorHandlers' uncaughtException listener never sees
+    // it. Report + flush here too, or "first-ever crash visibility" misses
+    // exactly the failures ops hits most.
+    Sentry.captureException(error);
+    await Sentry.flush(2000);
     process.exit(1);
   }
 }
