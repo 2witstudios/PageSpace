@@ -12,13 +12,10 @@ export { CompactToolRunGroup } from './CompactToolRunGroup';
 
 // Task renderers
 export { TaskRenderer } from './TaskRenderer';
-export { TaskManagementRenderer } from './TaskManagementRenderer';
-export { CompactTaskManagementRenderer } from './CompactTaskManagementRenderer';
 
 // Content renderers
 export { RichContentRenderer } from './RichContentRenderer';
 export { RichDiffRenderer } from './RichDiffRenderer';
-export { DocumentRenderer } from './DocumentRenderer';
 
 // List renderers
 export { PageTreeRenderer } from './PageTreeRenderer';
@@ -49,6 +46,3 @@ export { WorkflowListRenderer } from './workflow/WorkflowListRenderer';
 
 // Tool renderer registry
 export { toolRenderers, renderToolContent, SPECIAL_HANDLED_TOOLS } from './registry';
-
-// Legacy (prefer PageTreeRenderer)
-export { FileTreeRenderer } from './FileTreeRenderer';

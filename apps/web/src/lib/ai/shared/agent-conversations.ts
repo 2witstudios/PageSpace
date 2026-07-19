@@ -89,17 +89,6 @@ export async function fetchAgentConversationMessages(
   };
 }
 
-/**
- * @deprecated Use fetchAgentConversationMessages with options instead
- */
-export async function fetchAgentConversationMessagesLegacy(
-  agentId: string,
-  conversationId: string
-): Promise<UIMessage[]> {
-  const result = await fetchAgentConversationMessages(agentId, conversationId);
-  return result.messages;
-}
-
 export async function fetchMostRecentAgentConversation(
   agentId: string
 ): Promise<AgentConversationSummary | null> {

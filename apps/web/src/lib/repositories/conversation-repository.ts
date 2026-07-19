@@ -441,5 +441,3 @@ export const conversationRepository = {
     await db.insert(userActivities).values(activity);
   },
 };
-
-export type ConversationRepository = typeof conversationRepository;

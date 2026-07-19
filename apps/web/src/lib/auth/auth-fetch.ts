@@ -1180,11 +1180,5 @@ export const warmSessionCache = (token: string) =>
 export const refreshAuthSession = () =>
   getAuthFetch().refreshAuthSession();
 
-export const isSystemSuspended = () =>
-  getAuthFetch().isSystemSuspended();
-
 export const getCachedCSRFToken = () =>
   getAuthFetch().getCachedCSRFToken();
-
-export const getSuspendTime = () =>
-  getAuthFetch().getSuspendTime();

@@ -33,10 +33,6 @@ export function getMachineIdentifier(): string {
   }
 }
 
-export function getCachedSession(): StoredAuthSession | null | undefined {
-  return cachedSession;
-}
-
 export async function getOrLoadSession(): Promise<StoredAuthSession | null> {
   if (cachedSession === undefined) {
     await preloadAuthSession();

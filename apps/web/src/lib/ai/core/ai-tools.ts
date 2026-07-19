@@ -120,8 +120,6 @@ export function buildPageSpaceTools({
 
 export const pageSpaceTools = buildPageSpaceTools();
 
-export type PageSpaceTools = typeof pageSpaceTools;
-
 export const corePageSpaceTools = Object.fromEntries(
   Object.entries(pageSpaceTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
 );

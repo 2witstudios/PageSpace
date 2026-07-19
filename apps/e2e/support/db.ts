@@ -6,7 +6,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
-import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
@@ -221,39 +221,6 @@ export async function seedChatPage(userId: string, driveId: string): Promise<See
     startedAt: new Date(Date.now() - 60_000),
   });
   return { pageId, conversationA, conversationB };
-}
-
-/**
- * Seed history into the UNIFIED `messages` table (the global assistant's store), so
- * GlobalAssistantView specs have something to render. Pair with `createGlobalConversation`.
- */
-export async function seedConversationMessages(
-  conversationId: string,
-  userId: string,
-  msgs: { role: 'user' | 'assistant'; content: string }[],
-): Promise<void> {
-  if (msgs.length === 0) return;
-
-  const startedAt = Date.now() - msgs.length * 1000;
-  for (let i = 0; i < msgs.length; i++) {
-    await db.insert(messages).values({
-      conversationId,
-      userId,
-      role: msgs[i].role,
-      content: msgs[i].content,
-      createdAt: new Date(startedAt + i * 1000),
-    });
-  }
-  // Exactly the last message's own createdAt — matching seedChatConversation. Using
-  // `startedAt + msgs.length * 1000` would land a second PAST the last message, which is
-  // `Date.now()` however the messages were staggered: every seeded conversation's
-  // lastMessageAt would then cluster at "now" and the recency ordering that the staggered
-  // timestamps exist to create would be lost.
-  const lastMessageAt = new Date(startedAt + (msgs.length - 1) * 1000);
-  await db
-    .update(conversations)
-    .set({ lastMessageAt })
-    .where(eq(conversations.id, conversationId));
 }
 
 /** Create a global conversation owned by the user (for /api/ai/global/[id]/messages). */

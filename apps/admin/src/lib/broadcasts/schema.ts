@@ -39,8 +39,6 @@ export const audienceDefinitionSchema = z
     }
   });
 
-export type AudienceDefinitionInput = z.infer<typeof audienceDefinitionSchema>;
-
 /**
  * POST /api/admin/broadcasts body.
  *
@@ -127,8 +125,6 @@ export const broadcastActionSchema = z.object({
   reason: z.string().trim().min(1, 'A reason is required').max(500),
 });
 
-export type BroadcastActionInput = z.infer<typeof broadcastActionSchema>;
-
 /** POST /api/admin/broadcasts/templates body. */
 export const templateCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -136,5 +132,3 @@ export const templateCreateSchema = z.object({
   bodyMarkdown: z.string().trim().min(1).max(100000),
   isActive: z.boolean().default(true),
 });
-
-export type TemplateCreateInput = z.infer<typeof templateCreateSchema>;

@@ -3,8 +3,6 @@
  * @see https://schema.org/
  * @see https://developers.google.com/search/docs/appearance/structured-data
  */
-import { MONTHLY_CREDITS } from "./credits";
-
 // In development, set NEXT_PUBLIC_MARKETING_URL and NEXT_PUBLIC_APP_URL to distinct local origins
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
@@ -68,115 +66,6 @@ export const webApplicationSchema = {
 };
 
 /**
- * Product schema with pricing offers
- */
-export const productSchema = {
-  "@context": "https://schema.org",
-  "@type": "Product",
-  name: "PageSpace",
-  description:
-    "AI-powered unified workspace for documents, tasks, calendar, and team collaboration.",
-  brand: {
-    "@type": "Brand",
-    name: "PageSpace",
-  },
-  image: `${SITE_URL}/og-image.png`,
-  offers: [
-    {
-      "@type": "Offer",
-      name: "Free",
-      price: "0",
-      priceCurrency: "USD",
-      description: `500MB storage, ${MONTHLY_CREDITS.free}/month in credits, standard models`,
-      availability: "https://schema.org/InStock",
-    },
-    {
-      "@type": "Offer",
-      name: "Pro",
-      price: "15",
-      priceCurrency: "USD",
-      priceSpecification: {
-        "@type": "UnitPriceSpecification",
-        price: "15",
-        priceCurrency: "USD",
-        billingDuration: "P1M",
-      },
-      description: `2GB storage, ${MONTHLY_CREDITS.pro}/month in credits, standard and Pro models`,
-      availability: "https://schema.org/InStock",
-    },
-    {
-      "@type": "Offer",
-      name: "Founder",
-      price: "50",
-      priceCurrency: "USD",
-      priceSpecification: {
-        "@type": "UnitPriceSpecification",
-        price: "50",
-        priceCurrency: "USD",
-        billingDuration: "P1M",
-      },
-      description: `10GB storage, ${MONTHLY_CREDITS.founder}/month in credits, standard and Pro models`,
-      availability: "https://schema.org/InStock",
-    },
-    {
-      "@type": "Offer",
-      name: "Business",
-      price: "100",
-      priceCurrency: "USD",
-      priceSpecification: {
-        "@type": "UnitPriceSpecification",
-        price: "100",
-        priceCurrency: "USD",
-        billingDuration: "P1M",
-      },
-      description: `50GB storage, ${MONTHLY_CREDITS.business}/month in credits, standard and Pro models`,
-      availability: "https://schema.org/InStock",
-    },
-  ],
-};
-
-/**
- * SoftwareApplication schema for downloads page
- */
-export const softwareApplicationSchema = {
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  name: "PageSpace",
-  applicationCategory: "ProductivityApplication",
-  operatingSystem: "macOS, Windows, Linux, iOS, Android",
-  softwareVersion: SOFTWARE_VERSION,
-  offers: {
-    "@type": "Offer",
-    price: "0",
-    priceCurrency: "USD",
-  },
-  author: organizationRef,
-};
-
-/**
- * FAQ schema - for FAQ page
- */
-export interface FAQItem {
-  question: string;
-  answer: string;
-}
-
-export function createFAQSchema(faqs: FAQItem[]) {
-  return {
-    "@context": "https://schema.org",
-    "@type": "FAQPage",
-    mainEntity: faqs.map((faq) => ({
-      "@type": "Question",
-      name: faq.question,
-      acceptedAnswer: {
-        "@type": "Answer",
-        text: faq.answer,
-      },
-    })),
-  };
-}
-
-/**
  * Article schema - for blog posts
  */
 export interface ArticleData {
@@ -208,27 +97,6 @@ export function createArticleSchema(article: ArticleData) {
       "@type": "WebPage",
       "@id": `${SITE_URL}/blog/${article.slug}`,
     },
-  };
-}
-
-/**
- * BreadcrumbList schema - for navigation
- */
-export interface BreadcrumbItem {
-  name: string;
-  path: string;
-}
-
-export function createBreadcrumbSchema(items: BreadcrumbItem[]) {
-  return {
-    "@context": "https://schema.org",
-    "@type": "BreadcrumbList",
-    itemListElement: items.map((item, index) => ({
-      "@type": "ListItem",
-      position: index + 1,
-      name: item.name,
-      item: `${SITE_URL}${item.path}`,
-    })),
   };
 }
 

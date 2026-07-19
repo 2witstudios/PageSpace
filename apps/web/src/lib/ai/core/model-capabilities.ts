@@ -213,26 +213,6 @@ export async function hasToolCapability(model: string, provider: string): Promis
   return true;
 }
 
-/**
- * Get suggested tool-capable models for fallback
- * @param provider - Current provider
- * @returns Array of model suggestions
- */
-export function getSuggestedToolCapableModels(provider: string): string[] {
-  switch (provider) {
-    case 'ollama':
-      return ['llama3.1:8b', 'qwen2.5:7b', 'mistral:7b'];
-    case 'google':
-      return ['google/gemini-3.5-flash', 'google/gemini-2.5-flash'];
-    case 'openai':
-      return ['openai/gpt-5.4-mini', 'openai/gpt-4.1-mini'];
-    case 'anthropic':
-      return ['anthropic/claude-haiku-4.5', 'anthropic/claude-sonnet-4.6'];
-    default:
-      return ['openai/gpt-5.3-chat', 'anthropic/claude-haiku-4.5', 'google/gemini-3.5-flash'];
-  }
-}
-
 // Known reasoning model bare IDs for non-OpenRouter providers (e.g. direct openai).
 // These models reject the temperature parameter entirely.
 const NON_TEMPERATURE_MODELS = new Set([

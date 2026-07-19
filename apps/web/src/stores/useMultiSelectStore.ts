@@ -108,8 +108,3 @@ export const useMultiSelectStore = create<MultiSelectState>((set, get) => ({
     return Array.from(get().selectedPages.values());
   },
 }));
-
-// Selector helpers for performance
-export const selectIsMultiSelectMode = (state: MultiSelectState) => state.isMultiSelectMode;
-export const selectActiveDriveId = (state: MultiSelectState) => state.activeDriveId;
-export const selectSelectedCount = (state: MultiSelectState) => state.selectedPages.size;

@@ -151,5 +151,3 @@ export function VoiceModeSettings() {
     </Card>
   );
 }
-
-export default VoiceModeSettings;
