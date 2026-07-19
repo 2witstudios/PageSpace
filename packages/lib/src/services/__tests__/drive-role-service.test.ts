@@ -45,6 +45,14 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   asc: vi.fn((a) => ({ op: 'asc', a })),
+  inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  sql: Object.assign(
+    vi.fn((strings: unknown, ...values: unknown[]) => ({ strings, values })),
+    {
+      join: vi.fn((parts: unknown[], sep: unknown) => ({ parts, sep })),
+      identifier: vi.fn((name: string) => ({ identifier: name })),
+    }
+  ),
 }));
 
 import { db } from '@pagespace/db/db';
@@ -114,14 +122,17 @@ function makeTx(
       returning: vi.fn().mockResolvedValue(insertResult ?? []),
     }),
   }));
-  return {
-    select: vi.fn(() => ({
-      from: vi.fn(() => ({
-        where: vi.fn(() => selectWhereChain),
-      })),
+  const selectMock = vi.fn(() => ({
+    from: vi.fn(() => ({
+      where: vi.fn(() => selectWhereChain),
     })),
+  }));
+  const executeMock = vi.fn().mockResolvedValue(undefined);
+  return {
+    select: selectMock,
     update: updateMock,
     insert: insertMock,
+    execute: executeMock,
     forMock,
     orderByMock,
   };
@@ -446,20 +457,47 @@ describe('drive-role-service', () => {
       mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
       await expect(reorderDriveRoles('drive-1', ['r1', 'r3'])).rejects.toThrow('Invalid role IDs');
+      // Invalid-id rejection short-circuits before the batched write is ever attempted.
+      expect(tx.execute).not.toHaveBeenCalled();
     });
 
-    it('should update positions in transaction, taking the ordered drive-wide lock', async () => {
+    it('should write positions as a single batched statement instead of N sequential updates', async () => {
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await expect(reorderDriveRoles('drive-1', ['r2', 'r1'])).resolves.toBeUndefined();
+      expect(tx.execute).toHaveBeenCalledTimes(1);
+      // No more per-row tx.update(...).set(...).where(...) calls for the write.
+      expect(tx.update).not.toHaveBeenCalled();
+    });
+
+    it('should take the ordered drive-wide lock (lockDriveRolesInOrder) before lockedBatchReorder batches the write', async () => {
       // Locking the drive's role rows in id order before writing positions
       // avoids a deadlock against a concurrent updateDriveRole isDefault
       // switch, which locks in the same order (see lockDriveRolesInOrder).
-      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }], [undefined, undefined]);
+      // lockedBatchReorder then re-locks (harmlessly, same tx) only the
+      // targeted rows before its own batched write — hence two orderBy/for
+      // ('update') pairs instead of one.
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
       mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
-      // void function — verifying it resolves without error is the contract
-      await expect(reorderDriveRoles('drive-1', ['r2', 'r1'])).resolves.toBeUndefined();
-      expect(tx.orderByMock).toHaveBeenCalledTimes(1);
+      await reorderDriveRoles('drive-1', ['r2', 'r1']);
+
+      expect(tx.orderByMock).toHaveBeenCalledTimes(2);
       expect(tx.forMock).toHaveBeenCalledWith('update');
-      expect(tx.update).toHaveBeenCalledTimes(2);
+      const firstSelectOrder = tx.select.mock.invocationCallOrder[0];
+      const executeOrder = tx.execute.mock.invocationCallOrder[0];
+      expect(firstSelectOrder).toBeLessThan(executeOrder);
+    });
+
+    it('should no-op on an empty roleIds array without touching the batched write', async () => {
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await expect(reorderDriveRoles('drive-1', [])).resolves.toBeUndefined();
+      // Still takes the drive-wide lock (validation), but skips the batched write entirely.
+      expect(tx.orderByMock).toHaveBeenCalledTimes(1);
+      expect(tx.execute).not.toHaveBeenCalled();
     });
   });
 
