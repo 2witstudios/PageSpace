@@ -17,6 +17,14 @@ const compat = new FlatCompat({
 // > Property[key.name='limit'])` only matches a `limit` that is a DIRECT key of that options
 // object — a `limit` nested inside a `with: { children: { limit } }` relation, or anywhere else
 // in the subtree, does not falsely satisfy the root query's own boundedness.
+//
+// Known limitation: this is a syntactic AST pattern, not a type-aware check, so it only
+// catches the call written out as `<handle>.query.<table>.findMany(...)` at the call site.
+// Aliasing the query object first (`const q = db.query.taskItems; q.findMany(...)`) evades
+// it, the same way the original `db`-only selector missed `tx`/`database` until reviewed.
+// If that pattern shows up in practice, the durable fix is a typed wrapper in packages/db
+// that makes `limit` a required parameter — immune to call-shape variation entirely — not
+// another AST special case here.
 const unboundedFindManyRule = {
   selector:
     "CallExpression[callee.property.name='findMany'][callee.object.object.property.name='query']:not(:has(ObjectExpression.arguments > Property[key.name='limit']))",
