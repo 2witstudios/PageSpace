@@ -842,6 +842,35 @@ describe('POST /api/stripe/webhook', () => {
       expect(response.status).toBe(200);
       expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
     });
+
+    it('still acks 200 (funding already committed) when the refilled-user lookup for the receipt throws', async () => {
+      // First select is handleInvoicePaid's own user lookup (inside withFundingRetry);
+      // second is the post-funding refilled-user lookup that feeds the receipt send.
+      mockSelectLimit
+        .mockResolvedValueOnce([mockUser()])
+        .mockRejectedValueOnce(new Error('pool timeout'));
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // A failure in the post-commit receipt lookup must NOT escape to the outer
+      // catch: that would mark the event processedAt/error and make a Stripe
+      // redelivery classify as duplicate-ack, permanently skipping the receipt even
+      // though funding already succeeded.
+      expect(response.status).toBe(200);
+      expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Could not look up refilled user for subscription receipt',
+        expect.objectContaining({ eventId: event.id }),
+      );
+    });
   });
 
   describe('Checkout Session Events', () => {
@@ -1030,6 +1059,36 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(mockSendTopupReceiptEmail).not.toHaveBeenCalled();
+    });
+
+    it('still acks 200 (funding already committed) when the buyer lookup for the receipt throws', async () => {
+      mockSelectLimit.mockRejectedValueOnce(new Error('pool timeout'));
+      const session = mockCheckoutSession({
+        mode: 'payment',
+        customerEmail: 'buyer@example.com',
+        metadata: { kind: 'credit_pack', packId: 'pack_25', packCents: '2500', userId: 'user_123' },
+      });
+      const event = mockStripeEvent('checkout.session.completed', session);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      // Same protection as the invoice.paid path: a failure in the post-commit
+      // buyer lookup must not escape to the outer catch and mark the event
+      // processed-with-error, or a Stripe redelivery would permanently skip the
+      // receipt (duplicate-ack) even though funding already succeeded.
+      expect(response.status).toBe(200);
+      expect(mockSendTopupReceiptEmail).not.toHaveBeenCalled();
+      expect(loggers.api.warn).toHaveBeenCalledWith(
+        'Could not look up buyer for top-up receipt',
+        expect.objectContaining({ eventId: event.id }),
+      );
     });
   });
 

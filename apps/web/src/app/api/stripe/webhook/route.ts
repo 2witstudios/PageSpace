@@ -161,6 +161,11 @@ export async function POST(request: NextRequest) {
           // Push the buyer's new balance to their open tabs so the top-up appears
           // live, and send a payment receipt. Both best-effort, post-commit; never
           // block the webhook ack (see sendTopupReceiptEmail's own try/catch).
+          // The whole block is wrapped in its own try/catch: this runs AFTER funding
+          // already committed, so a failure here (e.g. the name lookup) must never
+          // escape to the outer catch — that would mark the event processedAt/error
+          // and make a Stripe redelivery classify as duplicate-ack, permanently
+          // skipping the receipt with no retry path even though funding succeeded.
           if (
             session.mode === 'payment' &&
             session.metadata?.kind === 'credit_pack' &&
@@ -168,20 +173,27 @@ export async function POST(request: NextRequest) {
           ) {
             void emitCreditsUpdated(session.metadata.userId);
 
-            const buyerEmail = session.customer_details?.email;
-            if (buyerEmail) {
-              const packLabel = getCreditPack(session.metadata.packId ?? '')?.label ?? 'Credit top-up';
-              const buyer = await db
-                .select({ name: users.name })
-                .from(users)
-                .where(eq(users.id, session.metadata.userId))
-                .limit(1);
-              void sendTopupReceiptEmail({
-                session,
-                packLabel,
-                email: buyerEmail,
-                userName: buyer[0]?.name ?? 'there',
+            try {
+              const buyerEmail = session.customer_details?.email;
+              if (buyerEmail) {
+                const packLabel = getCreditPack(session.metadata.packId ?? '')?.label ?? 'Credit top-up';
+                const buyer = await db
+                  .select({ name: users.name })
+                  .from(users)
+                  .where(eq(users.id, session.metadata.userId))
+                  .limit(1);
+                void sendTopupReceiptEmail({
+                  session,
+                  packLabel,
+                  email: buyerEmail,
+                  userName: buyer[0]?.name ?? 'there',
+                  eventId: event.id,
+                });
+              }
+            } catch (error) {
+              loggers.api.warn('Could not look up buyer for top-up receipt', {
                 eventId: event.id,
+                error: error instanceof Error ? error.message : String(error),
               });
             }
           }
@@ -206,7 +218,11 @@ export async function POST(request: NextRequest) {
           // never affect funding that already succeeded (see
           // sendSubscriptionReceiptEmail's own try/catch) or force a Stripe retry.
           // Skipped for $0 invoices (proration/trial) — nothing to receipt.
-          {
+          // The lookup itself is also wrapped: it runs AFTER funding already
+          // committed, so letting it escape to the outer catch would mark the event
+          // processedAt/error and make a Stripe redelivery classify as duplicate-ack,
+          // permanently skipping the receipt with no retry path.
+          try {
             const customerId = invoice.customer as string | null;
             if (customerId) {
               const refilled = await db
@@ -226,6 +242,11 @@ export async function POST(request: NextRequest) {
                 }
               }
             }
+          } catch (error) {
+            loggers.api.warn('Could not look up refilled user for subscription receipt', {
+              eventId: event.id,
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
           break;
         }
