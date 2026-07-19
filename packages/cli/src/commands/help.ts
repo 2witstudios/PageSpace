@@ -42,7 +42,7 @@ interface GroupDefinition {
  */
 const GROUP_DEFINITIONS: readonly GroupDefinition[] = [
   { key: 'auth', title: 'Auth', example: 'pagespace login', resources: ['login', 'logout', 'whoami'] },
-  { key: 'drives', title: 'Drives', example: 'pagespace drives list', resources: ['drives', 'trash'] },
+  { key: 'drives', title: 'Drives', example: 'pagespace drives list', resources: ['drives', 'trash', 'roles'] },
   { key: 'pages', title: 'Pages', example: 'pagespace pages read <pageId>', resources: ['pages', 'sheets'] },
   { key: 'search', title: 'Search', example: 'pagespace search text <query> --drive <id>', resources: ['search'] },
   { key: 'tasks', title: 'Tasks', example: 'pagespace tasks create <pageId> --title <title>', resources: ['tasks'] },
