@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 import path from "path";
 import fs from "fs";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
 const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
@@ -58,4 +59,15 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+const sentryBuildOptions = {
+  org: process.env.SENTRY_ORG,
+  // Admin gets its own Sentry project (SENTRY_PROJECT is baked from the
+  // SENTRY_PROJECT_ADMIN GH secret at admin's Docker build step only, see
+  // docker-images.yml) so its issue stream stays separate from web's.
+  project: process.env.SENTRY_PROJECT,
+  silent: !process.env.CI,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  widenClientFileUpload: true,
+};
+
+export default withSentryConfig(nextConfig, sentryBuildOptions);

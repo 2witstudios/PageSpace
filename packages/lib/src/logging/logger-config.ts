@@ -257,18 +257,31 @@ export function withLogging<T extends (...args: unknown[]) => Promise<unknown>>(
 }
 
 /**
- * Log unhandled errors
+ * Log unhandled errors. An optional onFatalError hook (e.g. Sentry capture +
+ * flush) runs before uncaughtException exits, and after unhandledRejection
+ * logs — the hook's own errors are swallowed so a broken hook never blocks
+ * shutdown or masks the original error.
  */
-export function setupErrorHandlers(): void {
-  process.on('uncaughtException', (error: Error) => {
+export function setupErrorHandlers(onFatalError?: (error: unknown) => Promise<void> | void): void {
+  process.on('uncaughtException', async (error: Error) => {
     loggers.system.fatal('Uncaught exception', error);
+    if (onFatalError) {
+      try {
+        await onFatalError(error);
+      } catch { /* never let the hook block shutdown */ }
+    }
     process.exit(1);
   });
 
-  process.on('unhandledRejection', (reason: unknown) => {
+  process.on('unhandledRejection', async (reason: unknown) => {
     loggers.system.error('Unhandled rejection', undefined, {
       reason: String(reason),
     });
+    if (onFatalError) {
+      try {
+        await onFatalError(reason);
+      } catch { /* never let the hook block shutdown */ }
+    }
   });
 }
 
@@ -296,9 +309,9 @@ export function logPerformanceDecorator(target: object, propertyName: string, de
 /**
  * Initialize logging for the application
  */
-export function initializeLogging(): void {
+export function initializeLogging(onFatalError?: (error: unknown) => Promise<void> | void): void {
   // Set up error handlers
-  setupErrorHandlers();
+  setupErrorHandlers(onFatalError);
   
   // Log startup
   loggers.system.info('Application starting', {

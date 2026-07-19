@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isOnPrem } from '../deployment-mode';
 
 /**
  * Server-side environment variable validation schema.
@@ -159,6 +160,14 @@ export const serverEnvSchema = z
     // auth error surfaced as a provisioning failure) rather than failing app-wide
     // env validation. Read via resolveSpritesToken (services/sandbox/...).
     SPRITES_API_TOKEN: z.string().min(1).optional().or(z.literal('')),
+
+    // Sentry server/edge DSN. Fail-loud in production for cloud/tenant (see
+    // superRefine below) — a missing DSN previously meant Sentry.init({dsn:
+    // undefined}) silently no-op'd with zero alerts ever reaching a human.
+    // Onprem is exempt: Sentry is a third-party SaaS integration, and onprem
+    // already disables that class of integration (OAuth, external AI,
+    // Calendar) per deployment-mode.ts.
+    SENTRY_DSN: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY
@@ -179,6 +188,13 @@ export const serverEnvSchema = z
       }
     }
 
+    if (data.NODE_ENV === 'production' && !isOnPrem() && !data.SENTRY_DSN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'SENTRY_DSN is required in production (cloud/tenant) so crashes reach Sentry — onprem deployments are exempt',
+        path: ['SENTRY_DSN'],
+      });
+    }
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -226,6 +242,20 @@ export const getEnvErrors = (): string[] => {
 export const isEnvValid = (): boolean => {
   const result = serverEnvSchema.safeParse(process.env);
   return result.success;
+};
+
+/**
+ * Fail-loud SENTRY_DSN check for services that don't run the full
+ * serverEnvSchema (realtime, processor, control-plane, admin). Mirrors the
+ * schema's production/onprem-exempt SENTRY_DSN rule via process.env directly.
+ * @throws Error naming the service if production, non-onprem, and SENTRY_DSN is unset.
+ */
+export const requireSentryDsn = (serviceName: string): void => {
+  if (process.env.NODE_ENV === 'production' && !isOnPrem() && !process.env.SENTRY_DSN) {
+    throw new Error(
+      `SENTRY_DSN is required in production for ${serviceName} so crashes reach Sentry (onprem deployments are exempt).`
+    );
+  }
 };
 
 // Cached validated env - validated once on first access

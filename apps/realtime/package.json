@@ -16,6 +16,7 @@
     "@fly/sprites": "0.0.1-rc37",
     "@pagespace/db": "workspace:*",
     "@pagespace/lib": "workspace:*",
+    "@sentry/node": "^10.56.0",
     "cookie": "1.0.2",
     "dotenv": "^17.2.0",
     "socket.io": "^4.7.5"

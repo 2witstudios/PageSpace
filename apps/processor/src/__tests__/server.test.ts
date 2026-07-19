@@ -245,6 +245,18 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  setupErrorHandlers: vi.fn(),
+}));
+
+// instrument.ts (Sentry init) is a side-effecting module-load-time import —
+// stub it so `import './instrument'` in server.ts doesn't hit the real SDK
+// (whose default integrations reach for setInterval(...).unref, unavailable
+// under this suite's fake/mocked timer environment).
+vi.mock('../instrument', () => ({}));
+vi.mock('@sentry/node', () => ({
+  captureException: vi.fn(),
+  flush: vi.fn(async () => true),
+  setupExpressErrorHandler: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------

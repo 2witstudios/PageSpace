@@ -1,3 +1,6 @@
+import './instrument'
+import * as Sentry from '@sentry/node'
+import { setupErrorHandlers } from '@pagespace/lib/logging/logger-config'
 import { createApp } from './app'
 import { drizzle } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
@@ -5,6 +8,14 @@ import Stripe from 'stripe'
 import { createTenantRepository, type TenantDb } from './repositories/tenant-repository'
 import { createProvisioningEngine, createTenantLifecycle, createShellExecutor, createAdminSeeder } from './services'
 import { mkdir, writeFile, readFile } from 'node:fs/promises'
+
+// control-plane's first-ever crash visibility of any kind — until now it had
+// no process.on(...) handler at all, so an uncaught exception just killed
+// the process silently.
+setupErrorHandlers(async (error) => {
+  Sentry.captureException(error)
+  await Sentry.flush(2000)
+})
 
 const PORT = parseInt(process.env.CONTROL_PLANE_PORT || '3010', 10)
 
