@@ -7,7 +7,6 @@ import { getLiveInFlightHolds } from '@pagespace/lib/billing/live-concurrency-qu
 import { MACHINE_MAX_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { getCodeExecutionConcurrencyLimit } from '@pagespace/lib/services/sandbox/quota';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
-import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const isSubscriptionTier = (value: string): value is SubscriptionTier =>
@@ -23,6 +22,15 @@ const isSubscriptionTier = (value: string): value is SubscriptionTier =>
  * out. `codeExecutionLimit` is the configured per-tier ceiling from
  * quota.ts — that semaphore lives in server-process memory, so it has no
  * reliable cross-replica live count and is exposed as a static value only.
+ *
+ * Deliberately NOT audited (unlike its `/api/credits` and
+ * `/api/credits/breakdown` siblings): those are one-shot page-load reads of
+ * financial data, so one `data.read` audit row per view is meaningful
+ * signal. This route is polled every 5s by `ConcurrencyCard` for as long as
+ * the usage page stays open — auditing every poll would write ~720 rows/hour
+ * per open tab into the tamper-evident audit table for a non-sensitive
+ * advisory count (a user reading their own live status), drowning out
+ * genuinely security-relevant events.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -40,13 +48,6 @@ export async function GET(request: NextRequest) {
     const tier: SubscriptionTier = rawTier && isSubscriptionTier(rawTier) ? rawTier : 'free';
 
     const count = await getLiveInFlightHolds(userId);
-
-    auditRequest(request, {
-      eventType: 'data.read',
-      userId,
-      resourceType: 'credit_concurrency',
-      resourceId: 'self',
-    });
 
     return NextResponse.json({
       inFlightHolds: { count, limit: MACHINE_MAX_INFLIGHT },

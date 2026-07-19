@@ -180,14 +180,16 @@ export function resolveImageCost(
 export const MACHINE_HOLD_ESTIMATE_CENTS = envInt('MACHINE_HOLD_ESTIMATE_CENTS', 2);
 
 /**
- * Max concurrent in-flight Machine runs per payer, applied to ALL tiers
- * (mirrors VOICE_MAX_INFLIGHT). Bounds worst-case concurrent overdraw to
- * `MACHINE_MAX_INFLIGHT × the real settled cost of a single run` — a payer's
- * multiple agent tool calls and/or interactive PTY sessions can run concurrently
- * across different machines, so this is generous enough for legitimate multi-machine
- * use. Set to match the top subscription tier's `quota.ts` concurrency ceiling
- * (business, 50) so that per-tier semaphore — not this flat cap — is always the
- * binding constraint. Default 50.
+ * FLOOR for max concurrent in-flight Machine runs per payer — mirrors
+ * VOICE_MAX_INFLIGHT, and bounds worst-case concurrent overdraw to
+ * `MACHINE_MAX_INFLIGHT × the real settled cost of a single run`. Set to
+ * match the top subscription tier's `quota.ts` concurrency ceiling (business,
+ * 50) as a sane default, but `machine-billing.ts`'s `gate()` takes
+ * `Math.max(MACHINE_MAX_INFLIGHT, that payer's own tier ceiling)` rather than
+ * using this value alone — so if a tier's `quota.ts` limit is ever raised
+ * past this default without also raising this env var, the billing gate
+ * still tracks it instead of silently rejecting runs the semaphore would
+ * allow. Default 50.
  */
 export const MACHINE_MAX_INFLIGHT = envInt('MACHINE_MAX_INFLIGHT', 50);
 
