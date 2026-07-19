@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { reapOrphanedFiles } from '@/lib/storage/reap-orphaned-files';
@@ -53,7 +54,7 @@ export async function GET(request: Request) {
       timestamp: now.toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error purging trashed pages:', error);
+    loggers.system.error('[Cron] Error purging trashed pages', error as Error);
     return NextResponse.json(
       {
         success: false,

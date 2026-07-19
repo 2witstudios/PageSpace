@@ -1,6 +1,7 @@
 import { purgeAiUsageLogs } from '@pagespace/lib/logging/ai-usage-purge';
 import { getAiUsageLogsRetentionDays, getRetentionCutoff } from '@pagespace/lib/compliance/retention/monitoring-retention';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
       timestamp: now.toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error purging AI usage logs:', error);
+    loggers.system.error('[Cron] Error purging AI usage logs', error as Error);
     return NextResponse.json(
       {
         success: false,

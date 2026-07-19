@@ -3,6 +3,7 @@ import { sweepExpiredRateLimitBuckets } from '@pagespace/lib/security/distribute
 import { sweepExpiredAuthHandoffTokens } from '@pagespace/lib/security/auth-handoff-sweep';
 import { sweepExpiredPendingAbortIntents } from '@/lib/ai/core/pending-abort-intents';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -77,7 +78,7 @@ export async function GET(request: Request) {
   });
 
   if (hadError) {
-    console.error('[Cron] sweep-expired partial failure:', results);
+    loggers.system.error('[Cron] sweep-expired partial failure', undefined, { results });
     return NextResponse.json(
       { success: false, results, timestamp: new Date().toISOString() },
       { status: 500 },
