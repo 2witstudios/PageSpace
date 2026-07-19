@@ -36,6 +36,3 @@ export function getPlatformStorage(): PlatformStorage {
   return instance;
 }
 
-export function resetPlatformStorage(): void {
-  instance = null;
-}

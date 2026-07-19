@@ -37,11 +37,6 @@ export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = {
   business: formatCredits(TIER_MONTHLY_ALLOWANCE_CENTS.business),
 };
 
-/** "15/month in credits" style phrase for a tier. */
-export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
-  return `${MONTHLY_CREDITS[tier]}/month in credits`;
-}
-
 /** Buyable top-up packs as dollar price strings (e.g. "$10"), sorted by value. */
 export const CREDIT_PACKS_DISPLAY: string[] = Object.values(CREDIT_PACKS)
   .sort((a, b) => a.cents - b.cents)

@@ -128,11 +128,6 @@ export interface BroadcastCreateConflictResponse {
   duplicateOf: string;
 }
 
-export interface BroadcastCreateFailedResponse {
-  error: string;
-  broadcastId: string;
-}
-
 export interface BroadcastValidationErrorResponse {
   error: string;
   details?: Record<string, string[] | undefined>;

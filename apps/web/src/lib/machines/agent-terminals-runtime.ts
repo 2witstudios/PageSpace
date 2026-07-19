@@ -42,7 +42,6 @@ import { createDbMachineAgentTerminalStore } from '@pagespace/lib/services/machi
 import { createDbMachineProjectStore } from '@pagespace/lib/services/machines/machine-projects-store';
 import type {
   SpawnAgentTerminalDeps,
-  ResolveAgentTerminalDeps,
   ListAgentTerminalsDeps,
   KillAgentTerminalDeps,
   AgentTerminalProjectLookup,
@@ -183,10 +182,6 @@ function buildMachineSandbox(actorUserId: string): AgentTerminalMachineSandbox {
 
 export function buildSpawnAgentTerminalDeps(): SpawnAgentTerminalDeps {
   return { ...buildBaseDeps(), projectStore: buildProjectStoreLookup(), now: () => new Date() };
-}
-
-export function buildResolveAgentTerminalDeps(actorUserId: string): ResolveAgentTerminalDeps {
-  return { ...buildBaseDeps(), projectStore: buildProjectStoreLookup(), machineSandbox: buildMachineSandbox(actorUserId) };
 }
 
 export function buildListAgentTerminalsDeps(): ListAgentTerminalsDeps {

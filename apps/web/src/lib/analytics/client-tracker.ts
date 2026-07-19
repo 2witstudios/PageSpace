@@ -227,24 +227,6 @@ export const track = (event: string, data?: Record<string, unknown>) =>
 export const trackPageView = (path: string, title?: string) => 
   tracker.trackPageView(path, title);
 
-export const trackFeature = (feature: string, metadata?: Record<string, unknown>) => 
-  tracker.trackFeature(feature, metadata);
-
-export const trackAction = (action: string, resource?: string, resourceId?: string, metadata?: Record<string, unknown>) => 
-  tracker.trackAction(action, resource, resourceId, metadata);
-
-export const trackClick = (element: string, metadata?: Record<string, unknown>) => 
-  tracker.trackClick(element, metadata);
-
-export const trackSearch = (query: string, resultCount?: number, searchType?: string) => 
-  tracker.trackSearch(query, resultCount, searchType);
-
-export const trackError = (errorMessage: string, errorType?: string, context?: Record<string, unknown>) => 
-  tracker.trackError(errorMessage, errorType, context);
-
-export const trackTiming = (category: string, variable: string, duration: number) => 
-  tracker.trackTiming(category, variable, duration);
-
 // Auto-track page views on route changes (for Next.js)
 if (typeof window !== 'undefined') {
   // Track initial page view (the tracker's own consent gate suppresses the send until
@@ -281,5 +263,3 @@ if (typeof window !== 'undefined') {
     trackPageView(window.location.pathname);
   });
 }
-
-export default tracker;

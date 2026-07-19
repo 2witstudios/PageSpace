@@ -20,18 +20,6 @@ export function stripLineNumbers(content: string): string {
 }
 
 /**
- * Escapes HTML entities for safe rendering
- */
-export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-/**
  * Simple markdown to HTML conversion for basic formatting
  * Handles: bold, italic, code, links, headers, lists
  *

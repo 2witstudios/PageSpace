@@ -173,5 +173,3 @@ export const pageReorderService = {
     }
   },
 };
-
-export type PageReorderService = typeof pageReorderService;

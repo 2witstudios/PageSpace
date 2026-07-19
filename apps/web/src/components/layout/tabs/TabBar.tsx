@@ -255,5 +255,3 @@ export const TabBar = memo(function TabBar({ className }: TabBarProps) {
     </AnimatePresence>
   );
 });
-
-export default TabBar;

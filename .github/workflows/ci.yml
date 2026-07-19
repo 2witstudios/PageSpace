@@ -123,3 +123,6 @@ jobs:
 
       - name: Run TypeScript check
         run: bun run typecheck
+
+      - name: Knip (unused code gate)
+        run: bun run knip:check

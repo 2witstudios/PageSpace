@@ -1,5 +1,3 @@
-import { PageSize } from "./constants";
-
 export interface PaginationConfig {
   pageHeight: number;
   pageWidth: number;
@@ -44,25 +42,4 @@ export const updateCssVariables = (targetNode: HTMLElement, config: PaginationCo
   Object.entries(cssVariables).forEach(([key, value]) => {
     targetNode.style.setProperty(`--${key}`, value);
   });
-};
-
-/**
- * Helper to create a PageSize object
- */
-export const getPageSize = (
-  height: number,
-  width: number,
-  marginTop: number,
-  marginBottom: number,
-  marginLeft: number,
-  marginRight: number
-): PageSize => {
-  return {
-    pageHeight: height,
-    pageWidth: width,
-    marginTop,
-    marginBottom,
-    marginLeft,
-    marginRight,
-  };
 };

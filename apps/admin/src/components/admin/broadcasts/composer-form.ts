@@ -1,7 +1,6 @@
 import type { AudienceDefinitionInput, BroadcastCreateInput } from "@/lib/broadcasts/schema";
 
 export const PLAN_TIERS = ["free", "pro", "founder", "business"] as const;
-export type PlanTier = (typeof PLAN_TIERS)[number];
 
 export interface AudienceFormState {
   includeUnverified: boolean;

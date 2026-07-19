@@ -76,6 +76,3 @@ export async function post<T = unknown>(url: string, body?: unknown): Promise<T>
   });
 }
 
-export async function del<T = unknown>(url: string): Promise<T> {
-  return fetchJSON<T>(url, { method: 'DELETE' });
-}

@@ -2,12 +2,6 @@
 
 export type MentionType = 'page' | 'user' | 'everyone' | 'role';
 
-export interface BaseMention {
-  id: string;
-  label: string;
-  type: MentionType;
-}
-
 export interface PageMentionData {
   pageType: 'DOCUMENT' | 'FOLDER' | 'AI_CHAT' | 'CHANNEL' | 'SHEET' | 'CANVAS' | 'FILE' | 'TASK_LIST' | 'CODE' | 'MACHINE';
   driveId: string;
@@ -34,38 +28,6 @@ export type MentionData =
   | UserMentionData
   | EveryoneMentionData
   | RoleMentionData;
-
-export interface EnhancedMention extends BaseMention {
-  data: MentionData;
-}
-
-// Type-specific mention interfaces
-export interface PageMention extends BaseMention {
-  type: 'page';
-  data: PageMentionData;
-}
-
-export interface UserMention extends BaseMention {
-  type: 'user';
-  data: UserMentionData;
-}
-
-export interface EveryoneMention extends BaseMention {
-  type: 'everyone';
-  data: EveryoneMentionData;
-}
-
-export interface RoleMention extends BaseMention {
-  type: 'role';
-  data: RoleMentionData;
-}
-
-// Union type for all specific mention types
-export type TypedMention =
-  | PageMention
-  | UserMention
-  | EveryoneMention
-  | RoleMention;
 
 // For search results and suggestions
 export interface MentionSuggestion {
