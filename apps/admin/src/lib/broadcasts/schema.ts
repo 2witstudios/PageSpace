@@ -39,6 +39,8 @@ export const audienceDefinitionSchema = z
     }
   });
 
+export type AudienceDefinitionInput = z.infer<typeof audienceDefinitionSchema>;
+
 /**
  * POST /api/admin/broadcasts body.
  *
@@ -124,6 +126,8 @@ export const broadcastActionSchema = z.object({
   action: z.enum(['cancel', 'pause']),
   reason: z.string().trim().min(1, 'A reason is required').max(500),
 });
+
+export type BroadcastActionInput = z.infer<typeof broadcastActionSchema>;
 
 /** POST /api/admin/broadcasts/templates body. */
 export const templateCreateSchema = z.object({
