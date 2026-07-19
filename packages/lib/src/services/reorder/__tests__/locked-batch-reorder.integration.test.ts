@@ -13,16 +13,27 @@
  * Requires DATABASE_URL → a running Postgres with migrations applied
  * (scripts/test-with-db.sh, port 5433). Skipped when no DB is reachable.
  *
- * The second test below forces genuine contention with a deliberate
- * `pg_sleep` while each transaction holds its locks — without that, a bare
- * `Promise.all([runOne, runTwo])` has no guarantee the two transactions ever
- * actually hold overlapping locks at the same time (Postgres could run one
- * to completion before the other's locking select even arrives), which would
- * let the test pass "vacuously" — proving nothing about lock contention —
- * even against a broken implementation. The forced hold guarantees real
- * row-lock blocking/serialization happens on every run (observable as the
- * test's duration jumping to roughly the sleep length), not just that both
- * promises happened to resolve.
+ * The second test below proves genuine row-lock contention deterministically
+ * rather than inferring it from timing. Two dangers with a timing-based
+ * approach (e.g. a fixed `pg_sleep` while holding locks): (1) if the app's
+ * connection pool is configured with `DB_POOL_MAX=1` (a supported config in
+ * packages/db/src/db.ts), both `db.transaction()` calls draw from the SAME
+ * one-connection pool, so the second transaction can't even start until the
+ * first releases its connection — they'd never reach Postgres concurrently
+ * at all, and the test would pass without ever exercising contention; (2) a
+ * loaded CI runner can delay the second transaction's query past any fixed
+ * sleep window regardless of pool size. Both would let the test pass
+ * "vacuously" — proving nothing — even against a broken implementation.
+ *
+ * Fixed here with two changes: each transaction gets its own dedicated
+ * single-connection `pg.Pool`, independent of the app's shared pool and its
+ * `DB_POOL_MAX` setting, so both are always able to reach Postgres
+ * concurrently regardless of production pool tuning; and instead of a fixed
+ * sleep, the test polls `pg_stat_activity` for `wait_event_type = 'Lock'` on
+ * whichever side didn't win the race to lock first — an explicit,
+ * timing-independent proof that real row-lock blocking occurred — before
+ * releasing the winner. If that proof is never observed within the poll
+ * window, the test fails loudly rather than passing vacuously.
  *
  * NOTE (manual lock proof, verified): temporarily dropping only the
  * `.orderBy(asc(idColumn))` from lockedBatchReorder's `FOR UPDATE` select
@@ -38,12 +49,15 @@
  * size) — mirrors `lockDriveRolesInOrder`'s doc comment in
  * drive-role-service.ts — but don't trust a quick local edit as a
  * regression check for it; this file's real regression coverage is the
- * "never deadlock" assertion under forced contention below, not a manual
+ * "never deadlock" assertion under proven contention below, not a manual
  * probe of Postgres's incidental scan order.
  */
 import { describe, it, expect, beforeAll } from 'vitest';
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
+import { schema } from '@pagespace/db/schema';
 import { driveRoles } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
 import { computeReorderPlan } from '../compute-reorder-plan';
@@ -174,39 +188,89 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
       { id: c.id, position: 202 },
     ]);
 
-    // Whichever transaction wins the race to lock first holds its locks for
-    // this long before committing — forcing the OTHER transaction's locking
-    // select to genuinely arrive and block while those overlapping rows are
-    // still held, instead of the two transactions merely running back-to-back
-    // without ever actually contending. See the file-level doc comment.
-    const runOne = db.transaction(async (tx) => {
-      await lockedBatchReorder(tx, {
-        table: driveRoles,
-        idColumn: driveRoles.id,
-        positionColumn: driveRoles.position,
-        scopeWhere: eq(driveRoles.driveId, drive.id),
-        plan: planOne,
-      });
-      await tx.execute(sql`SELECT pg_sleep(0.3)`);
-    });
-    const runTwo = db.transaction(async (tx) => {
-      await lockedBatchReorder(tx, {
-        table: driveRoles,
-        idColumn: driveRoles.id,
-        positionColumn: driveRoles.position,
-        scopeWhere: eq(driveRoles.driveId, drive.id),
-        plan: planTwo,
-      });
-      await tx.execute(sql`SELECT pg_sleep(0.3)`);
-    });
+    // Dedicated single-connection pools, independent of the shared app
+    // pool's DB_POOL_MAX — see the file-level doc comment for why.
+    const poolOne = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    const poolTwo = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    const dbOne = drizzle(poolOne, { schema });
+    const dbTwo = drizzle(poolTwo, { schema });
 
-    // The deadlock-absence proof: firing both concurrently against overlapping
-    // rows — with the forced hold above guaranteeing they genuinely contend —
-    // must not raise Postgres error 40P01 (deadlock detected). One
-    // transaction blocking behind the other's row lock is correct
-    // serialization, not a failure — but neither may be aborted by the
-    // deadlock detector.
-    await Promise.all([runOne, runTwo]);
+    try {
+      const pids: { one: number | null; two: number | null } = { one: null, two: null };
+      // Set exactly once, by whichever side's lockedBatchReorder call
+      // resolves first — that side won the race to lock, so it pauses here
+      // (holding its locks open) until the test explicitly releases it.
+      // Whichever side is still stuck inside lockedBatchReorder at that
+      // point must be genuinely blocked waiting on these same rows.
+      let firstToLock: 'one' | 'two' | null = null;
+      let releaseFirst: (() => void) | null = null;
+      const releaseSignal = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      const makeRun = (side: 'one' | 'two', sideDb: typeof dbOne, plan: typeof planOne) =>
+        sideDb.transaction(async (tx) => {
+          const pidRows = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+          pids[side] = Number((pidRows.rows[0] as { pid: string | number }).pid);
+
+          await lockedBatchReorder(tx, {
+            table: driveRoles,
+            idColumn: driveRoles.id,
+            positionColumn: driveRoles.position,
+            scopeWhere: eq(driveRoles.driveId, drive.id),
+            plan,
+          });
+
+          if (firstToLock === null) {
+            firstToLock = side;
+            await releaseSignal;
+          }
+        });
+
+      const runOne = makeRun('one', dbOne, planOne);
+      const runTwo = makeRun('two', dbTwo, planTwo);
+
+      // Backend pids are assigned before either side's locking select, so
+      // this resolves almost immediately — not a contention wait.
+      while (pids.one === null || pids.two === null) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      // The deterministic contention proof: poll until whichever side didn't
+      // win the lock race shows as genuinely blocked on a Postgres lock.
+      // Fails the test (via the assertion below) rather than timing out
+      // silently if that's never observed.
+      let observedBlockedPid: number | null = null;
+      for (let i = 0; i < 150 && observedBlockedPid === null; i++) {
+        const activity = await db.execute(sql`
+          SELECT pid, wait_event_type FROM pg_stat_activity
+          WHERE pid IN (${pids.one}, ${pids.two})
+        `);
+        for (const row of activity.rows as { pid: number; wait_event_type: string | null }[]) {
+          if (row.wait_event_type === 'Lock') {
+            observedBlockedPid = row.pid;
+            break;
+          }
+        }
+        if (observedBlockedPid === null) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      }
+
+      expect(observedBlockedPid).not.toBeNull();
+
+      // Release whichever side won the race to lock first.
+      releaseFirst!();
+
+      // The deadlock-absence proof: with genuine contention already proven
+      // above, both transactions must still resolve without Postgres error
+      // 40P01 (deadlock detected). The side that was blocked simply proceeds
+      // once the winner commits — correct serialization, not a failure.
+      await Promise.all([runOne, runTwo]);
+    } finally {
+      await poolOne.end();
+      await poolTwo.end();
+    }
 
     const updated = await db.select().from(driveRoles).where(eq(driveRoles.driveId, drive.id));
     const positionById = new Map(updated.map((r) => [r.id, r.position]));
