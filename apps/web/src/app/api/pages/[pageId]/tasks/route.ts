@@ -247,7 +247,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     },
   });
 
-  let tasks = await decryptTaskUserRelations(await query);
+  const tasks = await decryptTaskUserRelations(await query);
 
   // Sort by page.position (source of truth), fallback to task.position
   tasks.sort((a, b) => {
@@ -255,14 +255,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     const posB = b.page?.position ?? b.position;
     return sortOrder === 'desc' ? posB - posA : posA - posB;
   });
-
-  // Apply search filter in memory
-  if (search) {
-    const searchLower = search.toLowerCase();
-    tasks = tasks.filter(task =>
-      (task.page?.title ?? '').toLowerCase().includes(searchLower)
-    );
-  }
 
   // Ground-truth active trigger count from task_triggers so badges don't go
   // stale when an agent page is trashed: the workflows row cascade-deletes,

@@ -472,17 +472,35 @@ describe('Task API Routes', () => {
     });
 
 
-    it('filters tasks by search query', async () => {
-      const mockTasks = [
-        { id: 'task-1', description: 'Milk, bread', status: 'pending', page: { id: 'p-1', title: 'Buy groceries', isTrashed: false, position: 0 } },
-        { id: 'task-2', description: null, status: 'pending', page: { id: 'p-2', title: 'Call mom', isTrashed: false, position: 1 } },
-      ];
+    it('filters tasks by search query (phase-1 bounded query narrows by ilike on page.title)', async () => {
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+      const childPageRows = [
+        { id: 'p-1', pageId: 'p-1' },
+        { id: 'p-2', pageId: 'p-2' },
+      ];
+      // Stands in for the phase-1 query already applying ilike(pages.title, '%groceries%') —
+      // only p-1's task matches, so only its id reaches phase 2.
+      const boundedIdRows = [{ id: 'task-1' }];
+      const allTasks = [
+        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Buy groceries', isTrashed: false, position: 0 } },
+        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Call mom', isTrashed: false, position: 1 } },
+      ];
 
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
-      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
+
+      vi.mocked(db.select)
+        .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
+        .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
+        .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: search-filtered ids
+        .mockImplementation(() => makeSelectChain([]) as never); // trigger / sub-task counts
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      vi.mocked(db.query.taskItems.findMany).mockImplementation(((args: any) => {
+        const ids: string[] = args?.where?.values ?? [];
+        return Promise.resolve(allTasks.filter(t => ids.includes(t.id)));
+      }) as never);
 
       const response = await GET(createRequest('?search=groceries'), { params: mockParams });
       const body = await response.json();
