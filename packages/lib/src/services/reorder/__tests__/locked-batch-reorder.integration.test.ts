@@ -370,6 +370,61 @@ describe('lockedBatchReorder concurrency (Postgres row lock)', () => {
     }
   });
 
+  it('stamps touchColumns with the write-time clock, not the transaction-start snapshot (clock_timestamp, not now())', async () => {
+    if (!dbAvailable) return;
+    // Regression test for a P2 Codex finding on PR #2139: `now()` (aka
+    // `transaction_timestamp()`) is fixed at this transaction's BEGIN and
+    // stays fixed for every statement inside it, including the touchColumns
+    // UPDATE. If the transaction is delayed between BEGIN and the write (in
+    // production: blocked waiting on the FOR UPDATE lock behind a concurrent
+    // role mutation), `now()` would stamp a timestamp from before that
+    // delay — potentially older than a concurrent writer's own commit,
+    // silently regressing `updatedAt` backwards. `clock_timestamp()`
+    // reflects the actual wall-clock moment the UPDATE executes, so it must
+    // reflect time elapsed *inside* the transaction, not just its start.
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const role = (
+      await db
+        .insert(driveRoles)
+        .values([{ driveId: drive.id, name: 'role-clock', permissions: {}, position: 0 }])
+        .returning()
+    )[0];
+
+    const plan = computeReorderPlan([{ id: role.id, position: 7 }]);
+    const IN_TX_DELAY_MS = 150;
+
+    let checkpoint = 0;
+    await db.transaction(async (tx) => {
+      // Forces Postgres to actually issue BEGIN now, rather than pipelining
+      // it with the first "real" statement below — without this, the delay
+      // that follows wouldn't elapse any time *inside* the open transaction
+      // from Postgres's point of view, and now() vs clock_timestamp() would
+      // be indistinguishable.
+      await tx.execute(sql`SELECT 1`);
+      // Elapses real wall-clock time after BEGIN (which already fixed
+      // now()/transaction_timestamp()) but before the touchColumns write —
+      // standing in for time spent blocked on the row lock in production.
+      await new Promise((resolve) => setTimeout(resolve, IN_TX_DELAY_MS));
+      checkpoint = Date.now();
+
+      await lockedBatchReorder(tx, {
+        table: driveRoles,
+        idColumn: driveRoles.id,
+        positionColumn: driveRoles.position,
+        scopeWhere: eq(driveRoles.driveId, drive.id),
+        plan,
+        touchColumns: [driveRoles.updatedAt],
+      });
+    });
+
+    const [updated] = await db.select().from(driveRoles).where(eq(driveRoles.id, role.id));
+    // A margin well under IN_TX_DELAY_MS: with now(), the stamp would trail
+    // checkpoint by roughly IN_TX_DELAY_MS; with clock_timestamp(), it lands
+    // at-or-after checkpoint.
+    expect(updated.updatedAt.getTime()).toBeGreaterThanOrEqual(checkpoint - 50);
+  });
+
   it('leaves touchColumns untouched (and thus stale) when the caller opts out', async () => {
     if (!dbAvailable) return;
     const owner = await factories.createUser();
