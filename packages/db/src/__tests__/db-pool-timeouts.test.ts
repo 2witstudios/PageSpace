@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAppPoolOptions, pool, getAdvisoryLockPool, getMigrationPool } from '../db';
+import { buildAppPoolOptions, pool, getAdvisoryLockPool, getMigrationPool, getMigrationDb } from '../db';
 
 describe('buildAppPoolOptions (Phase 7 — statement_timeout/lock_timeout on the main pool)', () => {
   it('should set statement_timeout to 15000ms', () => {
@@ -46,5 +46,20 @@ describe('buildAppPoolOptions (Phase 7 — statement_timeout/lock_timeout on the
 
   it('given the migration pool, should be a singleton across repeated calls (lazy init, one pool)', () => {
     expect(getMigrationPool()).toBe(getMigrationPool());
+  });
+
+  it('given getMigrationDb(), should be bound to the migration pool, not the app pool', () => {
+    // drizzle's node-postgres session exposes the underlying pool as `client`.
+    const migrationDb = getMigrationDb() as unknown as { session: { client: unknown } };
+    expect(migrationDb.session.client).toBe(getMigrationPool());
+  });
+
+  it('given getMigrationDb(), should be schema-bound (relational db.query API available for scripts that need it)', () => {
+    const migrationDb = getMigrationDb();
+    expect(migrationDb.query).toBeDefined();
+  });
+
+  it('given getMigrationDb(), should be a singleton across repeated calls', () => {
+    expect(getMigrationDb()).toBe(getMigrationDb());
   });
 });

@@ -38,11 +38,16 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { db as defaultDb } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { eq, and, gt, asc, inArray, sql } from '@pagespace/db/operators';
 import { computeHomeBackfillInserts } from './lib/home-drive-backfill';
+
+// One-shot backfill script — runs on the unthrottled migration pool, not the
+// app-throttled `db`, so a slow full-table scan on a large `users` table
+// can't be aborted by the app pool's statement_timeout.
+const defaultDb = getMigrationDb();
 
 const BATCH_SIZE = 500;
 

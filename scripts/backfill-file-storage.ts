@@ -1,8 +1,12 @@
 import 'dotenv/config';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { sql } from '@pagespace/db/operators';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 async function backfill(): Promise<void> {
   const rows = await db

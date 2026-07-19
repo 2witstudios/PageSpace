@@ -15,7 +15,7 @@ import { scryptSync, randomBytes, createCipheriv } from 'crypto';
 // hands out successive batches would pass even with a broken cursor).
 const { gtCursors } = vi.hoisted(() => ({ gtCursors: [] as unknown[] }));
 
-vi.mock('@pagespace/db/db', () => ({ db: { select: vi.fn(), update: vi.fn() } }));
+vi.mock('@pagespace/db/db', () => ({ getMigrationDb: () => ({ select: vi.fn(), update: vi.fn() }) }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', email: 'email', name: 'name', updatedAt: 'updatedAt' },
 }));

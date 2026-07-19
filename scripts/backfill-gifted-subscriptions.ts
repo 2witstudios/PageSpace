@@ -15,9 +15,13 @@
  */
 
 import Stripe from 'stripe';
-import { db as defaultDb } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { eq, asc } from '@pagespace/db/operators';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const defaultDb = getMigrationDb();
 
 const isDryRun = process.argv.includes('--dry-run');
 const BATCH_SIZE = 10;

@@ -21,10 +21,14 @@
  * Run with: bun run scripts/migrate-ai-models-to-openrouter.ts
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { and, or, eq, inArray, like, sql } from '@pagespace/db/operators';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 const DEFAULT_PROVIDER = 'openai';
 const DEFAULT_MODEL = 'openai/gpt-5.3-chat';
