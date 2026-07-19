@@ -47,7 +47,7 @@ import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostB
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
-import { useChatTransport, useSendHandoff, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
+import { useChatTransport, useSendHandoff, useConversationSendHandoff, HANDOFF_REFUSED_MESSAGE, useCacheMessageActions, useResumeBootstrap, useAnswerAskUser, useChatErrorCause, buildChatConfig, SIDEBAR_AGENT_CHAT_ID, buildGlobalChatRequestBody } from '@/lib/ai/shared';
 import { AskUserAnswerProvider } from '@/components/ai/shared/chat/ask-user/AskUserAnswerContext';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
@@ -272,9 +272,11 @@ const SidebarChatTab: React.FC = () => {
     isStreaming,
     addToolResult,
     globalStatus,
+    globalStop,
     globalMessages,
     agentStatus,
     agentMessages,
+    agentStop,
   } = usePageAgentSidebarChat({
     selectedAgent,
     globalChatConfig,
@@ -436,7 +438,7 @@ const SidebarChatTab: React.FC = () => {
     [user?.id, user?.name, user?.email],
   );
 
-  useOwnStreamMirror({
+  const { getLatchedConversationId: getGlobalLatchedConversationId } = useOwnStreamMirror({
     status: globalStatus,
     ownMessages: globalMessages,
     pageId: channelIdForGlobal ?? '',
@@ -444,13 +446,32 @@ const SidebarChatTab: React.FC = () => {
     triggeredBy: mirrorTriggeredBy,
   });
 
-  useOwnStreamMirror({
+  const { getLatchedConversationId: getAgentLatchedConversationId } = useOwnStreamMirror({
     status: agentStatus,
     ownMessages: agentMessages,
     pageId: selectedAgent?.id ?? '',
     conversationId: agentConversationId ?? '',
     triggeredBy: mirrorTriggeredBy,
   });
+
+  // Pre-send handoff, PER CHAT like the mirrors: a send into a different conversation than the
+  // one this chat is consuming for must first stop the local read and hand the in-flight stream
+  // to the socket path — the SDK's Chat cannot consume two response bodies at once, and a second
+  // concurrent send is how chat 1's stream ended up rendering inside chat 2. See
+  // useConversationSendHandoff.
+  const { prepareSend: prepareGlobalSend } = useConversationSendHandoff({
+    status: globalStatus,
+    stop: globalStop,
+    getLatchedConversationId: getGlobalLatchedConversationId,
+    rejoin: rejoinGlobalStream,
+  });
+  const { prepareSend: prepareAgentSend } = useConversationSendHandoff({
+    status: agentStatus,
+    stop: agentStop,
+    getLatchedConversationId: getAgentLatchedConversationId,
+    rejoin: rejoinAgentStream,
+  });
+  const prepareSendForMode = selectedAgent ? prepareAgentSend : prepareGlobalSend;
 
   // Shared store-first message actions (F2/F9): actions reason over SETTLED rows
   // only — a synthesized live-stream row must never reach retry/delete's
@@ -466,6 +487,8 @@ const SidebarChatTab: React.FC = () => {
   const displayIsStreamingRef = useRef(displayIsStreaming);
   displayIsStreamingRef.current = displayIsStreaming;
 
+  const getIsOwnSendLive = useCallback(() => isOwnSendLiveRef.current, []);
+
   const { handleEdit, handleDelete, handleRetry } = useCacheMessageActions({
     agentId: selectedAgent?.id || null,
     conversationId: currentConversationId,
@@ -473,6 +496,10 @@ const SidebarChatTab: React.FC = () => {
     isOwnSendLive,
     setMessages,
     regenerate,
+    // Retry is a send: the handoff runs INSIDE handleRetry, before its destructive steps, and
+    // the hydrate decision re-reads liveness after the handoff settles (dual-stream fix).
+    prepareSend: prepareSendForMode,
+    getIsOwnSendLive,
   });
 
   // Display ids come from the RENDERED list (affordance placement + streaming
@@ -519,7 +546,7 @@ const SidebarChatTab: React.FC = () => {
   const { preferences: displayPreferences } = useDisplayPreferences();
 
   // Image attachments for vision support
-  const { attachments, addFiles, removeFile, clearFiles, getFilesForSend } = useImageAttachments();
+  const { attachments, addFiles, removeFile, getFilesForSend } = useImageAttachments();
 
   // Get web search and write mode from store
   const webSearchEnabled = useAssistantSettingsStore((state) => state.webSearchEnabled);
@@ -730,9 +757,25 @@ const SidebarChatTab: React.FC = () => {
     const contextRef = buildFreshContextRef();
     const text = input;
     const sendFiles = files.length > 0 ? files : undefined;
+    // The ids behind `files` — same processed filter getFilesForSend applies. Attachments are
+    // cleared per-id AFTER the handoff confirms, so a refusal loses nothing and anything
+    // attached DURING the wait (a different id) survives the clear.
+    const sentAttachmentIds = attachments.filter((a) => !a.processing && a.dataUrl).map((a) => a.id);
 
+    // Text clears immediately (typing during the wait must not merge into the old draft) and is
+    // restored on refusal ONLY if the composer is still empty — newer keystrokes win.
     setInput('');
-    clearFiles();
+
+    // Hand off any in-flight stream this chat is consuming for ANOTHER conversation before
+    // sending — the Chat cannot consume two bodies at once. No-op for same-conversation sends.
+    // `false` means the handoff could not confirm (unmount, or the settle wait timed out with
+    // the latch still held): sending would re-key the new stream under the old conversation.
+    if (!(await prepareSendForMode(currentConversationId))) {
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      setInput((current) => (current === '' ? text : current));
+      return;
+    }
+    for (const id of sentAttachmentIds) removeFile(id);
 
     // Client-minted id, parts-form send (PR 4 pattern): only that shape preserves the
     // id end to end, and the id is what lets the cache reconcile the optimistic bubble
@@ -761,16 +804,25 @@ const SidebarChatTab: React.FC = () => {
     buildSidebarChatRequestBody,
     sendMessage,
     getFilesForSend,
-    clearFiles,
+    attachments,
+    removeFile,
     wrapSend,
+    prepareSendForMode,
   ]);
 
   // Voice mode: Send message from voice transcript
-  const handleVoiceSend = useCallback((text: string) => {
+  const handleVoiceSend = useCallback(async (text: string) => {
     if (!text.trim() || !currentConversationId) return;
 
     const isReadOnly = !writeMode;
     const contextRef = buildFreshContextRef();
+
+    // Same cross-conversation handoff as handleSendMessage; abort on an unconfirmed handoff —
+    // with feedback, or the transcript would vanish silently.
+    if (!(await prepareSendForMode(currentConversationId))) {
+      toast.error(HANDOFF_REFUSED_MESSAGE);
+      return;
+    }
 
     // Same client-minted-id, optimistic-cache-write shape as handleSendMessage.
     const userMessage = buildUserMessage({ id: createId(), text }) as UIMessage;
@@ -789,6 +841,7 @@ const SidebarChatTab: React.FC = () => {
     buildSidebarChatRequestBody,
     sendMessage,
     wrapSend,
+    prepareSendForMode,
   ]);
 
   // renderedMessages (selector output): "answerable" is decided by the conversation's
@@ -803,6 +856,8 @@ const SidebarChatTab: React.FC = () => {
     setMessages,
     addToolResult,
     wrapSend,
+    // Answering re-invokes the chat — same cross-conversation handoff as every send path.
+    prepareSend: prepareSendForMode,
     buildBody: useCallback(
       () => buildSidebarChatRequestBody(buildFreshContextRef(), !writeMode),
       [buildSidebarChatRequestBody, buildFreshContextRef, writeMode],
@@ -868,7 +923,15 @@ const SidebarChatTab: React.FC = () => {
   //
   // There is no whose. `activeStream` is a read of the one place a live stream is recorded, and
   // the abort names it by messageId — which no surface owns, and which needs no map.
-  const handleStop = useStopStream({ activeStream, pendingSendConversationId, rawStop: stop });
+  const handleStop = useStopStream({
+    activeStream,
+    pendingSendConversationId,
+    rawStop: stop,
+    // The rawStop gate: a Stop on a socket-attached conversation must not abort another
+    // conversation's live local fetch (conversation-scoped consuming, dual-stream fix).
+    getLocalSendConversationId: selectedAgent ? getAgentLatchedConversationId : getGlobalLatchedConversationId,
+    targetConversationId: currentConversationId,
+  });
 
   const handleUndoFromHere = useCallback((messageId: string) => {
     setUndoDialogMessageId(messageId);

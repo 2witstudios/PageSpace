@@ -217,6 +217,52 @@ describe('stream-abort-client', () => {
       expect(consuming.isChannelConsuming('page-1')).toBe(false);
     });
 
+    // Conversation scoping (the dual-stream fix): the mark must name the conversation the POST
+    // body targets, so the socket can attach a DIFFERENT conversation's own handed-off stream on
+    // the same channel — and the unmark must release that same key, not a channel-wide one.
+    it('given a body carrying a conversationId, should scope the mark to that conversation and release the same key', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a']));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [], conversationId: 'conv-a' }),
+      });
+
+      // Marked for conv-a; conv-b on the same channel is NOT consuming, so its own
+      // stream may attach off the socket.
+      expect(consuming.isChannelConsuming('page-1', 'conv-a')).toBe(true);
+      expect(consuming.isChannelConsuming('page-1', 'conv-b')).toBe(false);
+
+      await drain(response);
+
+      expect(consuming.isChannelConsuming('page-1', 'conv-a')).toBe(false);
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
+    it('given a body without a conversationId, should fall back to the channel-wide mark (conservative)', async () => {
+      const client = await import('../stream-abort-client');
+      const consuming = await import('@/lib/ai/streams/consumingChannels');
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce(streamingResponse(['a']));
+
+      const trackingFetch = client.createStreamTrackingFetch({ getChannelId: () => 'page-1' });
+      const response = await trackingFetch('/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [] }),
+      });
+
+      // The sentinel mark makes EVERY conversation on the channel report consuming.
+      expect(consuming.isChannelConsuming('page-1', 'conv-anything')).toBe(true);
+
+      await drain(response);
+
+      expect(consuming.isChannelConsuming('page-1')).toBe(false);
+    });
+
     it('given a non-ok response with a non-JSON body, should still throw a safe typed-cause Error (never crash)', async () => {
       const client = await import('../stream-abort-client');
 

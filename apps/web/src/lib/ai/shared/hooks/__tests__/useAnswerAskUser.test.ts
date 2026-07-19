@@ -26,6 +26,7 @@ const baseOptions = (overrides: Partial<UseAnswerAskUserOptions> = {}): UseAnswe
   addToolResult: vi.fn().mockResolvedValue(undefined),
   wrapSend: (sendFn) => sendFn(),
   buildBody: () => ({}),
+  prepareSend: vi.fn().mockResolvedValue(true),
   ...overrides,
 });
 
@@ -98,5 +99,49 @@ describe('useAnswerAskUser', () => {
     });
 
     expect(wrapSend).not.toHaveBeenCalled();
+  });
+
+  // Answering re-invokes the chat (addToolResult auto-resend) — with a shared chat instance it
+  // must go through the cross-conversation handoff like every other send path (dual-stream fix).
+  it('given a refused handoff, should patch nothing, send nothing, and release the claim', async () => {
+    const applyAskUserAnswerSpy = vi.spyOn(conversationMessagesActions, 'applyAskUserAnswer');
+    const addToolResult = vi.fn().mockResolvedValue(undefined);
+    const prepareSend = vi.fn().mockResolvedValue(false);
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, prepareSend })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(prepareSend).toHaveBeenCalledWith('conv-1');
+    expect(applyAskUserAnswerSpy).not.toHaveBeenCalled();
+    expect(addToolResult).not.toHaveBeenCalled();
+    // The claim mutex is released — a later answer attempt is not wedged.
+    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
+    applyAskUserAnswerSpy.mockRestore();
+  });
+
+  it('given a confirmed handoff, should proceed through patch and send exactly as before', async () => {
+    const addToolResult = vi.fn().mockResolvedValue(undefined);
+    const prepareSend = vi.fn().mockResolvedValue(true);
+    const { result } = renderHook(() =>
+      useAnswerAskUser(baseOptions({ addToolResult, prepareSend })),
+    );
+
+    await act(async () => {
+      result.current.submitAnswers('tc1', { answers: [{ header: 'h', question: 'q', otherText: 'hi' }] });
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(prepareSend).toHaveBeenCalledWith('conv-1');
+    expect(addToolResult).toHaveBeenCalledTimes(1);
+    expect(useAskUserAnsweringStore.getState().answeringToolCallIds.has('tc1')).toBe(false);
   });
 });
