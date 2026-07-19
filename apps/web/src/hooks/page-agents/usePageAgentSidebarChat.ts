@@ -45,6 +45,8 @@ export interface UseSidebarChatReturn {
   agentStatus: 'ready' | 'submitted' | 'streaming' | 'error';
   /** Agent mode messages (see agentStatus). */
   agentMessages: UIMessage[];
+  /** Agent mode stop function (per chat, like globalStop — the send handoff needs its own chat's stop). */
+  agentStop: () => void;
   /** Add a client-side tool result (mode-selected) — used by ask_user answers */
   addToolResult: (args: {
     tool: string;
@@ -186,6 +188,7 @@ export function usePageAgentSidebarChat({
     // Per-chat agent values — the agent mirror's inputs (see the interface docblock).
     agentStatus,
     agentMessages,
+    agentStop,
   }), [
     messages,
     sendMessage,
@@ -203,5 +206,6 @@ export function usePageAgentSidebarChat({
     setGlobalMessages,
     agentStatus,
     agentMessages,
+    agentStop,
   ]);
 }

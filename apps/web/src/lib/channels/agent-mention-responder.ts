@@ -190,6 +190,7 @@ export async function resolveMentionedAgents(content: string): Promise<Mentioned
     return [];
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const pagesById = await db.query.pages.findMany({
     where: and(
       inArray(pages.id, mentionOrder),
@@ -284,6 +285,7 @@ async function resolveImageAttachmentsForContext(
     return [];
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const fileRows = await db.query.files.findMany({
     where: inArray(files.id, [...latestByFileId.keys()]),
     columns: { id: true, driveId: true, sizeBytes: true, mimeType: true, storagePath: true },

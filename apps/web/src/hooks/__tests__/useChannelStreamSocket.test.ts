@@ -540,6 +540,41 @@ describe('useChannelStreamSocket', () => {
       expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
     });
 
+    // Consuming is CONVERSATION-scoped (the dual-stream mis-render fix). While conversation 2's
+    // POST is being read, conversation 1's own handed-off stream on the SAME channel must attach —
+    // the send handoff releases local consumption of conv-1 and relies on this path to render it.
+    it('given an own-session stream for conv-1 while this context consumes only conv-2, should attach', () => {
+      const conv1Payload: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+      };
+
+      markChannelConsuming('page-a', 'conv-2');
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', conv1Payload); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+      }));
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    it('given an own-session stream for the conversation actually being consumed, should still decline', () => {
+      const conv1Payload: AiStreamStartPayload = {
+        ...START_PAYLOAD,
+        triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+      };
+
+      markChannelConsuming('page-a', 'conv-1');
+      renderHook(() => useChannelStreamSocket('page-a'));
+      act(() => { mockSocket._trigger('chat:stream_start', conv1Payload); });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
+    });
+
     // THE HEADLINE REGRESSION TEST. A reload wipes the consuming set (module state)
     // but NOT the browserSessionId (sessionStorage). Under the old blanket own-session
     // skip, the reloaded tab still looked like the originator and dropped its own
@@ -1664,6 +1699,55 @@ describe('useChannelStreamSocket', () => {
         messageId: 'msg-own',
         isOwn: true,
       }));
+    });
+
+    // Consuming is CONVERSATION-scoped: the send handoff (dual-stream fix) stops conv-1's local
+    // read, then relies on this bootstrap to re-attach conv-1 while conv-2's POST is being read
+    // on the same channel.
+    it('given an own conv-1 stream in the DB while this context consumes only conv-2, should attach it', async () => {
+      markChannelConsuming('page-a', 'conv-2');
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-1',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAddStream).toHaveBeenCalledWith(expect.objectContaining({
+        messageId: 'msg-own',
+        conversationId: 'conv-1',
+        isOwn: true,
+      }));
+      expect(mockConsumeStreamJoin).toHaveBeenCalledTimes(1);
+    });
+
+    it('given an own conv-2 stream in the DB while this context consumes conv-2, should still decline it', async () => {
+      markChannelConsuming('page-a', 'conv-2');
+      mockFetchWithAuth.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          streams: [{
+            messageId: 'msg-own',
+            conversationId: 'conv-2',
+            triggeredBy: { userId: 'user-1', displayName: 'Me', browserSessionId: SESSION_ID_LOCAL },
+          }],
+        }),
+      });
+
+      renderHook(() => useChannelStreamSocket('page-a'));
+
+      await act(async () => { await Promise.resolve(); });
+
+      expect(mockAddStream).not.toHaveBeenCalled();
+      expect(mockConsumeStreamJoin).not.toHaveBeenCalled();
     });
 
     it('given a stream is already in processedRef (completed via socket race), should not re-add', async () => {

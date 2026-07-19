@@ -74,6 +74,51 @@ describe('consumingChannels', () => {
     expect(isChannelConsuming('page-never')).toBe(false);
   });
 
+  // CONVERSATION SCOPING. Concurrent streams across conversations share one channel (every
+  // global conversation lives on the user's personal channel). A channel-wide mark blocked the
+  // socket from attaching a handed-off conversation's own stream while another conversation's
+  // POST was being read — the exact mechanism behind chat 1's stream rendering in chat 2.
+  describe('conversation scoping', () => {
+    it('given conv-b consuming, should NOT report conv-a as consuming on the same channel', () => {
+      markChannelConsuming('page-a', 'conv-b');
+      expect(isChannelConsuming('page-a', 'conv-a')).toBe(false);
+      expect(isChannelConsuming('page-a', 'conv-b')).toBe(true);
+    });
+
+    it('given a channel-wide (sentinel) mark, should report EVERY conversation as consuming', () => {
+      markChannelConsuming('page-a');
+      expect(isChannelConsuming('page-a', 'conv-a')).toBe(true);
+      expect(isChannelConsuming('page-a', 'conv-b')).toBe(true);
+    });
+
+    it('given only a conversation-scoped mark, should report an unscoped query as consuming (conservative)', () => {
+      markChannelConsuming('page-a', 'conv-a');
+      expect(isChannelConsuming('page-a')).toBe(true);
+    });
+
+    it('given per-conversation refcounts, should release independently', () => {
+      markChannelConsuming('page-a', 'conv-a');
+      markChannelConsuming('page-a', 'conv-a');
+      markChannelConsuming('page-a', 'conv-b');
+
+      unmarkChannelConsuming('page-a', 'conv-a');
+      expect(isChannelConsuming('page-a', 'conv-a')).toBe(true);
+      unmarkChannelConsuming('page-a', 'conv-a');
+      expect(isChannelConsuming('page-a', 'conv-a')).toBe(false);
+      expect(isChannelConsuming('page-a', 'conv-b')).toBe(true);
+
+      unmarkChannelConsuming('page-a', 'conv-b');
+      expect(isChannelConsuming('page-a')).toBe(false);
+    });
+
+    it('given an unmark for a conversation never marked, should not disturb other marks', () => {
+      markChannelConsuming('page-a', 'conv-a');
+      unmarkChannelConsuming('page-a', 'conv-b');
+      unmarkChannelConsuming('page-a');
+      expect(isChannelConsuming('page-a', 'conv-a')).toBe(true);
+    });
+  });
+
   // THE property this module exists for. A fresh document evaluates this module from
   // scratch, so the set is empty — which is exactly what makes a reloaded tab stop
   // classifying itself as "the originator" and re-attach to its own live stream.

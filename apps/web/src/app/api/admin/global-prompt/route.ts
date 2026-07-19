@@ -86,6 +86,7 @@ async function handleGlobalPrompt(
 
     // Get all drives the user has access to (for the picker)
     // 1. Get drives owned by the user
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const ownedDrives = await db.query.drives.findMany({
       where: and(eq(drives.ownerId, adminUser.id), eq(drives.isTrashed, false)),
     });

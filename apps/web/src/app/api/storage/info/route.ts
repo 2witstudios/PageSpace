@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
     const fileCount = await getUserFileCount(user.id);
 
     // Get user's drives
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const userDrives = await db.query.drives.findMany({
       where: eq(drives.ownerId, user.id),
       columns: { id: true, name: true }

@@ -8,6 +8,7 @@ import { ArrowLeft, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CreditBalanceCard } from '@/components/billing/CreditBalanceCard';
 import { UsageBreakdownCard } from '@/components/billing/UsageBreakdownCard';
 import { MachineUsageCard } from '@/components/billing/MachineUsageCard';
+import { ConcurrencyCard } from '@/components/billing/ConcurrencyCard';
 import { AutomationsCard } from '@/components/billing/AutomationsCard';
 import { StorageUsageCard } from '@/components/billing/StorageUsageCard';
 
@@ -65,6 +66,7 @@ export default function UsagePage() {
       <CreditBalanceCard />
       <UsageBreakdownCard />
       <MachineUsageCard />
+      <ConcurrencyCard />
       <AutomationsCard />
       <StorageUsageCard />
     </div>

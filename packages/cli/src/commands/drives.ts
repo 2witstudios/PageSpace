@@ -1,5 +1,5 @@
 /**
- * `pagespace drives list|create|rename|trash|restore` (Phase 5 task 1).
+ * `pagespace drives list|create|rename|update-context|trash|restore` (Phase 5 task 1).
  * Thin projections over the `drives.*` SDK operations — argv parsing and
  * result rendering are pure; `ctx.sdk` is the only I/O edge each handler
  * touches directly (destructive `trash` also reads `ctx.isTTY`/`ctx.prompt`
@@ -83,6 +83,24 @@ export const drivesRenameHandler: CommandHandler = async (ctx, intent) => {
     ctx.stdout.write(`${JSON.stringify(result.value)}\n`);
   } else {
     ctx.stdout.write(`Renamed drive to ${renderDrive(result.value)}`);
+  }
+  return EXIT_SUCCESS;
+};
+
+export const drivesUpdateContextHandler: CommandHandler = async (ctx, intent) => {
+  const [driveId, drivePrompt] = intent.args;
+  if (!driveId || drivePrompt === undefined || intent.args.length > 2) {
+    ctx.stderr.write('Usage: pagespace drives update-context <driveId> <drivePrompt>\n');
+    return EXIT_USAGE_ERROR;
+  }
+
+  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.updateContext({ driveId, drivePrompt }));
+  if (!result.ok) return EXIT_RUNTIME_ERROR;
+
+  if (intent.flags.json) {
+    ctx.stdout.write(`${JSON.stringify(result.value)}\n`);
+  } else {
+    ctx.stdout.write(`Updated AI context for drive ${driveId}.\n`);
   }
   return EXIT_SUCCESS;
 };

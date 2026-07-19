@@ -109,6 +109,7 @@ export async function POST(request: Request) {
     }
 
     // Check user has edit access to all source pages
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const sourcePages = await db.query.pages.findMany({
       where: inArray(pages.id, pageIds),
     });
@@ -285,6 +286,7 @@ async function updateChildrenDriveId(
   parentId: string,
   newDriveId: string
 ) {
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const children = await tx.query.pages.findMany({
     where: eq(pages.parentId, parentId),
   });
