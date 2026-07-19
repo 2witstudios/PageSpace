@@ -10,6 +10,7 @@ import { eq, and, asc } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import type { PagePerm } from '../permissions/membership-queries';
+import { computeReorderPlan, lockedBatchReorder } from './reorder';
 
 // Re-export canonical type so callers can import from one place
 export type { PagePerm };
@@ -380,12 +381,14 @@ export async function deleteDriveRole(
 /**
  * Reorder roles for a drive.
  *
- * Takes the ordered drive-wide lock before writing: the per-role position
- * updates run in caller-supplied order, which would otherwise acquire row
- * locks in an arbitrary order and could deadlock against a concurrent default
- * switch holding the id-ordered lock. Holding all the rows up front also makes
- * the membership validation authoritative rather than a pre-transaction
- * snapshot.
+ * Takes the ordered drive-wide lock before writing — via `lockDriveRolesInOrder`,
+ * not `lockedBatchReorder`'s own (narrower) lock — because this lock also
+ * serializes `reorderDriveRoles` against `createDriveRole`/`updateDriveRole`'s
+ * default-switch, both of which take the same drive-wide lock. Holding all the
+ * rows up front also makes the membership validation (`existingIds`/
+ * `invalidIds`) authoritative rather than a pre-transaction snapshot. The write
+ * itself is then a single batched statement via `lockedBatchReorder` instead of
+ * N sequential per-row updates.
  */
 export async function reorderDriveRoles(
   driveId: string,
@@ -400,14 +403,16 @@ export async function reorderDriveRoles(
       throw new Error('Invalid role IDs');
     }
 
-    for (let index = 0; index < roleIds.length; index++) {
-      const roleId = roleIds[index];
-      await tx.update(driveRoles)
-        .set({ position: index, updatedAt: new Date() })
-        .where(and(
-          eq(driveRoles.id, roleId),
-          eq(driveRoles.driveId, driveId)
-        ));
+    const plan = computeReorderPlan(roleIds.map((id, index) => ({ id, position: index })));
+    if (plan.orderedIds.length > 0) {
+      await lockedBatchReorder(tx, {
+        table: driveRoles,
+        idColumn: driveRoles.id,
+        positionColumn: driveRoles.position,
+        scopeWhere: eq(driveRoles.driveId, driveId),
+        plan,
+        touchColumns: [driveRoles.updatedAt],
+      });
     }
   });
 }
