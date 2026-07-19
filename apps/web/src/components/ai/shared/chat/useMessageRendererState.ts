@@ -101,16 +101,15 @@ export function useMessageRendererState({
       taskId: string;
       data: { newStatus: TaskStatus };
     }) => {
-      const taskInOurMessage = tasks.find(task => task.id === payload.taskId);
-      if (taskInOurMessage) {
-        setTasks(prevTasks =>
-          prevTasks.map(task =>
-            task.id === payload.taskId
-              ? { ...task, status: payload.data.newStatus, updatedAt: new Date() }
-              : task
-          )
+      setTasks(prevTasks => {
+        const taskInOurMessage = prevTasks.find(task => task.id === payload.taskId);
+        if (!taskInOurMessage) return prevTasks;
+        return prevTasks.map(task =>
+          task.id === payload.taskId
+            ? { ...task, status: payload.data.newStatus, updatedAt: new Date() }
+            : task
         );
-      }
+      });
     };
 
     const handleTaskListUpdate = (payload: { taskListId: string }) => {
@@ -126,7 +125,7 @@ export function useMessageRendererState({
       socket.off('task:task_updated', handleTaskUpdate);
       socket.off('task:task_list_created', handleTaskListUpdate);
     };
-  }, [socket, message.messageType, message.id, tasks, taskList]);
+  }, [socket, message.messageType, message.id, taskList]);
 
   const handleTaskStatusUpdate = async (taskId: string, newStatus: TaskStatus) => {
     try {
