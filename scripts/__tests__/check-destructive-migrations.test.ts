@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ACK_PATTERN, findDestructiveReasons, statementsOf } from '../check-destructive-migrations';
+import { ACK_PATTERN, findDestructiveReasons, statementsOf, stripSqlComments } from '../check-destructive-migrations';
 
 describe('statementsOf', () => {
   it('given a Drizzle-style file, should split on statement-breakpoint markers', () => {
@@ -78,6 +78,46 @@ describe('findDestructiveReasons', () => {
     expect(reasons).toContain('DROP COLUMN');
     expect(reasons).toContain('DROP TYPE');
     expect(reasons).toHaveLength(3);
+  });
+
+  it('given ADD COLUMN NOT NULL with a comment mentioning DEFAULT (not a real one), should still flag it', () => {
+    expect(
+      findDestructiveReasons(
+        '-- table is empty, so no DEFAULT is needed\nALTER TABLE "t" ADD COLUMN "x" text NOT NULL;'
+      )
+    ).toEqual(['ADD COLUMN ... NOT NULL without a DEFAULT']);
+  });
+
+  it('given ADD COLUMN NOT NULL with a comment mentioning SERIAL (not a real one), should still flag it', () => {
+    expect(
+      findDestructiveReasons(
+        '-- not a serial column, just named that way\nALTER TABLE "t" ADD COLUMN "x" text NOT NULL;'
+      )
+    ).toEqual(['ADD COLUMN ... NOT NULL without a DEFAULT']);
+  });
+
+  it('given a real DROP TABLE only inside a comment, should not flag it', () => {
+    expect(findDestructiveReasons('-- old code used to DROP TABLE "x" here, no longer true\nSELECT 1;')).toEqual(
+      []
+    );
+  });
+});
+
+describe('stripSqlComments', () => {
+  it('given a line comment, should remove it', () => {
+    expect(stripSqlComments('-- a comment\nDROP TABLE "x";')).toBe('\nDROP TABLE "x";');
+  });
+
+  it('given a block comment, should remove it', () => {
+    expect(stripSqlComments('/* a block comment */ DROP TABLE "x";')).toBe(' DROP TABLE "x";');
+  });
+
+  it('given a multi-line block comment, should remove it', () => {
+    expect(stripSqlComments('/* line one\nline two */\nDROP TABLE "x";')).toBe('\nDROP TABLE "x";');
+  });
+
+  it('given no comments, should return the input unchanged', () => {
+    expect(stripSqlComments('DROP TABLE "x";')).toBe('DROP TABLE "x";');
   });
 });
 

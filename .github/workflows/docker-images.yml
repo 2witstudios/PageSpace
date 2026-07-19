@@ -11,6 +11,10 @@ on:
       - 'docker/**'
       - 'bun.lock'
       - '.github/workflows/docker-images.yml'
+      # deploy-staging/smoke-test/deploy-fly run these directly from the checked-out
+      # commit (not baked into any image) — without this, a fix here sits inert until
+      # an unrelated apps/packages change happens to also touch master.
+      - 'scripts/deploy/**'
 
 env:
   REGISTRY: ghcr.io
