@@ -16,8 +16,8 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/2witstudios/pagespace
 
-# Serialize deploys: back-to-back merges to master queue instead of racing on the
-# mutable :latest tag (the slower run would otherwise win and land prod on an older
+# Serialize deploys: back-to-back merges to master queue instead of racing each other
+# (the slower run would otherwise finish last and clobber a newer deploy with an older
 # commit). Queue rather than cancel so an in-flight migration/deploy is never interrupted.
 concurrency:
   group: deploy-fly-${{ github.ref }}
@@ -129,14 +129,18 @@ jobs:
             ${{ matrix.service == 'web' && format('SENTRY_ORG={0}', secrets.SENTRY_ORG) || '' }}
             ${{ matrix.service == 'web' && format('SENTRY_PROJECT={0}', secrets.SENTRY_PROJECT) || '' }}
 
-  deploy-fly:
-    name: Deploy to Fly.io
+  deploy-staging:
+    name: Deploy to Staging
     needs: [build-and-push, ci]
     runs-on: ubuntu-latest
-    environment: fly-production
+    environment: fly-staging
     if: github.ref == 'refs/heads/master'
 
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
       - name: Setup flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
 
@@ -152,77 +156,69 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Same sha-pinned tag that smoke-test verifies and deploy-fly (prod) later
+      # promotes — staging and prod always run the exact same artifact.
+      - name: Run staging migrations
+        run: |
+          scripts/deploy/run-fly-migration.sh pagespace-web-staging \
+            ghcr.io/2witstudios/pagespace-migrate "sha-${GITHUB_SHA::7}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_NO_UPDATE_CHECK: "true"
+
+      - name: Deploy web to staging
+        run: |
+          scripts/deploy/deploy-fly-service.sh pagespace-web-staging \
+            ghcr.io/2witstudios/pagespace-web "sha-${GITHUB_SHA::7}" 180
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  smoke-test:
+    name: Smoke Test Staging
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Poll /api/health until healthy
+        run: scripts/deploy/smoke-test.sh https://pagespace-web-staging.fly.dev
+
+  deploy-fly:
+    name: Deploy to Fly.io (Production)
+    needs: [build-and-push, ci, smoke-test]
+    runs-on: ubuntu-latest
+    environment: fly-production
+    if: github.ref == 'refs/heads/master'
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Log in to Fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Promotes the EXACT tag that smoke-test just verified against staging —
+      # never :latest, which could have moved since the build.
       - name: Run migrations
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
-          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
-          docker push registry.fly.io/pagespace-web:migrate
-
-          # Migrations exit before reaching "started" state, so flyctl errors with
-          # "failed to reach desired start state" after 60s. This is expected.
-          # Use || true so bash -e doesn't exit; we verify success via machine state below.
-          flyctl machine run registry.fly.io/pagespace-web:migrate \
-            --app pagespace-web \
-            --region iad \
-            --restart no \
-            2>&1 | tee /tmp/machine_output.txt || true
-
-          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/machine_output.txt | head -1)
-          if [ -z "$MACHINE_ID" ]; then
-            echo "ERROR: could not parse machine ID from flyctl output"
-            cat /tmp/machine_output.txt
-            exit 1
-          fi
-          echo "Migration machine: $MACHINE_ID"
-
-          # Fail on any unexpected error (not the expected "desired start state" one)
-          if grep -q "Error:" /tmp/machine_output.txt && ! grep -q "desired start state" /tmp/machine_output.txt; then
-            echo "ERROR: unexpected flyctl error:"
-            grep "Error:" /tmp/machine_output.txt
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
-            exit 1
-          fi
-
-          # Poll for terminal state. A machine that exits 0 → "stopped"; non-zero → "failed".
-          # flyctl machine wait --state stopped hangs the full timeout when migrations fail
-          # because the machine is already in "failed" state, not "stopped". Poll both.
-          TIMEOUT=900
-          ELAPSED=0
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            # flyctl machine status has no --json flag (outputs a formatted table regardless).
-            # Use the Fly.io Machines REST API directly for reliable JSON state polling.
-            HTTP_CODE=$(curl -s -o /tmp/fly_machine.json -w "%{http_code}" \
-              -H "Authorization: Bearer $FLY_API_TOKEN" \
-              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID")
-            if [ "$HTTP_CODE" = "200" ]; then
-              STATE=$(jq -r '.state // "unknown"' /tmp/fly_machine.json 2>/dev/null || echo "unknown")
-            elif [ "$HTTP_CODE" = "404" ]; then
-              echo "ERROR: migration machine $MACHINE_ID not found (unexpectedly destroyed)"
-              exit 1
-            else
-              STATE="unknown"
-            fi
-            echo "  [${ELAPSED}s] state: $STATE"
-            if [ "$STATE" = "stopped" ]; then
-              break
-            elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
-              echo "ERROR: migration machine reached $STATE state (migrations failed)"
-              flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
-              flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
-              exit 1
-            fi
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
-          done
-
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "ERROR: timed out after ${TIMEOUT}s waiting for migration machine"
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
-            exit 1
-          fi
-
-          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
-          echo "Migrations complete"
+          scripts/deploy/run-fly-migration.sh pagespace-web \
+            ghcr.io/2witstudios/pagespace-migrate "sha-${GITHUB_SHA::7}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
@@ -252,72 +248,9 @@ jobs:
             exit 1
           fi
 
-          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
-          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate-admin
-          docker push registry.fly.io/pagespace-web:migrate-admin
-
-          # Same expected "desired start state" error as the main migration machine
-          # (one-shot machines exit before reaching "started"); verify via state below.
-          flyctl machine run registry.fly.io/pagespace-web:migrate-admin \
-            --app pagespace-web \
-            --region iad \
-            --restart no \
-            --env ADMIN_DATABASE_URL_MIGRATE="$ADMIN_DATABASE_URL_MIGRATE" \
-            bun run db:migrate:admin \
-            2>&1 | tee /tmp/admin_machine_output.txt || true
-
-          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/admin_machine_output.txt | head -1)
-          if [ -z "$MACHINE_ID" ]; then
-            echo "ERROR: could not parse machine ID from flyctl output"
-            cat /tmp/admin_machine_output.txt
-            exit 1
-          fi
-          echo "Admin migration machine: $MACHINE_ID"
-
-          if grep -q "Error:" /tmp/admin_machine_output.txt && ! grep -q "desired start state" /tmp/admin_machine_output.txt; then
-            echo "ERROR: unexpected flyctl error:"
-            grep "Error:" /tmp/admin_machine_output.txt
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
-            exit 1
-          fi
-
-          # Poll for terminal state (stopped = success, failed/destroyed = failure) —
-          # same REST-API polling as the main migration step.
-          TIMEOUT=900
-          ELAPSED=0
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            HTTP_CODE=$(curl -s -o /tmp/fly_admin_machine.json -w "%{http_code}" \
-              -H "Authorization: Bearer $FLY_API_TOKEN" \
-              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID")
-            if [ "$HTTP_CODE" = "200" ]; then
-              STATE=$(jq -r '.state // "unknown"' /tmp/fly_admin_machine.json 2>/dev/null || echo "unknown")
-            elif [ "$HTTP_CODE" = "404" ]; then
-              echo "ERROR: admin migration machine $MACHINE_ID not found (unexpectedly destroyed)"
-              exit 1
-            else
-              STATE="unknown"
-            fi
-            echo "  [${ELAPSED}s] state: $STATE"
-            if [ "$STATE" = "stopped" ]; then
-              break
-            elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
-              echo "ERROR: admin migration machine reached $STATE state (migrations failed)"
-              flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
-              flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
-              exit 1
-            fi
-            sleep 10
-            ELAPSED=$((ELAPSED + 10))
-          done
-
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "ERROR: timed out after ${TIMEOUT}s waiting for admin migration machine"
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
-            exit 1
-          fi
-
-          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
-          echo "Admin migrations complete"
+          scripts/deploy/run-fly-migration.sh pagespace-web \
+            ghcr.io/2witstudios/pagespace-migrate "sha-${GITHUB_SHA::7}" \
+            -- --env ADMIN_DATABASE_URL_MIGRATE="$ADMIN_DATABASE_URL_MIGRATE" bun run db:migrate:admin
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
@@ -325,51 +258,41 @@ jobs:
 
       - name: Deploy web
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-web:latest
-          docker tag ghcr.io/2witstudios/pagespace-web:latest registry.fly.io/pagespace-web:latest
-          docker push registry.fly.io/pagespace-web:latest
-          flyctl deploy --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
+          scripts/deploy/deploy-fly-service.sh pagespace-web \
+            ghcr.io/2witstudios/pagespace-web "sha-${GITHUB_SHA::7}" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy realtime
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-realtime:latest
-          docker tag ghcr.io/2witstudios/pagespace-realtime:latest registry.fly.io/pagespace-realtime:latest
-          docker push registry.fly.io/pagespace-realtime:latest
-          flyctl deploy --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+          scripts/deploy/deploy-fly-service.sh pagespace-realtime \
+            ghcr.io/2witstudios/pagespace-realtime "sha-${GITHUB_SHA::7}" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy processor
+        # strategy=immediate (fly.processor.toml): restarts in-place, no two-phase rolling swap.
+        # flyctl deploy with immediate strategy completes in ~3s (updates config + restart) and
+        # returns "good state" only after the machine is up. No post-deploy machine wait needed —
+        # flyctl machine wait against an immediate-strategy machine hits a transient "replacing"
+        # state and produces false-negative CI failures.
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-processor:latest
-          docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
-          docker push registry.fly.io/pagespace-processor:latest
-          # strategy=immediate (fly.processor.toml): restarts in-place, no two-phase rolling swap.
-          # flyctl deploy with immediate strategy completes in ~3s (updates config + restart) and
-          # returns "good state" only after the machine is up. No post-deploy machine wait needed —
-          # flyctl machine wait against an immediate-strategy machine hits a transient "replacing"
-          # state and produces false-negative CI failures.
-          flyctl deploy --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          scripts/deploy/deploy-fly-service.sh pagespace-processor \
+            ghcr.io/2witstudios/pagespace-processor "sha-${GITHUB_SHA::7}" 120
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy admin
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-admin:latest
-          docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
-          docker push registry.fly.io/pagespace-admin:latest
-          flyctl deploy --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+          scripts/deploy/deploy-fly-service.sh pagespace-admin \
+            ghcr.io/2witstudios/pagespace-admin "sha-${GITHUB_SHA::7}" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
       - name: Deploy cron
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-cron:latest
-          docker tag ghcr.io/2witstudios/pagespace-cron:latest registry.fly.io/pagespace-cron:latest
-          docker push registry.fly.io/pagespace-cron:latest
-          flyctl deploy --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
+          scripts/deploy/deploy-fly-service.sh pagespace-cron \
+            ghcr.io/2witstudios/pagespace-cron "sha-${GITHUB_SHA::7}" 300
 
           # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
           # (memory/pulse crons) double-fire. Reconcile to one machine, ensure it's started,
@@ -393,9 +316,7 @@ jobs:
 
       - name: Deploy marketing
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-marketing:latest
-          docker tag ghcr.io/2witstudios/pagespace-marketing:latest registry.fly.io/pagespace-marketing:latest
-          docker push registry.fly.io/pagespace-marketing:latest
-          flyctl deploy --app pagespace-marketing --image registry.fly.io/pagespace-marketing:latest --wait-timeout 300
+          scripts/deploy/deploy-fly-service.sh pagespace-marketing \
+            ghcr.io/2witstudios/pagespace-marketing "sha-${GITHUB_SHA::7}" 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
