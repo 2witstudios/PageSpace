@@ -19,7 +19,7 @@ const stream = (overrides: Partial<PendingStream> & { messageId: string }): Pend
   ...overrides,
 });
 
-const emptyEntry: ConversationCacheEntry = { messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle' };
+const emptyEntry: ConversationCacheEntry = { messages: [], optimisticSends: [], loadGeneration: 0, pendingMutationsSinceLoad: [], loadStatus: 'idle', olderCursor: null, hasMoreOlder: false, isLoadingOlder: false };
 
 describe('selectRenderedMessages', () => {
   it('given an empty cache and no streams, should return an empty array', () => {
@@ -165,6 +165,30 @@ describe('selectRenderedMessages', () => {
     // re-selecting A with its own streams still works after B was rendered in between.
     const resultA = selectRenderedMessages(convA, streamsForA);
     expect(resultA.map((r) => r.message.id)).toEqual(['a1', 'a-stream']);
+  });
+
+  // Terminal-edge ordering (epic leaf 6.4.2): the selector is a pure function of ONE
+  // snapshot of (cache, activeStreams) — it cannot itself produce an intermediate
+  // "neither streaming nor committed" state. Voice's falling-edge tail flush depends on
+  // this: it reads the selector on the isAIStreaming falling edge, so the committed
+  // full text must already be there the instant the streaming entry is gone from
+  // activeStreams — there is no render in between where both are simultaneously true.
+  it('given the stream entry has been removed AND the cache already holds the committed message, should render only the full confirmed message (no streaming row, no gap)', () => {
+    const entry: ConversationCacheEntry = {
+      ...emptyEntry,
+      messages: [{ id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'the full reply' }] } as UIMessage],
+    };
+    const result = selectRenderedMessages(entry, []);
+    expect(result).toEqual([
+      { message: { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'the full reply' }] }, mode: 'confirmed' },
+    ]);
+  });
+
+  it('given the stream entry is STILL present but the cache does not yet hold the commit, should render the streaming row (never the reverse: streaming absent AND cache absent)', () => {
+    const result = selectRenderedMessages(emptyEntry, [stream({ messageId: 'a1', parts: [{ type: 'text', text: 'partial' }] })]);
+    expect(result).toEqual([
+      { message: expect.objectContaining({ id: 'a1', role: 'assistant' }), mode: 'streaming' },
+    ]);
   });
 
   it('switch-away/back: once the committed row lands (no streaming status), it wins over the lingering entry immediately and after removal', () => {

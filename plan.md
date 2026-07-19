@@ -52,6 +52,7 @@ justification, and should be revisited as a follow-up:
 
 ## Recently Completed
 
+- [Kill the useToast Console.log Stub](tasks/archive/2026-07-18-kill-usetoast-stub.md) — ✅ 2026-07-18 — deleted the console.log-only `useToast` hook, migrated all 14 consumers (member management, role editing, drive AI settings, drive deletion, invites, version-history/activity rollback flows) to `sonner`; updated 2 tests, typecheck/lint clean.
 - [BYOK Retirement](tasks/archive/2026-05-01-byok-retirement.md) — ✅ 2026-05-01 — Drop `user_ai_settings`, route all AI calls through `*_DEFAULT_API_KEY` env vars, broaden per-tier rate-limit gate to every managed provider; breaking change for self-hosters.
 - [Deployment Mode Isolation Gaps](tasks/archive/2026-04-17-deployment-mode-isolation-gaps.md) — ✅ 2026-04-17 — Resend, Google Calendar, and AI provider guards for onprem mode; closes #944 #960 #964.
 - [Files Empty-State CTA](tasks/archive/2026-04-17-files-empty-state-cta.md) — ✅ 2026-04-17 — discoverable Upload + Create actions for empty Files view with drag-and-drop and permission gating.

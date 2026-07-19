@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { RollbackConfirmDialog } from '@/components/version-history/RollbackConfirmDialog';
 import { RollbackToPointDialog } from './RollbackToPointDialog';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { post } from '@/lib/auth/auth-fetch';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
 import { getInitials } from './utils';
@@ -35,7 +35,6 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
   const [showConfirm, setShowConfirm] = useState(false);
   const [showRollbackToPoint, setShowRollbackToPoint] = useState(false);
   const [preview, setPreview] = useState<ActivityActionPreview | null>(null);
-  const { toast } = useToast();
 
   const displayOperation = activity.operation === 'rollback'
     ? activity.rollbackSourceOperation || activity.operation
@@ -59,11 +58,7 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
       const data = await post<{ preview?: ActivityActionPreview }>(`/api/activities/${activity.id}/rollback`, { context, dryRun: true });
       setPreview(data.preview ?? null);
     } catch (error) {
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to load rollback preview',
-        variant: 'destructive',
-      });
+      toast.error(error instanceof Error ? error.message : 'Failed to load rollback preview');
       setPreview({
         action: 'rollback',
         canExecute: false,

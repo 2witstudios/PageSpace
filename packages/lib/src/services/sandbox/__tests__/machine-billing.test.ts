@@ -19,7 +19,8 @@ const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
 
 import { defaultSandboxBillingDeps } from '../machine-billing';
-import { MACHINE_MARKUP_BPS } from '../../../billing/credit-pricing';
+import { MACHINE_MARKUP_BPS, MACHINE_MAX_INFLIGHT } from '../../../billing/credit-pricing';
+import { getCodeExecutionConcurrencyLimit } from '../quota';
 
 function mockUserRow(tier: string | null) {
   mockDb.select.mockReturnValue({
@@ -113,6 +114,42 @@ describe('defaultSandboxBillingDeps.gate', () => {
 
     const opts = mockCanConsumeAI.mock.calls[0][2];
     expect(opts.skipDailyCap).not.toBe(true);
+  });
+
+  it("passes the payer's own maxInFlight when MACHINE_MAX_INFLIGHT is left at its default", async () => {
+    mockUserRow('business');
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
+
+    await defaultSandboxBillingDeps.gate({ payerId: 'owner-1' });
+
+    const opts = mockCanConsumeAI.mock.calls[0][2];
+    // Never below the flat MACHINE_MAX_INFLIGHT floor, and never below the
+    // resolved tier's own quota.ts ceiling — see the comment below.
+    expect(opts.maxInFlight).toBe(Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit('business')));
+  });
+
+  it("widens maxInFlight past MACHINE_MAX_INFLIGHT when an operator raises a tier's quota.ts ceiling above it, so the billing gate never silently undercuts a raised concurrency tier", async () => {
+    const originalEnv = process.env.CODE_EXEC_CONCURRENCY_BUSINESS;
+    try {
+      // Simulate an operator raising the business tier's semaphore ceiling
+      // well past the flat MACHINE_MAX_INFLIGHT default (50) without also
+      // updating MACHINE_MAX_INFLIGHT — the exact drift Codex flagged.
+      process.env.CODE_EXEC_CONCURRENCY_BUSINESS = String(MACHINE_MAX_INFLIGHT + 25);
+      vi.resetModules();
+      const { defaultSandboxBillingDeps: freshDeps } = await import('../machine-billing');
+
+      mockUserRow('business');
+      mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
+
+      await freshDeps.gate({ payerId: 'owner-1' });
+
+      const opts = mockCanConsumeAI.mock.calls[0][2];
+      expect(opts.maxInFlight).toBe(MACHINE_MAX_INFLIGHT + 25);
+    } finally {
+      if (originalEnv === undefined) delete process.env.CODE_EXEC_CONCURRENCY_BUSINESS;
+      else process.env.CODE_EXEC_CONCURRENCY_BUSINESS = originalEnv;
+      vi.resetModules();
+    }
   });
 });
 

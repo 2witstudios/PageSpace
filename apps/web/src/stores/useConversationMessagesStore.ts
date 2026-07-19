@@ -4,14 +4,18 @@ import { applyStartLoad } from '@/stores/conversationMessages/applyStartLoad';
 import { applyLoad } from '@/stores/conversationMessages/applyLoad';
 import { applyFailLoad } from '@/stores/conversationMessages/applyFailLoad';
 import { applyOptimisticSend } from '@/stores/conversationMessages/applyOptimisticSend';
+import { applyOptimisticSendFailure } from '@/stores/conversationMessages/applyOptimisticSendFailure';
+import { applyOlderPage } from '@/stores/conversationMessages/applyOlderPage';
 import { applyConversationEdit } from '@/stores/conversationMessages/applyConversationEdit';
 import { applyConversationDelete } from '@/stores/conversationMessages/applyConversationDelete';
+import { applyConversationAskUserAnswer } from '@/stores/conversationMessages/applyConversationAskUserAnswer';
 import { applyRemoteUserMessage } from '@/stores/conversationMessages/applyRemoteUserMessage';
 import { applyConfirmedMessage } from '@/stores/conversationMessages/applyConfirmedMessage';
 import { promoteOptimisticSends } from '@/stores/conversationMessages/promoteOptimisticSends';
 import { replayPendingMutations } from '@/stores/conversationMessages/replayPendingMutations';
 import { seedEmpty, type ConversationCacheEntry, type ConversationMessagesById } from '@/stores/conversationMessages/seedEmpty';
 import type { MessageEditPayload } from '@/lib/ai/streams/applyMessageEdit';
+import { revertAskUserAnswer, type AskUserAnswerPayload, type AskUserAnswerRevertPayload } from '@/lib/ai/streams/applyAskUserAnswer';
 
 export type { ConversationCacheEntry, ConversationMessagesById };
 
@@ -21,11 +25,34 @@ interface ConversationMessagesState {
   startLoad: (conversationId: string) => number;
   /** True while `generation` is still the newest `startLoad` result for `conversationId`. */
   isLoadCurrent: (conversationId: string, generation: number) => boolean;
-  applyLoad: (conversationId: string, generation: number, messages: UIMessage[]) => void;
+  applyLoad: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    pagination?: { hasMore: boolean; nextCursor: string | null },
+  ) => void;
   failLoad: (conversationId: string, generation: number) => void;
+  /** Marks a "load older" fetch in flight (epic leaf 6.6) — inline indicator, no generation change. */
+  startLoadingOlder: (conversationId: string) => void;
+  /** Prepends a dedup'd older page and advances olderCursor/hasMoreOlder; generation-gated. */
+  applyOlderPage: (
+    conversationId: string,
+    generation: number,
+    messages: UIMessage[],
+    hasMoreOlder: boolean,
+    nextCursor: string | null,
+  ) => void;
+  /** Clears isLoadingOlder on a failed "load older" fetch; leaves the cache otherwise intact. */
+  failLoadingOlder: (conversationId: string, generation: number) => void;
   addOptimisticSend: (conversationId: string, message: UIMessage) => void;
+  /** Rolls back an optimistic send whose POST rejected (epic leaf 6.5, M9) — never touches confirmed `messages`. */
+  removeOptimisticSendOnFailure: (conversationId: string, messageId: string) => void;
   applyEdit: (conversationId: string, payload: MessageEditPayload) => void;
   applyDelete: (conversationId: string, messageId: string) => void;
+  /** Optimistic ask_user answer patch (epic leaf 6.3) — the resume POST's own commit reconciles it once persisted. */
+  applyAskUserAnswer: (conversationId: string, payload: AskUserAnswerPayload) => void;
+  /** Reverts an optimistic ask_user answer (the resume POST rejected) back to input-available. */
+  revertAskUserAnswer: (conversationId: string, payload: AskUserAnswerRevertPayload) => void;
   applyRemoteUserMessage: (conversationId: string, message: UIMessage) => void;
   /** Upsert-by-id (replace if present, append if absent) — see applyConfirmedMessage's docblock. */
   applyConfirmedMessage: (conversationId: string, message: UIMessage) => void;
@@ -70,16 +97,42 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
   isLoadCurrent: (conversationId, generation) =>
     get().byConversationId[conversationId]?.loadGeneration === generation,
 
-  applyLoad: (conversationId, generation, messages) => {
-    set((state) => ({ byConversationId: applyLoad(state.byConversationId, { conversationId, generation, messages }) }));
+  applyLoad: (conversationId, generation, messages, pagination) => {
+    set((state) => ({ byConversationId: applyLoad(state.byConversationId, { conversationId, generation, messages, pagination }) }));
   },
 
   failLoad: (conversationId, generation) => {
     set((state) => ({ byConversationId: applyFailLoad(state.byConversationId, { conversationId, generation }) }));
   },
 
+  startLoadingOlder: (conversationId) => {
+    set((state) => {
+      const existing = state.byConversationId[conversationId];
+      if (!existing) return state;
+      return { byConversationId: { ...state.byConversationId, [conversationId]: { ...existing, isLoadingOlder: true } } };
+    });
+  },
+
+  applyOlderPage: (conversationId, generation, messages, hasMoreOlder, nextCursor) => {
+    set((state) => ({
+      byConversationId: applyOlderPage(state.byConversationId, { conversationId, generation, messages, hasMoreOlder, nextCursor }),
+    }));
+  },
+
+  failLoadingOlder: (conversationId, generation) => {
+    set((state) => {
+      const existing = state.byConversationId[conversationId];
+      if (!existing || existing.loadGeneration !== generation) return state;
+      return { byConversationId: { ...state.byConversationId, [conversationId]: { ...existing, isLoadingOlder: false } } };
+    });
+  },
+
   addOptimisticSend: (conversationId, message) => {
     set((state) => ({ byConversationId: applyOptimisticSend(state.byConversationId, { conversationId, message }) }));
+  },
+
+  removeOptimisticSendOnFailure: (conversationId, messageId) => {
+    set((state) => ({ byConversationId: applyOptimisticSendFailure(state.byConversationId, { conversationId, messageId }) }));
   },
 
   applyEdit: (conversationId, payload) => {
@@ -88,6 +141,23 @@ export const useConversationMessagesStore = create<ConversationMessagesState>((s
 
   applyDelete: (conversationId, messageId) => {
     set((state) => ({ byConversationId: applyConversationDelete(state.byConversationId, { conversationId, messageId }) }));
+  },
+
+  applyAskUserAnswer: (conversationId, payload) => {
+    set((state) => ({ byConversationId: applyConversationAskUserAnswer(state.byConversationId, { conversationId, payload }) }));
+  },
+
+  revertAskUserAnswer: (conversationId, payload) => {
+    set((state) => {
+      const existing = state.byConversationId[conversationId];
+      if (!existing) return state;
+      return {
+        byConversationId: {
+          ...state.byConversationId,
+          [conversationId]: { ...existing, messages: revertAskUserAnswer(existing.messages, payload) },
+        },
+      };
+    });
   },
 
   applyRemoteUserMessage: (conversationId, message) => {

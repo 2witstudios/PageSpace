@@ -192,6 +192,11 @@
       "import": "./dist/billing/machine-payer.js",
       "require": "./dist/billing/machine-payer.js"
     },
+    "./billing/live-concurrency-query": {
+      "types": "./dist/billing/live-concurrency-query.d.ts",
+      "import": "./dist/billing/live-concurrency-query.js",
+      "require": "./dist/billing/live-concurrency-query.js"
+    },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
@@ -1688,6 +1693,9 @@
       ],
       "billing/credit-funding": [
         "./dist/billing/credit-funding.d.ts"
+      ],
+      "billing/live-concurrency-query": [
+        "./dist/billing/live-concurrency-query.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"

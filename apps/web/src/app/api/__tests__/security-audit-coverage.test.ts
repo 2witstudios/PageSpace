@@ -87,6 +87,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],
   ['notifications/[id]/read', 'Notification read receipt, low-risk'],
   ['notifications/read-all', 'Bulk notification read receipt, low-risk'],
+  ['credits/concurrency', 'Polled every 5s by ConcurrencyCard for as long as the usage page stays open — auditing every poll would write ~720 rows/hour per open tab into the audit table for a non-sensitive advisory count (own in-flight credit-hold count + configured tier ceiling, no spend/balance detail)'],
 
   // --- Model discovery (no user data, no external calls) ---
   ['ai/models', 'Public model-catalog discovery, unauthenticated, no user data or resource access'],

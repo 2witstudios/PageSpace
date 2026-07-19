@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { ChevronLeft, Save, X, Shield, RefreshCw } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -55,7 +55,6 @@ type UnifiedRole = { type: 'admin' } | { type: 'custom'; roleId: string } | null
 export default function MemberSettingsPage() {
   const params = useParams();
   const router = useRouter();
-  const { toast } = useToast();
   const driveId = params.driveId as string;
   const userId = params.userId as string;
 
@@ -110,10 +109,7 @@ export default function MemberSettingsPage() {
       const role = customRoles.find(r => r.id === selectedUnifiedRole.roleId);
       if (role && permissionsGridRef.current) {
         permissionsGridRef.current.applyRolePermissions(role.permissions);
-        toast({
-          title: 'Permissions synced',
-          description: `Permissions reset to "${role.name}" defaults`,
-        });
+        toast.success(`Permissions reset to "${role.name}" defaults`);
       }
     }
   };
@@ -146,11 +142,7 @@ export default function MemberSettingsPage() {
       const response = await fetchWithAuth(`/api/drives/${driveId}/members/${userId}`);
       if (!response.ok) {
         if (response.status === 403) {
-          toast({
-            title: 'Access Denied',
-            description: 'Only drive owners and admins can manage member settings',
-            variant: 'destructive',
-          });
+          toast.error('Only drive owners and admins can manage member settings');
           router.push(`/dashboard/${driveId}/members`);
           return;
         }
@@ -184,11 +176,7 @@ export default function MemberSettingsPage() {
       }
     } catch (error) {
       console.error('Error fetching member details:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load member details',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load member details');
     } finally {
       setLoading(false);
     }
@@ -222,21 +210,14 @@ export default function MemberSettingsPage() {
         permissions: permissionsArray
       });
 
-      toast({
-        title: 'Success',
-        description: 'Member settings updated successfully',
-      });
+      toast.success('Member settings updated successfully');
 
       setOriginalPermissions(new Map(permissions));
       setOriginalUnifiedRole(selectedUnifiedRole);
       setHasChanges(false);
     } catch (error) {
       console.error('Error saving changes:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to save changes',
-        variant: 'destructive',
-      });
+      toast.error('Failed to save changes');
     } finally {
       setSaving(false);
     }

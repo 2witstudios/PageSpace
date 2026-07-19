@@ -6,6 +6,8 @@ export interface ApplyLoadEvent {
   conversationId: string;
   generation: number;
   messages: UIMessage[];
+  /** The load's pagination envelope (epic leaf 6.6) — seeds hasMoreOlder/olderCursor for "load older". */
+  pagination?: { hasMore: boolean; nextCursor: string | null };
 }
 
 /**
@@ -48,6 +50,11 @@ export const applyLoad = (
       optimisticSends,
       pendingMutationsSinceLoad: [],
       loadStatus: 'loaded',
+      // A caller without a pagination envelope (background snapshot refresh, a
+      // preloaded fast path) must not clobber an already-known cursor — leave it as
+      // whatever the last envelope-carrying load established (PR 6 review, Codex).
+      hasMoreOlder: event.pagination ? event.pagination.hasMore : existing.hasMoreOlder,
+      olderCursor: event.pagination ? event.pagination.nextCursor : existing.olderCursor,
     },
   };
 };

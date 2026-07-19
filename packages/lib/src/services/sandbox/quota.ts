@@ -20,13 +20,23 @@
 
 import type { SubscriptionTier } from '../subscription-utils';
 
+function envInt(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (raw === undefined || raw === '') return fallback;
+  if (!/^\d+$/.test(raw)) return fallback;
+  return Number.parseInt(raw, 10);
+}
+
 // Concurrent runs permitted per user, by subscription tier. Per-process: each
 // replica enforces this independently, matching the upload-semaphore model.
+// Free stays effectively unreachable in practice (Machine pages are currently
+// admin-role gated, see apps/web/src/app/api/pages/route.ts) rather than
+// tier-gated, so its value is left low but non-zero.
 const CONCURRENCY_LIMITS: Record<SubscriptionTier, number> = {
-  free: 1,
-  pro: 2,
-  founder: 3,
-  business: 5,
+  free: envInt('CODE_EXEC_CONCURRENCY_FREE', 1),
+  pro: envInt('CODE_EXEC_CONCURRENCY_PRO', 10),
+  founder: envInt('CODE_EXEC_CONCURRENCY_FOUNDER', 20),
+  business: envInt('CODE_EXEC_CONCURRENCY_BUSINESS', 50),
 };
 
 const activeByUser = new Map<string, number>();

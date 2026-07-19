@@ -21,6 +21,7 @@ import { resolveMachinePayerId, lookupPageOwnerId } from '../../billing/machine-
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars } from '../../monitoring/machine-pricing';
 import type { SubscriptionTier } from '../subscription-utils';
+import { getCodeExecutionConcurrencyLimit } from './quota';
 import type { SandboxBillingDeps } from './tool-runners';
 
 const VALID_TIERS: ReadonlySet<string> = new Set(['free', 'pro', 'founder', 'business']);
@@ -51,9 +52,18 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
 
   async gate({ payerId }) {
     const tier = await resolvePayerTier(payerId);
+    // MACHINE_MAX_INFLIGHT and quota.ts's per-tier CONCURRENCY_LIMITS are two
+    // independently env-configured values that are SUPPOSED to agree (this
+    // flat cap set to the top tier's ceiling), but nothing enforces that once
+    // either is retuned independently — an operator raising a tier's
+    // semaphore without also raising this constant would have the billing
+    // gate silently reject runs the semaphore itself would allow. Take the
+    // max of both so this floor can never undercut the resolved payer's own
+    // tier ceiling, regardless of env drift.
+    const maxInFlight = Math.max(MACHINE_MAX_INFLIGHT, getCodeExecutionConcurrencyLimit(tier));
     const result = await canConsumeAI(payerId, tier, {
       estCostCents: MACHINE_HOLD_ESTIMATE_CENTS,
-      maxInFlight: MACHINE_MAX_INFLIGHT,
+      maxInFlight,
     });
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
   },
