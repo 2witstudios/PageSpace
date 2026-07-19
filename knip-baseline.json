@@ -3,8 +3,5 @@
   "duplicates::apps/web/src/lib/auth/device-auth-helpers.ts::",
   "duplicates::packages/cli/src/commands/keys/list.ts::",
   "duplicates::packages/cli/src/commands/keys/revoke.ts::",
-  "exports::apps/web/src/lib/capacitor-bridge.ts::callNative",
-  "exports::apps/web/src/lib/capacitor-bridge.ts::getInjectedPlatform",
-  "exports::apps/web/src/lib/capacitor-bridge.ts::isAndroid",
   "types::apps/web/src/lib/repositories/page-agent-repository.ts::PageAgentConfig"
 ]

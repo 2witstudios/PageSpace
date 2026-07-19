@@ -4,9 +4,8 @@
  * Comprehensive test coverage for platform detection utilities:
  * - isCapacitorApp detection
  * - getPlatform function
- * - Platform-specific checks (isIOS, isAndroid)
+ * - Platform-specific checks (isIOS)
  * - Platform info injection
- * - Safe native function wrapper
  * - SSR safety
  */
 
@@ -199,30 +198,6 @@ describe('capacitor-bridge', () => {
     });
   });
 
-  describe('isAndroid', () => {
-    it('returns true for Android platform', async () => {
-      setupCapacitorMock(true, 'android');
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
-
-      expect(capacitorBridge.isAndroid()).toBe(true);
-    });
-
-    it('returns false for iOS platform', async () => {
-      setupCapacitorMock(true, 'ios');
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
-
-      expect(capacitorBridge.isAndroid()).toBe(false);
-    });
-
-    it('returns false for web platform', () => {
-      removeCapacitorMock();
-
-      expect(capacitorBridge.isAndroid()).toBe(false);
-    });
-  });
-
   describe('injectPlatformInfo', () => {
     it('sets __PAGESPACE_PLATFORM__ on window', async () => {
       setupCapacitorMock(true, 'ios');
@@ -259,79 +234,6 @@ describe('capacitor-bridge', () => {
       expect(() => capacitorBridge.injectPlatformInfo()).not.toThrow();
 
       globalThis.window = windowBackup;
-    });
-  });
-
-  describe('getInjectedPlatform', () => {
-    it('returns injected platform value', () => {
-      (window as Window & { __PAGESPACE_PLATFORM__?: string })
-        .__PAGESPACE_PLATFORM__ = 'android';
-
-      expect(capacitorBridge.getInjectedPlatform()).toBe('android');
-    });
-
-    it('returns web when no platform injected', () => {
-      delete (window as Window & { __PAGESPACE_PLATFORM__?: string })
-        .__PAGESPACE_PLATFORM__;
-
-      expect(capacitorBridge.getInjectedPlatform()).toBe('web');
-    });
-
-    it('returns web when window is undefined', async () => {
-      const windowBackup = globalThis.window;
-      // @ts-expect-error - intentionally testing undefined window
-      delete globalThis.window;
-
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
-
-      expect(capacitorBridge.getInjectedPlatform()).toBe('web');
-
-      globalThis.window = windowBackup;
-    });
-  });
-
-  describe('callNative', () => {
-    describe('when in native app', () => {
-      beforeEach(async () => {
-        setupCapacitorMock(true, 'ios');
-        vi.resetModules();
-        capacitorBridge = await import('../capacitor-bridge');
-      });
-
-      it('executes and returns result of native function', async () => {
-        const mockFn = vi.fn().mockResolvedValue({ success: true });
-
-        const result = await capacitorBridge.callNative(mockFn);
-
-        expect(mockFn).toHaveBeenCalled();
-        expect(result).toEqual({ success: true });
-      });
-
-      it('returns undefined when native function throws', async () => {
-        const mockFn = vi.fn().mockRejectedValue(new Error('Native error'));
-        const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-        const result = await capacitorBridge.callNative(mockFn);
-
-        expect(result).toBeUndefined();
-        expect(consoleSpy).toHaveBeenCalled();
-
-        consoleSpy.mockRestore();
-      });
-    });
-
-    describe('when in web browser', () => {
-      it('returns undefined without calling function', async () => {
-        removeCapacitorMock();
-
-        const mockFn = vi.fn().mockResolvedValue({ data: 'test' });
-
-        const result = await capacitorBridge.callNative(mockFn);
-
-        expect(mockFn).not.toHaveBeenCalled();
-        expect(result).toBeUndefined();
-      });
     });
   });
 
@@ -384,10 +286,9 @@ describe('capacitor-bridge', () => {
         Promise.resolve(capacitorBridge.isCapacitorApp()),
         Promise.resolve(capacitorBridge.getPlatform()),
         Promise.resolve(capacitorBridge.isIOS()),
-        Promise.resolve(capacitorBridge.isAndroid()),
       ]);
 
-      expect(results).toEqual([true, 'ios', true, false]);
+      expect(results).toEqual([true, 'ios', true]);
     });
   });
 
