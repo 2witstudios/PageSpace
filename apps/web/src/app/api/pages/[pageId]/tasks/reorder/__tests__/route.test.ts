@@ -41,9 +41,9 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 
 vi.mock('@pagespace/db/db', () => {
-  const mockTxUpdate = vi.fn(() => ({
-    set: vi.fn(() => ({
-      where: vi.fn().mockResolvedValue(undefined),
+  const mockSelect = vi.fn(() => ({
+    from: vi.fn(() => ({
+      where: vi.fn().mockResolvedValue([]),
     })),
   }));
   return {
@@ -52,26 +52,40 @@ vi.mock('@pagespace/db/db', () => {
         taskLists: { findFirst: vi.fn() },
         pages: { findFirst: vi.fn() },
       },
+      select: mockSelect,
       transaction: vi.fn(async (callback) => {
-        const tx = { update: mockTxUpdate };
+        const tx = {};
         return callback(tx);
       }),
     },
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn((a, b) => ({ field: a, value: b })),
+  eq: vi.fn((a, b) => ({ op: 'eq', field: a, value: b })),
+  and: vi.fn((...conditions) => ({ op: 'and', conditions })),
+  inArray: vi.fn((column, values) => ({ op: 'inArray', column, values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: {},
+  pages: { id: 'pages.id', parentId: 'pages.parentId', type: 'pages.type', isTrashed: 'pages.isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: {},
+  taskItems: { id: 'taskItems.id', position: 'taskItems.position', pageId: 'taskItems.pageId', updatedAt: 'taskItems.updatedAt' },
   taskLists: {},
 }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@pagespace/lib/services/reorder', () => ({
+  computeReorderPlan: vi.fn((entries: { id: string; position: number }[]) => {
+    const positionById = new Map<string, number>();
+    for (const entry of entries) {
+      positionById.set(entry.id, entry.position);
+    }
+    return { orderedIds: Array.from(positionById.keys()).sort(), positionById };
+  }),
+  lockedBatchReorder: vi.fn(),
 }));
 
 // ---------- Imports (after mocks) ----------
@@ -82,6 +96,8 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { computeReorderPlan, lockedBatchReorder } from '@pagespace/lib/services/reorder';
+import { taskItems } from '@pagespace/db/schema/tasks';
 
 // ---------- Helpers ----------
 
@@ -114,6 +130,9 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(checkMCPPageScope).mockResolvedValue(null as never);
+    // Default: every submitted task id resolves within scope (the "happy path").
+    // Individual tests override this to simulate out-of-scope/invalid ids.
+    vi.mocked(lockedBatchReorder).mockImplementation(async (_tx, opts) => opts.plan.orderedIds);
   });
 
   it('returns 401 when not authenticated', async () => {
@@ -208,13 +227,69 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(body.success).toBe(true);
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
-    expect(typeof vi.mocked(db.transaction).mock.calls[0][0]).toBe('function');
+    expect(lockedBatchReorder).toHaveBeenCalledTimes(1);
+    expect(lockedBatchReorder).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        table: taskItems,
+        idColumn: taskItems.id,
+        positionColumn: taskItems.position,
+        touchColumns: [taskItems.updatedAt],
+        plan: expect.objectContaining({ orderedIds: ['task-a', 'task-b'] }),
+      }),
+    );
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: 'tasks_reordered',
       taskId: 'task-a',
       taskListId: mockTaskListId,
       pageId: mockPageId,
     }));
+  });
+
+  it('issues a single batched reorder call instead of N sequential per-row updates', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    const tasks = [
+      { id: 'task-a', position: 0 },
+      { id: 'task-b', position: 1 },
+      { id: 'task-c', position: 2 },
+      { id: 'task-d', position: 3 },
+      { id: 'task-e', position: 4 },
+    ];
+
+    const response = await PATCH(createRequest({ tasks }), context);
+    expect(response.status).toBe(200);
+
+    // The N-sequential-update loop that deadlocked production would have
+    // issued one write per task. The batched primitive issues exactly one,
+    // regardless of how many tasks are being reordered.
+    expect(computeReorderPlan).toHaveBeenCalledWith(tasks);
+    expect(lockedBatchReorder).toHaveBeenCalledTimes(1);
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 when a submitted task id falls outside the task list scope', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    // Simulate lockedBatchReorder's scopeWhere excluding one of the submitted ids
+    // (e.g. it belongs to a different task list) — only 'task-a' actually locked.
+    vi.mocked(lockedBatchReorder).mockResolvedValue(['task-a']);
+
+    const tasks = [
+      { id: 'task-a', position: 0 },
+      { id: 'task-b', position: 1 },
+    ];
+
+    const response = await PATCH(createRequest({ tasks }), context);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Invalid task IDs');
+    expect(broadcastTaskEvent).not.toHaveBeenCalled();
   });
 
   it('logs page activity when taskListPage exists', async () => {
@@ -295,5 +370,8 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
       taskId: '',
     }));
+    // Empty plan is a no-op: no transaction should be opened for zero tasks.
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(lockedBatchReorder).not.toHaveBeenCalled();
   });
 });
