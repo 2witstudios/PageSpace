@@ -13,7 +13,7 @@ import { useChat } from '@ai-sdk/react';
 import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Loader2, Settings, MessageSquare, History, Plus, Save } from 'lucide-react';
+import { Loader2, Settings, MessageSquare, History, Plus, Save, Webhook } from 'lucide-react';
 import { UIMessage } from 'ai';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
@@ -24,6 +24,7 @@ import { PageAgentSettingsTab, PageAgentHistoryTab, ConversationShareToggle, typ
 import { AgentIntegrationsPanel } from '@/components/ai/page-agents/AgentIntegrationsPanel';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { VoiceCallPanel } from '@/components/ai/voice/VoiceCallPanel';
+import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 
 import { useEditingStore } from '@/stores/useEditingStore';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
@@ -114,6 +115,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   const [showError, setShowError] = useState(true);
   const [isReadOnly, setIsReadOnly] = useState<boolean>(false);
   const [isSettingsSaving, setIsSettingsSaving] = useState(false);
+  const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [lastAIResponse, setLastAIResponse] = useState<{ id: string; text: string } | null>(null);
   // Message-load state — tracks in-progress DB fetches and their failures independently
   // of the useChat streaming state so blank → spinner instead of blank → blank.
@@ -1341,60 +1343,74 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
               </TabsTrigger>
             </TabsList>
 
-            {/* Chat tab actions */}
-            {activeTab === 'chat' && (
-              <div className="flex items-center gap-3">
-                {displayPreferences.showTokenCounts && (
-                  <AiUsageMonitor pageId={page.id} compact />
-                )}
+            <div className="flex items-center gap-3">
+              {/* Chat tab actions */}
+              {activeTab === 'chat' && (
+                <>
+                  {displayPreferences.showTokenCounts && (
+                    <AiUsageMonitor pageId={page.id} compact />
+                  )}
 
-                <TasksDropdown messages={plainMessages} driveId={driveId} />
+                  <TasksDropdown messages={plainMessages} driveId={driveId} />
 
-                {currentConversation && (
-                  <ConversationShareToggle
-                    isShared={currentConversation.isShared}
-                    isOwner={currentConversation.isOwner}
-                    onToggle={() =>
-                      toggleConversationShare(
-                        currentConversation.id,
-                        !currentConversation.isShared,
-                      )
-                    }
-                  />
-                )}
+                  {currentConversation && (
+                    <ConversationShareToggle
+                      isShared={currentConversation.isShared}
+                      isOwner={currentConversation.isOwner}
+                      onToggle={() =>
+                        toggleConversationShare(
+                          currentConversation.id,
+                          !currentConversation.isShared,
+                        )
+                      }
+                    />
+                  )}
 
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => createConversation()}
+                    className="flex items-center gap-2"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span className="hidden sm:inline">New Chat</span>
+                  </Button>
+                </>
+              )}
+
+              {/* Settings tab actions */}
+              {activeTab === 'settings' && (
                 <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => createConversation()}
-                  className="flex items-center gap-2"
+                  onClick={() => agentSettingsRef.current?.submitForm()}
+                  disabled={isSettingsSaving}
+                  className="min-w-[100px] sm:min-w-[120px]"
                 >
-                  <Plus className="h-4 w-4" />
-                  <span className="hidden sm:inline">New Chat</span>
+                  {isSettingsSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <span className="hidden sm:inline">Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Save Settings</span>
+                    </>
+                  )}
                 </Button>
-              </div>
-            )}
+              )}
 
-            {/* Settings tab actions */}
-            {activeTab === 'settings' && (
+              {/* Deliberately not permission-gated: the dialog itself explains the
+                  owner/admin requirement, so the feature stays discoverable. */}
               <Button
-                onClick={() => agentSettingsRef.current?.submitForm()}
-                disabled={isSettingsSaving}
-                className="min-w-[100px] sm:min-w-[120px]"
+                variant="ghost"
+                size="sm"
+                onClick={() => setWebhooksOpen(true)}
+                title="Incoming Webhooks"
+                className="px-2 text-muted-foreground hover:text-foreground"
               >
-                {isSettingsSaving ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    <span className="hidden sm:inline">Saving...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Save Settings</span>
-                  </>
-                )}
+                <Webhook className="h-4 w-4" />
               </Button>
-            )}
+            </div>
           </div>
         </div>
 
@@ -1563,6 +1579,11 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
         </TabsContent>
       </Tabs>
 
+      <PageWebhooksDialog
+        open={webhooksOpen}
+        onOpenChange={setWebhooksOpen}
+        pageId={page.id}
+      />
     </div>
     </AskUserAnswerProvider>
   );

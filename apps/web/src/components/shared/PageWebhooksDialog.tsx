@@ -26,7 +26,7 @@ interface WebhookRow {
   lastFireError: string | null;
 }
 
-interface ChannelWebhooksDialogProps {
+interface PageWebhooksDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pageId: string;
@@ -39,7 +39,7 @@ const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } 
   return body;
 };
 
-export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWebhooksDialogProps) {
+export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksDialogProps) {
   const key = open ? `/api/pages/${pageId}/webhooks` : null;
   const { data, isLoading, mutate: refetch } = useSWR(key, webhooksFetcher, { revalidateOnFocus: false });
 
@@ -116,10 +116,11 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Webhook className="h-4 w-4" />
-            Webhooks
+            Incoming Webhooks
           </DialogTitle>
           <DialogDescription>
-            External systems can post messages into this channel by sending signed requests to a webhook URL.
+            External systems can send signed requests to a webhook URL and they appear in this
+            page&apos;s context.
           </DialogDescription>
         </DialogHeader>
 
@@ -127,7 +128,7 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
           <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
         ) : forbidden ? (
           <p className="text-sm text-muted-foreground py-4">
-            Only this drive&apos;s owner or an admin can manage webhooks for a channel.
+            Only this drive&apos;s owner or an admin can manage webhooks.
           </p>
         ) : revealed ? (
           <div className="space-y-3 py-2">
@@ -170,7 +171,8 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
 
             {webhooks.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No webhooks yet — create one to let an external system (CI, monitoring, a script) post messages here.
+                No webhooks yet — create one to let an external system (CI, monitoring, a script) send
+                events to this page.
               </p>
             ) : (
               <div className="space-y-2">
