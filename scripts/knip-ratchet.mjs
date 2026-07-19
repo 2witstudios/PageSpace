@@ -52,6 +52,19 @@ function fingerprint(category, file, name) {
   return `${category}::${file}::${name ?? ''}`;
 }
 
+// knip's `duplicates` entries are themselves arrays of group members (each
+// group is 2+ symbols that are the same export under different names), not a
+// flat {name} object like every other category. Fingerprint the whole group
+// by its sorted member names so two distinct duplicate groups in the same
+// file never collapse onto the same fingerprint.
+function itemName(item) {
+  if (typeof item === 'string') return item;
+  if (Array.isArray(item)) {
+    return item.map((member) => itemName(member)).filter(Boolean).sort().join(',');
+  }
+  return item?.name;
+}
+
 // Builds the current issue set from knip's JSON reporter output. Iterates every
 // array-valued key on each issues[] entry generically (rather than a hardcoded
 // category list) so a knip upgrade that adds a new issue type doesn't go ungated.
@@ -67,8 +80,7 @@ function buildFingerprints(knipOutput) {
     for (const [category, value] of Object.entries(entry)) {
       if (category === 'file' || !Array.isArray(value)) continue;
       for (const item of value) {
-        const name = typeof item === 'string' ? item : item?.name;
-        fingerprints.add(fingerprint(category, file, name));
+        fingerprints.add(fingerprint(category, file, itemName(item)));
       }
     }
   }
@@ -140,9 +152,17 @@ if (added.length > 0) {
   process.exit(1);
 }
 
-console.log(`[ok] knip: ${current.size} issue(s), all within baseline (${baseline.size}).`);
 if (removed.length > 0) {
-  console.log(
-    `${removed.length} previously-baselined issue(s) no longer present — run \`bun run knip:ratchet\` to lock in the shrink.`
+  console.error(
+    `[fail] ${removed.length} previously-baselined issue(s) are no longer present — the baseline can shrink but wasn't ratcheted.\n` +
+      '        A stale fingerprint here would silently permit that exact dead code being reintroduced later.\n' +
+      '        Run `bun run knip:ratchet` and commit the updated knip-baseline.json:\n'
   );
+  for (const [category, items] of groupForPrinting(removed)) {
+    console.error(`  ${category} (${items.length}):`);
+    for (const item of items) console.error(`    ${item}`);
+  }
+  process.exit(1);
 }
+
+console.log(`[ok] knip: ${current.size} issue(s), all within baseline (${baseline.size}).`);
