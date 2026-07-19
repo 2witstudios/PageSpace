@@ -24,11 +24,15 @@
  * Idempotent: a re-run only touches drives still missing a subdomain.
  */
 
-import { db as defaultDb } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { drives } from '@pagespace/db/schema/core';
 import { eq, and, isNull, isNotNull, gt, asc } from '@pagespace/db/operators';
 import { computePublishSubdomainBackfill } from './lib/publish-subdomain-backfill';
 import { isUniqueViolation } from '@pagespace/lib/services/subdomain-allocation';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const defaultDb = getMigrationDb();
 
 const BATCH_SIZE = 500;
 

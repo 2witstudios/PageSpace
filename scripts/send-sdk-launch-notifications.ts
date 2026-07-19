@@ -62,7 +62,7 @@
 import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { dataSubjectRequests } from '@pagespace/db/schema/data-subject-requests';
@@ -89,6 +89,10 @@ import {
   resolveMarketingBase,
   runBroadcast,
 } from './lib/sdk-launch-broadcast';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 /** One person the broadcast is about to mail. */
 interface Recipient {

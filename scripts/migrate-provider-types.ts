@@ -9,9 +9,13 @@
  * Run with: npx tsx scripts/migrate-provider-types.ts
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { aiUsageDaily } from '@pagespace/db/schema/ai';
 import { eq } from '@pagespace/db/operators';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 async function migrateProviderTypes() {
   console.log('🚀 Starting provider type migration...');

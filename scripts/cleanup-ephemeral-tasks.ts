@@ -1,7 +1,11 @@
 import 'dotenv/config';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { taskLists } from '@pagespace/db/schema/tasks';
 import { and, isNull, isNotNull } from '@pagespace/db/operators';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 /**
  * Cleanup script to remove ephemeral (conversation-scoped) task lists.

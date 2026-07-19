@@ -21,9 +21,13 @@
  */
 
 import 'dotenv/config';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { isNotNull, count, sql } from 'drizzle-orm';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 const DRY_RUN = process.argv.includes('--dry-run');
 

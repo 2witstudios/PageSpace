@@ -10,11 +10,15 @@
 
 import 'dotenv/config';
 import Stripe from 'stripe';
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { eq, and, inArray, ne } from '@pagespace/db/operators';
 import { stripeConfig, stripeMode } from '../apps/web/src/lib/stripe-config';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2025-08-27.basil',

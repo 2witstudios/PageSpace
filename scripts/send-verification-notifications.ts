@@ -11,10 +11,14 @@
  * 3. Reports the number of notifications sent
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { eq, isNull } from '@pagespace/db/operators';
 import { createNotification } from '@pagespace/lib/notifications/notifications';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 async function sendVerificationNotifications() {
   console.log('🔍 Finding users with unverified emails...');

@@ -11,7 +11,7 @@
  * 3. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
@@ -19,6 +19,10 @@ import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
 import { generateOnPremSetupLink } from '@pagespace/lib/auth/onprem-setup-link';
 import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { parseArgs } from 'node:util';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 async function main() {
   const { values } = parseArgs({

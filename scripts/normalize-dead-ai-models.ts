@@ -26,7 +26,7 @@
  *   bun run scripts/normalize-dead-ai-models.ts --apply    # apply
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { eq, inArray } from '@pagespace/db/operators';
@@ -36,6 +36,10 @@ import {
   DEFAULT_PROVIDER,
   DEFAULT_MODEL,
 } from '../apps/web/src/lib/ai/core/ai-providers-config';
+
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 const APPLY = process.argv.includes('--apply');
 

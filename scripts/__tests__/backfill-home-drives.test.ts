@@ -9,7 +9,7 @@ const { selectMock, insertMock } = vi.hoisted(() => ({
 }));
 
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: selectMock, insert: insertMock },
+  getMigrationDb: () => ({ select: selectMock, insert: insertMock }),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
