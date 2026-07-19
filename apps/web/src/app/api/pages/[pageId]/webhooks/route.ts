@@ -40,6 +40,7 @@ export async function GET(request: Request, context: { params: Promise<{ pageId:
 
     const rows = await db.query.pageWebhooks.findMany({
       where: eq(pageWebhooks.pageId, pageId),
+      limit: 100,
     });
 
     return NextResponse.json({ webhooks: rows.map(toPublicWebhook) });
