@@ -185,8 +185,8 @@ export async function resolveMachineSandbox(
   }
 
   // Both `projectName` AND `branchName` must be set for true branch scope —
-  // matching `resolveScopeKey`/`resolveScopeLocation`'s own discriminator
-  // (`agent-terminals.ts`), rather than relying on the implicit invariant
+  // matching `resolveScopeKey`'s own discriminator (`agent-terminals.ts`),
+  // rather than relying on the implicit invariant
   // that a real `resolveAgentTerminal` already rejects `branchName` without
   // `projectName` as `invalid_target` before ever reaching here. Checking
   // both explicitly means this gate stays correct even if that upstream
