@@ -205,7 +205,7 @@ describe('NodeActionPalette', () => {
     });
   });
 
-  test('"New terminal" offers shell, claude, and codex — not pagespace-cli — with shell first/default', async () => {
+  test('"New terminal" offers shell, claude, codex, and the PageSpace Agent — not pagespace-cli — with shell first/default', async () => {
     renderPalette(<NodeActionPalette machineId="m1" node={MACHINE_NODE} onWorkspaceCreated={vi.fn()} />);
 
     const user = await openPalette();
@@ -218,9 +218,10 @@ describe('NodeActionPalette', () => {
 
     assert({
       given: 'the "New terminal" agent-type picker, opened',
-      should: 'offer exactly shell, claude, and codex (never pagespace-cli), defaulting to shell',
+      should:
+        'offer the shared PICKABLE_AGENT_TYPES — shell first/default, then claude, codex, and the chat agent labeled "PageSpace Agent" (never pagespace-cli); a palette-local hardcoded list is exactly what silently dropped pagespace from this surface',
       actual: { optionTexts, defaultSelected },
-      expected: { optionTexts: ['shell', 'claude', 'codex'], defaultSelected: 'shell' },
+      expected: { optionTexts: ['shell', 'claude', 'codex', 'PageSpace Agent'], defaultSelected: 'shell' },
     });
   });
 
