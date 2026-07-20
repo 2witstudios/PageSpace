@@ -4,10 +4,11 @@
  * after signature verification.
  *
  * Every decision (envelope validation, the page-type → handler mapping) is
- * delegated to page-webhook-core.ts; this module only does I/O: the page-type
- * lookup, the handler invocation, and the lastFireError bookkeeping on the
- * no-action / bad-envelope paths. Never throws — the route maps outcomes to
- * status codes without a try/catch of its own.
+ * delegated to page-webhook-core.ts; this module only does I/O: the page
+ * lookup (type + trashed state — a trashed/missing target 404s like an
+ * unknown token), the handler invocation, and the lastFireError bookkeeping
+ * on the no-action / bad-envelope paths. Never throws — the route maps
+ * outcomes to status codes without a try/catch of its own.
  *
  * WEBHOOK_HANDLERS is the whole extension surface: giving a page type a
  * default action means adding its key to WEBHOOK_HANDLER_PAGE_TYPES
@@ -68,18 +69,26 @@ export async function dispatchWebhookDelivery({
   payload: unknown;
 }): Promise<WebhookDispatchResult> {
   try {
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { type: true, isTrashed: true },
+    });
+    // Minting is blocked on trashed pages, but a page can be trashed after its
+    // webhook was created — a delivery must not keep writing into the trash.
+    // Checked before payload validation and with no bookkeeping write, so a
+    // trashed target is indistinguishable from an unknown/disabled token (the
+    // route maps 'not_found' to the same generic 404).
+    if (!page || page.isTrashed) {
+      return { kind: 'failed', error: 'not_found' };
+    }
+
     const validation = validateWebhookEnvelope(payload);
     if (!validation.ok) {
       await markWebhookFired(webhookId, validation.error);
       return { kind: 'failed', error: validation.error };
     }
 
-    const page = await db.query.pages.findFirst({
-      where: eq(pages.id, pageId),
-      columns: { type: true },
-    });
-
-    const handlerKey = resolveWebhookHandler(page?.type);
+    const handlerKey = resolveWebhookHandler(page.type);
     if (handlerKey === 'none') {
       await markWebhookFired(webhookId, 'no action configured');
       return { kind: 'no_action' };

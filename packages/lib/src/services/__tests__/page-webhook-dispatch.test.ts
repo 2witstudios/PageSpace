@@ -41,7 +41,7 @@ const DELIVERY = { webhookId: 'wh-1', pageId: 'page-1', payload: { content: 'dep
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL' });
+  mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: false });
   mockPublish.mockResolvedValue({ ok: true });
   mockMarkFired.mockResolvedValue(undefined);
 });
@@ -66,7 +66,7 @@ describe('dispatchWebhookDelivery', () => {
   });
 
   it('reports no_action for a page type without a handler and records the error on the row', async () => {
-    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT' });
+    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT', isTrashed: false });
 
     const result = await dispatchWebhookDelivery(DELIVERY);
 
@@ -76,14 +76,33 @@ describe('dispatchWebhookDelivery', () => {
     expect(mockMarkFired).toHaveBeenCalledWith('wh-1', 'no action configured');
   });
 
-  it('reports no_action when the page row has vanished — the sender still gets its 202', async () => {
+  it('reports not_found for a trashed target page — no write into the trash, no bookkeeping, indistinguishable from an unknown token', async () => {
+    mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: true });
+
+    const result = await dispatchWebhookDelivery(DELIVERY);
+
+    expect(result).toEqual({ kind: 'failed', error: 'not_found' });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockMarkFired).not.toHaveBeenCalled();
+  });
+
+  it('reports not_found when the page row is gone entirely — same generic outcome as trashed', async () => {
     mockPageFindFirst.mockResolvedValue(undefined);
 
     const result = await dispatchWebhookDelivery(DELIVERY);
 
-    expect(result).toEqual({ kind: 'no_action' });
+    expect(result).toEqual({ kind: 'failed', error: 'not_found' });
     expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockMarkFired).toHaveBeenCalledWith('wh-1', 'no action configured');
+    expect(mockMarkFired).not.toHaveBeenCalled();
+  });
+
+  it('rejects a trashed target even when the payload is invalid — the 404 wins so nothing is distinguishable', async () => {
+    mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: true });
+
+    const result = await dispatchWebhookDelivery({ ...DELIVERY, payload: null });
+
+    expect(result).toEqual({ kind: 'failed', error: 'not_found' });
+    expect(mockMarkFired).not.toHaveBeenCalled();
   });
 
   it('rejects a non-object envelope before any handler runs, and records the envelope error', async () => {
@@ -94,7 +113,6 @@ describe('dispatchWebhookDelivery', () => {
       expect(mockMarkFired).toHaveBeenCalledWith('wh-1', 'payload must be a JSON object');
     }
     expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockPageFindFirst).not.toHaveBeenCalled();
   });
 
   it('catches an unexpected page-lookup failure and reports internal_error, never throws', async () => {
