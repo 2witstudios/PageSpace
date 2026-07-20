@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { mutate } from 'swr';
 import useSWRInfinite from 'swr/infinite';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
@@ -511,11 +510,12 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   );
 
-  // Any cache entry for this task list, across every loaded offset — lets write
-  // handlers below revalidate everything fetched so far via a single call.
-  const mutateTasks = useCallback(() => mutate(
-    (key: unknown) => typeof key === 'string' && (key === tasksKeyPrefix || key.startsWith(`${tasksKeyPrefix}?`))
-  ), [tasksKeyPrefix]);
+  // useSWRInfinite's reactive cache entry lives under a synthetic `$inf$<firstPageKey>`
+  // key, not under each page's own URL — a plain-string key matcher here would silently
+  // touch dead cache entries and never actually revalidate. Only the hook's own bound
+  // `mutate` (with no args, forcing every loaded page to refetch — see swr/infinite's
+  // `_i` "revalidate all" flag) reaches the right key.
+  const mutateTasks = useCallback(() => mutateTaskPages(), [mutateTaskPages]);
 
   const data: TaskListData | undefined = useMemo(() => {
     if (!taskPages || taskPages.length === 0) return undefined;
