@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import type { UIMessage } from 'ai';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
 import { useDictationActivityStore } from '@/hooks/useSpeechRecognition';
@@ -24,7 +24,29 @@ import {
  * itself also stops any in-progress read-aloud the moment either turns on,
  * so this is a pre-check for starting a new read, not the only guard.
  */
+
+// The player is deliberately independent of any one component's lifecycle
+// (that's the whole point of the module singleton — see readAloudPlayer.ts),
+// but if EVERY mounted chat surface unmounts (e.g. the user navigates to a
+// route with no chat UI at all) there is no longer a Stop control reachable
+// anywhere, while synthesis keeps running and billing and audio keeps
+// playing. Ref-counts how many useReadAloud() consumers are currently
+// mounted; stops playback only when the count drops to zero, not on every
+// individual unmount (closing just the sidebar while the main chat is still
+// open must not interrupt a main-chat-initiated read).
+let mountedConsumers = 0;
+
 export function useReadAloud() {
+  useEffect(() => {
+    mountedConsumers += 1;
+    return () => {
+      mountedConsumers -= 1;
+      if (mountedConsumers === 0) {
+        stopReadAloud();
+      }
+    };
+  }, []);
+
   const isReadingAloud = useReadAloudPlayerStore((s) => s.isPlaying);
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
   const isDictationActive = useDictationActivityStore((s) => s.activeCount > 0);

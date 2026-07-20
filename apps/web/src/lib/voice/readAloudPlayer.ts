@@ -74,9 +74,6 @@ function getAudioContext(): AudioContext {
 
 async function synthesize(text: string, runId: number): Promise<AudioBuffer | null> {
   const { ttsVoice, ttsSpeed } = useVoiceModeStore.getState();
-  // Created before the network await so the browser still credits this
-  // AudioContext to the user gesture that triggered playback.
-  const ctx = getAudioContext();
   const controller = new AbortController();
   activeAbortController = controller;
   // A stale, already-superseded run (from a stop-then-restart) failing for
@@ -90,6 +87,14 @@ async function synthesize(text: string, runId: number): Promise<AudioBuffer | nu
     stopReadAloud();
   };
   try {
+    // Created before the network await so the browser still credits this
+    // AudioContext to the user gesture that triggered playback. Inside the
+    // try block (not before it) so a creation failure — quota exhausted,
+    // Web Audio unsupported — gets the same surface-and-stop handling as any
+    // other synthesis failure, rather than rejecting playNext()'s
+    // fire-and-forget call unhandled and leaving isPlaying stuck true with
+    // no explanation and no audio.
+    const ctx = getAudioContext();
     const response = await fetchWithAuth('/api/voice/synthesize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
