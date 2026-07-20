@@ -203,6 +203,24 @@ describe('resolveMachineSandbox', () => {
     });
   });
 
+  it('refuses a pagespace (chat-surface) target WITHOUT reading the Sprite', async () => {
+    const getSprite = spyGetSprite();
+    const result = await resolveMachineSandbox(
+      { machineId: 'm-1', name: 'assistant' },
+      {
+        resolveAgentTerminal: async () => ({ ...resolvedOk, agentType: 'pagespace' }),
+        getSprite: getSprite.fn,
+      },
+    );
+
+    assert({
+      given: 'a resolved agent terminal whose agentType is pagespace (chat surface, not pty)',
+      should: 'deny with not_a_pty_agent without touching the Sprite',
+      actual: { result, spriteCalls: getSprite.calls.length },
+      expected: { result: { ok: false, reason: 'not_a_pty_agent' }, spriteCalls: 0 },
+    });
+  });
+
   it('denies with provision_failed (and the sandboxId) when the Sprite lookup throws', async () => {
     const result = await resolveMachineSandbox(
       { machineId: 'm-1', name: 'shell' },
@@ -440,7 +458,7 @@ function buildDeps(overrides: Partial<AgentTerminalCheckAuthDeps> = {}): {
     }),
     resolveMachineRow: async () => {
       calls.resolveMachineRow += 1;
-      return { ok: true };
+      return { ok: true, agentType: 'shell' };
     },
     writeAudit: () => {},
     buildSessionKey: () => 'session-key-1',
@@ -825,6 +843,43 @@ describe('buildAgentTerminalCheckAuth', () => {
       should: 'deny with not_found from the access half, touching no Sprite',
       actual: { result, spriteCalls: sandbox.getSpriteCalls.length },
       expected: { result: { ok: false, reason: 'not_found' }, spriteCalls: 0 },
+    });
+  });
+
+  it('DENIES a pagespace (chat-surface) row from the ACCESS half itself, before the lazy sandbox thunk could ever acquire/wake the machine\'s Sprite', async () => {
+    // This is the gap a machine/project-scope target has that a direct
+    // resolveMachineSandbox() call can't see: the real resolveAgentTerminal
+    // (agent-terminals.ts) resolves the Sprite's LOCATION via
+    // machineSandbox.acquire — which can resume or reprovision a hibernating
+    // Sprite — BEFORE it even reads the row's agentType. Gating only inside
+    // resolveMachineSandbox (which only runs from the lazy resolveSandbox
+    // thunk, i.e. AFTER resolveAgentTerminal has already resolved/acquired)
+    // is too late for that scope. resolveMachineRow uses resolveScopeKey
+    // instead, which never touches machineSandbox at all, so denying here is
+    // the earliest point that's both correct and Sprite-free.
+    const sandbox = sandboxSpy(async () => ({ ...resolvedOk, agentType: 'pagespace' }));
+    const denials: string[] = [];
+    const { deps } = buildDeps({
+      resolveSandbox: sandbox.fn,
+      resolveMachineRow: async () => ({ ok: true, agentType: 'pagespace' }),
+      logDenied: (reason) => {
+        denials.push(reason);
+      },
+    });
+    const checkAuth = buildAgentTerminalCheckAuth(deps);
+
+    const result = await checkAuth({ userId: 'u-1', machineId: 'm-1', name: 'assistant' });
+
+    assert({
+      given: 'a resolveMachineRow that reports a chat-surface (pagespace) agentType for a machine-scope target',
+      should: 'deny with not_a_pty_agent from the access half alone, never calling resolveSandbox or touching a Sprite',
+      actual: { result, denials, sandboxCalls: sandbox.calls, spriteCalls: sandbox.getSpriteCalls.length },
+      expected: {
+        result: { ok: false, reason: 'not_a_pty_agent' },
+        denials: ['not_a_pty_agent'],
+        sandboxCalls: 0,
+        spriteCalls: 0,
+      },
     });
   });
 

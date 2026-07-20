@@ -20,7 +20,7 @@
  * testable with none.
  */
 
-import { resolveAgentLaunchSpec } from '@pagespace/lib/services/machines/agent-terminal-types';
+import { isPtyAgentType, resolveAgentLaunchSpec, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
 import type { ResolveAgentTerminalResult } from '@pagespace/lib/services/machines/agent-terminals';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -158,8 +158,9 @@ export type ResolveMachineSandboxResult =
 /**
  * Resolve the Sprite a FRESH PTY will attach to: resolve the agent-terminal row
  * to its sandbox, then read that Sprite once. A read-only resolve failure never
- * touches the Sprite; a vanished Sprite (getSprite throws) denies with
- * `provision_failed`.
+ * touches the Sprite; a chat-surface agentType (e.g. `pagespace`) denies with
+ * `not_a_pty_agent` before the Sprite is touched; a vanished Sprite (getSprite
+ * throws) denies with `provision_failed`.
  */
 export async function resolveMachineSandbox(
   target: ResolveMachineSandboxTarget,
@@ -167,6 +168,12 @@ export async function resolveMachineSandbox(
 ): Promise<ResolveMachineSandboxResult> {
   const resolved = await deps.resolveAgentTerminal(target);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
+
+  // Belt-and-suspenders over the socket layer's own `not_a_pty_agent` deny: a
+  // buggy client emitting `agent-terminal:connect` for a chat-surface
+  // (`pagespace`) session must be refused here too, before ever touching the
+  // Sprite — the socket deny path and this one share the same reason string.
+  if (!isPtyAgentType(resolved.agentType)) return { ok: false, reason: 'not_a_pty_agent' };
 
   const spec = resolveAgentLaunchSpec(resolved.agentType);
 
@@ -241,8 +248,16 @@ export interface AgentTerminalCheckAuthDeps {
    * Part of the ACCESS half precisely because it is cheap: authorization must
    * keep noticing that a terminal's project/branch/row was deleted, and the 60s
    * re-auth tick (which never resolves a sandbox) is the only thing that will.
+   *
+   * Surfaces `agentType` on success — unlike `resolveAgentTerminal`, resolving
+   * this row's SCOPE (`resolveScopeKey`) never touches `machineSandbox.acquire`
+   * even for machine/project scope, so this is the earliest point a chat-surface
+   * (`pagespace`) row can be denied `not_a_pty_agent` WITHOUT first waking or
+   * reprovisioning the Machine's Sprite — `resolveMachineSandbox`'s own guard
+   * runs too late for that (it only sees the row after `resolveAgentTerminal`
+   * has already resolved the Sprite's location via `machineSandbox.acquire`).
    */
-  resolveMachineRow: (target: ResolveMachineSandboxTarget) => Promise<{ ok: true } | { ok: false; reason: string }>;
+  resolveMachineRow: (target: ResolveMachineSandboxTarget) => Promise<{ ok: true; agentType: AgentRuntimeType } | { ok: false; reason: string }>;
   writeAudit: (input: { userId: string; actorEmail: string; driveId: string; command: string }) => void;
   buildSessionKey: (args: { machineId: string; projectName?: string; branchName?: string; name: string }) => string;
   logDenied: (reason: string, context: Record<string, unknown>) => void;
@@ -306,6 +321,17 @@ export function buildAgentTerminalCheckAuth(deps: AgentTerminalCheckAuthDeps): A
     if (!machineRow.ok) {
       deps.logDenied(machineRow.reason, { userId, machineId, projectName, branchName, name });
       return { ok: false, reason: machineRow.reason };
+    }
+
+    // Belt-and-suspenders over the socket layer's own `not_a_pty_agent` deny,
+    // enforced HERE (not only in `resolveMachineSandbox`) because this is the
+    // earliest point the row's agentType is known WITHOUT having already
+    // acquired (and possibly woken/reprovisioned) the machine/project scope's
+    // Sprite — that acquisition happens inside `resolveAgentTerminal`, which
+    // the lazy `resolveSandbox` thunk below only calls for pty-surface rows.
+    if (!isPtyAgentType(machineRow.agentType)) {
+      deps.logDenied('not_a_pty_agent', { userId, machineId, projectName, branchName, name });
+      return { ok: false, reason: 'not_a_pty_agent' };
     }
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
