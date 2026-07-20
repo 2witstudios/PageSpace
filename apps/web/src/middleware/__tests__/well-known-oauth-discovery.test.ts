@@ -23,6 +23,7 @@ vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse: vi.fn(),
+  isHandoffBridgeRoute: vi.fn((pathname: string) => pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback'),
   isPublicPageRoute: vi.fn(() => false),
   isPublishedSiteHost: vi.fn(() => false),
   shouldDisableCOEP: vi.fn(() => false),
