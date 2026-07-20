@@ -65,6 +65,7 @@ import { PATCH } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { favorites } from '@pagespace/db/schema/core';
+import { db } from '@pagespace/db/db';
 
 const mockUserId = 'user_123';
 
@@ -158,5 +159,31 @@ describe('PATCH /api/user/favorites/reorder locked-batch reorder', () => {
     expect(response.status).toBe(403);
     expect(mockTransaction).not.toHaveBeenCalled();
     expect(mockLockedBatchReorder).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 and skips all DB work when orderedIds exceeds the batch bound', async () => {
+    // lockedBatchReorder's batched UPDATE ... FROM (VALUES ...) binds 2 params
+    // per row + 1 scope param; an unbounded array can cross Postgres's 65,535
+    // param ceiling and 500 instead of failing cleanly. Reject up front.
+    const oversized = Array.from({ length: 5001 }, (_, i) => `fav-${i}`);
+    const response = await PATCH(createRequest({ orderedIds: oversized }));
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toMatch(/must not exceed/);
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockLockedBatchReorder).not.toHaveBeenCalled();
+  });
+
+  it('allows a batch exactly at the bound', async () => {
+    const atBound = Array.from({ length: 5000 }, (_, i) => `fav-${i}`);
+    vi.mocked(db.query.favorites.findMany).mockResolvedValueOnce(
+      atBound.map((id) => ({ id })) as never
+    );
+
+    const response = await PATCH(createRequest({ orderedIds: atBound }));
+
+    expect(response.status).toBe(200);
+    expect(mockLockedBatchReorder).toHaveBeenCalledTimes(1);
   });
 });
