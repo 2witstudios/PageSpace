@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
+import { HANDOFF_BRIDGE_ROUTE_PATHS } from '@/app/api/auth/_shared/handoffBridgeRoutes';
 
 export const NONCE_HEADER = 'x-nonce';
 
@@ -289,16 +290,14 @@ export const isPublishedSiteHost = (host: string | null | undefined): boolean =>
 };
 
 // OAuth callback routes that return their OWN styled HTML "handoff bridge" page
-// (buildHandoffBridgeResponse) with a bespoke CSP allowing an inline <style> block.
-// Middleware must NOT layer its restrictive API CSP (default-src 'none', no style-src)
-// on top — browsers enforce the intersection of all delivered CSPs, which would fall
-// style-src back to 'none' and block the page's inline styles. See:
-//   apps/web/src/app/api/auth/google/callback/route.ts (desktop branch)
-//   apps/web/src/app/api/auth/apple/callback/route.ts  (desktop branch)
-//   apps/web/src/app/api/auth/_shared/handoffBridgeResponse.ts (the route-owned CSP)
-// Their other returns are redirects, which need no CSP, so skipping is safe path-wide.
+// with a bespoke CSP allowing an inline <style> block. Middleware must NOT layer
+// its restrictive API CSP (default-src 'none', no style-src) on top — browsers
+// enforce the intersection of all delivered CSPs, which would fall style-src back
+// to 'none' and block the page's inline styles. The path list is the shared
+// HANDOFF_BRIDGE_ROUTE_PATHS constant (colocated with the CSP it protects); their
+// other returns are redirects, which need no CSP, so skipping is safe path-wide.
 export const isHandoffBridgeRoute = (pathname: string): boolean =>
-  pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback';
+  (HANDOFF_BRIDGE_ROUTE_PATHS as readonly string[]).includes(pathname);
 
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
