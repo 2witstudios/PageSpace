@@ -1317,6 +1317,11 @@
       "import": "./dist/security/path-validator.js",
       "require": "./dist/security/path-validator.js"
     },
+    "./security/webhook-signature": {
+      "types": "./dist/security/webhook-signature.d.ts",
+      "import": "./dist/security/webhook-signature.js",
+      "require": "./dist/security/webhook-signature.js"
+    },
     "./auth/constants": {
       "types": "./dist/auth/constants.d.ts",
       "import": "./dist/auth/constants.js",
