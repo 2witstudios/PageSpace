@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { Check, Copy, Webhook } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
@@ -26,20 +26,21 @@ interface WebhookRow {
   lastFireError: string | null;
 }
 
-interface ChannelWebhooksDialogProps {
+interface PageWebhooksDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pageId: string;
+  pageType: string;
 }
 
-const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string }> => {
+const webhooksFetcher = async (url: string): Promise<{ webhooks: WebhookRow[] } | { error: string; status: number }> => {
   const res = await fetchWithAuth(url);
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) return { error: body.error ?? 'Failed to load webhooks' };
+  if (!res.ok) return { error: body.error ?? 'Failed to load webhooks', status: res.status };
   return body;
 };
 
-export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWebhooksDialogProps) {
+function PageWebhooksDialogImpl({ open, onOpenChange, pageId, pageType }: PageWebhooksDialogProps) {
   const key = open ? `/api/pages/${pageId}/webhooks` : null;
   const { data, isLoading, mutate: refetch } = useSWR(key, webhooksFetcher, { revalidateOnFocus: false });
 
@@ -55,7 +56,9 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
     }
   }, [open]);
 
-  const forbidden = data && 'error' in data;
+  const errorStatus = data && 'error' in data ? data.status : null;
+  const forbidden = errorStatus === 403;
+  const loadFailed = errorStatus !== null && errorStatus !== 403;
   const webhooks = data && 'webhooks' in data ? data.webhooks : [];
 
   const createWebhook = async () => {
@@ -116,10 +119,14 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Webhook className="h-4 w-4" />
-            Webhooks
+            Incoming Webhooks
           </DialogTitle>
           <DialogDescription>
-            External systems can post messages into this channel by sending signed requests to a webhook URL.
+            {/* CHANNEL is the one type with a default delivery action today — the same
+                special case the intake route carries until the dispatch map lands. */}
+            {pageType === 'CHANNEL'
+              ? 'External systems can post messages into this channel by sending signed requests to a webhook URL.'
+              : 'External systems can push events to this page by sending signed requests to a webhook URL.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -127,8 +134,15 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
           <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
         ) : forbidden ? (
           <p className="text-sm text-muted-foreground py-4">
-            Only this drive&apos;s owner or an admin can manage webhooks for a channel.
+            Only this drive&apos;s owner or an admin can manage webhooks.
           </p>
+        ) : loadFailed ? (
+          <div className="flex items-center justify-between gap-2 py-4">
+            <p className="text-sm text-muted-foreground">Failed to load webhooks.</p>
+            <Button type="button" variant="outline" size="sm" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </div>
         ) : revealed ? (
           <div className="space-y-3 py-2">
             <p className="text-sm">
@@ -170,7 +184,8 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
 
             {webhooks.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No webhooks yet — create one to let an external system (CI, monitoring, a script) post messages here.
+                No webhooks yet — create one to let an external system (CI, monitoring, a script) send
+                events to this page.
               </p>
             ) : (
               <div className="space-y-2">
@@ -217,3 +232,7 @@ export function ChannelWebhooksDialog({ open, onOpenChange, pageId }: ChannelWeb
     </Dialog>
   );
 }
+
+// Memoized: AiChatView re-renders per streaming token, and every prop here is
+// stable/primitive — memo skips the closed dialog's subtree on all of them.
+export const PageWebhooksDialog = memo(PageWebhooksDialogImpl);

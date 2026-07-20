@@ -20,7 +20,7 @@ import { MessageReactions, type Reaction } from '@/components/shared/MessageReac
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Lock, Check, X, MessageSquareText, Webhook } from 'lucide-react';
-import { ChannelWebhooksDialog } from './ChannelWebhooksDialog';
+import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
@@ -641,20 +641,22 @@ function ChannelView({ page }: ChannelViewProps) {
     <div className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
-          {canEdit && (
-            <button
-              type="button"
-              onClick={() => setWebhooksOpen(true)}
-              title="Webhooks"
-              className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            >
-              <Webhook size={14} aria-hidden />
-            </button>
-          )}
-          <ChannelWebhooksDialog
+          {/* Deliberately not permission-gated: the dialog itself explains the
+              owner/admin requirement, so the feature stays discoverable. */}
+          <button
+            type="button"
+            onClick={() => setWebhooksOpen(true)}
+            title="Incoming Webhooks"
+            aria-label="Incoming Webhooks"
+            className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Webhook size={14} aria-hidden />
+          </button>
+          <PageWebhooksDialog
             open={webhooksOpen}
             onOpenChange={setWebhooksOpen}
             pageId={page.id}
+            pageType="CHANNEL"
           />
           <Conversation className="h-full">
             <ConversationContent className="max-w-4xl mx-auto p-4">
