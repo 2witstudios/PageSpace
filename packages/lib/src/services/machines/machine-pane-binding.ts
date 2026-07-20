@@ -22,7 +22,14 @@ import type { MachineAgentTerminalStore } from './agent-terminals-store';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
 
-/** The agent-terminal `agentType` that marks a row as a PageSpace Agent pane (not a PTY session). */
+/**
+ * The agent-terminal `agentType` that marks a row as a PageSpace Agent pane
+ * (not a PTY session). Hardcoded here rather than imported from
+ * `agent-terminal-types.ts`'s `AGENT_LAUNCH_SPECS` registry because that
+ * registry's own `pagespace` entry (issue #2166 step 1) lands in a separate,
+ * parallel phase not yet on this branch — reconcile against its canonical
+ * constant once that phase merges, instead of duplicating the literal.
+ */
 const PAGESPACE_AGENT_TYPE = 'pagespace';
 
 export type MachinePaneBindingFailureReason = 'binding_page_mismatch' | 'project_not_found' | 'branch_not_found';
@@ -72,6 +79,15 @@ export interface DeriveMachinePaneBindingDeps {
  * machine-bound). A resolved `pagespace` row that fails page-identity or
  * scope-existence checks fails CLOSED (`ok: false`) rather than falling back
  * to an unbound run.
+ *
+ * PERFORMS NO ACCESS CHECK on `input.chatId` itself (mirrors the same
+ * explicit caveat on `resolveAgentTerminalById` in `agent-terminals.ts`) —
+ * the `binding_page_mismatch` check only verifies that the resolved row is
+ * INTERNALLY CONSISTENT with the `chatId` the caller supplied, not that the
+ * caller is entitled to that machine. Whoever wires the actual call site
+ * (issue #2166 phases 6/7) MUST authorize the acting user against `chatId`
+ * BEFORE calling this — the same way the chat route already authorizes page
+ * access for every request.
  */
 export async function deriveMachinePaneBinding(
   input: DeriveMachinePaneBindingInput,
