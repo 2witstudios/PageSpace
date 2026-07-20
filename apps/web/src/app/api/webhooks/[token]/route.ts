@@ -77,14 +77,17 @@ export async function POST(request: Request, context: { params: Promise<{ token:
 
     // Fire bound workflows AFTER the HTTP response so the sender is never held
     // on AI latency — one signed delivery both runs its default page-type
-    // action (above) AND fires any bound workflows. Skipped only for a delivery
-    // that never reached a valid page: the dispatcher returns 'not_found'
-    // BEFORE any handler for a trashed/missing target, and firing into the
-    // trash makes no sense. A default-handler failure (rate limit, bad channel
-    // payload) does NOT suppress the fan-out — the workflow envelope is
-    // arbitrary JSON, independent of the channel handler's own contract.
-    const reachedPage = !(result.kind === 'failed' && result.error === 'not_found');
-    if (reachedPage && enabledTriggers.length > 0) {
+    // action (above) AND fires any bound workflows. Gated on an ACCEPTED (2xx)
+    // delivery only: 'handled' (default action ran) or 'no_action' (no default
+    // handler). Every 'failed' outcome — a malformed/rejected envelope (400), a
+    // rate limit (429), a trashed/missing page (404), an internal error (500) —
+    // is a non-2xx the sender is expected to RETRY, so firing AI/tool side
+    // effects there would both act on a rejected delivery and duplicate on the
+    // retry. A valid delivery to a channel with bound triggers still composes:
+    // it posts (handled → 200) AND fires; an arbitrary-JSON delivery to a
+    // no-handler page fires via no_action → 202.
+    const deliveryAccepted = result.kind === 'handled' || result.kind === 'no_action';
+    if (deliveryAccepted && enabledTriggers.length > 0) {
       after(() => firePageWebhookTriggers(enabledTriggers, body));
     }
 

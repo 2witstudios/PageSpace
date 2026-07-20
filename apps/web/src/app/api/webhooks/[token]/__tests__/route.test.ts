@@ -273,7 +273,7 @@ describe('POST /api/webhooks/[token]', () => {
     expect(mockFireTriggers).not.toHaveBeenCalled();
   });
 
-  it('still fires triggers when the default handler fails for a non-not_found reason (independent envelopes)', async () => {
+  it('does NOT fire triggers when the default handler fails (429) — a retryable non-2xx must not perform AI side effects', async () => {
     mockDispatch.mockResolvedValue({ kind: 'failed', error: 'rate_limited' });
     const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
     mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
@@ -281,7 +281,18 @@ describe('POST /api/webhooks/[token]', () => {
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
 
     expect(response.status).toBe(429);
-    expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+    expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire triggers for a rejected/malformed envelope (400) — no AI side effects on a rejected, retryable delivery', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'payload must be a JSON object' });
+    const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+    mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+
+    const response = await POST(signedRequest('not json'), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    expect(response.status).toBe(400);
+    expect(mockFireTriggers).not.toHaveBeenCalled();
   });
 
   it('treats a trigger lookup failure as no triggers — never crashes, dispatcher told hasEnabledTriggers:false', async () => {
