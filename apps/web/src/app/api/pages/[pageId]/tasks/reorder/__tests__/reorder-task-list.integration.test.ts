@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { factories } from '@pagespace/db/test/factories';
@@ -25,6 +25,34 @@ import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { reorderTaskListChildren } from '../reorder-task-list';
 
 let dbAvailable = false;
+
+/**
+ * Polls pg_locks (from a separate connection than the one holding the lock)
+ * until `backendPid` is observed actually holding a granted lock on `pages`.
+ * A fixed sleep-then-fire "head start" would make this test's pass/fail
+ * depend on whether that guess happened to be long enough under whatever
+ * load the CI runner is under that day — this instead confirms the lock is
+ * held before the concurrent trash attempt fires, so the test is
+ * deterministic rather than timing-guessed.
+ */
+async function waitForPagesLock(backendPid: number, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // mode = 'RowShareLock' is specifically the lock FOR SHARE/FOR UPDATE
+    // selects take — a plain unlocked SELECT only ever takes the much
+    // weaker, always-present AccessShareLock, so filtering by mode is what
+    // makes this a genuine proof that reorderTaskListChildren's FOR SHARE
+    // ran, not just that some connection touched the pages table.
+    const result = await db.execute(sql`
+      SELECT 1 FROM pg_locks
+      WHERE pid = ${backendPid} AND relation = 'pages'::regclass AND mode = 'RowShareLock' AND granted = true
+      LIMIT 1
+    `);
+    if (result.rows.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for backend ${backendPid} to hold a lock on pages`);
+}
 
 describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
   beforeAll(async () => {
@@ -54,9 +82,12 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
     }).returning();
 
     const HOLD_MS = 500;
+    let backendPid: number | undefined;
 
     const plan = computeReorderPlan([{ id: task.id, position: 9 }]);
     const reorderPromise = db.transaction(async (tx) => {
+      const pidResult = await tx.execute(sql`SELECT pg_backend_pid() as pid`);
+      backendPid = (pidResult.rows[0] as { pid: number }).pid;
       const lockedIds = await reorderTaskListChildren(tx, taskListPage.id, plan);
       // Hold the FOR SHARE lock open for a measurable window so the
       // concurrent trash attempt below is provably blocked, not just fast.
@@ -64,9 +95,13 @@ describe('reorderTaskListChildren concurrency (Postgres row lock)', () => {
       return lockedIds;
     });
 
-    // Give the reorder transaction a head start to acquire its FOR SHARE
-    // lock before the trash attempt fires.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait until the reorder transaction is actually observed holding its
+    // lock (not a fixed delay guess) before firing the concurrent trash.
+    await new Promise((resolve) => setTimeout(resolve, 0)); // let the transaction above start executing
+    while (backendPid === undefined) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await waitForPagesLock(backendPid);
 
     const trashStart = performance.now();
     await db.update(pages).set({ isTrashed: true }).where(eq(pages.id, childPage.id));
