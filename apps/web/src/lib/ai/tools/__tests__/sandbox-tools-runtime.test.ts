@@ -328,6 +328,43 @@ describe('createMachineDirectory', () => {
       await directory.listMachines({ userId: 'u1', parentAgentId: 'parent-agent-1' });
       expect(seen).toEqual(['parent-agent-1']);
     });
+
+    describe('machine-bound "PageSpace Agent" panes (machineBinding)', () => {
+      it('given a machineBinding, should collapse to exactly the bound machine — ignoring the agent\'s own configured machine list entirely', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({
+            getAgentConfig: async () => ({
+              machineAccess: true,
+              machines: [{ kind: 'own' }, { kind: 'existing', machineId: 'other-1' }],
+            }),
+          }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: { machineId: 'bound-1', cwd: '/workspace' },
+        };
+        await expect(directory.listMachines(context)).resolves.toEqual([
+          { kind: 'existing', machineId: 'bound-1' },
+        ]);
+      });
+
+      it('given a machineBinding on the global assistant context, should still collapse to the bound machine (not resolve the global config at all)', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({
+            getGlobalConfig: async () => ({ machineAccess: false, machines: [] }),
+          }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'global' },
+          machineBinding: { machineId: 'bound-1', cwd: '/workspace' },
+        };
+        await expect(directory.listMachines(context)).resolves.toEqual([
+          { kind: 'existing', machineId: 'bound-1' },
+        ]);
+      });
+    });
   });
 
   describe('describeMachine', () => {
@@ -517,6 +554,81 @@ describe('createMachineDirectory', () => {
         );
         const decision = await directory.isMachineAccessible(pageContext, { kind: 'existing', machineId: 't1' });
         expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
+      });
+    });
+
+    describe('machine-bound "PageSpace Agent" panes (machineBinding)', () => {
+      const machineDenyingPageAgents = async () => ({
+        title: 'Locked Machine',
+        type: 'MACHINE',
+        driveId: 'drive-1',
+        isTrashed: false,
+        allowPageAgents: false,
+        visibleToGlobalAssistant: true,
+      });
+
+      it('given the BOUND machine, should allow even though its allowPageAgents toggle is off — the binding IS the entitlement', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: { machineId: 't1', cwd: '/workspace' },
+        };
+        await expect(
+          directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
+        ).resolves.toEqual({ allowed: true });
+      });
+
+      it('given a DIFFERENT machine than the one bound, should keep the full toggle checks and deny', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: { machineId: 'bound-1', cwd: '/workspace' },
+        };
+        const decision = await directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' });
+        expect(decision).toMatchObject({ allowed: false, code: 'page_agents_disabled' });
+      });
+
+      it('given the BOUND machine but its page is trashed, should still deny — existence/trash checks are never bypassed', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({
+            findPage: async () => ({
+              title: 'Trashed Machine',
+              type: 'MACHINE',
+              driveId: 'drive-1',
+              isTrashed: true,
+              allowPageAgents: false,
+              visibleToGlobalAssistant: true,
+            }),
+          }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: { machineId: 't1', cwd: '/workspace' },
+        };
+        await expect(
+          directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
+        ).resolves.toEqual({ allowed: false });
+      });
+
+      it('given the BOUND machine but the actor cannot view its page, should still deny — canActorViewPage is never bypassed', async () => {
+        const directory = createMachineDirectory(
+          makeMachineDirectoryDeps({ findPage: machineDenyingPageAgents, canViewPage: async () => false }),
+        );
+        const context: ToolExecutionContext = {
+          userId: 'u1',
+          chatSource: { type: 'page', agentPageId: 'agent-1' },
+          machineBinding: { machineId: 't1', cwd: '/workspace' },
+        };
+        await expect(
+          directory.isMachineAccessible(context, { kind: 'existing', machineId: 't1' }),
+        ).resolves.toEqual({ allowed: false });
       });
     });
 
