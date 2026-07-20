@@ -5,6 +5,7 @@ const mockValidateOriginForMiddleware = vi.hoisted(() => vi.fn());
 const mockIsOriginValidationBlocking = vi.hoisted(() => vi.fn());
 const mockGetSessionFromCookies = vi.hoisted(() => vi.fn());
 const mockLogSecurityEvent = vi.hoisted(() => vi.fn());
+const mockCreateSecureResponse = vi.hoisted(() => vi.fn());
 
 vi.mock('@/middleware/monitoring', () => ({
   monitoringMiddleware: (_req: unknown, handler: () => unknown) => handler(),
@@ -18,7 +19,7 @@ const MOCK_API_CORS_HEADERS: Record<string, string> = {
 };
 
 vi.mock('@/middleware/security-headers', () => ({
-  createSecureResponse: () => ({ response: NextResponse.json({ ok: true }, { status: 200 }) }),
+  createSecureResponse: mockCreateSecureResponse,
   // Kept faithful to the real implementation's rewrite: the whole point of the
   // /dashboard branch is that Next emits an x-middleware-rewrite header instead
   // of a 307, so a stub that dropped it would assert nothing.
@@ -27,6 +28,11 @@ vi.mock('@/middleware/security-headers', () => ({
     nonce: 'test-nonce',
   }),
   createSecureErrorResponse: (body: unknown, status: number) => NextResponse.json(body, { status }),
+  // Real predicate logic — middleware passes its result as `skipCSP` so the
+  // handoff-bridge OAuth callbacks don't get a middleware CSP layered on top of
+  // their own (see the isHandoffBridgeRoute describe block below).
+  isHandoffBridgeRoute: (pathname: string) =>
+    pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback',
   isPublicPageRoute: () => false,
   isPublishedSiteHost: () => false,
   isSecureRequest: () => true,
@@ -66,6 +72,12 @@ vi.mock('@/lib/well-known/rewrites', () => ({
 }));
 
 import { middleware } from '../middleware';
+
+// clearAllMocks() (used in every beforeEach) resets calls but keeps this
+// implementation, so a single default set here survives the whole suite.
+mockCreateSecureResponse.mockImplementation(() => ({
+  response: NextResponse.json({ ok: true }, { status: 200 }),
+}));
 
 const buildRequest = (pathname: string, headers: Record<string, string> = {}, method = 'GET') =>
   new NextRequest(new URL(`http://localhost${pathname}`), { headers, method });
@@ -332,5 +344,42 @@ describe('middleware — unauthenticated /dashboard rewrites instead of redirect
 
     expect(response.status).toBe(401);
     expect(rewriteTarget(response)).toBeNull();
+  });
+});
+
+// The desktop/native OAuth callbacks return their own styled HTML "handoff
+// bridge" with a bespoke CSP that allows an inline <style> block. Middleware
+// must tell createSecureResponse to skip its own CSP for these paths, so the two
+// policies don't intersect and fall style-src back to default-src 'none'
+// (which blocked the bridge's inline styles — the reported regression).
+describe('middleware — handoff-bridge OAuth callbacks skip the middleware CSP', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: '' });
+    mockIsOriginValidationBlocking.mockReturnValue(false);
+  });
+
+  it.each(['/api/auth/google/callback', '/api/auth/apple/callback'])(
+    'calls createSecureResponse with skipCSP: true for %s',
+    async (pathname) => {
+      await middleware(buildRequest(pathname));
+
+      expect(mockCreateSecureResponse).toHaveBeenCalledWith(
+        expect.any(Boolean),
+        expect.anything(),
+        expect.objectContaining({ skipCSP: true }),
+      );
+    },
+  );
+
+  it('does NOT skip the CSP for a normal public API route (control)', async () => {
+    await middleware(buildRequest('/api/auth/csrf'));
+
+    expect(mockCreateSecureResponse).toHaveBeenCalledWith(
+      expect.any(Boolean),
+      expect.anything(),
+      expect.objectContaining({ skipCSP: false }),
+    );
   });
 });
