@@ -295,15 +295,16 @@ describe('POST /api/webhooks/[token]', () => {
     expect(mockFireTriggers).not.toHaveBeenCalled();
   });
 
-  it('treats a trigger lookup failure as no triggers — never crashes, dispatcher told hasEnabledTriggers:false', async () => {
-    mockDispatch.mockResolvedValue({ kind: 'no_action' });
+  it('returns a retryable 503 (no dispatch, no fan-out) when the trigger lookup fails — never silently drops bound workflows', async () => {
     mockFindTriggers.mockResolvedValue({ success: false, error: 'db down' });
 
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
 
-    expect(response.status).toBe(202);
-    expect(await response.json()).toEqual({ accepted: true, action: 'none' });
-    expect(mockDispatch).toHaveBeenCalledWith(expect.objectContaining({ hasEnabledTriggers: false }));
+    // A transient lookup failure must reject the whole delivery as retryable —
+    // not post to the channel, not fire workflows, not answer 2xx (which would
+    // stop the sender retrying and permanently drop the bound workflows).
+    expect(response.status).toBe(503);
+    expect(mockDispatch).not.toHaveBeenCalled();
     expect(mockFireTriggers).not.toHaveBeenCalled();
   });
 });

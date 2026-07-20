@@ -55,19 +55,27 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       body = null;
     }
 
-    // Resolve the enabled workflow triggers bound to this webhook once. The
-    // count tells the dispatcher a page with triggers isn't a no-op (it records
-    // the delivery as fired instead of 'no action configured') and decides the
-    // route's no-action vs triggers 202. This is the single trigger lookup for
-    // the delivery.
+    // Resolve the enabled workflow triggers bound to this webhook once, BEFORE
+    // dispatch. The count tells the dispatcher a page with triggers isn't a
+    // no-op (it records the delivery as fired instead of 'no action configured')
+    // and decides the route's no-action vs triggers 202.
+    //
+    // A transient failure here must NOT be silently treated as "no triggers":
+    // that would drop every bound workflow while returning a 2xx the sender
+    // won't retry (and mis-report action:'none' on a no-handler page). Reject
+    // the whole delivery as retryable (5xx) BEFORE dispatch, so no channel post
+    // happens either and the sender's retry can't duplicate it — a healthy
+    // retry then resolves the triggers and dispatches both actions. (v1 has no
+    // durable delivery queue; retry is the at-least-once mechanism.)
     const triggerLookup = await findEnabledPageWebhookTriggers(webhook.id);
     if (!triggerLookup.success) {
-      loggers.api.warn('Page webhook: trigger lookup failed', {
+      loggers.api.error('Page webhook: trigger lookup failed — returning retryable 503', {
         webhookId: webhook.id,
         error: triggerLookup.error,
       });
+      return NextResponse.json({ error: 'Service unavailable' }, { status: 503 });
     }
-    const enabledTriggers = triggerLookup.success ? triggerLookup.data : [];
+    const enabledTriggers = triggerLookup.data;
 
     const result = await dispatchWebhookDelivery({
       webhookId: webhook.id,
