@@ -102,7 +102,7 @@ Once bound, the workflow receives the full JSON payload as context (wrapped so t
 ### Try it yourself (manual end-to-end check)
 
 1. Create a Channel page and open its **Incoming Webhooks** dialog (the webhook icon in the page toolbar, titled "Incoming Webhooks") to mint a webhook. Save the URL and secret.
-2. Create a workflow (an AI Chat agent with a scheduled/triggerable prompt) in the same drive, then bind it to the webhook with the API call above.
+2. Create a workflow from the drive's **Workflows** dashboard (\`/dashboard/<driveId>/workflows\`) — it needs a name, a prompt, an AI Chat agent page to run against, and a cron schedule (the schedule still applies; binding a trigger just adds "also run on a webhook delivery" on top of it). Bind it to the webhook with the API call above.
 3. Send one signed \`POST\` with \`{"content": "Deploy finished"}\` using either signing example above.
 4. Confirm **both** things happened from that single request: the message \`Deploy finished\` appears verbatim in the channel, **and** a new run shows up for the bound workflow (its agent page picks up the delivery as context).
 
