@@ -10,6 +10,7 @@ import {
   isBootstrapped,
   bootstrapWorkspaces,
   type MachineWorkspacesDeps,
+  type WorkspaceLayoutInput,
 } from '../machine-workspaces';
 import type { MachineWorkspaceStore, MachineWorkspaceRecord, NewMachineWorkspaceInput } from '../machine-workspaces-store';
 
@@ -153,6 +154,19 @@ describe('isValidWorkspaceName / planWorkspacePayload', () => {
   it('accepts a well-shaped payload', () => {
     const plan = planWorkspacePayload({ name: 'Workspace 1', layout: VALID_COLUMNS });
     expect(plan).toEqual({ ok: true, name: 'Workspace 1', layout: VALID_COLUMNS });
+  });
+
+  // #2166 phase 9 — the client tags a pane's bound scope with a content kind
+  // ('terminal' | 'chat'); this mirror type and its lenient runtime check must
+  // tolerate it so a workspace layout carrying the tag round-trips through create/update.
+  it('accepts a pane scope carrying the content kind — mirrors the client\'s tagged bound scope, lenient by design', () => {
+    const layoutWithKind: WorkspaceLayoutInput = {
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+    };
+
+    const plan = planWorkspacePayload({ name: 'Workspace 1', layout: layoutWithKind });
+
+    expect(plan).toEqual({ ok: true, name: 'Workspace 1', layout: layoutWithKind });
   });
 });
 

@@ -580,6 +580,35 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
+  it('given hydrateFromServer with a pane scope carrying the content kind, should round-trip it (#2166 phase 9)', () => {
+    store().hydrateFromServer('m1', [
+      {
+        id: 'ws-1',
+        name: 'Workspace 1',
+        scope: {},
+        columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+      },
+    ]);
+
+    assert({
+      given: "the sync hook's initial hydrate carrying a pane tagged kind: 'chat'",
+      should: 'round-trip the content kind into the store',
+      actual: panesOf(activeOf('m1')!)[0]?.scope,
+      expected: { name: 'claude-a1', kind: 'chat' },
+    });
+  });
+
+  it('given hydrateFromServer for an unknown machine id, should still create a usable entry (no-op-on-unknown baseline)', () => {
+    store().hydrateFromServer('never-seen', []);
+
+    assert({
+      given: 'a hydrate call for a machine this browser never ensured',
+      should: 'converge on an empty, renderable machine rather than error',
+      actual: { active: selectMachine('never-seen')(store())?.activeWorkspaceId, workspaces: workspacesOf(selectMachine('never-seen')(store())).length },
+      expected: { active: '', workspaces: 0 },
+    });
+  });
+
   it('given applyServerUpsert for an unseen workspace id, should add it', () => {
     seedMachine('m1');
     const existing = activeOf('m1')!;
