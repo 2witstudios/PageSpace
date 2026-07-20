@@ -60,6 +60,7 @@ import { normalizeBranchName } from '@pagespace/lib/services/machines/branch-nam
 import {
   PICKABLE_AGENT_TYPES,
   agentSurfaceOf,
+  isAgentRuntimeType,
   type AgentRuntimeType,
 } from '@pagespace/lib/services/machines/agent-terminal-types';
 import { useMachineWorkspaceStore, autoSessionName } from '@/stores/machine-workspace/useMachineWorkspaceStore';
@@ -283,9 +284,13 @@ function TerminalSpawnForm({
               branchName: scope.branchName,
               name: created.name,
               // Same rule as TerminalPanes' spawnIntoPane: record the surface
-              // at bind time; only `chat` is written, since an omitted kind
-              // already means `terminal` (see OpenTerminalScope).
-              ...(agentSurfaceOf(agentType) === 'chat' ? { kind: 'chat' as const } : {}),
+              // at bind time, judged by the API's answer (`created.agentType`
+              // — a resumed session's type can differ from the picked one);
+              // only `chat` is written, since an omitted kind already means
+              // `terminal` (see OpenTerminalScope).
+              ...(isAgentRuntimeType(created.agentType) && agentSurfaceOf(created.agentType) === 'chat'
+                ? { kind: 'chat' as const }
+                : {}),
             },
             created.resumed ? undefined : prompt.trim() || undefined,
           )

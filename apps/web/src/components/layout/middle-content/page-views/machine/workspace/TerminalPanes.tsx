@@ -19,7 +19,12 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { useMobile } from '@/hooks/useMobile';
 import { useAgentTerminals, killAgentTerminal, type AgentTerminal } from '@/hooks/useAgentTerminals';
 import { useSyncedWorkspaceActions } from '@/hooks/useMachineWorkspaceSync';
-import { PICKABLE_AGENT_TYPES, agentSurfaceOf, type AgentRuntimeType } from '@pagespace/lib/services/machines/agent-terminal-types';
+import {
+  PICKABLE_AGENT_TYPES,
+  agentSurfaceOf,
+  isAgentRuntimeType,
+  type AgentRuntimeType,
+} from '@pagespace/lib/services/machines/agent-terminal-types';
 import {
   useMachineWorkspaceStore,
   selectActiveWorkspace,
@@ -119,8 +124,14 @@ export default function TerminalPanes({ machineId, socket }: TerminalPanesProps)
           // rather than re-derived from the SWR list on every future mount.
           // Only `chat` is written — an omitted kind already means `terminal`
           // (see OpenTerminalScope), so PTY bindings stay byte-identical to
-          // every binding that predates the tag.
-          ...(agentSurfaceOf(agentType) === 'chat' ? { kind: 'chat' as const } : {}),
+          // every binding that predates the tag. Judged by the API's OWN
+          // answer, not the picked type: a `resumed` upsert hands back an
+          // existing session whose agentType can differ (same reasoning as
+          // the resumed-prompt guard below), and a retired type the registry
+          // no longer knows falls through to the terminal default.
+          ...(isAgentRuntimeType(created.agentType) && agentSurfaceOf(created.agentType) === 'chat'
+            ? { kind: 'chat' as const }
+            : {}),
         },
         // `spawnAgentTerminal` is an upsert: `resumed` means it handed back a session
         // that ALREADY EXISTED rather than creating one. An agent that was already
@@ -506,11 +517,20 @@ function TerminalPane({
             onFocused={onPickerFocused}
           />
         ) : resolved.surface === 'chat' ? (
-          // `terminalId` still null means the list hasn't turned the row up
-          // yet — hold, exactly like the kind-less loading branch below; the
-          // one thing a chat-bound pane must never do is mount an Xterm.
+          // `terminalId` still null means the list hasn't turned the row up:
+          // hold while it's still loading (the one thing a chat-bound pane
+          // must never do is mount an Xterm), but a LOADED list without the
+          // row means the session was killed — say so rather than spin
+          // forever; the close control above stays reachable either way.
           resolved.terminalId === null ? (
-            <PaneLoading message="Loading session…" />
+            agentTerminalsLoading ? (
+              <PaneLoading message="Loading session…" />
+            ) : (
+              <PaneNotice
+                title="This session no longer exists"
+                description="It may have been closed elsewhere. Close the pane to remove it."
+              />
+            )
           ) : (
             <MachinePaneChat
               // Re-keyed per conversation row, same reason TerminalPaneStream
