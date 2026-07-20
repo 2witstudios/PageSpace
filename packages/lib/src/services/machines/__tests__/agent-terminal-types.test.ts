@@ -6,6 +6,8 @@ import {
   resolveAgentLaunchSpec,
   isValidAgentTerminalName,
   isValidAgentTerminalCommand,
+  isPtyAgentType,
+  agentSurfaceOf,
 } from '../agent-terminal-types';
 
 describe('isAgentRuntimeType', () => {
@@ -23,6 +25,10 @@ describe('isAgentRuntimeType', () => {
 
   it('given the retired pagespace-cli agent type, should reject it as unrecognized (not crash)', () => {
     expect(isAgentRuntimeType('pagespace-cli')).toBe(false);
+  });
+
+  it('given the pagespace agent type, should recognize it', () => {
+    expect(isAgentRuntimeType('pagespace')).toBe(true);
   });
 });
 
@@ -47,7 +53,7 @@ describe('resolveAgentLaunchSpec', () => {
   });
 
   it('should expose a registry entry for every AgentRuntimeType', () => {
-    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['shell', 'claude', 'codex']);
+    expect(Object.keys(AGENT_LAUNCH_SPECS)).toEqual(['shell', 'claude', 'codex', 'pagespace']);
   });
 
   it('should not expose a registry entry for the retired pagespace-cli agent type', () => {
@@ -56,12 +62,49 @@ describe('resolveAgentLaunchSpec', () => {
 });
 
 describe('PICKABLE_AGENT_TYPES', () => {
-  it('should include shell (primary) plus claude and codex (secondary) — only the retired pagespace-cli is excluded', () => {
-    expect(PICKABLE_AGENT_TYPES).toEqual(['shell', 'claude', 'codex']);
+  it('should include shell (primary) plus claude, codex, and pagespace (secondary) — only the retired pagespace-cli is excluded', () => {
+    expect(PICKABLE_AGENT_TYPES).toEqual(['shell', 'claude', 'codex', 'pagespace']);
   });
 
   it('should list shell FIRST — a plain interactive shell is the default, primary way to work on a Machine', () => {
     expect(PICKABLE_AGENT_TYPES[0]).toBe('shell');
+  });
+});
+
+describe('agentSurfaceOf', () => {
+  it('given pagespace, should return chat', () => {
+    expect(agentSurfaceOf('pagespace')).toBe('chat');
+  });
+
+  it('given shell, claude, or codex, should return pty', () => {
+    expect(agentSurfaceOf('shell')).toBe('pty');
+    expect(agentSurfaceOf('claude')).toBe('pty');
+    expect(agentSurfaceOf('codex')).toBe('pty');
+  });
+});
+
+describe('isPtyAgentType', () => {
+  it('given pagespace, should return false', () => {
+    expect(isPtyAgentType('pagespace')).toBe(false);
+  });
+
+  it('given shell, claude, or codex, should return true', () => {
+    expect(isPtyAgentType('shell')).toBe(true);
+    expect(isPtyAgentType('claude')).toBe(true);
+    expect(isPtyAgentType('codex')).toBe(true);
+  });
+});
+
+describe('agent type identifiers stay compatible with autoSessionName', () => {
+  // autoSessionName (apps/web/src/stores/machine-workspace/workspace-reducer.ts) builds
+  // `${agentType}-${suffix}` or bare `agentType` for the split-and-pick spawn name — this
+  // guards that every registry key, including the new `pagespace` type, still produces a
+  // name isValidAgentTerminalName accepts.
+  it('given every pickable agent type, should produce identifiers that satisfy isValidAgentTerminalName', () => {
+    for (const type of PICKABLE_AGENT_TYPES) {
+      expect(isValidAgentTerminalName(type)).toBe(true);
+      expect(isValidAgentTerminalName(`${type}-a1b2c3`)).toBe(true);
+    }
   });
 });
 
