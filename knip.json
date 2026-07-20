@@ -428,6 +428,7 @@
         "src/services/machines/machine-branches.ts",
         "src/services/machines/machine-list.ts",
         "src/services/machines/machine-orphan-reconcile.ts",
+        "src/services/machines/machine-pane-binding.ts",
         "src/services/machines/machine-projects-store.ts",
         "src/services/machines/machine-projects.ts",
         "src/services/machines/machine-settings.ts",

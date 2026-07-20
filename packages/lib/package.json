@@ -682,6 +682,11 @@
       "import": "./dist/services/machines/agent-terminals.js",
       "require": "./dist/services/machines/agent-terminals.js"
     },
+    "./services/machines/machine-pane-binding": {
+      "types": "./dist/services/machines/machine-pane-binding.d.ts",
+      "import": "./dist/services/machines/machine-pane-binding.js",
+      "require": "./dist/services/machines/machine-pane-binding.js"
+    },
     "./services/machines/machine-access": {
       "types": "./dist/services/machines/machine-access.d.ts",
       "import": "./dist/services/machines/machine-access.js",

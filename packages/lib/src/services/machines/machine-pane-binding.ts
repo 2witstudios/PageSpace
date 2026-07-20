@@ -19,6 +19,8 @@
  */
 
 import type { MachineAgentTerminalStore } from './agent-terminals-store';
+import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
+import { BRANCH_REPO_PATH } from './machine-branches';
 
 /** The agent-terminal `agentType` that marks a row as a PageSpace Agent pane (not a PTY session). */
 const PAGESPACE_AGENT_TYPE = 'pagespace';
@@ -71,10 +73,32 @@ export interface DeriveMachinePaneBindingDeps {
  * scope-existence checks fails CLOSED (`ok: false`) rather than falling back
  * to an unbound run.
  */
-// RED: intentionally unimplemented — see __tests__/machine-pane-binding.test.ts.
 export async function deriveMachinePaneBinding(
-  _input: DeriveMachinePaneBindingInput,
-  _deps: DeriveMachinePaneBindingDeps,
+  input: DeriveMachinePaneBindingInput,
+  deps: DeriveMachinePaneBindingDeps,
 ): Promise<MachinePaneBindingResult> {
-  throw new Error('deriveMachinePaneBinding: not implemented');
+  const row = await deps.terminalStore.findById(input.conversationId);
+  if (!row) return null;
+  if (row.agentType !== PAGESPACE_AGENT_TYPE) return null;
+  if (row.machineId !== input.chatId) return { ok: false, reason: 'binding_page_mismatch' };
+
+  if (row.machineBranchId) {
+    const branch = await deps.branchLookup.findById(row.machineBranchId);
+    if (!branch || branch.spriteTornDownAt !== null) return { ok: false, reason: 'branch_not_found' };
+    return {
+      ok: true,
+      binding: {
+        cwd: BRANCH_REPO_PATH,
+        branchSandbox: { machineBranchId: row.machineBranchId, sandboxId: branch.sandboxId },
+      },
+    };
+  }
+
+  if (row.projectName) {
+    const project = await deps.projectLookup.findByName(row.machineId, row.projectName);
+    if (!project) return { ok: false, reason: 'project_not_found' };
+    return { ok: true, binding: { cwd: project.path } };
+  }
+
+  return { ok: true, binding: { cwd: SANDBOX_ROOT } };
 }
