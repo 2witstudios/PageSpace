@@ -63,10 +63,19 @@ export async function dispatchWebhookDelivery({
   webhookId,
   pageId,
   payload,
+  hasEnabledTriggers = false,
 }: {
   webhookId: string;
   pageId: string;
   payload: unknown;
+  /**
+   * True when the caller (the intake route) has resolved enabled workflow
+   * triggers bound to this webhook and will fire them via `after()`. A page
+   * with no default handler but firing triggers is NOT a no-op, so the
+   * dispatcher suppresses its 'no action configured' bookkeeping write in that
+   * case — the triggers are the delivery's action.
+   */
+  hasEnabledTriggers?: boolean;
 }): Promise<WebhookDispatchResult> {
   try {
     const page = await db.query.pages.findFirst({
@@ -90,7 +99,12 @@ export async function dispatchWebhookDelivery({
 
     const handlerKey = resolveWebhookHandler(page.type);
     if (handlerKey === 'none') {
-      await markWebhookFired(webhookId, 'no action configured');
+      // Only record 'no action configured' when there is genuinely nothing to
+      // do. Firing workflow triggers count as the delivery's action even
+      // without a default page-type handler.
+      if (!hasEnabledTriggers) {
+        await markWebhookFired(webhookId, 'no action configured');
+      }
       return { kind: 'no_action' };
     }
 

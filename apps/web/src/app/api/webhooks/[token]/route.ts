@@ -1,10 +1,12 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { v0Scheme, DEFAULT_REPLAY_WINDOW_MS } from '@pagespace/lib/security/webhook-signature';
 import { dispatchWebhookDelivery } from '@pagespace/lib/services/page-webhook-dispatch';
+import { findEnabledPageWebhookTriggers } from '@/lib/webhooks/page-webhook-trigger-queries';
+import { firePageWebhookTriggers } from '@/lib/webhooks/fire-page-webhook-triggers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Arbitrary-JSON envelope cap — checked on the raw bytes BEFORE JSON.parse so
@@ -53,15 +55,49 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       body = null;
     }
 
-    const result = await dispatchWebhookDelivery({ webhookId: webhook.id, pageId: webhook.pageId, payload: body });
+    // Resolve the enabled workflow triggers bound to this webhook once. The
+    // count both suppresses the dispatcher's 'no action configured' write (a
+    // page with triggers isn't a no-op) and decides the no-action vs triggers
+    // 202. This is the single trigger lookup for the delivery.
+    const triggerLookup = await findEnabledPageWebhookTriggers(webhook.id);
+    if (!triggerLookup.success) {
+      loggers.api.warn('Page webhook: trigger lookup failed', {
+        webhookId: webhook.id,
+        error: triggerLookup.error,
+      });
+    }
+    const enabledTriggers = triggerLookup.success ? triggerLookup.data : [];
+
+    const result = await dispatchWebhookDelivery({
+      webhookId: webhook.id,
+      pageId: webhook.pageId,
+      payload: body,
+      hasEnabledTriggers: enabledTriggers.length > 0,
+    });
+
+    // Fire bound workflows AFTER the HTTP response so the sender is never held
+    // on AI latency — one signed delivery both runs its default page-type
+    // action (above) AND fires any bound workflows. Skipped only for a delivery
+    // that never reached a valid page: the dispatcher returns 'not_found'
+    // BEFORE any handler for a trashed/missing target, and firing into the
+    // trash makes no sense. A default-handler failure (rate limit, bad channel
+    // payload) does NOT suppress the fan-out — the workflow envelope is
+    // arbitrary JSON, independent of the channel handler's own contract.
+    const reachedPage = !(result.kind === 'failed' && result.error === 'not_found');
+    if (reachedPage && enabledTriggers.length > 0) {
+      after(() => firePageWebhookTriggers(enabledTriggers, body));
+    }
+
     if (result.kind === 'handled') {
       return NextResponse.json({ ok: true });
     }
-    // A verified delivery to a page type with no default handler is accepted —
-    // the sender never breaks while wiring is in progress; the dispatcher has
-    // recorded 'no action configured' on the row for the settings UI to surface.
     if (result.kind === 'no_action') {
-      return NextResponse.json({ accepted: true, action: 'none' }, { status: 202 });
+      // No default handler for this page type. If workflow triggers are firing,
+      // the delivery still has an action; only a webhook with neither is truly
+      // 'no action configured' (recorded on the row by the dispatcher).
+      return enabledTriggers.length > 0
+        ? NextResponse.json({ accepted: true, action: 'triggers' }, { status: 202 })
+        : NextResponse.json({ accepted: true, action: 'none' }, { status: 202 });
     }
 
     switch (result.error) {

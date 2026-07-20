@@ -76,6 +76,18 @@ describe('dispatchWebhookDelivery', () => {
     expect(mockMarkFired).toHaveBeenCalledWith('wh-1', 'no action configured');
   });
 
+  it('suppresses the no-action write when triggers are firing — a no-handler page with triggers is not a no-op', async () => {
+    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT', isTrashed: false });
+
+    const result = await dispatchWebhookDelivery({ ...DELIVERY, hasEnabledTriggers: true });
+
+    // Still no default handler, so still no_action — but the triggers ARE the
+    // delivery's action, so the misleading 'no action configured' isn't written.
+    expect(result).toEqual({ kind: 'no_action' });
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockMarkFired).not.toHaveBeenCalled();
+  });
+
   it('reports not_found for a trashed target page — no write into the trash, no bookkeeping, indistinguishable from an unknown token', async () => {
     mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: true });
 
