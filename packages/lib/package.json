@@ -782,6 +782,11 @@
       "import": "./dist/services/page-webhook-core.js",
       "require": "./dist/services/page-webhook-core.js"
     },
+    "./services/page-webhook-dispatch": {
+      "types": "./dist/services/page-webhook-dispatch.d.ts",
+      "import": "./dist/services/page-webhook-dispatch.js",
+      "require": "./dist/services/page-webhook-dispatch.js"
+    },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",

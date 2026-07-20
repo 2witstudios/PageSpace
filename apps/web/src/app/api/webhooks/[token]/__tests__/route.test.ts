@@ -11,35 +11,17 @@ const WEBHOOK = {
   webhookSecretEncrypted: 'encrypted-form-of-secret',
 };
 
-function makeChain(value: unknown) {
-  const chain: Record<string, unknown> = {
-    set: () => chain,
-    where: () => chain,
-    then: (resolve: (v: unknown) => void, reject?: (e: unknown) => void) =>
-      Promise.resolve(value).then(resolve, reject),
-    catch: (reject: (e: unknown) => void) => Promise.resolve(value).catch(reject),
-  };
-  return chain;
-}
-
 const mockFindFirst = vi.fn();
-const mockPageFindFirst = vi.fn();
-const mockUpdate = vi.fn((..._args: unknown[]) => makeChain(undefined));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       pageWebhooks: { findFirst: (...args: unknown[]) => mockFindFirst(...args) },
-      pages: { findFirst: (...args: unknown[]) => mockPageFindFirst(...args) },
     },
-    update: (...args: unknown[]) => mockUpdate(...args),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
 vi.mock('@pagespace/db/schema/page-webhooks', () => ({
   pageWebhooks: { id: 'pageWebhooks.id', webhookToken: 'pageWebhooks.webhookToken' },
-}));
-vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'pages.id' },
 }));
 
 // Real decrypt-equivalent for the test: returns the plaintext secret directly,
@@ -48,9 +30,9 @@ vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
   decryptField: vi.fn(async (v: string) => (v === WEBHOOK.webhookSecretEncrypted ? SECRET : v)),
 }));
 
-const mockPublish = vi.fn();
-vi.mock('@pagespace/lib/services/page-webhook-service', () => ({
-  publishWebhookMessage: (...args: unknown[]) => mockPublish(...args),
+const mockDispatch = vi.fn();
+vi.mock('@pagespace/lib/services/page-webhook-dispatch', () => ({
+  dispatchWebhookDelivery: (...args: unknown[]) => mockDispatch(...args),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -84,19 +66,20 @@ const VALID_PAYLOAD = JSON.stringify({ content: 'deploy finished' });
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindFirst.mockResolvedValue(WEBHOOK);
-  mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: false });
-  mockPublish.mockResolvedValue({ ok: true });
+  mockDispatch.mockResolvedValue({ kind: 'handled' });
 });
 
 describe('POST /api/webhooks/[token]', () => {
-  it('accepts a validly signed request and publishes to the resolved webhook', async () => {
+  it('accepts a validly signed request and dispatches the delivery for the resolved webhook', async () => {
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
 
     expect(response.status).toBe(200);
-    expect(mockPublish).toHaveBeenCalledTimes(1);
-    const [webhookId, payload] = mockPublish.mock.calls[0];
-    expect(webhookId).toBe('wh-1');
-    expect(payload).toEqual({ content: 'deploy finished' });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledWith({
+      webhookId: 'wh-1',
+      pageId: 'page-1',
+      payload: { content: 'deploy finished' },
+    });
   });
 
   it('rejects a body over 64KB with 413 before any lookup or parse', async () => {
@@ -104,7 +87,7 @@ describe('POST /api/webhooks/[token]', () => {
     const response = await POST(signedRequest(oversized), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(413);
     expect(mockFindFirst).not.toHaveBeenCalled();
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
   it('accepts a body exactly at the 64KB cap', async () => {
@@ -118,7 +101,7 @@ describe('POST /api/webhooks/[token]', () => {
   it('rejects a request with no signature', async () => {
     const response = await POST(makeRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
   it('rejects a request signed with the wrong secret', async () => {
@@ -129,7 +112,7 @@ describe('POST /api/webhooks/[token]', () => {
     });
     const response = await POST(request, { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
   it('rejects a signature older than the 5-minute replay window', async () => {
@@ -140,7 +123,7 @@ describe('POST /api/webhooks/[token]', () => {
     });
     const response = await POST(request, { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
   it('rejects a signature computed over a different body than the one delivered', async () => {
@@ -151,85 +134,73 @@ describe('POST /api/webhooks/[token]', () => {
     });
     const response = await POST(request, { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
   it('returns a generic 404 for an unknown token, without revealing whether it ever existed', async () => {
     mockFindFirst.mockResolvedValue(undefined);
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'unknown' }) });
     expect(response.status).toBe(404);
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
   it('returns the same generic 404 for a disabled webhook (does not leak that the token is valid but off)', async () => {
     mockFindFirst.mockResolvedValue({ ...WEBHOOK, isEnabled: false });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(404);
-    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
-  it('returns the generic 404 for a delivery whose target page was trashed after minting — no write into the trash', async () => {
-    mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: true });
-    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
-    expect(response.status).toBe(404);
-    expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockUpdate).not.toHaveBeenCalled();
-  });
-
-  it('returns the generic 404 when the target page row is gone entirely', async () => {
-    mockPageFindFirst.mockResolvedValue(undefined);
-    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
-    expect(response.status).toBe(404);
-    expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockUpdate).not.toHaveBeenCalled();
-  });
-
-  it('accepts a verified delivery to a non-CHANNEL page with 202 action:none and records no-action on the row', async () => {
-    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT', isTrashed: false });
+  it('maps a no_action dispatch (page type without a handler) to 202 accepted action:none', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'no_action' });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
 
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({ accepted: true, action: 'none' });
-    expect(mockPublish).not.toHaveBeenCalled();
-    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('still requires a valid signature before the non-CHANNEL 202 path — no unauthenticated probe', async () => {
-    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT', isTrashed: false });
+  it('still requires a valid signature before the no-action 202 path — no unauthenticated probe', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'no_action' });
     const response = await POST(makeRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
-    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockDispatch).not.toHaveBeenCalled();
   });
 
-  it('maps a payload-validation error from the service to a 400 with the message', async () => {
-    mockPublish.mockResolvedValue({ ok: false, error: 'content must not be empty' });
+  it('maps a payload-validation error from the dispatcher to a 400 with the message', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'content must not be empty' });
     const badPayload = JSON.stringify({ content: '   ' });
     const response = await POST(signedRequest(badPayload), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'content must not be empty' });
   });
 
-  it('passes a non-JSON body through as null so the service rejects it as invalid — never a crash', async () => {
-    mockPublish.mockResolvedValue({ ok: false, error: 'payload must be a JSON object' });
+  it('passes a non-JSON body through as null so the dispatcher rejects it as a bad envelope — never a crash', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'payload must be a JSON object' });
     const response = await POST(signedRequest('not json'), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(400);
-    expect(mockPublish).toHaveBeenCalledWith('wh-1', null);
+    expect(mockDispatch).toHaveBeenCalledWith({ webhookId: 'wh-1', pageId: 'page-1', payload: null });
+  });
+
+  it('maps not_found to the generic 404', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'not_found' });
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).toBe(404);
   });
 
   it('maps rate_limited to 429', async () => {
-    mockPublish.mockResolvedValue({ ok: false, error: 'rate_limited' });
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'rate_limited' });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(429);
   });
 
   it('maps channel_not_found to the generic 404', async () => {
-    mockPublish.mockResolvedValue({ ok: false, error: 'channel_not_found' });
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'channel_not_found' });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(404);
   });
 
   it('maps internal_error to 500', async () => {
-    mockPublish.mockResolvedValue({ ok: false, error: 'internal_error' });
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'internal_error' });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(500);
   });

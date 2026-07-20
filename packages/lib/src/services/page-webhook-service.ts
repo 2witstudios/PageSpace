@@ -23,7 +23,7 @@ import { channelMessageRepository } from './channel-message-repository';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '../security/distributed-rate-limit';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { loggers } from '../logging/logger-config';
-import { validateWebhookPayload, formatWebhookSenderIdentity } from './page-webhook-core';
+import { validateChannelWebhookPayload, formatWebhookSenderIdentity } from './page-webhook-core';
 
 export type PublishWebhookMessageResult =
   | { ok: true }
@@ -77,7 +77,7 @@ export async function publishWebhookMessage(webhookId: string, rawPayload: unkno
       return { ok: false, error: 'not_found' };
     }
 
-    const validation = validateWebhookPayload(rawPayload);
+    const validation = validateChannelWebhookPayload(rawPayload);
     if (!validation.ok) {
       await markWebhookFired(webhookId, validation.error);
       return { ok: false, error: validation.error };

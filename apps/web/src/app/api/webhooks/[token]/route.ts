@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
-import { pages } from '@pagespace/db/schema/core';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { v0Scheme, DEFAULT_REPLAY_WINDOW_MS } from '@pagespace/lib/security/webhook-signature';
-import { publishWebhookMessage } from '@pagespace/lib/services/page-webhook-service';
+import { dispatchWebhookDelivery } from '@pagespace/lib/services/page-webhook-dispatch';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 // Arbitrary-JSON envelope cap — checked on the raw bytes BEFORE JSON.parse so
@@ -47,29 +46,6 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
     }
 
-    const page = await db.query.pages.findFirst({
-      where: eq(pages.id, webhook.pageId),
-      columns: { type: true, isTrashed: true },
-    });
-    // Minting is blocked on trashed pages, but a page can be trashed after its
-    // webhook was created — a delivery must not keep writing into the trash.
-    // Same generic 404 as an unknown/disabled token: nothing leaks.
-    if (!page || page.isTrashed) {
-      return NOT_FOUND();
-    }
-
-    // Behavioral stub until the dispatch map lands: only CHANNEL pages have a
-    // default action today. A verified delivery to any other page type is
-    // accepted (the sender never breaks while wiring is in progress) but does
-    // nothing, recorded on the row for the settings UI to surface.
-    if (page.type !== 'CHANNEL') {
-      await db
-        .update(pageWebhooks)
-        .set({ lastFireError: 'no action configured' })
-        .where(eq(pageWebhooks.id, webhook.id));
-      return NextResponse.json({ accepted: true, action: 'none' }, { status: 202 });
-    }
-
     let body: unknown;
     try {
       body = JSON.parse(rawBody);
@@ -77,9 +53,15 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       body = null;
     }
 
-    const result = await publishWebhookMessage(webhook.id, body);
-    if (result.ok) {
+    const result = await dispatchWebhookDelivery({ webhookId: webhook.id, pageId: webhook.pageId, payload: body });
+    if (result.kind === 'handled') {
       return NextResponse.json({ ok: true });
+    }
+    // A verified delivery to a page type with no default handler is accepted —
+    // the sender never breaks while wiring is in progress; the dispatcher has
+    // recorded 'no action configured' on the row for the settings UI to surface.
+    if (result.kind === 'no_action') {
+      return NextResponse.json({ accepted: true, action: 'none' }, { status: 202 });
     }
 
     switch (result.error) {
