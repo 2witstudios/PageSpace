@@ -545,12 +545,14 @@ const SidebarChatTab: React.FC = () => {
   const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
 
   // Read Aloud: on-demand TTS for everything the assistant said since the
-  // user's last turn. Owns its own useVoiceMode() instance, so it's disabled
-  // whenever VoiceCallPanel's live-call instance is active on this surface.
+  // user's last turn, via a shared playback singleton (see readAloudPlayer).
+  // Disabled whenever Voice Mode is enabled on ANY surface (not just this
+  // one) since a live call elsewhere plays through its own separate
+  // AudioContext and would overlap with this audio.
   const { isReadingAloud, toggleReadAloud } = useReadAloud();
   const canReadAloud = useMemo(
-    () => !isVoiceModeActive && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
-    [plainMessages, isVoiceModeActive]
+    () => !isVoiceModeEnabled && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
+    [plainMessages, isVoiceModeEnabled]
   );
 
   // Display preferences
