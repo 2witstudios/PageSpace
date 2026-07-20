@@ -112,9 +112,15 @@ export async function executePageWebhookTrigger(
       };
     }
 
-    // 4. Cheap preflight: verify the agent page still exists.
+    // 4. Preflight the agent page: it must still exist, be untrashed, AND live
+    //    in the workflow's drive. Same authoritative fire-time guard as the
+    //    webhook page (step 2) — the agent page can ALSO be bulk-moved after
+    //    binding, and executeWorkflow loads it by id and writes the webhook
+    //    prompt + AI response into it. The owner staying a member of
+    //    workflow.driveId says nothing about a drive the agent was moved into,
+    //    so a moved agent must be rejected, not written to across drives.
     const [agentPage] = await db
-      .select({ id: pages.id, isTrashed: pages.isTrashed })
+      .select({ id: pages.id, isTrashed: pages.isTrashed, driveId: pages.driveId })
       .from(pages)
       .where(eq(pages.id, workflow.agentPageId));
     if (!agentPage || agentPage.isTrashed) {
@@ -123,6 +129,16 @@ export async function executePageWebhookTrigger(
         durationMs: Date.now() - startTime,
         error: `Trigger agent page ${workflow.agentPageId} not found or trashed`,
       };
+    }
+    if (agentPage.driveId !== workflow.driveId) {
+      const error =
+        'Agent page and workflow are in different drives (binding stale after a page move)';
+      logger.warn('Page webhook trigger: skipped (agent page drive mismatch)', {
+        triggerId: trigger.id,
+        agentDriveId: agentPage.driveId,
+        workflowDriveId: workflow.driveId,
+      });
+      return { success: false, durationMs: Date.now() - startTime, error };
     }
 
     // 5. Credit gate on the billed user — blocks out-of-credits users before

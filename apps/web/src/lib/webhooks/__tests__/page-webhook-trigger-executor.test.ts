@@ -63,11 +63,11 @@ const WORKFLOW = {
 
 function queueHappyPath() {
   selectResults = [
-    [WORKFLOW],                                   // workflows
-    [{ pageId: 'wpage-1' }],                       // pageWebhooks
-    [{ driveId: 'drive-1', isTrashed: false }],    // webhook page (same drive)
-    [{ id: 'agent-1', isTrashed: false }],         // agent page
-    [{ subscriptionTier: 'pro' }],                 // owner
+    [WORKFLOW],                                                  // workflows
+    [{ pageId: 'wpage-1' }],                                     // pageWebhooks
+    [{ driveId: 'drive-1', isTrashed: false }],                 // webhook page (same drive)
+    [{ id: 'agent-1', isTrashed: false, driveId: 'drive-1' }],  // agent page (same drive)
+    [{ subscriptionTier: 'pro' }],                              // owner
   ];
 }
 
@@ -137,6 +137,15 @@ describe('executePageWebhookTrigger', () => {
     const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
     expect(result.success).toBe(false);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('skips + does NOT execute when the AGENT page was bulk-moved to a different drive than the workflow', async () => {
+    selectResults[3] = [{ id: 'agent-1', isTrashed: false, driveId: 'drive-OTHER' }];
+    const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/different drives/);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsume).not.toHaveBeenCalled();
   });
 
   it('does not execute when the billed user is no longer a drive member', async () => {

@@ -99,12 +99,13 @@ export async function dispatchWebhookDelivery({
 
     const handlerKey = resolveWebhookHandler(page.type);
     if (handlerKey === 'none') {
-      // Only record 'no action configured' when there is genuinely nothing to
-      // do. Firing workflow triggers count as the delivery's action even
-      // without a default page-type handler.
-      if (!hasEnabledTriggers) {
-        await markWebhookFired(webhookId, 'no action configured');
-      }
+      // Firing workflow triggers ARE the delivery's action even without a
+      // default page-type handler. Record a successful dispatch on the webhook
+      // row in that case (stamp lastFiredAt, clear any stale lastFireError) so
+      // the settings UI reflects the accepted delivery instead of a leftover
+      // 'no action configured' failure. Genuinely-idle webhooks (no handler,
+      // no triggers) still record the no-action error.
+      await markWebhookFired(webhookId, hasEnabledTriggers ? null : 'no action configured');
       return { kind: 'no_action' };
     }
 
