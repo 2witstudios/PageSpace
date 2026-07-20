@@ -35,6 +35,23 @@ vi.mock('@pagespace/lib/services/page-webhook-dispatch', () => ({
   dispatchWebhookDelivery: (...args: unknown[]) => mockDispatch(...args),
 }));
 
+// `after()` schedules post-response work. In the test it runs the callback
+// immediately so the fan-out scheduling is observable synchronously.
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>();
+  return { ...actual, after: (fn: () => unknown) => { void fn(); } };
+});
+
+const mockFindTriggers = vi.fn();
+vi.mock('@/lib/webhooks/page-webhook-trigger-queries', () => ({
+  findEnabledPageWebhookTriggers: (...args: unknown[]) => mockFindTriggers(...args),
+}));
+
+const mockFireTriggers = vi.fn();
+vi.mock('@/lib/webhooks/fire-page-webhook-triggers', () => ({
+  firePageWebhookTriggers: (...args: unknown[]) => mockFireTriggers(...args),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
@@ -67,6 +84,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockFindFirst.mockResolvedValue(WEBHOOK);
   mockDispatch.mockResolvedValue({ kind: 'handled' });
+  // Default: no workflow triggers bound. Composability tests override this.
+  mockFindTriggers.mockResolvedValue({ success: true, data: [] });
+  mockFireTriggers.mockResolvedValue(undefined);
 });
 
 describe('POST /api/webhooks/[token]', () => {
@@ -79,6 +99,7 @@ describe('POST /api/webhooks/[token]', () => {
       webhookId: 'wh-1',
       pageId: 'page-1',
       payload: { content: 'deploy finished' },
+      hasEnabledTriggers: false,
     });
   });
 
@@ -157,6 +178,7 @@ describe('POST /api/webhooks/[token]', () => {
 
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({ accepted: true, action: 'none' });
+    expect(mockFireTriggers).not.toHaveBeenCalled();
   });
 
   it('still requires a valid signature before the no-action 202 path — no unauthenticated probe', async () => {
@@ -177,7 +199,7 @@ describe('POST /api/webhooks/[token]', () => {
     mockDispatch.mockResolvedValue({ kind: 'failed', error: 'payload must be a JSON object' });
     const response = await POST(signedRequest('not json'), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(400);
-    expect(mockDispatch).toHaveBeenCalledWith({ webhookId: 'wh-1', pageId: 'page-1', payload: null });
+    expect(mockDispatch).toHaveBeenCalledWith({ webhookId: 'wh-1', pageId: 'page-1', payload: null, hasEnabledTriggers: false });
   });
 
   it('maps not_found to the generic 404', async () => {
@@ -202,5 +224,87 @@ describe('POST /api/webhooks/[token]', () => {
     mockDispatch.mockResolvedValue({ kind: 'failed', error: 'internal_error' });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(500);
+  });
+
+  // ── Trigger fan-out composability ───────────────────────────────────────
+
+  it('does not fan out to triggers when none are bound (default handled path)', async () => {
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).toBe(200);
+    expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  it('COMPOSES: one handled CHANNEL delivery both runs the default action AND fires the bound workflow', async () => {
+    const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+    mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    // Default action still runs, sender still gets 200 — and the dispatcher is
+    // told triggers are firing (so it never records 'no action configured').
+    expect(response.status).toBe(200);
+    expect(mockDispatch).toHaveBeenCalledWith(expect.objectContaining({ hasEnabledTriggers: true }));
+    // Workflow fan-out fired alongside, with the resolved triggers + parsed envelope.
+    expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+    expect(mockFireTriggers).toHaveBeenCalledWith(triggers, { content: 'deploy finished' });
+  });
+
+  it('fires bound workflows for a no-handler page and returns 202 action:triggers (no no-action write)', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'no_action' });
+    const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+    mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ accepted: true, action: 'triggers' });
+    expect(mockDispatch).toHaveBeenCalledWith(expect.objectContaining({ hasEnabledTriggers: true }));
+    expect(mockFireTriggers).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire triggers when the delivery never reached a valid page (trashed/missing → not_found)', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'not_found' });
+    const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+    mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    expect(response.status).toBe(404);
+    expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire triggers when the default handler fails (429) — a retryable non-2xx must not perform AI side effects', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'rate_limited' });
+    const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+    mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    expect(response.status).toBe(429);
+    expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire triggers for a rejected/malformed envelope (400) — no AI side effects on a rejected, retryable delivery', async () => {
+    mockDispatch.mockResolvedValue({ kind: 'failed', error: 'payload must be a JSON object' });
+    const triggers = [{ id: 't1', workflowId: 'wf1', pageWebhookId: 'wh-1' }];
+    mockFindTriggers.mockResolvedValue({ success: true, data: triggers });
+
+    const response = await POST(signedRequest('not json'), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    expect(response.status).toBe(400);
+    expect(mockFireTriggers).not.toHaveBeenCalled();
+  });
+
+  it('returns a retryable 503 (no dispatch, no fan-out) when the trigger lookup fails — never silently drops bound workflows', async () => {
+    mockFindTriggers.mockResolvedValue({ success: false, error: 'db down' });
+
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+
+    // A transient lookup failure must reject the whole delivery as retryable —
+    // not post to the channel, not fire workflows, not answer 2xx (which would
+    // stop the sender retrying and permanently drop the bound workflows).
+    expect(response.status).toBe(503);
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(mockFireTriggers).not.toHaveBeenCalled();
   });
 });

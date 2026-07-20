@@ -683,6 +683,19 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 1000,
     progressiveDelay: false,
   },
+  // Per-trigger cap on page-webhook-fired workflow runs (key:
+  // `page-webhook-trigger:{triggerId}`). Deliberately far TIGHTER than the
+  // 30/min PAGE_WEBHOOK channel-post limit: a fired trigger runs an agent
+  // (LLM calls, tool use) that costs on the order of 1000x a single channel
+  // message insert, so a runaway sender must be throttled hard here — on top
+  // of executeWorkflow's single-running claim, which already serializes runs
+  // of the same workflow but does not bound their rate over time.
+  PAGE_WEBHOOK_TRIGGER: {
+    maxAttempts: 5,
+    windowMs: 60 * 1000,
+    blockDurationMs: 60 * 1000,
+    progressiveDelay: false,
+  },
 } as const;
 
 // =============================================================================
