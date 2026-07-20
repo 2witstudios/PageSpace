@@ -2,47 +2,64 @@ import { describe, it, expect, vi } from 'vitest';
 import { resolveFallbackDeviceId, type DeviceIdFallbackDeps } from '../device-id-fallback';
 
 describe('resolveFallbackDeviceId', () => {
-  it('reuses a previously-persisted id without generating or re-persisting', () => {
+  it('reuses a previously-persisted id without seeding or re-persisting', () => {
     const deps: DeviceIdFallbackDeps = {
-      readPersistedId: vi.fn().mockReturnValue('stored-uuid'),
+      readPersistedId: vi.fn().mockReturnValue('stored-id'),
       persistId: vi.fn(),
-      generateId: vi.fn().mockReturnValue('should-not-be-used'),
+      seedId: vi.fn().mockReturnValue('should-not-be-used'),
     };
 
-    expect(resolveFallbackDeviceId(deps)).toBe('stored-uuid');
-    expect(deps.generateId).not.toHaveBeenCalled();
+    expect(resolveFallbackDeviceId(deps)).toBe('stored-id');
+    expect(deps.seedId).not.toHaveBeenCalled();
     expect(deps.persistId).not.toHaveBeenCalled();
   });
 
-  it('generates and persists a new id when none is stored', () => {
-    const deps: DeviceIdFallbackDeps = {
-      readPersistedId: vi.fn().mockReturnValue(null),
-      persistId: vi.fn(),
-      generateId: vi.fn().mockReturnValue('fresh-uuid'),
-    };
-
-    expect(resolveFallbackDeviceId(deps)).toBe('fresh-uuid');
-    expect(deps.persistId).toHaveBeenCalledWith('fresh-uuid');
-  });
-
-  it('is STABLE across a simulated hostname change (persisted uuid, never hostname-derived)', () => {
-    // In-memory persistence store. The hostname is irrelevant to the result:
-    // the fallback only ever reads/writes the persisted uuid.
+  it('seeds from the legacy machine-derived id on first run and persists it (P1 upgrade continuity)', () => {
+    // On upgrade there is no device-id file yet, but the device token is already
+    // bound to the legacy `${hostname}-${platform}-${arch}` value. Seeding from
+    // that value (not a fresh random id) preserves the binding, then persisting
+    // it freezes it for future launches.
     let stored: string | null = null;
-    let generateCount = 0;
     const deps: DeviceIdFallbackDeps = {
       readPersistedId: () => stored,
       persistId: (id) => { stored = id; },
-      generateId: () => `uuid-${++generateCount}`,
+      seedId: () => 'oldhost-darwin-arm64',
     };
 
-    // First launch (hostname "host-A"): generates + persists.
-    const first = resolveFallbackDeviceId(deps);
-    // Second launch after a hostname change (hostname "host-B"): reuses the same id.
-    const second = resolveFallbackDeviceId(deps);
+    expect(resolveFallbackDeviceId(deps)).toBe('oldhost-darwin-arm64');
+    expect(stored).toBe('oldhost-darwin-arm64');
+  });
 
-    expect(first).toBe('uuid-1');
-    expect(second).toBe('uuid-1');
-    expect(generateCount).toBe(1);
+  it('is STABLE across a simulated hostname change once persisted (never re-derived)', () => {
+    let stored: string | null = null;
+    let seedCount = 0;
+    const deps: DeviceIdFallbackDeps = {
+      readPersistedId: () => stored,
+      persistId: (id) => { stored = id; },
+      // Simulate the hostname changing between launches: the seed would differ,
+      // but the persisted value must win so the id never flips.
+      seedId: () => `host-${++seedCount}-darwin-arm64`,
+    };
+
+    const first = resolveFallbackDeviceId(deps);   // launch on host-1 → seeds + persists
+    const second = resolveFallbackDeviceId(deps);  // launch on host-2 → reads persisted
+
+    expect(first).toBe('host-1-darwin-arm64');
+    expect(second).toBe('host-1-darwin-arm64');
+    expect(seedCount).toBe(1);
+  });
+
+  it('stays stable across launches even when persistence FAILS, thanks to a deterministic seed (P2)', () => {
+    // Simulate a read-only profile / full disk: persistId is a no-op, so the
+    // file never appears. A deterministic seed means each launch regenerates the
+    // SAME id — no device-binding churn, no repeated logouts.
+    const deps: DeviceIdFallbackDeps = {
+      readPersistedId: () => null,           // file never exists (write kept failing)
+      persistId: () => { /* swallowed failure */ },
+      seedId: () => 'host-darwin-arm64',     // deterministic for this machine
+    };
+
+    expect(resolveFallbackDeviceId(deps)).toBe('host-darwin-arm64');
+    expect(resolveFallbackDeviceId(deps)).toBe('host-darwin-arm64'); // next launch, same id
   });
 });

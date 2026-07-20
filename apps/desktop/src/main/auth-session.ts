@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import * as os from 'node:os';
 import { readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { app } from 'electron';
@@ -25,8 +25,21 @@ function persistDeviceId(id: string): void {
   try {
     writeFileSync(deviceIdFilePath(), id, 'utf8');
   } catch (error) {
+    // A write failure is non-fatal: `legacyMachineDerivedId` is deterministic,
+    // so the next launch regenerates the identical id (no device-binding churn).
     logger.warn('[Auth] Failed to persist fallback device id', { error });
   }
+}
+
+/**
+ * The historical fallback deviceId. It is DETERMINISTIC for a given machine,
+ * which is exactly why we seed the persisted id from it: an existing install
+ * whose device token was bound to this value keeps that binding across the
+ * upgrade to the persisted-id scheme (no forced `device_id_mismatch` logout).
+ * Persisting it once then makes it stable even if the hostname later changes.
+ */
+function legacyMachineDerivedId(): string {
+  return `${os.hostname()}-${process.platform}-${process.arch}`;
 }
 
 export async function preloadAuthSession(): Promise<void> {
@@ -51,14 +64,16 @@ export function getMachineIdentifier(): string {
     setCachedMachineId(id);
     return id;
   } catch (error) {
-    // Do NOT derive the fallback from the hostname — it flips on network/VPN
-    // changes and triggers a device_id_mismatch 401 → logout. Use a persisted
-    // UUID that is stable across launches and hostname changes.
+    // Persist the deviceId once, then reuse it verbatim — so it stays stable
+    // even if the hostname later changes (VPN/network switch), which otherwise
+    // flips a recomputed hostname-derived id and triggers a device_id_mismatch
+    // 401 → logout. The seed is the legacy machine-derived id so an existing
+    // install's token binding survives the upgrade to this scheme.
     logger.warn('[Auth] Failed to read machine identifier, falling back to persisted device id', { error });
     const fallbackId = resolveFallbackDeviceId({
       readPersistedId: readPersistedDeviceId,
       persistId: persistDeviceId,
-      generateId: randomUUID,
+      seedId: legacyMachineDerivedId,
     });
     setCachedMachineId(fallbackId);
     return fallbackId;
