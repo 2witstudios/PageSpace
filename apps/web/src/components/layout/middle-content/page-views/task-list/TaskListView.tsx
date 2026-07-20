@@ -344,7 +344,7 @@ export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): bool
 
 // True while a "Load More" click has bumped useSWRInfinite's `size` but the newly
 // requested page hasn't resolved into `pages` yet.
-export const isLoadingNextTaskPage = (pages: unknown[] | undefined, size: number): boolean =>
+export const isLoadingNextTaskPage = (pages: { hasMore: boolean }[] | undefined, size: number): boolean =>
   size > 0 && (pages === undefined || pages.length < size);
 
 export type TaskLoadMoreState = 'idle' | 'loading' | 'failed';
@@ -547,6 +547,17 @@ function TaskListView({ page }: TaskListViewProps) {
       // source — every other condition needs an explicit mutate() or a missing cache
       // entry). The cost is an extra page-0 refetch on every "Load More" click, which is
       // cheap and infrequent — worth it to keep the periodic staleness fallback alive.
+      // Pre-existing pattern, not new to pagination: `isAnyEditing` is global (any
+      // document/form edit anywhere in the app, not just this page — see
+      // useEditingStore.ts), and SWR's `isPaused()` gates every revalidation trigger
+      // for this key, not just background ones — including this PR's new "Load More"/
+      // Retry clicks (verified in swr's core `revalidate()`). If a user clicks either
+      // while some other edit session is active, that click's fetch is silently
+      // dropped; `size` still advances, leaving the control on "Loading…" until it
+      // self-heals via the next unpaused trigger (the refreshInterval below, at most).
+      // Every pre-existing write handler in this file already had this exact exposure
+      // through its own post-write mutate() call — fixing it needs a change to how
+      // `isPaused` composes with explicit user actions, which is out of scope here.
       isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
