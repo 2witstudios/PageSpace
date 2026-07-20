@@ -42,7 +42,8 @@
         "src/lib/auth/platform-storage/web-storage.ts",
         "src/test/next-server-stub.ts",
         "src/__fixtures__/eslint-unbounded-findmany/**",
-        "src/components/ai/ui/web-preview.tsx"
+        "src/components/ai/ui/web-preview.tsx",
+        "src/lib/ai/machine-pane/machine-pane-binding-runtime.ts"
       ],
       "ignoreDependencies": [
         "eslint-config-next",
