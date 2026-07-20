@@ -112,6 +112,15 @@ describe('PATCH /api/pages/[pageId]/webhooks/[id]/triggers/[triggerId]', () => {
     expect(mockUpdateReturning).not.toHaveBeenCalled();
   });
 
+  it('returns 404 without auditing when the row vanishes between the check and the update (TOCTOU)', async () => {
+    // Ownership check passes, but a concurrent DELETE removes the row before the
+    // UPDATE lands — returning() yields nothing.
+    mockUpdateReturning.mockResolvedValue([]);
+    const response = await PATCH(makeRequest('PATCH', { isEnabled: false }), PARAMS);
+    expect(response.status).toBe(404);
+    expect(mockAuditRequest).not.toHaveBeenCalled();
+  });
+
   it('scopes both lookups so a trigger on another page/webhook cannot be toggled (IDOR)', async () => {
     mockUpdateReturning.mockResolvedValue([{ ...TRIGGER_ROW, isEnabled: false }]);
     await PATCH(makeRequest('PATCH', { isEnabled: false }), PARAMS);

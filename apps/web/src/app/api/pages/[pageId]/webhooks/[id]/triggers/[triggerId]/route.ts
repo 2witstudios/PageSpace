@@ -65,6 +65,11 @@ export async function PATCH(
       .where(eq(webhookTriggers.id, triggerId))
       .returning();
 
+    // The ownership check and the update are not atomic — a concurrent DELETE
+    // could remove the row in between. Don't report a phantom success or emit a
+    // toggle audit for a change that never landed.
+    if (!trigger) return NextResponse.json({ error: 'Trigger not found' }, { status: 404 });
+
     auditRequest(request, {
       eventType: 'data.write',
       userId,
