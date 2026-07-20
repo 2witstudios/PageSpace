@@ -580,6 +580,24 @@ describe('useMachineWorkspaceStore', () => {
     });
   });
 
+  it('given hydrateFromServer with a pane scope carrying the content kind, should round-trip it (#2166 phase 9)', () => {
+    store().hydrateFromServer('m1', [
+      {
+        id: 'ws-1',
+        name: 'Workspace 1',
+        scope: {},
+        columns: [{ id: 'col-1', panes: [{ id: 'pane-1', scope: { name: 'claude-a1', kind: 'chat' } }] }],
+      },
+    ]);
+
+    assert({
+      given: "the sync hook's initial hydrate carrying a pane tagged kind: 'chat'",
+      should: 'round-trip the content kind into the store',
+      actual: panesOf(activeOf('m1')!)[0]?.scope,
+      expected: { name: 'claude-a1', kind: 'chat' },
+    });
+  });
+
   it('given applyServerUpsert for an unseen workspace id, should add it', () => {
     seedMachine('m1');
     const existing = activeOf('m1')!;

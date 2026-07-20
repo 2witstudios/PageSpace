@@ -31,7 +31,7 @@ export interface WorkspaceScopeInput {
 /** Mirrors the client's `OpenTerminalScope`/pane shape — see machine-workspaces-store.ts's DTOs. */
 export interface WorkspaceLayoutPaneInput {
   id: string;
-  scope: { projectName?: string; branchName?: string; name: string } | null;
+  scope: { projectName?: string; branchName?: string; name: string; kind?: 'terminal' | 'chat' } | null;
 }
 export interface WorkspaceLayoutColumnInput {
   id: string;

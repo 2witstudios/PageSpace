@@ -552,7 +552,7 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
     });
   });
 
-  test('the agent picker offers shell (primary), claude, and codex — no retired pagespace-cli', async () => {
+  test('the agent picker offers shell (primary), claude, codex, and pagespace — no retired pagespace-cli', async () => {
     render(<TerminalPanes machineId="m1" socket={socket} />);
 
     await userEvent.click(screen.getByLabelText('Agent type'));
@@ -560,9 +560,9 @@ describe('TerminalPanes (split-and-pick spawn)', () => {
 
     assert({
       given: 'the empty pane\'s agent picker',
-      should: 'list every user-spawnable agent type — shell as the default primary option, claude and codex as secondary AI agents — excluding only the retired pagespace-cli',
+      should: 'list every user-spawnable agent type — shell as the default primary option, claude, codex, and pagespace as secondary agents — excluding only the retired pagespace-cli',
       actual: options,
-      expected: ['shell', 'claude', 'codex'],
+      expected: ['shell', 'claude', 'codex', 'pagespace'],
     });
   });
 
