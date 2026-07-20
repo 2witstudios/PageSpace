@@ -48,6 +48,10 @@ describe('middleware — third-party webhooks are public (own signature/HMAC aut
     '/api/stripe/webhook',
     '/api/integrations/google-calendar/webhook',
     '/api/integrations/zoom/webhook',
+    // Page incoming-webhook intake: the caller is an external system (CI,
+    // monitoring, a script) with no session; the route verifies the
+    // per-webhook HMAC signature itself.
+    '/api/webhooks/tok-abc123',
   ])('lets POST %s through with no session cookie instead of 401ing before the route runs', async (path) => {
     createSecureResponse.mockClear();
     const req = new NextRequest(`https://pagespace.ai${path}`, { method: 'POST' });

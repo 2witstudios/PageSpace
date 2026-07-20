@@ -275,6 +275,10 @@
       "types": "./dist/schema/email-broadcasts.d.ts",
       "default": "./dist/schema/email-broadcasts.js"
     },
+    "./schema/page-webhooks": {
+      "types": "./dist/schema/page-webhooks.d.ts",
+      "default": "./dist/schema/page-webhooks.js"
+    },
     "./schema/oauth": {
       "types": "./dist/schema/oauth.d.ts",
       "default": "./dist/schema/oauth.js"

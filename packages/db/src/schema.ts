@@ -58,6 +58,7 @@ export * from './schema/machine-agent-terminals';
 export * from './schema/machine-workspaces';
 export * from './schema/machine-workspace-bootstraps';
 export * from './schema/email-broadcasts';
+export * from './schema/page-webhooks';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -119,6 +120,7 @@ import * as machineAgentTerminals from './schema/machine-agent-terminals';
 import * as machineWorkspaces from './schema/machine-workspaces';
 import * as machineWorkspaceBootstraps from './schema/machine-workspace-bootstraps';
 import * as emailBroadcasts from './schema/email-broadcasts';
+import * as pageWebhooks from './schema/page-webhooks';
 
 export const schema = {
   ...auth,
@@ -181,4 +183,5 @@ export const schema = {
   ...machineWorkspaces,
   ...machineWorkspaceBootstraps,
   ...emailBroadcasts,
+  ...pageWebhooks,
 };

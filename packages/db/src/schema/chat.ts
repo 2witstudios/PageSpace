@@ -17,9 +17,14 @@ export interface ChannelCommandExecution {
   entryPageTitle?: string;
 }
 
-/** AI sender metadata: set when a channel message is posted by an AI tool. */
+/**
+ * AI sender metadata: set when a channel message is posted by a non-human
+ * sender — an AI tool, or an incoming page webhook ('webhook', see
+ * page-webhooks.ts; senderName carries the resolved display name, i.e. the
+ * payload's username override or the webhook's configured name).
+ */
 export interface ChannelMessageAiMeta {
-  senderType: 'global_assistant' | 'agent';
+  senderType: 'global_assistant' | 'agent' | 'webhook';
   senderName: string;
   agentPageId?: string;
   /** One entry per resolved command in the triggering message, in document order. */

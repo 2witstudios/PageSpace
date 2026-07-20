@@ -67,6 +67,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
   ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
+  ['webhooks/[token]', 'Signature-verified inbound page-webhook intake — no user session, authenticated by per-webhook HMAC secret; minting/managing the webhook is audited in the /api/pages/[pageId]/webhooks routes'],
 
   // --- Draft persistence (personal, ephemeral, own-user-only) ---
   ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],

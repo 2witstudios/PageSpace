@@ -169,6 +169,54 @@ describe('BackupService', () => {
       )
     })
 
+    test('given pg_dump failure and an alertPublisher configured, should call it with tenantId/slug/errorMessage', async () => {
+      const alertPublisher = vi.fn().mockResolvedValue(undefined)
+      const deps = makeDeps({ alertPublisher })
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        stdout: '', stderr: 'connection refused', exitCode: 1,
+      })
+      const service = createBackupService(deps)
+
+      await expect(service.backupTenant('tenant-1', 'acme')).rejects.toThrow()
+
+      expect(alertPublisher).toHaveBeenCalledWith({
+        tenantId: 'tenant-1',
+        slug: 'acme',
+        errorMessage: expect.stringContaining('connection refused'),
+      })
+    })
+
+    test('given no alertPublisher configured, should still fail the backup normally (optional dependency)', async () => {
+      const deps = makeDeps() // no alertPublisher
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        stdout: '', stderr: 'connection refused', exitCode: 1,
+      })
+      const service = createBackupService(deps)
+
+      await expect(service.backupTenant('tenant-1', 'acme')).rejects.toThrow('pg_dump failed')
+    })
+
+    test('given the alertPublisher itself rejects, should still throw the original backup error, not the publisher error', async () => {
+      const alertPublisher = vi.fn().mockRejectedValue(new Error('notification service down'))
+      const deps = makeDeps({ alertPublisher })
+      ;(deps.executor.exec as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        stdout: '', stderr: 'connection refused', exitCode: 1,
+      })
+      const service = createBackupService(deps)
+
+      await expect(service.backupTenant('tenant-1', 'acme')).rejects.toThrow('pg_dump failed')
+    })
+
+    test('given a successful backup, should never call alertPublisher', async () => {
+      const alertPublisher = vi.fn().mockResolvedValue(undefined)
+      const deps = makeDeps({ alertPublisher })
+      const service = createBackupService(deps)
+
+      await service.backupTenant('tenant-1', 'acme')
+
+      expect(alertPublisher).not.toHaveBeenCalled()
+    })
+
     test('given tar failure, should still complete backup (db dump is primary)', async () => {
       const deps = makeDeps()
       ;(deps.executor.exec as ReturnType<typeof vi.fn>)

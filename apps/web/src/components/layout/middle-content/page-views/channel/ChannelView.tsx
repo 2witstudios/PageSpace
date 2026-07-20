@@ -19,7 +19,8 @@ import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Check, X, MessageSquareText } from 'lucide-react';
+import { Lock, Check, X, MessageSquareText, Webhook } from 'lucide-react';
+import { ChannelWebhooksDialog } from './ChannelWebhooksDialog';
 import { MessageAttachment } from '@/components/shared/MessageAttachment';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
 import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
@@ -64,7 +65,7 @@ interface CommandExecutionEntry {
 
 // AI sender metadata for messages posted by AI tools
 interface AiMeta {
-  senderType: 'global_assistant' | 'agent';
+  senderType: 'global_assistant' | 'agent' | 'webhook';
   senderName: string;
   agentPageId?: string;
   // Universal Commands execution feedback (UX spec §7) on agent replies —
@@ -152,6 +153,7 @@ function ChannelView({ page }: ChannelViewProps) {
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
+  const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -639,6 +641,21 @@ function ChannelView({ page }: ChannelViewProps) {
     <div className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
+          {canEdit && (
+            <button
+              type="button"
+              onClick={() => setWebhooksOpen(true)}
+              title="Webhooks"
+              className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            >
+              <Webhook size={14} aria-hidden />
+            </button>
+          )}
+          <ChannelWebhooksDialog
+            open={webhooksOpen}
+            onOpenChange={setWebhooksOpen}
+            pageId={page.id}
+          />
           <Conversation className="h-full">
             <ConversationContent className="max-w-4xl mx-auto p-4">
                     {hasMore && (
@@ -658,7 +675,9 @@ function ChannelView({ page }: ChannelViewProps) {
                         const aiLabel = isAi
                           ? m.aiMeta!.senderType === 'global_assistant'
                             ? 'global assistant'
-                            : 'agent'
+                            : m.aiMeta!.senderType === 'webhook'
+                              ? 'webhook'
+                              : 'agent'
                           : null;
                         const avatarFallback = isAi
                           ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]

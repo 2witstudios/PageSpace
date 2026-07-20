@@ -1,6 +1,7 @@
 import { runRetentionCleanup } from '@pagespace/lib/compliance/retention/retention-engine';
 import { db } from '@pagespace/db/db';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
@@ -40,7 +41,7 @@ export async function GET(request: Request) {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('[Cron] Error running retention cleanup:', error);
+    loggers.system.error('[Cron] Error running retention cleanup', error as Error);
     return NextResponse.json(
       {
         success: false,
