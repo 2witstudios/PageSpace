@@ -118,6 +118,13 @@ export const WRITE_TOOLS = new Set([
 // Web search tools (excluded when web search is disabled)
 const WEB_SEARCH_TOOLS = new Set(['web_search', 'web_fetch']);
 
+// Tools that let the agent discover or switch to a different machine —
+// dropped when the conversation is bound to one specific machine via a
+// Machine Pane binding (deriveMachinePaneBinding). The bound machine is the
+// only one this conversation may ever act on, so offering a way to leave it
+// is moot.
+const MACHINE_BINDING_LOCKED_TOOLS = new Set(['switch_machine', 'list_machines']);
+
 // Image-generation tools (a runtime composer toggle, like web search — filtered
 // independently of the saved per-agent allow-list).
 const IMAGE_GEN_TOOLS = new Set(['generate_image']);
@@ -233,6 +240,22 @@ export function filterToolsForMcpScope<T>(
 
   return Object.fromEntries(
     Object.entries(tools).filter(([name]) => !isAccountLevelOnlyTool(name))
+  );
+}
+
+/**
+ * Filter tools based on machine-pane binding.
+ * Returns all tools when not bound, or drops switch_machine/list_machines
+ * when the conversation is bound to a specific machine.
+ */
+export function filterToolsForMachineBinding<T>(
+  tools: Record<string, T>,
+  isBound: boolean
+): Record<string, T> {
+  if (!isBound) return tools;
+
+  return Object.fromEntries(
+    Object.entries(tools).filter(([name]) => !MACHINE_BINDING_LOCKED_TOOLS.has(name))
   );
 }
 
