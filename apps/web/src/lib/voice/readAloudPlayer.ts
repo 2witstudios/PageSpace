@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { useDictationActivityStore } from '@/hooks/useSpeechRecognition';
 
 /**
  * Module-singleton "read aloud" audio player, deliberately independent of
@@ -25,6 +26,13 @@ import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
  * `useVoiceModeStore`). The actual audio machinery (AudioContext, the
  * current source, the chunk queue, the race-guard generation counter) stays
  * in plain module variables outside React entirely.
+ *
+ * Mutually exclusive with two other microphone-capturing features, each
+ * with the same cross-surface problem: a live Voice Mode call
+ * (`useVoiceModeStore`) and basic mic dictation (`useDictationActivityStore`
+ * in `useSpeechRecognition.ts`, one per `ChatInput` instance). Either one's
+ * mic could otherwise pick up this module's own TTS audio and transcribe it
+ * back into a draft or into Voice Mode's own turn. See `ensureReadAloudReady`.
  */
 
 interface ReadAloudPlayerState {
@@ -132,7 +140,14 @@ async function playNext(runId: number): Promise<void> {
 }
 
 export function startReadAloud(chunks: string[]): void {
-  ensureVoiceModeStopsReadAloud();
+  ensureMutualExclusionSubscriptions();
+  // synthesize() reads ttsVoice/ttsSpeed straight from useVoiceModeStore
+  // without ever mounting useVoiceMode() — which is what used to trigger
+  // this load on mount — so a user's persisted voice choice would otherwise
+  // be silently ignored the first time they use Read Aloud without ever
+  // having opened the full Voice Mode panel. Idempotent and cheap, so it's
+  // just re-run on every start rather than gated behind a one-time flag.
+  useVoiceModeStore.getState().loadSettings();
   stopReadAloud();
   if (chunks.length === 0) return;
   queue = [...chunks];
@@ -165,23 +180,30 @@ export function isReadAloudPlaying(): boolean {
   return useReadAloudPlayerStore.getState().isPlaying;
 }
 
-// Enforced here (not per call-site) so the invariant holds no matter which UI
-// entry point enables Voice Mode, present or future: a mic-capturing live
-// call must never run concurrently with this module's own TTS audio, since
-// each has its own separate AudioContext and would otherwise be picked up by
-// Voice Mode's microphone as if it were user speech.
-//
 // Registered lazily (on first startReadAloud(), not at module import time)
-// so merely importing this module — e.g. a component under test that renders
-// but never exercises Read Aloud — never touches useVoiceModeStore.subscribe.
-// By the time any audio could actually be playing, this has always already
-// run, since startReadAloud() is the only path that starts playback.
-let voiceModeSubscriptionRegistered = false;
-function ensureVoiceModeStopsReadAloud(): void {
-  if (voiceModeSubscriptionRegistered) return;
-  voiceModeSubscriptionRegistered = true;
+// so merely importing this module — e.g. a component under test that
+// renders but never exercises Read Aloud — never touches these other
+// stores' `.subscribe`. By the time any audio could actually be playing,
+// this has always already run, since startReadAloud() is the only path
+// that starts playback. Guarded by a one-time flag (unlike loadSettings()
+// above) because subscribing more than once would leak duplicate listeners.
+//
+// A live Voice Mode call or active mic dictation each capture the
+// microphone — this module's own TTS audio must never play concurrently
+// with either, or it risks being picked up as if it were user speech.
+// Enforced here (not per call-site) so the invariant holds no matter which
+// UI entry point triggers either, present or future.
+let subscriptionsRegistered = false;
+function ensureMutualExclusionSubscriptions(): void {
+  if (subscriptionsRegistered) return;
+  subscriptionsRegistered = true;
   useVoiceModeStore.subscribe((state, prevState) => {
     if (state.isEnabled && !prevState.isEnabled) {
+      stopReadAloud();
+    }
+  });
+  useDictationActivityStore.subscribe((state, prevState) => {
+    if (state.activeCount > 0 && prevState.activeCount === 0) {
       stopReadAloud();
     }
   });

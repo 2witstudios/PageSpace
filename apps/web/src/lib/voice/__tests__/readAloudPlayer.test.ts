@@ -6,6 +6,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { useDictationActivityStore } from '@/hooks/useSpeechRecognition';
 import {
   startReadAloud,
   stopReadAloud,
@@ -52,6 +53,7 @@ describe('readAloudPlayer', () => {
   afterEach(() => {
     stopReadAloud();
     useVoiceModeStore.getState().disable();
+    useDictationActivityStore.setState({ activeCount: 0 });
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -233,5 +235,27 @@ describe('readAloudPlayer', () => {
 
     stopReadAloud();
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it('stops playback the moment mic dictation becomes active anywhere, regardless of which ChatInput instance started it', () => {
+    // Dictation is per-ChatInput-instance local state (useSpeechRecognition),
+    // unlike Voice Mode's single global store — this simulates a DIFFERENT
+    // mounted surface's mic starting, via the shared activeCount it feeds.
+    startReadAloud(['hello there']);
+    expect(isReadAloudPlaying()).toBe(true);
+
+    useDictationActivityStore.setState({ activeCount: 1 });
+
+    expect(isReadAloudPlaying()).toBe(false);
+  });
+
+  it('reloads persisted voice settings on every start, not just once', () => {
+    const loadSettingsSpy = vi.spyOn(useVoiceModeStore.getState(), 'loadSettings');
+
+    startReadAloud(['first']);
+    stopReadAloud();
+    startReadAloud(['second']);
+
+    expect(loadSettingsSpy).toHaveBeenCalledTimes(2);
   });
 });

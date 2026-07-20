@@ -3,6 +3,7 @@
 import { useCallback } from 'react';
 import type { UIMessage } from 'ai';
 import { useVoiceModeStore } from '@/stores/useVoiceModeStore';
+import { useDictationActivityStore } from '@/hooks/useSpeechRecognition';
 import { getTextSinceLastUserTurn, hasTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
 import { flushForTts } from '@/lib/voice/chunkForTts';
 import {
@@ -17,15 +18,17 @@ import {
  * playback singleton (`readAloudPlayer`), so starting or stopping from any
  * mounted chat surface acts on the one real audio source.
  *
- * Unavailable while Voice Mode is enabled on ANY surface (not just the
- * current one): a live call elsewhere plays through its own separate
- * AudioContext and would overlap with this audio. `readAloudPlayer` itself
- * also stops any in-progress read-aloud the moment Voice Mode turns on, so
- * this is a pre-check for starting a new read, not the only guard.
+ * Unavailable while Voice Mode is enabled, or mic dictation is active, on
+ * ANY surface (not just the current one) — both are separate microphone
+ * captures elsewhere that would overlap with this audio.  `readAloudPlayer`
+ * itself also stops any in-progress read-aloud the moment either turns on,
+ * so this is a pre-check for starting a new read, not the only guard.
  */
 export function useReadAloud() {
   const isReadingAloud = useReadAloudPlayerStore((s) => s.isPlaying);
   const isVoiceModeEnabled = useVoiceModeStore((s) => s.isEnabled);
+  const isDictationActive = useDictationActivityStore((s) => s.activeCount > 0);
+  const blocked = isVoiceModeEnabled || isDictationActive;
 
   const toggleReadAloud = useCallback(
     (messages: readonly UIMessage[]) => {
@@ -33,17 +36,17 @@ export function useReadAloud() {
         stopReadAloud();
         return;
       }
-      if (isVoiceModeEnabled) return;
+      if (blocked) return;
       const text = getTextSinceLastUserTurn(messages);
       if (!text.trim()) return;
       startReadAloud(flushForTts(text));
     },
-    [isVoiceModeEnabled]
+    [blocked]
   );
 
   const canReadAloud = useCallback(
-    (messages: readonly UIMessage[]) => !isVoiceModeEnabled && hasTextSinceLastUserTurn(messages),
-    [isVoiceModeEnabled]
+    (messages: readonly UIMessage[]) => !blocked && hasTextSinceLastUserTurn(messages),
+    [blocked]
   );
 
   return { isReadingAloud, toggleReadAloud, canReadAloud };
