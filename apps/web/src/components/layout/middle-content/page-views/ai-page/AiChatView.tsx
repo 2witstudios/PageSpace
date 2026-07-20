@@ -48,6 +48,8 @@ import { shouldRefreshAfterUndo } from '@/lib/ai/streams/shouldRefreshAfterUndo'
 import { shouldPrependConversation } from '@/lib/ai/streams/shouldPrependConversation';
 import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnComountComplete';
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
+import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
+import { useReadAloud } from '@/hooks/useReadAloud';
 
 // Shared hooks and components
 import {
@@ -580,6 +582,15 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // (see loadMessagesForConversation's docblock for why it is still kept in sync).
   const renderedMessages = useRenderedMessages(page.id, currentConversationId);
   const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+
+  // Read Aloud: on-demand TTS for everything the assistant said since the
+  // user's last turn. Owns its own useVoiceMode() instance, so it's disabled
+  // whenever VoiceCallPanel's live-call instance is active on this surface.
+  const { isReadingAloud, toggleReadAloud } = useReadAloud();
+  const canReadAloud = useMemo(
+    () => !isVoiceModeActive && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
+    [plainMessages, isVoiceModeActive]
+  );
 
   // "Load older" (epic leaf 6.6, scroll-to-top): AiChatView's route IS the agent-conversation
   // route (page.id is the agentId), so the shared agent-mode loader applies directly.
@@ -1518,6 +1529,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                   }}
                   onVoiceModeClick={handleVoiceModeToggle}
                   isVoiceModeActive={isVoiceModeActive}
+                  onReadAloudClick={() => toggleReadAloud(plainMessages)}
+                  isReadingAloud={isReadingAloud}
+                  canReadAloud={canReadAloud}
                   attachments={attachments}
                   onAddFiles={addFiles}
                   onRemoveFile={removeFile}

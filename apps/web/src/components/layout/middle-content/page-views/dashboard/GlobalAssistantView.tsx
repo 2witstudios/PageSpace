@@ -108,6 +108,8 @@ import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimi
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
+import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
+import { useReadAloud } from '@/hooks/useReadAloud';
 import { createId } from '@paralleldrive/cuid2';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
@@ -436,6 +438,15 @@ const GlobalAssistantView: React.FC = () => {
   // above) never renders post-cutover — it stays the transport/controller only.
   const renderedMessages = useRenderedMessages(streamChannelId ?? '', currentConversationId);
   const plainMessages = useMemo(() => renderedMessages.map((r) => r.message), [renderedMessages]);
+
+  // Read Aloud: on-demand TTS for everything the assistant said since the
+  // user's last turn. Owns its own useVoiceMode() instance, so it's disabled
+  // whenever VoiceCallPanel's live-call instance is active on this surface.
+  const { isReadingAloud, toggleReadAloud } = useReadAloud();
+  const canReadAloud = useMemo(
+    () => !isVoiceModeActive && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
+    [plainMessages, isVoiceModeActive]
+  );
   // Loading/error UI reads the cache entry's state (replaces the context's
   // isMessagesLoading and the dashboard store's isConversationMessagesLoading).
   const messagesLoadState = useConversationLoadState(currentConversationId);
@@ -1095,6 +1106,9 @@ const GlobalAssistantView: React.FC = () => {
               popupPlacement={props.inputPosition === 'centered' ? 'bottom' : 'top'}
               onVoiceModeClick={handleVoiceModeToggle}
               isVoiceModeActive={isVoiceModeActive}
+              onReadAloudClick={() => toggleReadAloud(plainMessages)}
+              isReadingAloud={isReadingAloud}
+              canReadAloud={canReadAloud}
               attachments={attachments}
               onAddFiles={addFiles}
               onRemoveFile={removeFile}

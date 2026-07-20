@@ -65,6 +65,12 @@ export interface ChatInputProps {
   onVoiceModeClick?: () => void;
   /** Whether voice mode is currently active */
   isVoiceModeActive?: boolean;
+  /** Callback when the read-aloud button is clicked */
+  onReadAloudClick?: () => void;
+  /** Whether read-aloud is currently playing */
+  isReadingAloud?: boolean;
+  /** Whether there is anything eligible to read aloud right now */
+  canReadAloud?: boolean;
   /** Image attachments for vision support */
   attachments?: ImageAttachment[];
   /** Handler to add image files */
@@ -127,6 +133,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       onProviderModelChange,
       onVoiceModeClick,
       isVoiceModeActive = false,
+      onReadAloudClick,
+      isReadingAloud = false,
+      canReadAloud = false,
       attachments,
       onAddFiles,
       onRemoveFile,
@@ -305,6 +314,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           onClearMicError={clearSpeechError}
           onVoiceModeClick={onVoiceModeClick}
           isVoiceModeActive={isVoiceModeActive}
+          onReadAloudClick={onReadAloudClick}
+          isReadingAloud={isReadingAloud}
+          canReadAloud={canReadAloud}
           selectedProvider={currentProvider}
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}

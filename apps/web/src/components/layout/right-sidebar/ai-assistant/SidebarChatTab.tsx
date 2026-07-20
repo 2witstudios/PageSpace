@@ -44,6 +44,8 @@ import { rollbackOptimisticSendOnFailure } from '@/lib/ai/streams/rollbackOptimi
 import { selectVoiceStreamText } from '@/lib/ai/streams/selectVoiceStreamText';
 import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActivationBaseline';
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
+import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
+import { useReadAloud } from '@/hooks/useReadAloud';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
@@ -541,6 +543,15 @@ const SidebarChatTab: React.FC = () => {
   const enableVoiceMode = useVoiceModeStore((s) => s.enable);
   const disableVoiceMode = useVoiceModeStore((s) => s.disable);
   const isVoiceModeActive = isVoiceModeEnabled && voiceOwner === VOICE_OWNER;
+
+  // Read Aloud: on-demand TTS for everything the assistant said since the
+  // user's last turn. Owns its own useVoiceMode() instance, so it's disabled
+  // whenever VoiceCallPanel's live-call instance is active on this surface.
+  const { isReadingAloud, toggleReadAloud } = useReadAloud();
+  const canReadAloud = useMemo(
+    () => !isVoiceModeActive && getTextSinceLastUserTurn(plainMessages).trim().length > 0,
+    [plainMessages, isVoiceModeActive]
+  );
 
   // Display preferences
   const { preferences: displayPreferences } = useDisplayPreferences();
@@ -1115,6 +1126,9 @@ const SidebarChatTab: React.FC = () => {
           variant="sidebar"
           onVoiceModeClick={handleVoiceModeToggle}
           isVoiceModeActive={isVoiceModeActive}
+          onReadAloudClick={() => toggleReadAloud(plainMessages)}
+          isReadingAloud={isReadingAloud}
+          canReadAloud={canReadAloud}
           attachments={attachments}
           onAddFiles={addFiles}
           onRemoveFile={removeFile}
