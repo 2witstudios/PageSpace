@@ -176,6 +176,39 @@ describe('PATCH /api/pages/[pageId]/tasks/reorder', () => {
     expect(body.error).toBe('tasks must be an array');
   });
 
+  it('returns 400 and skips all DB work when tasks exceeds the batch bound', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    // lockedBatchReorder's batched UPDATE ... FROM (VALUES ...) binds 2 params
+    // per row + 1 scope param; an unbounded array can cross Postgres's 65,535
+    // param ceiling and 500 instead of failing cleanly. Reject up front —
+    // mirrors the bound added to apps/web/src/app/api/user/favorites/reorder/route.ts (#2164).
+    const oversized = Array.from({ length: 5001 }, (_, i) => ({ id: `task-${i}`, position: i }));
+    const response = await PATCH(createRequest({ tasks: oversized }), context);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toMatch(/must not exceed/);
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(reorderTaskListChildren).not.toHaveBeenCalled();
+  });
+
+  it('allows a batch exactly at the bound', async () => {
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1', title: 'My List' } as never);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+
+    const atBound = Array.from({ length: 5000 }, (_, i) => ({ id: `task-${i}`, position: i }));
+    const response = await PATCH(createRequest({ tasks: atBound }), context);
+
+    expect(response.status).toBe(200);
+    expect(reorderTaskListChildren).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 400 when a task entry is missing id', async () => {
     setupAuth();
     vi.mocked(canUserEditPage).mockResolvedValue(true);
