@@ -119,8 +119,9 @@ export function PageWebhooksDialog({ open, onOpenChange, pageId }: PageWebhooksD
             Incoming Webhooks
           </DialogTitle>
           <DialogDescription>
-            External systems can send signed requests to a webhook URL and they appear in this
-            page&apos;s context.
+            External systems can push events to this page by sending signed requests to a webhook
+            URL. On channels, deliveries post as messages; other page types act on deliveries as
+            their integrations are wired up.
           </DialogDescription>
         </DialogHeader>
 
