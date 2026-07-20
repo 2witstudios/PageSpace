@@ -6,6 +6,7 @@ import {
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse,
+  isHandoffBridgeRoute,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
@@ -306,7 +307,13 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
-      const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
+      // Handoff-bridge OAuth callbacks (google/apple) return their own styled HTML
+      // with a bespoke CSP — skip the middleware CSP so it doesn't intersect with
+      // and clobber the route's policy (which allows the page's inline styles).
+      const { response } = createSecureResponse(isProduction, req, {
+        isAPIRoute,
+        skipCSP: isHandoffBridgeRoute(pathname),
+      });
       return response;
     }
 

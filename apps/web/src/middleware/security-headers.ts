@@ -204,15 +204,21 @@ type SecurityHeadersOptions = {
   isSecure?: boolean;
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
+  skipCSP?: boolean;
 };
 
 export const applySecurityHeaders = (
   response: NextResponse,
-  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false }: SecurityHeadersOptions
+  { nonce, isProduction, isSecure = false, isAPIRoute = false, disableCOEP = false, skipCSP = false }: SecurityHeadersOptions
 ): NextResponse => {
-  const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
-
-  response.headers.set('Content-Security-Policy', csp);
+  // `skipCSP` lets a route own its own Content-Security-Policy header (see
+  // isHandoffBridgeRoute). Browsers enforce the INTERSECTION of every CSP header
+  // delivered, so if middleware also set one here it would combine with — and
+  // override — the route's policy. We still emit every other security header.
+  if (!skipCSP) {
+    const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
+    response.headers.set('Content-Security-Policy', csp);
+  }
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -282,6 +288,18 @@ export const isPublishedSiteHost = (host: string | null | undefined): boolean =>
   return hostname === PUBLISH_BASE_HOST || hostname.endsWith(`.${PUBLISH_BASE_HOST}`);
 };
 
+// OAuth callback routes that return their OWN styled HTML "handoff bridge" page
+// (buildHandoffBridgeResponse) with a bespoke CSP allowing an inline <style> block.
+// Middleware must NOT layer its restrictive API CSP (default-src 'none', no style-src)
+// on top — browsers enforce the intersection of all delivered CSPs, which would fall
+// style-src back to 'none' and block the page's inline styles. See:
+//   apps/web/src/app/api/auth/google/callback/route.ts (desktop branch)
+//   apps/web/src/app/api/auth/apple/callback/route.ts  (desktop branch)
+//   apps/web/src/app/api/auth/_shared/handoffBridgeResponse.ts (the route-owned CSP)
+// Their other returns are redirects, which need no CSP, so skipping is safe path-wide.
+export const isHandoffBridgeRoute = (pathname: string): boolean =>
+  pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback';
+
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
@@ -291,6 +309,7 @@ export const shouldDisableCOEP = (pathname: string): boolean =>
 type CreateSecureResponseOptions = {
   isAPIRoute?: boolean;
   disableCOEP?: boolean;
+  skipCSP?: boolean;
 };
 
 const buildSecureResponse = (
@@ -299,7 +318,7 @@ const buildSecureResponse = (
   request?: Request,
   options: CreateSecureResponseOptions = {},
 ): { response: NextResponse; nonce: string } => {
-  const { isAPIRoute = false, disableCOEP = false } = options;
+  const { isAPIRoute = false, disableCOEP = false, skipCSP = false } = options;
   const nonce = generateNonce();
   const isSecure = isSecureRequest(request);
   const csp = isAPIRoute ? buildAPICSPPolicy() : buildCSPPolicy(nonce);
@@ -309,14 +328,14 @@ const buildSecureResponse = (
   // and automatically apply it to framework scripts (via getScriptNonceFromHeader)
   const requestHeaders = new Headers(request?.headers);
   requestHeaders.set(NONCE_HEADER, nonce);
-  if (!isAPIRoute) {
+  if (!isAPIRoute && !skipCSP) {
     requestHeaders.set('Content-Security-Policy', csp);
   }
 
   const response = make(requestHeaders);
 
   // Also set CSP on response headers for browser enforcement
-  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP });
+  applySecurityHeaders(response, { nonce, isProduction, isSecure, isAPIRoute, disableCOEP, skipCSP });
 
   return { response, nonce };
 };
