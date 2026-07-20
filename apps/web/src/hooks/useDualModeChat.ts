@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useCallback } from 'react';
 import { useChat, UseChatOptions } from '@ai-sdk/react';
 import { UIMessage, type CreateUIMessage } from 'ai';
-import { SidebarAgentInfo } from './usePageAgentSidebarState';
+import type { AgentInfo } from '@/types/agent';
 
 /**
- * Return type for the unified sidebar chat interface.
+ * Return type for the unified dual-mode chat interface.
  */
-export interface UseSidebarChatReturn {
+export interface UseDualModeChatReturn {
   /** Current messages (from active mode) */
   messages: UIMessage[];
   /** Send a message — parts-form (client-minted id preserved end to end, PR 5B). */
@@ -56,28 +56,31 @@ export interface UseSidebarChatReturn {
   }) => void | PromiseLike<void>;
 }
 
-interface UseSidebarChatOptions {
-  /** Currently selected agent (null = global mode) */
-  selectedAgent: SidebarAgentInfo | null;
-  /** Chat config for global mode (from GlobalChatContext) */
+interface UseDualModeChatOptions {
+  /** Currently selected agent (null = default mode) */
+  selectedAgent: AgentInfo | null;
+  /** Chat config for default mode (the surface's null-selection identity) */
   globalChatConfig: UseChatOptions<UIMessage> | null;
   /** Chat config for agent mode */
   agentChatConfig: UseChatOptions<UIMessage> | null;
 }
 
 /**
- * Manages chat for the sidebar, handling both global and agent modes.
+ * Manages chat for a dual-mode surface (sidebar, machine pane), handling both
+ * the default (null-selection) and agent modes.
  *
- * - In Global mode: Uses globalChatConfig, syncs with GlobalChatContext
+ * - In default mode: Uses globalChatConfig (whatever identity the surface
+ *   gives its null selection — the global assistant in the sidebar, the
+ *   machine-anchored conversation in a machine pane)
  * - In Agent mode: Uses agentChatConfig, operates independently
  *
  * Handles mode switching gracefully (stops streams, clears stale messages).
  */
-export function usePageAgentSidebarChat({
+export function useDualModeChat({
   selectedAgent,
   globalChatConfig,
   agentChatConfig,
-}: UseSidebarChatOptions): UseSidebarChatReturn {
+}: UseDualModeChatOptions): UseDualModeChatReturn {
   // ============================================
   // Global Mode Chat Instance
   // ============================================
