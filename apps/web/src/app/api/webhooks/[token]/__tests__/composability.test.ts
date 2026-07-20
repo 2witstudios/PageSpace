@@ -257,6 +257,11 @@ describe('Incoming Webhooks: composability (real trigger fan-out reaches execute
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(200);
 
+    // The fan-out WAS scheduled — the guard, not a missing after(), is what
+    // must prevent execution. Without this, a regression that stopped after()
+    // from firing at all would make the not-called assertion below pass for
+    // the wrong reason.
+    expect(capturedAfter).not.toBeNull();
     await capturedAfter?.();
 
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
