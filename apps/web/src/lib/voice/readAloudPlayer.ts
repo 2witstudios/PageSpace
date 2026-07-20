@@ -42,6 +42,9 @@ function setPlaying(isPlaying: boolean): void {
 let audioContext: AudioContext | null = null;
 let audioSource: AudioBufferSourceNode | null = null;
 let queue: string[] = [];
+// The in-flight synthesis request, if any — aborted by stopReadAloud() so a
+// stopped chunk's billed TTS call is actually cancelled, not just ignored.
+let activeAbortController: AbortController | null = null;
 
 // Bumped by every stopReadAloud() call (including the implicit one at the
 // start of startReadAloud()). A `playNext`/`synthesize` chain captures the
@@ -65,11 +68,14 @@ async function synthesize(text: string): Promise<AudioBuffer | null> {
   // Created before the network await so the browser still credits this
   // AudioContext to the user gesture that triggered playback.
   const ctx = getAudioContext();
+  const controller = new AbortController();
+  activeAbortController = controller;
   try {
     const response = await fetchWithAuth('/api/voice/synthesize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice: ttsVoice, speed: ttsSpeed }),
+      signal: controller.signal,
     });
     if (!response.ok) return null;
     const audioData = await response.arrayBuffer();
@@ -79,6 +85,14 @@ async function synthesize(text: string): Promise<AudioBuffer | null> {
     return await ctx.decodeAudioData(audioData);
   } catch {
     return null;
+  } finally {
+    // Only clear if still ours — a stop-then-restart race can leave a newer
+    // call's controller as the active one while this (stale) call is still
+    // unwinding; clearing unconditionally would drop the newer reference and
+    // leave IT un-abortable by a later stop.
+    if (activeAbortController === controller) {
+      activeAbortController = null;
+    }
   }
 }
 
@@ -128,6 +142,8 @@ export function startReadAloud(chunks: string[]): void {
 
 export function stopReadAloud(): void {
   generation++;
+  activeAbortController?.abort();
+  activeAbortController = null;
   if (audioSource) {
     try {
       audioSource.stop();

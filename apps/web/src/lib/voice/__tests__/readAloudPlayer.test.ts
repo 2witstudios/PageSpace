@@ -219,4 +219,19 @@ describe('readAloudPlayer', () => {
 
     expect(isReadAloudPlaying()).toBe(false);
   });
+
+  it('aborts the in-flight synthesis fetch when stopped, instead of only discarding its result', () => {
+    let capturedSignal: AbortSignal | undefined;
+    vi.mocked(fetchWithAuth).mockImplementation((_url, options) => {
+      capturedSignal = (options as RequestInit | undefined)?.signal ?? undefined;
+      return new Promise(() => {}); // never resolves — only the signal matters here
+    });
+
+    startReadAloud(['only chunk']);
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    stopReadAloud();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
 });

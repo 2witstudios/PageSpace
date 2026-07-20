@@ -585,7 +585,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
   // Read Aloud: on-demand TTS for everything the assistant said since the
   // user's last turn, via a shared playback singleton (see readAloudPlayer).
   const { isReadingAloud, toggleReadAloud, canReadAloud: canReadAloudFor } = useReadAloud();
-  const canReadAloud = canReadAloudFor(plainMessages);
+  const canReadAloud = useMemo(() => canReadAloudFor(plainMessages), [canReadAloudFor, plainMessages]);
   const handleReadAloudClick = useCallback(
     () => toggleReadAloud(plainMessages),
     [toggleReadAloud, plainMessages]
