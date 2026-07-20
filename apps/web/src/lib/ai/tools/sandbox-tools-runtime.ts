@@ -32,6 +32,8 @@ import {
   createDbMachineSessionStore,
 } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { acquireMachineSandbox } from '@pagespace/lib/services/sandbox/machine-session';
+import { acquireBranchSandbox } from '@pagespace/lib/services/sandbox/branch-session';
+import { createDbMachineBranchStore } from '@pagespace/lib/services/machines/machine-branches-store';
 import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/machine-billing';
 import { measureMachineStorageOpportunistically } from '@pagespace/lib/services/sandbox/machine-storage-billing';
 import { lookupPageOwnerId } from '@pagespace/lib/billing/machine-payer';
@@ -72,6 +74,13 @@ let sandboxClientPromise: Promise<ExecSandboxClient> | null = null;
 function getStore() {
   storePromise ??= createDbMachineSessionStore();
   return storePromise;
+}
+
+let branchStorePromise: ReturnType<typeof createDbMachineBranchStore> | null = null;
+
+function getBranchStore() {
+  branchStorePromise ??= createDbMachineBranchStore();
+  return branchStorePromise;
 }
 
 // The Fly Sprites driver is loaded via a DYNAMIC import, never a static one.
@@ -120,28 +129,48 @@ function getSandboxClient(): Promise<ExecSandboxClient> {
 export function buildRealSandboxRunDeps(): SandboxRunDeps {
   return {
     isEnabled: isCodeExecutionEnabled,
-    acquireSandbox: async (input) =>
-      acquireMachineSandbox({
-        ...input,
-        deps: {
-          store: await getStore(),
-          client: await getSandboxClient(),
-          authorize: canRunCode,
-          now: () => new Date(),
-          secret: getSandboxSessionSecret(),
-          // Full-egress G-gate: the agent sandbox runs OPEN egress, so refuse to
-          // provision unless containment is verified for the live topology
-          // (SANDBOX_CONTAINMENT_VERIFIED=true after the G1 probes pass). Admin
-          // gate has precedence. Fail-closed when unset.
-          checkFullEgressEnablement: async () =>
-            decideFullEgressEnablement({
-              adminGateEnabled: isCodeExecutionEnabled(),
-              containment: isContainmentVerified() ? { contained: true } : null,
-            }),
-          checkMachineRuntimeGuardrail,
-          recordMachineActivity,
-        },
-      }),
+    // Branch-scoped "PageSpace Agent" panes (issue #2166 phase 8) route to the
+    // attach-only branch seam instead of the machine's own persistent
+    // session — a branch's Sprite is provisioned exclusively by the
+    // branch-spawn path, never lazily here.
+    acquireSandbox: async ({ branchSandbox, ...input }) =>
+      branchSandbox
+        ? acquireBranchSandbox({
+            driveId: input.driveId,
+            userId: input.userId,
+            requestOrigin: input.requestOrigin,
+            agentPageId: input.agentPageId,
+            machineId: branchSandbox.machineId,
+            machineBranchId: branchSandbox.machineBranchId,
+            deps: {
+              authorize: canRunCode,
+              now: () => new Date(),
+              checkMachineRuntimeGuardrail,
+              recordMachineActivity,
+              findBranch: async (machineBranchId) => (await getBranchStore()).findById(machineBranchId),
+            },
+          })
+        : acquireMachineSandbox({
+            ...input,
+            deps: {
+              store: await getStore(),
+              client: await getSandboxClient(),
+              authorize: canRunCode,
+              now: () => new Date(),
+              secret: getSandboxSessionSecret(),
+              // Full-egress G-gate: the agent sandbox runs OPEN egress, so refuse to
+              // provision unless containment is verified for the live topology
+              // (SANDBOX_CONTAINMENT_VERIFIED=true after the G1 probes pass). Admin
+              // gate has precedence. Fail-closed when unset.
+              checkFullEgressEnablement: async () =>
+                decideFullEgressEnablement({
+                  adminGateEnabled: isCodeExecutionEnabled(),
+                  containment: isContainmentVerified() ? { contained: true } : null,
+                }),
+              checkMachineRuntimeGuardrail,
+              recordMachineActivity,
+            },
+          }),
     reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
     quota: {
       acquireSlot: acquireCodeExecutionSlot,

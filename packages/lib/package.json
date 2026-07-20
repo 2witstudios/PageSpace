@@ -502,6 +502,11 @@
       "import": "./dist/services/sandbox/machine-session.js",
       "require": "./dist/services/sandbox/machine-session.js"
     },
+    "./services/sandbox/branch-session": {
+      "types": "./dist/services/sandbox/branch-session.d.ts",
+      "import": "./dist/services/sandbox/branch-session.js",
+      "require": "./dist/services/sandbox/branch-session.js"
+    },
     "./services/sandbox/machine-billing": {
       "types": "./dist/services/sandbox/machine-billing.d.ts",
       "import": "./dist/services/sandbox/machine-billing.js",
@@ -1846,6 +1851,9 @@
       ],
       "services/sandbox/machine-session": [
         "./dist/services/sandbox/machine-session.d.ts"
+      ],
+      "services/sandbox/branch-session": [
+        "./dist/services/sandbox/branch-session.d.ts"
       ],
       "services/sandbox/machine-billing": [
         "./dist/services/sandbox/machine-billing.d.ts"
