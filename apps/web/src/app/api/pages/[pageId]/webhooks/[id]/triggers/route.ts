@@ -111,8 +111,9 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
     if (!workflow) return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
 
     // Cross-drive guard: a webhook must only fire workflows from its own drive —
-    // binding a foreign-drive workflow would let a page in one drive drive
-    // execution (and AI billing) in another.
+    // binding a foreign-drive workflow would let a page in one drive trigger
+    // execution (and AI billing) in another. This is create-time validation;
+    // the move-safe authoritative guard lives at dispatch (see epic T5).
     if (workflow.driveId !== scope.driveId) {
       return NextResponse.json(
         { error: 'Workflow must belong to the same drive as the webhook' },
