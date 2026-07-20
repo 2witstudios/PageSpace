@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', field: a, value: b })),
@@ -21,6 +21,11 @@ import { lockedBatchReorder } from '@pagespace/lib/services/reorder';
 import { reorderTaskListChildren } from '../reorder-task-list';
 
 describe('reorderTaskListChildren', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(lockedBatchReorder).mockResolvedValue(['task-a']);
+  });
+
   it('locks the scoped pages FOR SHARE before delegating to lockedBatchReorder', async () => {
     const callOrder: string[] = [];
     const forShare = vi.fn().mockImplementation(async () => {
@@ -72,5 +77,17 @@ describe('reorderTaskListChildren', () => {
     const result = await reorderTaskListChildren(tx, 'page-1', plan);
 
     expect(result).toEqual(['task-a', 'task-b']);
+  });
+
+  it('never touches the transaction for an empty plan (defense in depth, matching lockedBatchReorder\'s own empty-plan guard)', async () => {
+    const select = vi.fn();
+    const tx = { select } as unknown as Parameters<typeof reorderTaskListChildren>[0];
+
+    const plan = { orderedIds: [], positionById: new Map() };
+    const result = await reorderTaskListChildren(tx, 'page-1', plan);
+
+    expect(select).not.toHaveBeenCalled();
+    expect(lockedBatchReorder).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
   });
 });

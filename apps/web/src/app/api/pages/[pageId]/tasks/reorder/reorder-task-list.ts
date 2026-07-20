@@ -16,8 +16,9 @@ function taskListChildPagesWhere(pageId: string) {
 
 /**
  * Applies a reorder plan to task_items scoped to pageId's TASK_LIST
- * children, inside the caller's transaction. Caller guards the
- * plan.orderedIds.length === 0 case (no-op, no transaction).
+ * children, inside the caller's transaction. No-ops (no lock, no query)
+ * for an empty plan — mirrors lockedBatchReorder's own empty-plan guard,
+ * so this stays safe to call even if a future caller stops pre-filtering.
  *
  * task_items has no direct FK to its task list — membership is derived via
  * pages that are direct TASK_LIST children of this list's page, the same
@@ -39,6 +40,10 @@ export async function reorderTaskListChildren(
   pageId: string,
   plan: ReorderPlan,
 ): Promise<string[]> {
+  if (plan.orderedIds.length === 0) {
+    return [];
+  }
+
   await tx.select({ id: pages.id }).from(pages).where(taskListChildPagesWhere(pageId)).for('share');
 
   return lockedBatchReorder(tx, {
