@@ -20,7 +20,7 @@
  * testable with none.
  */
 
-import { resolveAgentLaunchSpec } from '@pagespace/lib/services/machines/agent-terminal-types';
+import { isPtyAgentType, resolveAgentLaunchSpec } from '@pagespace/lib/services/machines/agent-terminal-types';
 import type { ResolveAgentTerminalResult } from '@pagespace/lib/services/machines/agent-terminals';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
@@ -167,6 +167,12 @@ export async function resolveMachineSandbox(
 ): Promise<ResolveMachineSandboxResult> {
   const resolved = await deps.resolveAgentTerminal(target);
   if (!resolved.ok) return { ok: false, reason: resolved.reason };
+
+  // Belt-and-suspenders over the socket layer's own `not_a_pty_agent` deny: a
+  // buggy client emitting `agent-terminal:connect` for a chat-surface
+  // (`pagespace`) session must be refused here too, before ever touching the
+  // Sprite — the socket deny path and this one share the same reason string.
+  if (!isPtyAgentType(resolved.agentType)) return { ok: false, reason: 'not_a_pty_agent' };
 
   const spec = resolveAgentLaunchSpec(resolved.agentType);
 
