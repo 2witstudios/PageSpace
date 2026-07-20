@@ -1,6 +1,10 @@
 import { describe, it } from 'vitest';
 import { assert } from '@/hooks/__tests__/riteway';
-import { getHasMoreTasks, isLoadingNextTaskPage } from '../TaskListView';
+import { getHasMoreTasks, isLoadingNextTaskPage, redistributeTasksAcrossPages } from '../TaskListView';
+import type { TaskItem } from '../task-list-types';
+
+// Minimal stand-ins — redistributeTasksAcrossPages only reads/copies `id` and `.tasks.length`.
+const task = (id: string) => ({ id }) as unknown as TaskItem;
 
 describe('getHasMoreTasks', () => {
   it('no pages loaded yet', () => {
@@ -74,6 +78,87 @@ describe('isLoadingNextTaskPage', () => {
       should: 'return true',
       actual: isLoadingNextTaskPage(undefined, 1),
       expected: true,
+    });
+  });
+});
+
+describe('redistributeTasksAcrossPages', () => {
+  it('preserves each page\'s original size', () => {
+    const pages = [
+      { hasMore: true, tasks: [task('a'), task('b')] },
+      { hasMore: false, tasks: [task('c')] },
+    ];
+    const reordered = [task('c'), task('a'), task('b')];
+    const result = redistributeTasksAcrossPages(pages, reordered);
+    assert({
+      given: 'pages of size 2 and 1',
+      should: 'keep the same per-page task counts after redistributing',
+      actual: result.map(p => p.tasks.length),
+      expected: [2, 1],
+    });
+  });
+
+  it('preserves order within the redistribution', () => {
+    const pages = [
+      { hasMore: true, tasks: [task('a'), task('b')] },
+      { hasMore: false, tasks: [task('c')] },
+    ];
+    const reordered = [task('c'), task('a'), task('b')];
+    const result = redistributeTasksAcrossPages(pages, reordered);
+    assert({
+      given: 'a reordered list where "c" moved to the front',
+      should: 'fill each page sequentially from the reordered list',
+      actual: result.map(p => p.tasks.map(t => t.id)),
+      expected: [['c', 'a'], ['b']],
+    });
+  });
+
+  it('preserves non-tasks fields (e.g. hasMore) untouched', () => {
+    const pages = [
+      { hasMore: true, tasks: [task('a')] },
+      { hasMore: false, tasks: [task('b')] },
+    ];
+    const result = redistributeTasksAcrossPages(pages, [task('b'), task('a')]);
+    assert({
+      given: 'pages with distinct hasMore flags',
+      should: 'leave hasMore on each page exactly as it was',
+      actual: result.map(p => p.hasMore),
+      expected: [true, false],
+    });
+  });
+
+  it('does not mutate the input pages array', () => {
+    const pages = [{ hasMore: true, tasks: [task('a')] }];
+    redistributeTasksAcrossPages(pages, [task('a')]);
+    assert({
+      given: 'the original pages array after redistributing',
+      should: 'remain referentially the same objects (pure function)',
+      actual: pages[0].tasks[0].id,
+      expected: 'a',
+    });
+  });
+
+  it('shorter reordered list (e.g. a filtered subset) truncates later pages instead of throwing', () => {
+    const pages = [
+      { hasMore: true, tasks: [task('a'), task('b')] },
+      { hasMore: false, tasks: [task('c'), task('d')] },
+    ];
+    // Only 2 of the original 4 tasks are in the reordered (filtered) list.
+    const result = redistributeTasksAcrossPages(pages, [task('a'), task('b')]);
+    assert({
+      given: 'a reordered list shorter than the total task count across pages',
+      should: 'fill leading pages fully and leave trailing pages empty rather than throwing',
+      actual: result.map(p => p.tasks.length),
+      expected: [2, 0],
+    });
+  });
+
+  it('empty pages array', () => {
+    assert({
+      given: 'no loaded pages',
+      should: 'return an empty array',
+      actual: redistributeTasksAcrossPages([], []),
+      expected: [],
     });
   });
 });

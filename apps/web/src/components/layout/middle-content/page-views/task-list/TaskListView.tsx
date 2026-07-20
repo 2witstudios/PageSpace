@@ -347,6 +347,22 @@ export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): bool
 export const isLoadingNextTaskPage = (pages: unknown[] | undefined, size: number): boolean =>
   size > 0 && (pages === undefined || pages.length < size);
 
+// Splits a reordered task list back into the same number of pages, each keeping its
+// original size (and every other field, e.g. hasMore, untouched) — used for the
+// drag-reorder optimistic update so getHasMoreTasks/isLoadingNextTaskPage stay correct
+// through the optimistic window instead of collapsing every loaded page into one.
+export const redistributeTasksAcrossPages = <P extends { tasks: TaskItem[] }>(
+  pages: P[],
+  reorderedTasks: TaskItem[],
+): P[] => {
+  let cursor = 0;
+  return pages.map((p) => {
+    const chunk = reorderedTasks.slice(cursor, cursor + p.tasks.length);
+    cursor += p.tasks.length;
+    return { ...p, tasks: chunk };
+  });
+};
+
 // Sortable row component for drag-and-drop
 interface SortableTaskRowProps {
   task: TaskItem;
@@ -503,7 +519,12 @@ function TaskListView({ page }: TaskListViewProps) {
     fetcher,
     {
       revalidateOnFocus: false,
-      revalidateFirstPage: false,
+      // Keep the default (true): with this off, `shouldFetchPage` in swr/infinite has no
+      // remaining trigger that fires from time passing alone, which silently turns the
+      // refreshInterval below into a no-op safety net (verified against swr/infinite's
+      // source — every other condition needs an explicit mutate() or a missing cache
+      // entry). The cost is an extra page-0 refetch on every "Load More" click, which is
+      // cheap and infrequent — worth it to keep the periodic staleness fallback alive.
       isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
@@ -833,14 +854,16 @@ function TaskListView({ page }: TaskListViewProps) {
       newPosition = (beforePos + afterPos) / 2;
     }
 
-    // Optimistic update: collapse every loaded page into one synthetic page holding
-    // the reordered (filtered) list. Same trade-off the single-page version of this
-    // view always made — a filtered-out task briefly disappears from the cache
-    // until the revalidate below restores the real, multi-page server state.
+    // Optimistic update: redistribute the reordered (filtered) list back across the
+    // same pages, preserving each page's size and hasMore — the pre-existing,
+    // single-page version of this view already dropped filtered-out tasks from the
+    // cache during this same optimistic window (arrayMove over `filteredTasks`, not
+    // the full list); redistributing by page here just keeps getHasMoreTasks /
+    // isLoadingNextTaskPage accurate through it instead of collapsing every loaded
+    // page into one. The revalidate below always restores the real server state.
     const reorderedTasks = arrayMove(tasks, oldIndex, newIndex);
-    const firstPage = taskPages?.[0];
-    if (firstPage) {
-      mutateTaskPages([{ ...firstPage, tasks: reorderedTasks }], false);
+    if (taskPages && taskPages.length > 0) {
+      mutateTaskPages(redistributeTasksAcrossPages(taskPages, reorderedTasks), false);
     }
 
     try {
