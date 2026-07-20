@@ -19,7 +19,8 @@ import { useDriveStore } from '@/hooks/useDrive';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { useVoiceModeStore, type VoiceModeOwner } from '@/stores/useVoiceModeStore';
 import { useGlobalChatConversation, useGlobalChatConfig } from '@/contexts/GlobalChatContext';
-import { usePageAgentSidebarState, usePageAgentSidebarChat, type SidebarAgentInfo } from '@/hooks/page-agents';
+import { usePageAgentSidebarState, type SidebarAgentInfo } from '@/hooks/page-agents';
+import { useDualModeChat } from '@/hooks/useDualModeChat';
 import { type PendingStream } from '@/stores/usePendingStreamsStore';
 import { useAuth } from '@/hooks/useAuth';
 import { dedupRemoteStreams } from '@/lib/ai/streams/dedupRemoteStreams';
@@ -277,7 +278,7 @@ const SidebarChatTab: React.FC = () => {
     agentStatus,
     agentMessages,
     agentStop,
-  } = usePageAgentSidebarChat({
+  } = useDualModeChat({
     selectedAgent,
     globalChatConfig,
     agentChatConfig,
@@ -424,7 +425,7 @@ const SidebarChatTab: React.FC = () => {
   // nothing is streaming, and emits removeStream for the id it was mirroring — deleting a live
   // stream's entry, and with it that stream's Stop button and its rendered content.
   //
-  // The sidebar's two chats happen to be mutually exclusive today (usePageAgentSidebarChat stops
+  // The sidebar's two chats happen to be mutually exclusive today (useDualModeChat stops
   // the other mode's LOCAL fetch on switch), which is exactly the kind of invariant that makes a
   // mode-selected mirror look fine until it isn't: those stop effects are themselves scheduled to
   // change (leaf 5.4, W6), and a local stop never stopped the SERVER stream anyway.

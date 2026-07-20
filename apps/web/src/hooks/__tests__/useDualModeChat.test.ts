@@ -1,12 +1,12 @@
 /**
- * usePageAgentSidebarChat Hook Tests
+ * useDualModeChat Hook Tests
  * Tests for unified chat interface supporting both global and agent modes
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { usePageAgentSidebarChat } from '../usePageAgentSidebarChat';
-import type { SidebarAgentInfo } from '../usePageAgentSidebarState';
+import { useDualModeChat } from '../useDualModeChat';
+import type { AgentInfo } from '@/types/agent';
 
 // Mock useChat from @ai-sdk/react
 const mockGlobalSendMessage = vi.fn();
@@ -50,9 +50,9 @@ vi.mock('@ai-sdk/react', () => ({
   }),
 }));
 
-describe('usePageAgentSidebarChat', () => {
+describe('useDualModeChat', () => {
   // Sample agent
-  const mockAgent: SidebarAgentInfo = {
+  const mockAgent: AgentInfo = {
     id: 'agent-123',
     title: 'Test Agent',
     driveId: 'drive-456',
@@ -83,7 +83,7 @@ describe('usePageAgentSidebarChat', () => {
   describe('unified interface', () => {
     it('should return messages from global chat when no agent selected', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -98,7 +98,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should return sendMessage function', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -110,7 +110,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should return stop function', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -122,7 +122,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should return regenerate function', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -134,7 +134,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should return setMessages function', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -151,7 +151,7 @@ describe('usePageAgentSidebarChat', () => {
   describe('global mode (no agent selected)', () => {
     it('should use global sendMessage when sending in global mode', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -169,7 +169,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should use global regenerate in global mode', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -186,7 +186,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should expose globalStatus for context sync', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -198,7 +198,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should expose globalMessages for context sync', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -210,7 +210,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should expose setGlobalMessages for context sync', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -227,7 +227,7 @@ describe('usePageAgentSidebarChat', () => {
   describe('agent mode (agent selected)', () => {
     it('should use agent sendMessage when agent is selected', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: mockAgent,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: mockAgentChatConfig,
@@ -248,7 +248,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should use agent regenerate in agent mode', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: mockAgent,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: mockAgentChatConfig,
@@ -274,7 +274,7 @@ describe('usePageAgentSidebarChat', () => {
 
     it('should be false when status is ready (default mock)', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -290,7 +290,7 @@ describe('usePageAgentSidebarChat', () => {
       // Test the isStreaming logic pattern:
       // isStreaming = status === 'submitted' || status === 'streaming'
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
@@ -309,7 +309,7 @@ describe('usePageAgentSidebarChat', () => {
   describe('return type stability', () => {
     it('should include all required properties', () => {
       const { result } = renderHook(() =>
-        usePageAgentSidebarChat({
+        useDualModeChat({
           selectedAgent: null,
           globalChatConfig: mockGlobalChatConfig,
           agentChatConfig: null,
