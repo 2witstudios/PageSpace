@@ -89,6 +89,7 @@ export interface TaskListData {
   };
   tasks: TaskItem[];
   statusConfigs: TaskStatusConfig[];
+  hasMore: boolean;
 }
 
 export type TaskPriority = 'low' | 'medium' | 'high';

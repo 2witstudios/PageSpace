@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import useSWR, { mutate } from 'swr';
+import useSWRInfinite from 'swr/infinite';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
@@ -108,6 +108,10 @@ const fetcher = async (url: string) => {
   if (!res.ok) throw new Error('Failed to fetch');
   return res.json();
 };
+
+// Matches DEFAULT_LIMIT in the GET route's query-spec.ts; must stay <= that route's
+// MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
+const TASKS_PAGE_SIZE = 100;
 
 // Mobile task card component
 interface MobileTaskCardProps {
@@ -331,6 +335,71 @@ export const toggleSet = (set: Set<string>, id: string): Set<string> => {
   return next;
 };
 
+// Only the most recently loaded page's hasMore matters — earlier pages are stale
+// snapshots of a bound that may have shifted as tasks were added/removed since.
+export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): boolean => {
+  if (!pages || pages.length === 0) return false;
+  return pages[pages.length - 1].hasMore;
+};
+
+// True while a "Load More" click has bumped useSWRInfinite's `size` but the newly
+// requested page hasn't resolved into `pages` yet.
+export const isLoadingNextTaskPage = (pages: { hasMore: boolean }[] | undefined, size: number): boolean =>
+  size > 0 && (pages === undefined || pages.length < size);
+
+export type TaskLoadMoreState = 'idle' | 'loading' | 'failed';
+
+// A requested page hasn't resolved into `pages` yet — true both while it's still in
+// flight and after it's permanently failed, since SWR keeps the last-good `data` and
+// sets `error` alongside it rather than clearing it. Disambiguates those two so the
+// "Load More" control can show a spinner vs. a retry state instead of getting stuck.
+export const getTaskLoadMoreState = (
+  pages: { hasMore: boolean }[] | undefined,
+  size: number,
+  hasError: boolean,
+): TaskLoadMoreState => {
+  // The last resolved page is authoritative over `size`: if the server says there's
+  // nothing more, that holds even when `size` (how many "Load More" clicks the user
+  // has made) is stale — e.g. concurrent deletes shrink the total across a page
+  // boundary, getTasksPageKey starts returning null for the pages beyond it, and
+  // `pages.length` permanently stops growing to match `size`. Without this check that
+  // reads as "still loading" forever instead of "there's nothing left to load".
+  if (getHasMoreTasks(pages) === false && pages && pages.length > 0) return 'idle';
+  if (!isLoadingNextTaskPage(pages, size)) return 'idle';
+  return hasError ? 'failed' : 'loading';
+};
+
+// `isPaused` (an app-wide "any document/form editing session" flag — see the config
+// comment where it's set) gates every SWR revalidation for this hook, including this
+// button's own click, not just background polling. There's no public SWR API to bypass
+// it for one call, so instead of leaving the button clickable and silently doing
+// nothing, disable it and say why while editing is active — the safe, honest fallback.
+export const getLoadMoreButtonLabel = (
+  loadMoreState: TaskLoadMoreState,
+  isEditingElsewhere: boolean,
+): string => {
+  if (isEditingElsewhere) return 'Finish editing to load more';
+  if (loadMoreState === 'loading') return 'Loading…';
+  if (loadMoreState === 'failed') return 'Retry';
+  return 'Load more tasks';
+};
+
+// Splits a reordered task list back into the same number of pages, each keeping its
+// original size (and every other field, e.g. hasMore, untouched) — used for the
+// drag-reorder optimistic update so getHasMoreTasks/isLoadingNextTaskPage stay correct
+// through the optimistic window instead of collapsing every loaded page into one.
+export const redistributeTasksAcrossPages = <P extends { tasks: TaskItem[] }>(
+  pages: P[],
+  reorderedTasks: TaskItem[],
+): P[] => {
+  let cursor = 0;
+  return pages.map((p) => {
+    const chunk = reorderedTasks.slice(cursor, cursor + p.tasks.length);
+    cursor += p.tasks.length;
+    return { ...p, tasks: chunk };
+  });
+};
+
 // Sortable row component for drag-and-drop
 interface SortableTaskRowProps {
   task: TaskItem;
@@ -467,18 +536,73 @@ function TaskListView({ page }: TaskListViewProps) {
     componentName: 'TaskListView',
   });
 
-  // Fetch tasks with refresh protection
+  // Fetch tasks with refresh protection, paginated via useSWRInfinite (bounded route:
+  // apps/web/src/app/api/pages/[pageId]/tasks/route.ts defaults to limit=100/offset=0).
   // CRITICAL: Only pause AFTER initial load - never block the first fetch
-  const { data, error, isLoading } = useSWR<TaskListData>(
-    `/api/pages/${page.id}/tasks`,
+  const tasksKeyPrefix = `/api/pages/${page.id}/tasks`;
+  const getTasksPageKey = (pageIndex: number, previousPageData: TaskListData | null) => {
+    if (previousPageData && !previousPageData.hasMore) return null;
+    return `${tasksKeyPrefix}?limit=${TASKS_PAGE_SIZE}&offset=${pageIndex * TASKS_PAGE_SIZE}`;
+  };
+  const {
+    data: taskPages,
+    error,
+    isLoading,
+    size,
+    setSize,
+    mutate: mutateTaskPages,
+  } = useSWRInfinite<TaskListData>(
+    getTasksPageKey,
     fetcher,
     {
       revalidateOnFocus: false,
+      // swr/infinite's default (revalidateFirstPage: true, revalidateAll: false) only
+      // ever refreshes page 0 on the interval tick below — pages 1+ only refetch when
+      // an explicit mutate() targets them (verified against swr/infinite's source: a
+      // page's own cache entry has to be missing or explicitly marked "revalidate all"
+      // for it to refetch; time passing alone isn't enough once it's cached). Without
+      // revalidateAll, a missed socket event for a task on page 2+ would stay stale
+      // until the next explicit write anywhere in this list. The cost is that every
+      // "Load More" click also refetches every already-loaded page, not just the new
+      // one — acceptable for a background task list, and worth it for correctness.
+      revalidateAll: true,
+      // `isAnyEditing` is app-wide (any document/form edit anywhere, not just this
+      // page — useEditingStore.ts), and SWR's isPaused() gates every revalidation for
+      // this key, not just background ones — including this PR's "Load More"/Retry
+      // clicks (verified in swr's core revalidate()). There's no public SWR API to
+      // bypass isPaused for one call, so instead of a click that silently no-ops,
+      // getLoadMoreButtonLabel + the disabled prop below surface it honestly: the
+      // control disables with an explanation while any edit session is active, and
+      // works normally again once it ends. This isPaused gate itself is a pre-existing
+      // pattern, not new to pagination — every write handler in this file already had
+      // the identical exposure through its own post-write mutate() call.
       isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
     }
   );
+
+  // useSWRInfinite's reactive cache entry lives under a synthetic `$inf$<firstPageKey>`
+  // key, not under each page's own URL — a plain-string key matcher here would silently
+  // touch dead cache entries and never actually revalidate. Only the hook's own bound
+  // `mutate` (with no args, forcing every loaded page to refetch — see swr/infinite's
+  // `_i` "revalidate all" flag) reaches the right key.
+  const mutateTasks = useCallback(() => mutateTaskPages(), [mutateTaskPages]);
+
+  const data: TaskListData | undefined = useMemo(() => {
+    if (!taskPages || taskPages.length === 0) return undefined;
+    return {
+      taskList: taskPages[0].taskList,
+      statusConfigs: taskPages[0].statusConfigs,
+      tasks: taskPages.flatMap(p => p.tasks),
+      hasMore: getHasMoreTasks(taskPages),
+    };
+  }, [taskPages]);
+  const hasMoreTasks = data?.hasMore ?? false;
+  const loadMoreState = getTaskLoadMoreState(taskPages, size, !!error);
+  const isLoadingMoreTasks = loadMoreState === 'loading';
+  const loadMoreFailed = loadMoreState === 'failed';
+  const handleLoadMoreTasks = () => setSize(size + 1);
 
   // Stable ref so the page:moved handler always sees the current task list
   // regardless of when the socket effect was installed relative to the SWR load.
@@ -503,19 +627,19 @@ function TaskListView({ page }: TaskListViewProps) {
 
     // Handle task events (event names match backend broadcast format: task:${operation})
     const handleTaskAdded = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     const handleTaskUpdated = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     const handleTaskDeleted = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     const handleTasksReordered = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     // Handle tasks moved between lists via drag-and-drop. The reorder API emits
@@ -526,7 +650,7 @@ function TaskListView({ page }: TaskListViewProps) {
     const handlePageMoved = (payload: { pageId: string; parentId: string | null }) => {
       const movedIn  = payload.parentId === page.id;
       const movedOut = tasksRef.current?.some(t => t.pageId === payload.pageId);
-      if (movedIn || movedOut) mutate(`/api/pages/${page.id}/tasks`);
+      if (movedIn || movedOut) mutateTasks();
     };
 
     socket.on('task:task_added', handleTaskAdded);
@@ -542,7 +666,7 @@ function TaskListView({ page }: TaskListViewProps) {
       socket.off('task:tasks_reordered', handleTasksReordered);
       socket.off('page:moved', handlePageMoved);
     };
-  }, [socket, connectionStatus, page.id]);
+  }, [socket, connectionStatus, page.id, mutateTasks]);
 
   // Derive dynamic status config from API response
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
@@ -550,6 +674,20 @@ function TaskListView({ page }: TaskListViewProps) {
   const statusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
 
   const activeSearch = isFindOpen ? findQuery : search;
+
+  // Filter/search are applied client-side over whatever pages have been loaded so
+  // far. Changing either resets "Load More" progress back to just the first page,
+  // so a previously-expanded load doesn't linger in a state inconsistent with a
+  // fresh filter (cached pages are reused instantly if the user re-expands).
+  //
+  // Deliberately keyed on `search` (the toolbar filter box), not `activeSearch`: the
+  // in-page Cmd+F Find bar (`findQuery`) fires this on every keystroke while typing,
+  // which would truncate `data.tasks` back to page 1 mid-search — silently hiding
+  // matches on already-loaded pages 2+ and under-reporting the match count to
+  // useFindStore. Find should search whatever's already loaded, not reset it.
+  useEffect(() => {
+    setSize(1);
+  }, [filter, search, setSize]);
 
   // Filter tasks
   const filteredTasks = useMemo(() => data?.tasks.filter(task => {
@@ -595,7 +733,7 @@ function TaskListView({ page }: TaskListViewProps) {
         ...(status && { status }),
       });
       if (!title) setNewTaskTitle('');
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to create task');
     }
@@ -607,7 +745,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { status: newStatus });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update status');
     }
@@ -619,7 +757,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { priority: newPriority });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update priority');
     }
@@ -666,7 +804,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const handleSaveTaskTitle = async (taskId: string, title: string) => {
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update task');
     }
@@ -689,7 +827,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await del(`/api/pages/${page.id}/tasks/${taskId}`);
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
       toast.success('Task deleted');
     } catch {
       toast.error('Failed to delete task');
@@ -705,7 +843,7 @@ function TaskListView({ page }: TaskListViewProps) {
         assigneeId,
         assigneeAgentId: agentId,
       });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update assignee');
     }
@@ -717,7 +855,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { assigneeIds });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update assignees');
     }
@@ -731,7 +869,7 @@ function TaskListView({ page }: TaskListViewProps) {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
         dueDate: dueDate?.toISOString() || null,
       });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update due date');
     }
@@ -775,13 +913,17 @@ function TaskListView({ page }: TaskListViewProps) {
       newPosition = (beforePos + afterPos) / 2;
     }
 
-    // Optimistic update
+    // Optimistic update: redistribute the reordered (filtered) list back across the
+    // same pages, preserving each page's size and hasMore — the pre-existing,
+    // single-page version of this view already dropped filtered-out tasks from the
+    // cache during this same optimistic window (arrayMove over `filteredTasks`, not
+    // the full list); redistributing by page here just keeps getHasMoreTasks /
+    // isLoadingNextTaskPage accurate through it instead of collapsing every loaded
+    // page into one. The revalidate below always restores the real server state.
     const reorderedTasks = arrayMove(tasks, oldIndex, newIndex);
-    mutate(
-      `/api/pages/${page.id}/tasks`,
-      { ...data, tasks: reorderedTasks },
-      false
-    );
+    if (taskPages && taskPages.length > 0) {
+      mutateTaskPages(redistributeTasksAcrossPages(taskPages, reorderedTasks), false);
+    }
 
     try {
       // Call page reorder API (page position is source of truth)
@@ -791,10 +933,10 @@ function TaskListView({ page }: TaskListViewProps) {
         newPosition,
       });
       // Refetch to get server state
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       // Revert on error
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
       toast.error('Failed to reorder task');
     }
   };
@@ -819,6 +961,26 @@ function TaskListView({ page }: TaskListViewProps) {
     onStartEdit: handleStartEdit,
     onConfigureTriggers: setTriggerDialogTask,
   };
+
+  // Shared between the table, kanban, and mobile card renders — the bounded GET route
+  // (limit=100 default) means any of them can silently truncate without this.
+  const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks || loadMoreFailed) && (
+    <div className="flex flex-col items-center gap-2 py-4">
+      {isAnyEditing ? (
+        <p className="text-sm text-muted-foreground">Finish editing elsewhere to load more.</p>
+      ) : loadMoreFailed && (
+        <p className="text-sm text-destructive">Failed to load more tasks.</p>
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={loadMoreFailed ? mutateTasks : handleLoadMoreTasks}
+        disabled={isLoadingMoreTasks || isAnyEditing}
+      >
+        {getLoadMoreButtonLabel(loadMoreState, isAnyEditing)}
+      </Button>
+    </div>
+  );
 
   if (viewMode === 'editor') {
     return (
@@ -857,7 +1019,10 @@ function TaskListView({ page }: TaskListViewProps) {
     );
   }
 
-  if (error) {
+  // Only a fatal error — no pages ever loaded successfully — replaces the whole view.
+  // A failed "Load More" (data already has earlier pages) surfaces via loadMoreFailed
+  // in the shared control instead, so already-loaded tasks stay visible.
+  if (error && !data) {
     return (
       <div className="flex items-center justify-center h-full text-destructive">
         Failed to load tasks
@@ -923,7 +1088,7 @@ function TaskListView({ page }: TaskListViewProps) {
               <StatusConfigManager
                 pageId={page.id}
                 statusConfigs={statusConfigs}
-                onConfigsChanged={() => mutate(`/api/pages/${page.id}/tasks`)}
+                onConfigsChanged={() => mutateTasks()}
               />
             )}
 
@@ -992,6 +1157,8 @@ function TaskListView({ page }: TaskListViewProps) {
           />
           </div>
         ))}
+
+        {loadMoreControl}
 
         {/* Mobile new task input */}
         {canEdit && (
@@ -1306,6 +1473,8 @@ function TaskListView({ page }: TaskListViewProps) {
             )}
           </>
         )}
+
+        {loadMoreControl}
       </div>
 
       {/* Footer stats */}
@@ -1327,7 +1496,7 @@ function TaskListView({ page }: TaskListViewProps) {
           pageId={page.id}
           driveId={page.driveId}
           hasDueDate={!!triggerDialogTask.dueDate}
-          onSaved={() => mutate(`/api/pages/${page.id}/tasks`)}
+          onSaved={() => mutateTasks()}
         />
       )}
 
