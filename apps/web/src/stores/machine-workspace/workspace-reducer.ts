@@ -28,6 +28,14 @@ export interface OpenTerminalScope {
   projectName?: string;
   branchName?: string;
   name: string;
+  /** What the pane renders once bound: an xterm PTY, or the PageSpace Agent
+   * chat UI (#2166). Omitted means `'terminal'` — every session bound before
+   * this tag existed is a PTY, so the renderer can treat a missing kind the
+   * same as an explicit one without a migration. Lives on the scope, not a
+   * loose `agentType` string, so it survives every place a scope already
+   * flows opaquely (assignPane, sanitizeMachines, mergeServerWorkspaces)
+   * without those transitions needing to know about it. */
+  kind?: 'terminal' | 'chat';
 }
 
 /**
