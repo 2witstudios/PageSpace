@@ -62,15 +62,22 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       return NextResponse.json({ error: 'Invalid signature' }, { status: 403 });
     }
 
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, webhook.pageId),
+      columns: { type: true, isTrashed: true },
+    });
+    // Minting is blocked on trashed pages, but a page can be trashed after its
+    // webhook was created — a delivery must not keep writing into the trash.
+    // Same generic 404 as an unknown/disabled token: nothing leaks.
+    if (!page || page.isTrashed) {
+      return NOT_FOUND();
+    }
+
     // Behavioral stub until the dispatch map lands: only CHANNEL pages have a
     // default action today. A verified delivery to any other page type is
     // accepted (the sender never breaks while wiring is in progress) but does
     // nothing, recorded on the row for the settings UI to surface.
-    const page = await db.query.pages.findFirst({
-      where: eq(pages.id, webhook.pageId),
-      columns: { type: true },
-    });
-    if (page?.type !== 'CHANNEL') {
+    if (page.type !== 'CHANNEL') {
       await db
         .update(pageWebhooks)
         .set({ lastFireError: 'no action configured' })

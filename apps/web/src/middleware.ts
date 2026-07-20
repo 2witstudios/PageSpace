@@ -241,6 +241,9 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // never a session cookie or a recognized bearer prefix — each must be listed here or this
     // middleware (now that it actually runs) blocks them with a 401 before route.ts ever sees
     // the request.
+    // `/api/webhooks/[token]` is the page incoming-webhook intake: external senders (CI,
+    // monitoring, scripts) have no session and authenticate via the per-webhook HMAC
+    // signature verified inside the route — same rationale as the third-party webhooks.
     // Signup/verification endpoints run before any session exists by definition (that's what
     // they're creating), authenticating instead via login-CSRF token, WebAuthn challenge, a
     // one-time handoff token, or an emailed verification token. `/passkey/register` (and its
@@ -293,6 +296,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/integrations/zoom/webhook' ||
       pathname === '/api/stripe/webhook' ||
       pathname === '/api/integrations/google-calendar/webhook' ||
+      pathname.startsWith('/api/webhooks/') ||
       pathname === '/api/auth/signup-passkey' ||
       pathname === '/api/auth/signup-passkey/options' ||
       pathname === '/api/auth/passkey/register' ||

@@ -84,7 +84,7 @@ const VALID_PAYLOAD = JSON.stringify({ content: 'deploy finished' });
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindFirst.mockResolvedValue(WEBHOOK);
-  mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL' });
+  mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: false });
   mockPublish.mockResolvedValue({ ok: true });
 });
 
@@ -168,8 +168,24 @@ describe('POST /api/webhooks/[token]', () => {
     expect(mockPublish).not.toHaveBeenCalled();
   });
 
+  it('returns the generic 404 for a delivery whose target page was trashed after minting — no write into the trash', async () => {
+    mockPageFindFirst.mockResolvedValue({ type: 'CHANNEL', isTrashed: true });
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).toBe(404);
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('returns the generic 404 when the target page row is gone entirely', async () => {
+    mockPageFindFirst.mockResolvedValue(undefined);
+    const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
+    expect(response.status).toBe(404);
+    expect(mockPublish).not.toHaveBeenCalled();
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it('accepts a verified delivery to a non-CHANNEL page with 202 action:none and records no-action on the row', async () => {
-    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT' });
+    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT', isTrashed: false });
     const response = await POST(signedRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
 
     expect(response.status).toBe(202);
@@ -179,7 +195,7 @@ describe('POST /api/webhooks/[token]', () => {
   });
 
   it('still requires a valid signature before the non-CHANNEL 202 path — no unauthenticated probe', async () => {
-    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT' });
+    mockPageFindFirst.mockResolvedValue({ type: 'DOCUMENT', isTrashed: false });
     const response = await POST(makeRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
     expect(mockUpdate).not.toHaveBeenCalled();
