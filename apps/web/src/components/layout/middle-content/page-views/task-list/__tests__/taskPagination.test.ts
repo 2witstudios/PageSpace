@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import { assert } from '@/hooks/__tests__/riteway';
-import { getHasMoreTasks, isLoadingNextTaskPage, redistributeTasksAcrossPages, getTaskLoadMoreState } from '../TaskListView';
+import { getHasMoreTasks, isLoadingNextTaskPage, redistributeTasksAcrossPages, getTaskLoadMoreState, getLoadMoreButtonLabel } from '../TaskListView';
 import type { TaskItem } from '../task-list-types';
 
 // Minimal stand-ins — redistributeTasksAcrossPages only reads/copies `id` and `.tasks.length`.
@@ -218,6 +218,53 @@ describe('getTaskLoadMoreState', () => {
       should: 'return idle — the last page is authoritative over a stale size, not stuck loading forever',
       actual: getTaskLoadMoreState([{ hasMore: false }], 2, false),
       expected: 'idle',
+    });
+  });
+});
+
+describe('getLoadMoreButtonLabel', () => {
+  it('editing elsewhere takes priority over every other state', () => {
+    assert({
+      given: 'isEditingElsewhere true, regardless of the load-more state',
+      should: 'return the editing-blocked label',
+      actual: getLoadMoreButtonLabel('idle', true),
+      expected: 'Finish editing to load more',
+    });
+  });
+
+  it('editing elsewhere takes priority even while genuinely loading', () => {
+    assert({
+      given: 'loadMoreState loading and isEditingElsewhere true',
+      should: 'still return the editing-blocked label, not "Loading…"',
+      actual: getLoadMoreButtonLabel('loading', true),
+      expected: 'Finish editing to load more',
+    });
+  });
+
+  it('loading, not editing', () => {
+    assert({
+      given: 'loadMoreState loading and isEditingElsewhere false',
+      should: 'return the loading label',
+      actual: getLoadMoreButtonLabel('loading', false),
+      expected: 'Loading…',
+    });
+  });
+
+  it('failed, not editing', () => {
+    assert({
+      given: 'loadMoreState failed and isEditingElsewhere false',
+      should: 'return the retry label',
+      actual: getLoadMoreButtonLabel('failed', false),
+      expected: 'Retry',
+    });
+  });
+
+  it('idle, not editing', () => {
+    assert({
+      given: 'loadMoreState idle and isEditingElsewhere false',
+      should: 'return the default label',
+      actual: getLoadMoreButtonLabel('idle', false),
+      expected: 'Load more tasks',
     });
   });
 });

@@ -369,6 +369,21 @@ export const getTaskLoadMoreState = (
   return hasError ? 'failed' : 'loading';
 };
 
+// `isPaused` (an app-wide "any document/form editing session" flag — see the config
+// comment where it's set) gates every SWR revalidation for this hook, including this
+// button's own click, not just background polling. There's no public SWR API to bypass
+// it for one call, so instead of leaving the button clickable and silently doing
+// nothing, disable it and say why while editing is active — the safe, honest fallback.
+export const getLoadMoreButtonLabel = (
+  loadMoreState: TaskLoadMoreState,
+  isEditingElsewhere: boolean,
+): string => {
+  if (isEditingElsewhere) return 'Finish editing to load more';
+  if (loadMoreState === 'loading') return 'Loading…';
+  if (loadMoreState === 'failed') return 'Retry';
+  return 'Load more tasks';
+};
+
 // Splits a reordered task list back into the same number of pages, each keeping its
 // original size (and every other field, e.g. hasMore, untouched) — used for the
 // drag-reorder optimistic update so getHasMoreTasks/isLoadingNextTaskPage stay correct
@@ -541,23 +556,26 @@ function TaskListView({ page }: TaskListViewProps) {
     fetcher,
     {
       revalidateOnFocus: false,
-      // Keep the default (true): with this off, `shouldFetchPage` in swr/infinite has no
-      // remaining trigger that fires from time passing alone, which silently turns the
-      // refreshInterval below into a no-op safety net (verified against swr/infinite's
-      // source — every other condition needs an explicit mutate() or a missing cache
-      // entry). The cost is an extra page-0 refetch on every "Load More" click, which is
-      // cheap and infrequent — worth it to keep the periodic staleness fallback alive.
-      // Pre-existing pattern, not new to pagination: `isAnyEditing` is global (any
-      // document/form edit anywhere in the app, not just this page — see
-      // useEditingStore.ts), and SWR's `isPaused()` gates every revalidation trigger
-      // for this key, not just background ones — including this PR's new "Load More"/
-      // Retry clicks (verified in swr's core `revalidate()`). If a user clicks either
-      // while some other edit session is active, that click's fetch is silently
-      // dropped; `size` still advances, leaving the control on "Loading…" until it
-      // self-heals via the next unpaused trigger (the refreshInterval below, at most).
-      // Every pre-existing write handler in this file already had this exact exposure
-      // through its own post-write mutate() call — fixing it needs a change to how
-      // `isPaused` composes with explicit user actions, which is out of scope here.
+      // swr/infinite's default (revalidateFirstPage: true, revalidateAll: false) only
+      // ever refreshes page 0 on the interval tick below — pages 1+ only refetch when
+      // an explicit mutate() targets them (verified against swr/infinite's source: a
+      // page's own cache entry has to be missing or explicitly marked "revalidate all"
+      // for it to refetch; time passing alone isn't enough once it's cached). Without
+      // revalidateAll, a missed socket event for a task on page 2+ would stay stale
+      // until the next explicit write anywhere in this list. The cost is that every
+      // "Load More" click also refetches every already-loaded page, not just the new
+      // one — acceptable for a background task list, and worth it for correctness.
+      revalidateAll: true,
+      // `isAnyEditing` is app-wide (any document/form edit anywhere, not just this
+      // page — useEditingStore.ts), and SWR's isPaused() gates every revalidation for
+      // this key, not just background ones — including this PR's "Load More"/Retry
+      // clicks (verified in swr's core revalidate()). There's no public SWR API to
+      // bypass isPaused for one call, so instead of a click that silently no-ops,
+      // getLoadMoreButtonLabel + the disabled prop below surface it honestly: the
+      // control disables with an explanation while any edit session is active, and
+      // works normally again once it ends. This isPaused gate itself is a pre-existing
+      // pattern, not new to pagination — every write handler in this file already had
+      // the identical exposure through its own post-write mutate() call.
       isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
@@ -661,9 +679,15 @@ function TaskListView({ page }: TaskListViewProps) {
   // far. Changing either resets "Load More" progress back to just the first page,
   // so a previously-expanded load doesn't linger in a state inconsistent with a
   // fresh filter (cached pages are reused instantly if the user re-expands).
+  //
+  // Deliberately keyed on `search` (the toolbar filter box), not `activeSearch`: the
+  // in-page Cmd+F Find bar (`findQuery`) fires this on every keystroke while typing,
+  // which would truncate `data.tasks` back to page 1 mid-search — silently hiding
+  // matches on already-loaded pages 2+ and under-reporting the match count to
+  // useFindStore. Find should search whatever's already loaded, not reset it.
   useEffect(() => {
     setSize(1);
-  }, [filter, activeSearch, setSize]);
+  }, [filter, search, setSize]);
 
   // Filter tasks
   const filteredTasks = useMemo(() => data?.tasks.filter(task => {
@@ -942,16 +966,18 @@ function TaskListView({ page }: TaskListViewProps) {
   // (limit=100 default) means any of them can silently truncate without this.
   const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks || loadMoreFailed) && (
     <div className="flex flex-col items-center gap-2 py-4">
-      {loadMoreFailed && (
+      {isAnyEditing ? (
+        <p className="text-sm text-muted-foreground">Finish editing elsewhere to load more.</p>
+      ) : loadMoreFailed && (
         <p className="text-sm text-destructive">Failed to load more tasks.</p>
       )}
       <Button
         variant="outline"
         size="sm"
         onClick={loadMoreFailed ? mutateTasks : handleLoadMoreTasks}
-        disabled={isLoadingMoreTasks}
+        disabled={isLoadingMoreTasks || isAnyEditing}
       >
-        {isLoadingMoreTasks ? 'Loading…' : loadMoreFailed ? 'Retry' : 'Load more tasks'}
+        {getLoadMoreButtonLabel(loadMoreState, isAnyEditing)}
       </Button>
     </div>
   );
