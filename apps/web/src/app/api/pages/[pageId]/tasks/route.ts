@@ -136,6 +136,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     },
     tasks: [],
     statusConfigs,
+    hasMore: false,
   });
 
   if (childPageIds.length === 0) {
@@ -150,6 +151,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // truth, falling back to task.position), filtered, bounded set of task ids —
   // this is what keeps the query from pulling every task into memory (the OOM
   // crash this route caused). Phase 2 hydrates only those ids' relations.
+  // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
+  // frontend's Load More) without a separate COUNT(*) query.
   const positionExpr = sql`coalesce(${pages.position}, ${taskItems.position})`;
   const orderedIdRows = await db
     .select({ id: taskItems.id })
@@ -166,9 +169,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     // rows that never got a distinct one) have no guaranteed stable order across repeated
     // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
     .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
-    .limit(limit)
+    .limit(limit + 1)
     .offset(offset);
-  const boundedTaskIds = orderedIdRows.map(r => r.id);
+  const hasMore = orderedIdRows.length > limit;
+  const boundedTaskIds = orderedIdRows.slice(0, limit).map(r => r.id);
 
   if (boundedTaskIds.length === 0) {
     return emptyTasksResponse();
@@ -325,6 +329,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     },
     tasks: enrichedTasks,
     statusConfigs,
+    hasMore,
   });
 }
 

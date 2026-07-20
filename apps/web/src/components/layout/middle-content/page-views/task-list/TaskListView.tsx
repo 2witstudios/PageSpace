@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import useSWR, { mutate } from 'swr';
+import { mutate } from 'swr';
+import useSWRInfinite from 'swr/infinite';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
@@ -108,6 +109,10 @@ const fetcher = async (url: string) => {
   if (!res.ok) throw new Error('Failed to fetch');
   return res.json();
 };
+
+// Matches DEFAULT_LIMIT in the GET route's query-spec.ts; must stay <= that route's
+// MAX_LIMIT (200) or every "Load More" page would silently get clamped down server-side.
+const TASKS_PAGE_SIZE = 100;
 
 // Mobile task card component
 interface MobileTaskCardProps {
@@ -331,6 +336,18 @@ export const toggleSet = (set: Set<string>, id: string): Set<string> => {
   return next;
 };
 
+// Only the most recently loaded page's hasMore matters — earlier pages are stale
+// snapshots of a bound that may have shifted as tasks were added/removed since.
+export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): boolean => {
+  if (!pages || pages.length === 0) return false;
+  return pages[pages.length - 1].hasMore;
+};
+
+// True while a "Load More" click has bumped useSWRInfinite's `size` but the newly
+// requested page hasn't resolved into `pages` yet.
+export const isLoadingNextTaskPage = (pages: unknown[] | undefined, size: number): boolean =>
+  size > 0 && (pages === undefined || pages.length < size);
+
 // Sortable row component for drag-and-drop
 interface SortableTaskRowProps {
   task: TaskItem;
@@ -467,18 +484,51 @@ function TaskListView({ page }: TaskListViewProps) {
     componentName: 'TaskListView',
   });
 
-  // Fetch tasks with refresh protection
+  // Fetch tasks with refresh protection, paginated via useSWRInfinite (bounded route:
+  // apps/web/src/app/api/pages/[pageId]/tasks/route.ts defaults to limit=100/offset=0).
   // CRITICAL: Only pause AFTER initial load - never block the first fetch
-  const { data, error, isLoading } = useSWR<TaskListData>(
-    `/api/pages/${page.id}/tasks`,
+  const tasksKeyPrefix = `/api/pages/${page.id}/tasks`;
+  const getTasksPageKey = (pageIndex: number, previousPageData: TaskListData | null) => {
+    if (previousPageData && !previousPageData.hasMore) return null;
+    return `${tasksKeyPrefix}?limit=${TASKS_PAGE_SIZE}&offset=${pageIndex * TASKS_PAGE_SIZE}`;
+  };
+  const {
+    data: taskPages,
+    error,
+    isLoading,
+    size,
+    setSize,
+    mutate: mutateTaskPages,
+  } = useSWRInfinite<TaskListData>(
+    getTasksPageKey,
     fetcher,
     {
       revalidateOnFocus: false,
+      revalidateFirstPage: false,
       isPaused: () => hasLoadedRef.current && isAnyEditing,
       onSuccess: () => { hasLoadedRef.current = true; },
       refreshInterval: 300000, // 5 minutes
     }
   );
+
+  // Any cache entry for this task list, across every loaded offset — lets write
+  // handlers below revalidate everything fetched so far via a single call.
+  const mutateTasks = useCallback(() => mutate(
+    (key: unknown) => typeof key === 'string' && (key === tasksKeyPrefix || key.startsWith(`${tasksKeyPrefix}?`))
+  ), [tasksKeyPrefix]);
+
+  const data: TaskListData | undefined = useMemo(() => {
+    if (!taskPages || taskPages.length === 0) return undefined;
+    return {
+      taskList: taskPages[0].taskList,
+      statusConfigs: taskPages[0].statusConfigs,
+      tasks: taskPages.flatMap(p => p.tasks),
+      hasMore: getHasMoreTasks(taskPages),
+    };
+  }, [taskPages]);
+  const hasMoreTasks = data?.hasMore ?? false;
+  const isLoadingMoreTasks = isLoadingNextTaskPage(taskPages, size);
+  const handleLoadMoreTasks = () => setSize(size + 1);
 
   // Stable ref so the page:moved handler always sees the current task list
   // regardless of when the socket effect was installed relative to the SWR load.
@@ -503,19 +553,19 @@ function TaskListView({ page }: TaskListViewProps) {
 
     // Handle task events (event names match backend broadcast format: task:${operation})
     const handleTaskAdded = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     const handleTaskUpdated = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     const handleTaskDeleted = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     const handleTasksReordered = () => {
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     };
 
     // Handle tasks moved between lists via drag-and-drop. The reorder API emits
@@ -526,7 +576,7 @@ function TaskListView({ page }: TaskListViewProps) {
     const handlePageMoved = (payload: { pageId: string; parentId: string | null }) => {
       const movedIn  = payload.parentId === page.id;
       const movedOut = tasksRef.current?.some(t => t.pageId === payload.pageId);
-      if (movedIn || movedOut) mutate(`/api/pages/${page.id}/tasks`);
+      if (movedIn || movedOut) mutateTasks();
     };
 
     socket.on('task:task_added', handleTaskAdded);
@@ -542,7 +592,7 @@ function TaskListView({ page }: TaskListViewProps) {
       socket.off('task:tasks_reordered', handleTasksReordered);
       socket.off('page:moved', handlePageMoved);
     };
-  }, [socket, connectionStatus, page.id]);
+  }, [socket, connectionStatus, page.id, mutateTasks]);
 
   // Derive dynamic status config from API response
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
@@ -550,6 +600,14 @@ function TaskListView({ page }: TaskListViewProps) {
   const statusOrder = useMemo(() => getStatusOrder(statusConfigs), [statusConfigs]);
 
   const activeSearch = isFindOpen ? findQuery : search;
+
+  // Filter/search are applied client-side over whatever pages have been loaded so
+  // far. Changing either resets "Load More" progress back to just the first page,
+  // so a previously-expanded load doesn't linger in a state inconsistent with a
+  // fresh filter (cached pages are reused instantly if the user re-expands).
+  useEffect(() => {
+    setSize(1);
+  }, [filter, activeSearch, setSize]);
 
   // Filter tasks
   const filteredTasks = useMemo(() => data?.tasks.filter(task => {
@@ -595,7 +653,7 @@ function TaskListView({ page }: TaskListViewProps) {
         ...(status && { status }),
       });
       if (!title) setNewTaskTitle('');
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to create task');
     }
@@ -607,7 +665,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { status: newStatus });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update status');
     }
@@ -619,7 +677,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { priority: newPriority });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update priority');
     }
@@ -666,7 +724,7 @@ function TaskListView({ page }: TaskListViewProps) {
   const handleSaveTaskTitle = async (taskId: string, title: string) => {
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update task');
     }
@@ -689,7 +747,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await del(`/api/pages/${page.id}/tasks/${taskId}`);
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
       toast.success('Task deleted');
     } catch {
       toast.error('Failed to delete task');
@@ -705,7 +763,7 @@ function TaskListView({ page }: TaskListViewProps) {
         assigneeId,
         assigneeAgentId: agentId,
       });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update assignee');
     }
@@ -717,7 +775,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
     try {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, { assigneeIds });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update assignees');
     }
@@ -731,7 +789,7 @@ function TaskListView({ page }: TaskListViewProps) {
       await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
         dueDate: dueDate?.toISOString() || null,
       });
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       toast.error('Failed to update due date');
     }
@@ -775,13 +833,15 @@ function TaskListView({ page }: TaskListViewProps) {
       newPosition = (beforePos + afterPos) / 2;
     }
 
-    // Optimistic update
+    // Optimistic update: collapse every loaded page into one synthetic page holding
+    // the reordered (filtered) list. Same trade-off the single-page version of this
+    // view always made — a filtered-out task briefly disappears from the cache
+    // until the revalidate below restores the real, multi-page server state.
     const reorderedTasks = arrayMove(tasks, oldIndex, newIndex);
-    mutate(
-      `/api/pages/${page.id}/tasks`,
-      { ...data, tasks: reorderedTasks },
-      false
-    );
+    const firstPage = taskPages?.[0];
+    if (firstPage) {
+      mutateTaskPages([{ ...firstPage, tasks: reorderedTasks }], false);
+    }
 
     try {
       // Call page reorder API (page position is source of truth)
@@ -791,10 +851,10 @@ function TaskListView({ page }: TaskListViewProps) {
         newPosition,
       });
       // Refetch to get server state
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
     } catch {
       // Revert on error
-      mutate(`/api/pages/${page.id}/tasks`);
+      mutateTasks();
       toast.error('Failed to reorder task');
     }
   };
@@ -819,6 +879,21 @@ function TaskListView({ page }: TaskListViewProps) {
     onStartEdit: handleStartEdit,
     onConfigureTriggers: setTriggerDialogTask,
   };
+
+  // Shared between the table, kanban, and mobile card renders — the bounded GET route
+  // (limit=100 default) means any of them can silently truncate without this.
+  const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks) && (
+    <div className="flex justify-center py-4">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleLoadMoreTasks}
+        disabled={isLoadingMoreTasks}
+      >
+        {isLoadingMoreTasks ? 'Loading…' : 'Load more tasks'}
+      </Button>
+    </div>
+  );
 
   if (viewMode === 'editor') {
     return (
@@ -923,7 +998,7 @@ function TaskListView({ page }: TaskListViewProps) {
               <StatusConfigManager
                 pageId={page.id}
                 statusConfigs={statusConfigs}
-                onConfigsChanged={() => mutate(`/api/pages/${page.id}/tasks`)}
+                onConfigsChanged={() => mutateTasks()}
               />
             )}
 
@@ -992,6 +1067,8 @@ function TaskListView({ page }: TaskListViewProps) {
           />
           </div>
         ))}
+
+        {loadMoreControl}
 
         {/* Mobile new task input */}
         {canEdit && (
@@ -1306,6 +1383,8 @@ function TaskListView({ page }: TaskListViewProps) {
             )}
           </>
         )}
+
+        {loadMoreControl}
       </div>
 
       {/* Footer stats */}
@@ -1327,7 +1406,7 @@ function TaskListView({ page }: TaskListViewProps) {
           pageId={page.id}
           driveId={page.driveId}
           hasDueDate={!!triggerDialogTask.dueDate}
-          onSaved={() => mutate(`/api/pages/${page.id}/tasks`)}
+          onSaved={() => mutateTasks()}
         />
       )}
 

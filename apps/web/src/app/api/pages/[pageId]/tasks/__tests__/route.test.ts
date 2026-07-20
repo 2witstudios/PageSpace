@@ -602,6 +602,98 @@ describe('Task API Routes', () => {
       // an `inArray` scoped to an already-bounded id list.
       expect(vi.mocked(db.query.taskItems.findMany).mock.calls[0]?.[0]).toMatchObject({ limit: 2 });
     });
+
+    it('sets hasMore=true when the phase-1 query returns more than the requested limit (frontend Load More signal)', async () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+      const childPageRows = [
+        { id: 'p-1', pageId: 'p-1' },
+        { id: 'p-2', pageId: 'p-2' },
+        { id: 'p-3', pageId: 'p-3' },
+      ];
+      // Requests limit+1 rows under the hood to detect a next page without an extra COUNT(*)
+      // query — 3 rows come back for a ?limit=2 request, so one is beyond the page.
+      const boundedIdRowsPlusOne = [{ id: 'task-1' }, { id: 'task-2' }, { id: 'task-3' }];
+      const allTasks = [
+        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Task One', isTrashed: false, position: 0 } },
+        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Task Two', isTrashed: false, position: 1 } },
+        { id: 'task-3', position: 2, page: { id: 'p-3', title: 'Task Three', isTrashed: false, position: 2 } },
+      ];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+
+      vi.mocked(db.select)
+        .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
+        .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
+        .mockImplementationOnce(() => makeSelectChain(boundedIdRowsPlusOne) as never) // phase 1
+        .mockImplementation(() => makeSelectChain([]) as never); // trigger / sub-task counts
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      vi.mocked(db.query.taskItems.findMany).mockImplementation(((args: any) => {
+        const ids: string[] = args?.where?.values ?? [];
+        return Promise.resolve(allTasks.filter(t => ids.includes(t.id)));
+      }) as never);
+
+      const response = await GET(createRequest('?limit=2'), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.tasks).toHaveLength(2);
+      expect(body.hasMore).toBe(true);
+    });
+
+    it('sets hasMore=false when the phase-1 query returns no more than the requested limit', async () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+      const childPageRows = [
+        { id: 'p-1', pageId: 'p-1' },
+        { id: 'p-2', pageId: 'p-2' },
+      ];
+      const boundedIdRows = [{ id: 'task-1' }, { id: 'task-2' }];
+      const allTasks = [
+        { id: 'task-1', position: 0, page: { id: 'p-1', title: 'Task One', isTrashed: false, position: 0 } },
+        { id: 'task-2', position: 1, page: { id: 'p-2', title: 'Task Two', isTrashed: false, position: 1 } },
+      ];
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+
+      vi.mocked(db.select)
+        .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
+        .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
+        .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1
+        .mockImplementation(() => makeSelectChain([]) as never); // trigger / sub-task counts
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      vi.mocked(db.query.taskItems.findMany).mockImplementation(((args: any) => {
+        const ids: string[] = args?.where?.values ?? [];
+        return Promise.resolve(allTasks.filter(t => ids.includes(t.id)));
+      }) as never);
+
+      const response = await GET(createRequest('?limit=2'), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.tasks).toHaveLength(2);
+      expect(body.hasMore).toBe(false);
+    });
+
+    it('reports hasMore=false on the empty-tasks response (no TASK_LIST children)', async () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+      vi.mocked(db.select).mockImplementation(() => makeSelectChain([]) as never); // no child pages
+
+      const response = await GET(createRequest(), { params: mockParams });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.tasks).toEqual([]);
+      expect(body.hasMore).toBe(false);
+    });
   });
 
   describe('POST /api/pages/[pageId]/tasks', () => {
