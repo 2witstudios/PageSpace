@@ -64,7 +64,9 @@ import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { buildInlineInstructions } from '@/lib/ai/core/inline-instructions';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
-import { filterToolsForReadOnly, filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForReadOnly, filterToolsForMcpScope, filterToolsForMachineBinding } from '@/lib/ai/core/tool-filtering';
+import { deriveMachinePaneBinding } from '@pagespace/lib/services/machines/machine-pane-binding';
+import { buildMachinePaneBindingDeps } from '@/lib/ai/machine-pane/machine-pane-binding-runtime';
 import { shouldExposeImageGen } from '@/lib/ai/core/image-gen-access';
 import { DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-capabilities';
 import { getPageTreeContext } from '@/lib/ai/core/page-tree-context';
@@ -556,6 +558,36 @@ export async function POST(request: Request) {
       isNewConversation: !requestConversationId
     });
 
+    // Machine Pane binding (Phase 5's deriveMachinePaneBinding pure core): a
+    // conversation whose id is a machine_agent_terminals row bound to THIS
+    // page is pinned to that machine for the rest of the request — tools,
+    // system prompt, and default active machine all follow from it below.
+    // No additional access check is needed here: canPrincipalViewPage /
+    // canPrincipalEditPage against chatId (above) already authorizes the
+    // acting user for this page, which is the precondition the pure core's
+    // own docstring requires of its caller. A non-bound conversation (a
+    // brand-new cuid, or any conversation not backed by a machine_agent_terminals
+    // row) derives to null and leaves everything below byte-identical to today.
+    const machinePaneBindingResult = await deriveMachinePaneBinding(
+      { chatId: chatId!, conversationId: conversationId! },
+      buildMachinePaneBindingDeps()
+    );
+    if (machinePaneBindingResult && !machinePaneBindingResult.ok) {
+      loggers.ai.warn('AI Chat API: machine-pane binding rejected', {
+        chatId: maskedChatId,
+        conversationId,
+        reason: machinePaneBindingResult.reason,
+      });
+      return NextResponse.json({ error: 'This conversation is not bound to this machine' }, { status: 400 });
+    }
+    const machineBinding = machinePaneBindingResult?.ok
+      ? {
+          machineId: chatId!,
+          cwd: machinePaneBindingResult.binding.cwd,
+          branchSandbox: machinePaneBindingResult.binding.branchSandbox,
+        }
+      : undefined;
+
     // Process @mentions in the user's message
     let mentionSystemPrompt = '';
     let mentionedPageIds: string[] = [];
@@ -855,11 +887,16 @@ export async function POST(request: Request) {
     const webSearchMode = webSearchEnabled === true;
     loggers.ai.debug('AI Page Chat API: Tool modes', { isReadOnly: readOnlyMode, webSearchEnabled: webSearchMode });
 
-    // Step 1: Apply isReadOnly filter, then hide account-level-only tools
-    // (e.g. create_drive) from drive-scoped MCP tokens' tool list.
-    const baseTools = filterToolsForMcpScope(
-      filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
-      isScopedMCPAuth(authResult)
+    // Step 1: Apply isReadOnly filter, hide account-level-only tools
+    // (e.g. create_drive) from drive-scoped MCP tokens' tool list, then drop
+    // switch_machine/list_machines when this conversation is bound to one
+    // machine (see machinePaneBindingResult above).
+    const baseTools = filterToolsForMachineBinding(
+      filterToolsForMcpScope(
+        filterToolsForReadOnly(pageSpaceTools, readOnlyMode),
+        isScopedMCPAuth(authResult)
+      ),
+      machineBinding != null
     );
 
     // Step 2: Extract web_search + generate_image so they can be handled as
@@ -1151,6 +1188,14 @@ export async function POST(request: Request) {
     // a custom system prompt is set (unlike drivePromptPrefix above, which is
     // only prepended in the customSystemPrompt branch).
     systemPrompt = memberDriveContextPrefix + systemPrompt;
+
+    // Machine binding section — applies uniformly (custom or default system
+    // prompt) for the same reason as memberDriveContextPrefix above. Fixed
+    // for the conversation's lifetime, so it belongs in the STABLE section,
+    // not the per-turn locationPrompt below.
+    if (machineBinding) {
+      systemPrompt += `\n\nMACHINE BINDING (this conversation)\n• This conversation is bound to machine "${machineBinding.machineId}" — code-execution tools (bash, readFile, writeFile, editFile, git/gh) operate from working directory: ${machineBinding.cwd}\n• switch_machine and list_machines are unavailable — this conversation cannot leave its bound machine`;
+    }
 
     // Build timestamp system prompt for temporal awareness
     const userTimezone = user?.timezone ?? undefined;
@@ -1509,6 +1554,15 @@ export async function POST(request: Request) {
                 // exceed its own membership role — via the agent's broader ACL.
                 mcpAllowedDriveIds: getAllowedDriveIds(authResult),
                 mcpTokenId: isMCPAuthResult(authResult) ? authResult.tokenId : undefined,
+                // Computed once above from deriveMachinePaneBinding — undefined
+                // for every conversation that isn't a machine-bound pagespace
+                // pane. activeMachine seeds the default-mode sandbox tools'
+                // active machine so they operate on the bound machine from the
+                // first tool call, without waiting for a switch_machine call.
+                machineBinding,
+                activeMachine: machineBinding
+                  ? { kind: 'existing' as const, machineId: machineBinding.machineId }
+                  : undefined,
               }, // Pass userId, timezone, AI context, location context, model capabilities, and chat source to tools
               maxRetries: 20, // Increase from default 2 to 20 for better handling of rate limits
               onChunk: ({ chunk }) => {
