@@ -158,8 +158,9 @@ export type ResolveMachineSandboxResult =
 /**
  * Resolve the Sprite a FRESH PTY will attach to: resolve the agent-terminal row
  * to its sandbox, then read that Sprite once. A read-only resolve failure never
- * touches the Sprite; a vanished Sprite (getSprite throws) denies with
- * `provision_failed`.
+ * touches the Sprite; a chat-surface agentType (e.g. `pagespace`) denies with
+ * `not_a_pty_agent` before the Sprite is touched; a vanished Sprite (getSprite
+ * throws) denies with `provision_failed`.
  */
 export async function resolveMachineSandbox(
   target: ResolveMachineSandboxTarget,
