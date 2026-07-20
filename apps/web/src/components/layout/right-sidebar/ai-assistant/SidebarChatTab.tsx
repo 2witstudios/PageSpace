@@ -46,6 +46,7 @@ import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActiv
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
 import { useReadAloud } from '@/hooks/useReadAloud';
+import { stopReadAloud } from '@/lib/voice/readAloudPlayer';
 import { createId } from '@paralleldrive/cuid2';
 import { useStopStream } from '@/hooks/useStopStream';
 import { useOwnStreamMirror } from '@/hooks/useOwnStreamMirror';
@@ -882,6 +883,9 @@ const SidebarChatTab: React.FC = () => {
     if (isVoiceModeActive) {
       disableVoiceMode();
     } else {
+      // Voice Mode's mic capture would otherwise pick up read-aloud audio
+      // still playing through the shared singleton.
+      stopReadAloud();
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);

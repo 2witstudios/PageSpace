@@ -180,8 +180,8 @@ export function InputFooter({
             <Button
               variant="ghost"
               size="sm"
-              onClick={isVoiceProGated ? undefined : onReadAloudClick}
-              disabled={disabled || isVoiceProGated || (!isReadingAloud && !canReadAloud)}
+              onClick={isReadingAloud || !isVoiceProGated ? onReadAloudClick : undefined}
+              disabled={isReadingAloud ? false : disabled || isVoiceProGated || !canReadAloud}
               className={cn(
                 'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
                 isReadingAloud

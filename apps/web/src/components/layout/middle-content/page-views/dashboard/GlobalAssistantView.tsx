@@ -110,6 +110,7 @@ import { selectVoiceActivationBaseline } from '@/lib/ai/streams/selectVoiceActiv
 import { selectPostBaselineAssistantMessage } from '@/lib/ai/streams/selectPostBaselineAssistantMessage';
 import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
 import { useReadAloud } from '@/hooks/useReadAloud';
+import { stopReadAloud } from '@/lib/voice/readAloudPlayer';
 import { createId } from '@paralleldrive/cuid2';
 
 const VOICE_OWNER: VoiceModeOwner = 'global-assistant';
@@ -917,6 +918,9 @@ const GlobalAssistantView: React.FC = () => {
     if (isVoiceModeActive) {
       disableVoiceMode();
     } else {
+      // Voice Mode's mic capture would otherwise pick up read-aloud audio
+      // still playing through the shared singleton.
+      stopReadAloud();
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);

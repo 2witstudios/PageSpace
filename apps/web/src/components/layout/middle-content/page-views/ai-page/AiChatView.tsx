@@ -50,6 +50,7 @@ import { shouldReloadOnComountComplete } from '@/lib/ai/streams/shouldReloadOnCo
 import { getBrowserSessionId } from '@/lib/ai/core/browser-session-id';
 import { getTextSinceLastUserTurn } from '@/lib/ai/streams/getTextSinceLastUserTurn';
 import { useReadAloud } from '@/hooks/useReadAloud';
+import { stopReadAloud } from '@/lib/voice/readAloudPlayer';
 
 // Shared hooks and components
 import {
@@ -1256,6 +1257,9 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
     if (isVoiceModeActive) {
       disableVoiceMode();
     } else {
+      // Voice Mode's mic capture would otherwise pick up read-aloud audio
+      // still playing through the shared singleton.
+      stopReadAloud();
       enableVoiceMode(VOICE_OWNER);
     }
   }, [isVoiceModeActive, enableVoiceMode, disableVoiceMode]);

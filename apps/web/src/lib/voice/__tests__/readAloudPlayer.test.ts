@@ -166,4 +166,42 @@ describe('readAloudPlayer', () => {
     expect(createdSources).toHaveLength(0);
     expect(isReadAloudPlaying()).toBe(false);
   });
+
+  it('given a stop-then-restart while the stopped run is still synthesizing, only the new run ever plays', async () => {
+    // Two independently-resolvable synthesis calls, so the first run's
+    // fetch can be made to resolve AFTER a second run has already started —
+    // reproducing the exact race the generation token guards against.
+    let resolveFirst: (() => void) | undefined;
+    let resolveSecond: (() => void) | undefined;
+    const firstResponse = new Promise<Response>((resolve) => {
+      resolveFirst = () => resolve({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      } as Response);
+    });
+    const secondResponse = new Promise<Response>((resolve) => {
+      resolveSecond = () => resolve({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      } as Response);
+    });
+    vi.mocked(fetchWithAuth)
+      .mockReturnValueOnce(firstResponse)
+      .mockReturnValueOnce(secondResponse);
+
+    startReadAloud(['stale chunk']); // run A: fetch is now pending
+    stopReadAloud(); // stopped before run A's fetch ever resolved
+    startReadAloud(['fresh chunk']); // run B: a second, independent fetch is pending
+
+    // Resolve the STALE run's fetch first, after the fresh run has already
+    // begun — without the generation guard this would create and start a
+    // second, overlapping AudioBufferSourceNode.
+    resolveFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(createdSources).toHaveLength(0);
+
+    resolveSecond?.();
+    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
+    expect(isReadAloudPlaying()).toBe(true);
+  });
 });

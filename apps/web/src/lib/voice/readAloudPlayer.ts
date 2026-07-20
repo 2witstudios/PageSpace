@@ -27,6 +27,15 @@ let queue: string[] = [];
 let playing = false;
 const listeners = new Set<Listener>();
 
+// Bumped by every stopReadAloud() call (including the implicit one at the
+// start of startReadAloud()). A `playNext`/`synthesize` chain captures the
+// generation it was started under and re-checks it after every await:
+// `playing` alone can't tell "this run was stopped" apart from "this run was
+// stopped AND THEN a newer run began" — in the latter case `playing` is true
+// again by the time the stale chain resumes, so it would otherwise create a
+// second AudioBufferSourceNode that plays concurrently with the new run's.
+let generation = 0;
+
 function notify(): void {
   listeners.forEach((listener) => { listener(); });
 }
@@ -60,8 +69,8 @@ async function synthesize(text: string): Promise<AudioBuffer | null> {
   }
 }
 
-async function playNext(): Promise<void> {
-  if (!playing) return;
+async function playNext(runId: number): Promise<void> {
+  if (runId !== generation) return;
   const text = queue.shift();
   if (text === undefined) {
     playing = false;
@@ -70,11 +79,12 @@ async function playNext(): Promise<void> {
   }
 
   const buffer = await synthesize(text);
-  // Stopped while this chunk was being synthesized — discard the result.
-  if (!playing) return;
+  // A stop, or a stop-then-restart, happened while this chunk was
+  // synthesizing — discard the result rather than letting a stale run play.
+  if (runId !== generation) return;
   if (!buffer) {
     // Skip a chunk that failed to synthesize rather than abandoning the rest.
-    void playNext();
+    void playNext(runId);
     return;
   }
 
@@ -84,9 +94,10 @@ async function playNext(): Promise<void> {
   source.connect(ctx.destination);
   audioSource = source;
   source.onended = () => {
+    if (runId !== generation) return;
     if (audioSource === source) {
       audioSource = null;
-      void playNext();
+      void playNext(runId);
     }
   };
   source.start();
@@ -98,10 +109,11 @@ export function startReadAloud(chunks: string[]): void {
   queue = [...chunks];
   playing = true;
   notify();
-  void playNext();
+  void playNext(generation);
 }
 
 export function stopReadAloud(): void {
+  generation++;
   const wasPlaying = playing;
   if (audioSource) {
     try {
