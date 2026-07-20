@@ -1406,6 +1406,7 @@ const AiChatView: React.FC<AiChatViewProps> = ({ page }) => {
                 size="sm"
                 onClick={() => setWebhooksOpen(true)}
                 title="Incoming Webhooks"
+                aria-label="Incoming Webhooks"
                 className="px-2 text-muted-foreground hover:text-foreground"
               >
                 <Webhook className="h-4 w-4" />

@@ -647,6 +647,7 @@ function ChannelView({ page }: ChannelViewProps) {
             type="button"
             onClick={() => setWebhooksOpen(true)}
             title="Incoming Webhooks"
+            aria-label="Incoming Webhooks"
             className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
             <Webhook size={14} aria-hidden />
