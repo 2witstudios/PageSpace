@@ -15,15 +15,17 @@
  */
 
 import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
+import { PageType } from '../utils/enums';
 
 /**
  * Page types with a built-in default webhook action. This tuple plus the
  * matching entry in WEBHOOK_HANDLERS (page-webhook-dispatch.ts, typed
  * Record<WebhookHandlerPageType, …> so the compiler rejects a key without a
  * handler) is ALL it takes to give a page type a default action — no route or
- * dispatcher plumbing changes.
+ * dispatcher plumbing changes. Keys are PageType members, so an entry that
+ * isn't a real page type is a compile error too.
  */
-export const WEBHOOK_HANDLER_PAGE_TYPES = ['CHANNEL'] as const;
+export const WEBHOOK_HANDLER_PAGE_TYPES = [PageType.CHANNEL] as const;
 
 export type WebhookHandlerPageType = (typeof WEBHOOK_HANDLER_PAGE_TYPES)[number];
 
@@ -49,9 +51,7 @@ export function validateWebhookEnvelope(raw: unknown): WebhookEnvelopeValidation
  * row records 'no action configured'.
  */
 export function resolveWebhookHandler(pageType: string | null | undefined): WebhookHandlerPageType | 'none' {
-  return (WEBHOOK_HANDLER_PAGE_TYPES as readonly string[]).includes(pageType ?? '')
-    ? (pageType as WebhookHandlerPageType)
-    : 'none';
+  return WEBHOOK_HANDLER_PAGE_TYPES.find((handlerType) => handlerType === pageType) ?? 'none';
 }
 
 // Generous enough for real payloads (stack traces, release notes) while still
@@ -73,16 +73,17 @@ export type ChannelWebhookPayloadValidation =
  * point of the primitive is "the payload appears as a message, untouched" — so
  * emptiness is checked on the trimmed string but the original is preserved.
  * A whitespace-only username is normalized to absent so downstream identity
- * formatting falls back to the webhook's configured name. Standalone strict
- * (re-checks the object shape) so the publish service stays safe to call
- * without going through envelope validation first.
+ * formatting falls back to the webhook's configured name. Standalone strict —
+ * it re-runs envelope validation so the publish service stays safe to call
+ * without going through the dispatcher first.
  */
 export function validateChannelWebhookPayload(raw: unknown): ChannelWebhookPayloadValidation {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return { ok: false, error: 'payload must be a JSON object' };
+  const envelope = validateWebhookEnvelope(raw);
+  if (!envelope.ok) {
+    return envelope;
   }
 
-  const { content, username } = raw as { content?: unknown; username?: unknown };
+  const { content, username } = envelope.envelope as { content?: unknown; username?: unknown };
 
   if (typeof content !== 'string') {
     return { ok: false, error: 'content is required and must be a string' };

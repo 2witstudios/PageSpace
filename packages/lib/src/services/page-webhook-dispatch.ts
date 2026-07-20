@@ -19,10 +19,14 @@
 
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { pages } from '@pagespace/db/schema/core';
-import { publishWebhookMessage } from './page-webhook-service';
+import {
+  publishWebhookMessage,
+  markWebhookFired,
+  type PublishWebhookMessageResult,
+} from './page-webhook-service';
 import { loggers } from '../logging/logger-config';
+import { PageType } from '../utils/enums';
 import {
   validateWebhookEnvelope,
   resolveWebhookHandler,
@@ -37,23 +41,16 @@ export type WebhookDispatchResult =
   /** `error` is machine-readable for the route's status mapping ('not_found', 'rate_limited', 'channel_not_found', 'internal_error') or a validation message from the pure core. */
   | { kind: 'failed'; error: string };
 
+/** A handler receives the full delivery context even if it only uses part of it, so a new handler never has to widen the contract. */
 type WebhookHandler = (delivery: {
   webhookId: string;
+  pageId: string;
   envelope: Record<string, unknown>;
-}) => Promise<{ ok: true } | { ok: false; error: string }>;
+}) => Promise<PublishWebhookMessageResult>;
 
 const WEBHOOK_HANDLERS: Record<WebhookHandlerPageType, WebhookHandler> = {
-  CHANNEL: ({ webhookId, envelope }) => publishWebhookMessage(webhookId, envelope),
+  [PageType.CHANNEL]: ({ webhookId, envelope }) => publishWebhookMessage(webhookId, envelope),
 };
-
-/** Best-effort lastFireError bookkeeping for outcomes decided here (bad envelope, no action); handlers own their own. */
-async function recordFireError(webhookId: string, error: string): Promise<void> {
-  try {
-    await db.update(pageWebhooks).set({ lastFireError: error }).where(eq(pageWebhooks.id, webhookId));
-  } catch (dbError) {
-    loggers.system.error('page-webhook-dispatch: failed to record fire error', dbError as Error, { webhookId });
-  }
-}
 
 /**
  * Dispatch a verified delivery to its page type's default handler. The route
@@ -61,16 +58,19 @@ async function recordFireError(webhookId: string, error: string): Promise<void> 
  * JSON-parsed the payload (null when unparseable — rejected here as a bad
  * envelope).
  */
-export async function dispatchWebhookDelivery(delivery: {
+export async function dispatchWebhookDelivery({
+  webhookId,
+  pageId,
+  payload,
+}: {
   webhookId: string;
   pageId: string;
   payload: unknown;
 }): Promise<WebhookDispatchResult> {
-  const { webhookId, pageId, payload } = delivery;
   try {
     const validation = validateWebhookEnvelope(payload);
     if (!validation.ok) {
-      await recordFireError(webhookId, validation.error);
+      await markWebhookFired(webhookId, validation.error);
       return { kind: 'failed', error: validation.error };
     }
 
@@ -81,11 +81,11 @@ export async function dispatchWebhookDelivery(delivery: {
 
     const handlerKey = resolveWebhookHandler(page?.type);
     if (handlerKey === 'none') {
-      await recordFireError(webhookId, 'no action configured');
+      await markWebhookFired(webhookId, 'no action configured');
       return { kind: 'no_action' };
     }
 
-    const result = await WEBHOOK_HANDLERS[handlerKey]({ webhookId, envelope: validation.envelope });
+    const result = await WEBHOOK_HANDLERS[handlerKey]({ webhookId, pageId, envelope: validation.envelope });
     return result.ok ? { kind: 'handled' } : { kind: 'failed', error: result.error };
   } catch (error) {
     loggers.system.error('page-webhook-dispatch: dispatchWebhookDelivery failed', error as Error, { webhookId });

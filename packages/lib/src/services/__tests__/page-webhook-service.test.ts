@@ -65,7 +65,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-import { publishWebhookMessage } from '../page-webhook-service';
+import { publishWebhookMessage, markWebhookFired } from '../page-webhook-service';
 
 const WEBHOOK_ROW = {
   id: 'wh-1',
@@ -174,5 +174,19 @@ describe('publishWebhookMessage', () => {
     mockFindFirst.mockRejectedValue(new Error('db down'));
     const result = await publishWebhookMessage('wh-1', { content: 'hi' });
     expect(result).toEqual({ ok: false, error: 'internal_error' });
+  });
+});
+
+describe('markWebhookFired', () => {
+  it('writes the error string to the row', async () => {
+    await markWebhookFired('wh-1', 'no action configured');
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('never throws on a db failure — bookkeeping can never fail a delivery (the dispatcher relies on this)', async () => {
+    mockUpdate.mockImplementationOnce(() => {
+      throw new Error('db down');
+    });
+    await expect(markWebhookFired('wh-1', 'boom')).resolves.toBeUndefined();
   });
 });

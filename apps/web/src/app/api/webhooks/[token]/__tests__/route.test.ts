@@ -160,7 +160,6 @@ describe('POST /api/webhooks/[token]', () => {
   });
 
   it('still requires a valid signature before the no-action 202 path — no unauthenticated probe', async () => {
-    mockDispatch.mockResolvedValue({ kind: 'no_action' });
     const response = await POST(makeRequest(VALID_PAYLOAD), { params: Promise.resolve({ token: 'tok-abc' }) });
     expect(response.status).toBe(403);
     expect(mockDispatch).not.toHaveBeenCalled();

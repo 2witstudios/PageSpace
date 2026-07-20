@@ -51,8 +51,14 @@ async function broadcastToChannel(channelId: string, payload: unknown): Promise<
   }
 }
 
-/** Success clears lastFireError and stamps lastFiredAt; failure records the error without touching lastFiredAt. Best-effort. */
-async function markWebhookFired(webhookId: string, error: string | null): Promise<void> {
+/**
+ * The one implementation of per-webhook fire bookkeeping, shared with the
+ * dispatcher (and future trigger fan-out): success (`error: null`) clears
+ * lastFireError and stamps lastFiredAt; failure records the error without
+ * touching lastFiredAt. Best-effort — never throws, a db failure is logged
+ * and swallowed so bookkeeping can never fail a delivery.
+ */
+export async function markWebhookFired(webhookId: string, error: string | null): Promise<void> {
   try {
     await db
       .update(pageWebhooks)
