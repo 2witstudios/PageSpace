@@ -20,6 +20,18 @@ export interface LockedBatchReorderOptions<T extends PgTable> {
    * without this a caller switching from `tx.update(...).set(...)` to this
    * primitive would silently stop refreshing those columns. Optional: tables
    * with no such column (e.g. `favorites`, which has no `updatedAt`) omit it.
+   *
+   * Stamped with Postgres `clock_timestamp()`, not `now()`. `now()` (aka
+   * `transaction_timestamp()`) is fixed at the transaction's `BEGIN` and
+   * stays fixed for every statement inside it — including this one. If this
+   * transaction blocks waiting on the `FOR UPDATE` lock above (e.g. a
+   * concurrent role mutation holds it), the wait can outlast a concurrent
+   * writer's own commit, and `now()` would then stamp a timestamp from
+   * *before* that writer's newer one — silently regressing `updatedAt`
+   * backwards. `clock_timestamp()` reflects the actual wall-clock moment
+   * this UPDATE executes (after the lock is acquired), matching the
+   * `new Date()`-evaluated-at-write-time semantics every other writer in
+   * this codebase already has.
    */
   touchColumns?: AnyPgColumn[];
 }
@@ -72,7 +84,7 @@ export async function lockedBatchReorder<T extends PgTable>(
   const setAssignments = sql.join(
     [
       sql`${sql.identifier(positionColumn.name)} = v.position`,
-      ...touchColumns.map((column) => sql`${sql.identifier(column.name)} = now()`),
+      ...touchColumns.map((column) => sql`${sql.identifier(column.name)} = clock_timestamp()`),
     ],
     sql`, `
   );
