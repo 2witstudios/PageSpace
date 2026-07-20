@@ -354,10 +354,17 @@ export type TaskLoadMoreState = 'idle' | 'loading' | 'failed';
 // sets `error` alongside it rather than clearing it. Disambiguates those two so the
 // "Load More" control can show a spinner vs. a retry state instead of getting stuck.
 export const getTaskLoadMoreState = (
-  pages: unknown[] | undefined,
+  pages: { hasMore: boolean }[] | undefined,
   size: number,
   hasError: boolean,
 ): TaskLoadMoreState => {
+  // The last resolved page is authoritative over `size`: if the server says there's
+  // nothing more, that holds even when `size` (how many "Load More" clicks the user
+  // has made) is stale — e.g. concurrent deletes shrink the total across a page
+  // boundary, getTasksPageKey starts returning null for the pages beyond it, and
+  // `pages.length` permanently stops growing to match `size`. Without this check that
+  // reads as "still loading" forever instead of "there's nothing left to load".
+  if (getHasMoreTasks(pages) === false && pages && pages.length > 0) return 'idle';
   if (!isLoadingNextTaskPage(pages, size)) return 'idle';
   return hasError ? 'failed' : 'loading';
 };

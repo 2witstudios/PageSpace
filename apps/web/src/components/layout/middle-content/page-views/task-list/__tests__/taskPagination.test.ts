@@ -175,27 +175,27 @@ describe('getTaskLoadMoreState', () => {
 
   it('all requested pages have resolved, no error', () => {
     assert({
-      given: 'page count matching size and no error',
+      given: 'page count matching size, last page still reports more, no error',
       should: 'return idle',
-      actual: getTaskLoadMoreState([{}, {}], 2, false),
+      actual: getTaskLoadMoreState([{ hasMore: true }, { hasMore: true }], 2, false),
       expected: 'idle',
     });
   });
 
   it('a new page was requested and is still in flight', () => {
     assert({
-      given: 'page count behind size and no error',
+      given: 'page count behind size, the one resolved page still reports more, no error',
       should: 'return loading',
-      actual: getTaskLoadMoreState([{}], 2, false),
+      actual: getTaskLoadMoreState([{ hasMore: true }], 2, false),
       expected: 'loading',
     });
   });
 
   it('a new page was requested and permanently failed', () => {
     assert({
-      given: 'page count behind size and an error is present (SWR keeps stale data + error together)',
+      given: 'page count behind size, the one resolved page still reports more, and an error is present (SWR keeps stale data + error together)',
       should: 'return failed, not loading',
-      actual: getTaskLoadMoreState([{}], 2, true),
+      actual: getTaskLoadMoreState([{ hasMore: true }], 2, true),
       expected: 'failed',
     });
   });
@@ -204,7 +204,19 @@ describe('getTaskLoadMoreState', () => {
     assert({
       given: 'page count matching size even though an error field happens to be set',
       should: 'return idle — nothing is behind, so there is nothing to retry',
-      actual: getTaskLoadMoreState([{}, {}], 2, true),
+      actual: getTaskLoadMoreState([{ hasMore: true }, { hasMore: true }], 2, true),
+      expected: 'idle',
+    });
+  });
+
+  it('the total shrank across a page boundary while `size` stayed stale (regression: permanently stuck "Loading…")', () => {
+    // e.g. 101 tasks (page 0 hasMore=true) drop to 100 after a delete; on revalidate,
+    // page 0 now resolves with hasMore=false and getTasksPageKey returns null for page
+    // 1, so `pages` permanently stops growing past length 1 even though `size` is 2.
+    assert({
+      given: 'page count behind size, but the one resolved (last) page says hasMore=false',
+      should: 'return idle — the last page is authoritative over a stale size, not stuck loading forever',
+      actual: getTaskLoadMoreState([{ hasMore: false }], 2, false),
       expected: 'idle',
     });
   });
