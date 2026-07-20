@@ -72,13 +72,23 @@ function getAudioContext(): AudioContext {
   return audioContext;
 }
 
-async function synthesize(text: string): Promise<AudioBuffer | null> {
+async function synthesize(text: string, runId: number): Promise<AudioBuffer | null> {
   const { ttsVoice, ttsSpeed } = useVoiceModeStore.getState();
   // Created before the network await so the browser still credits this
   // AudioContext to the user gesture that triggered playback.
   const ctx = getAudioContext();
   const controller = new AbortController();
   activeAbortController = controller;
+  // A stale, already-superseded run (from a stop-then-restart) failing for
+  // its own unrelated reason must be a full no-op: no toast, and — crucially
+  // — no stopReadAloud() either, since that would tear down a newer run that
+  // has nothing to do with this one's failure. Only the run that is still
+  // current gets to surface an error and stop the queue.
+  const handleFailure = (message: string) => {
+    if (runId !== generation) return;
+    toast.error(message);
+    stopReadAloud();
+  };
   try {
     const response = await fetchWithAuth('/api/voice/synthesize', {
       method: 'POST',
@@ -90,15 +100,15 @@ async function synthesize(text: string): Promise<AudioBuffer | null> {
       // A systemic failure (out of credits, rate-limited, misconfigured) —
       // every remaining chunk would fail identically, so surface it and stop
       // the whole run instead of silently skip-retrying it chunk by chunk.
-      // playNext()'s generation check (bumped by the stopReadAloud() call
-      // below) is what actually prevents the skip-retry, not this branch.
+      // playNext()'s generation check (bumped by handleFailure's
+      // stopReadAloud() call) is what actually prevents the skip-retry, not
+      // this branch.
       const errorData = await response.json().catch(() => ({}) as Record<string, unknown>);
       const message =
         (typeof errorData.message === 'string' && errorData.message) ||
         (typeof errorData.error === 'string' && errorData.error) ||
         'Could not read this reply aloud.';
-      toast.error(message);
-      stopReadAloud();
+      handleFailure(message);
       return null;
     }
     const audioData = await response.arrayBuffer();
@@ -106,7 +116,16 @@ async function synthesize(text: string): Promise<AudioBuffer | null> {
       await ctx.resume();
     }
     return await ctx.decodeAudioData(audioData);
-  } catch {
+  } catch (err) {
+    // An AbortError here means WE intentionally cancelled this request (via
+    // stopReadAloud()'s controller.abort()) — expected, nothing to surface.
+    // Any other exception (network failure, a corrupted/undecodable
+    // response, AudioContext.resume() failing) is unexpected and would
+    // otherwise silently truncate or drop the reply with zero explanation,
+    // so it gets the same surface-and-stop treatment as a non-ok response.
+    if (!(err instanceof DOMException && err.name === 'AbortError')) {
+      handleFailure('Could not read this reply aloud. Please try again.');
+    }
     return null;
   } finally {
     // Only clear if still ours — a stop-then-restart race can leave a newer
@@ -127,7 +146,7 @@ async function playNext(runId: number): Promise<void> {
     return;
   }
 
-  const buffer = await synthesize(text);
+  const buffer = await synthesize(text, runId);
   // A stop, or a stop-then-restart, happened while this chunk was
   // synthesizing — discard the result rather than letting a stale run play.
   if (runId !== generation) return;

@@ -150,24 +150,6 @@ describe('readAloudPlayer', () => {
     await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
   });
 
-  it('skips a chunk that fails to synthesize and continues with the rest', async () => {
-    vi.mocked(fetchWithAuth)
-      .mockResolvedValueOnce({ ok: false } as Response)
-      .mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-      } as Response);
-
-    startReadAloud(['broken chunk', 'good chunk']);
-    // The first chunk's failed synthesis is skipped without ever creating a
-    // source; only the second, successful chunk should end up playing.
-    await vi.waitFor(() => expect(createdSources).toHaveLength(1));
-    expect(isReadAloudPlaying()).toBe(true);
-
-    createdSources[0].onended?.();
-    await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
-  });
-
   it('discards a chunk that finishes synthesizing after stop was already called', async () => {
     startReadAloud(['only chunk']);
     stopReadAloud();
@@ -299,5 +281,64 @@ describe('readAloudPlayer', () => {
     expect(toastErrorMock).toHaveBeenCalledWith('Voice synthesis is not configured on this deployment.');
     // Stopped after the first failure — never even attempted the second chunk.
     expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not surface an error toast when synthesis is cancelled by an intentional stop', async () => {
+    // Mirrors a real fetch()'s behavior on abort: rejects with an AbortError,
+    // either immediately (if already aborted) or once the signal fires.
+    vi.mocked(fetchWithAuth).mockImplementation((_url, options) => {
+      const signal = (options as RequestInit | undefined)?.signal;
+      return new Promise((_resolve, reject) => {
+        const onAbort = () => reject(new DOMException('The operation was aborted', 'AbortError'));
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        signal?.addEventListener('abort', onAbort);
+      });
+    });
+
+    startReadAloud(['only chunk']);
+    stopReadAloud();
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an error toast and stops the run when synthesis throws for a reason other than an intentional stop', async () => {
+    vi.mocked(fetchWithAuth).mockRejectedValue(new Error('network blip'));
+
+    startReadAloud(['first chunk', 'second chunk']);
+
+    await vi.waitFor(() => expect(isReadAloudPlaying()).toBe(false));
+    expect(toastErrorMock).toHaveBeenCalledWith('Could not read this reply aloud. Please try again.');
+    // Stopped after the first failure — never even attempted the second chunk.
+    expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not surface a toast for a stale, already-superseded run that fails on its own after a restart', async () => {
+    let rejectFirst: ((err: Error) => void) | undefined;
+    const firstResponse = new Promise<Response>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    vi.mocked(fetchWithAuth)
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      } as Response);
+
+    startReadAloud(['stale chunk']); // run A: fetch pending
+    stopReadAloud(); // stopped before run A's fetch ever resolved
+    startReadAloud(['fresh chunk']); // run B: a fresh, successful fetch
+
+    // Run A's fetch fails for its own, unrelated reason — AFTER run B has
+    // already begun. The user already moved on; this shouldn't surface a
+    // confusing error about a read they're no longer waiting on.
+    rejectFirst?.(new Error('unrelated network blip'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(isReadAloudPlaying()).toBe(true);
   });
 });
