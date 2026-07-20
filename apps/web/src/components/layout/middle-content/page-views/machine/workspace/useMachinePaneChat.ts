@@ -144,17 +144,32 @@ export function useMachinePaneChat({
   const channelId = selectedAgent ? selectedAgent.id : machineId;
   const currentConversationId = selectedAgent ? agentConversationId : defaultConversationId;
 
+  // Ref-read rather than a functional-updater compare: clearing the agent
+  // conversation is a second state write, and state updaters must stay pure.
+  const selectedAgentRef = useRef(selectedAgent);
+  selectedAgentRef.current = selectedAgent;
   const selectAgent = useCallback((agent: AgentInfo | null) => {
-    setSelectedAgent((previous) => {
-      if (agent?.id !== previous?.id) {
-        // A genuinely new subject — the resolve effect below re-resolves it.
-        // The DEFAULT identity is deliberately untouched: returning to null
-        // resumes the machine conversation as-is, it never mints a new row.
-        setAgentConversationId(null);
-      }
-      return agent;
-    });
+    if (agent?.id !== selectedAgentRef.current?.id) {
+      // A genuinely new subject — the resolve effect below re-resolves it.
+      // The DEFAULT identity is deliberately untouched: returning to null
+      // resumes the machine conversation as-is, it never mints a new row.
+      setAgentConversationId(null);
+    }
+    setSelectedAgent(agent);
   }, []);
+
+  // A pane re-bound to a different terminal row is a different chat surface.
+  // Phase 10 keys the mount by session, but the hook defends its own
+  // invariant: the default identity and the pendingPrompt latch belong to
+  // the terminal row, not the mount.
+  const boundTerminalIdRef = useRef(terminalId);
+  const pendingPromptSentRef = useRef(false);
+  useEffect(() => {
+    if (boundTerminalIdRef.current === terminalId) return;
+    boundTerminalIdRef.current = terminalId;
+    pendingPromptSentRef.current = false;
+    setDefaultConversationId(terminalId);
+  }, [terminalId]);
 
   // Resolve the selected agent's conversation: most recent, or a client-minted
   // new one (same shape as usePageAgentSidebarState, pane-local instead of the
@@ -436,7 +451,6 @@ export function useMachinePaneChat({
   // ============================================
   // pendingPrompt — exactly once, fresh empty default conversation only
   // ============================================
-  const pendingPromptSentRef = useRef(false);
   useEffect(() => {
     if (pendingPromptSentRef.current) return;
     if (!pendingPrompt) return;
@@ -563,8 +577,17 @@ export function useMachinePaneChat({
   );
 
   const deleteConversation = useCallback(
-    (conversationId: string) => deleteConversationBase(conversationId),
-    [deleteConversationBase],
+    async (conversationId: string) => {
+      // The machine-anchored session conversation IS the pane's identity —
+      // deleting it out from under the live terminal row would leave the
+      // default mode pointing at a dead id. Not deletable from this surface.
+      if (conversationId === terminalId) {
+        toast.error('The machine session conversation cannot be deleted from this pane');
+        return;
+      }
+      await deleteConversationBase(conversationId);
+    },
+    [terminalId, deleteConversationBase],
   );
 
   // ============================================

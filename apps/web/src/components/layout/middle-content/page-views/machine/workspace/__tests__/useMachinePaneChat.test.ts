@@ -412,6 +412,22 @@ describe('useMachinePaneChat', () => {
       );
     });
 
+    it('refuses to delete the machine-anchored session conversation', async () => {
+      const { machineId, terminalId } = ids('history-delete-guard');
+
+      const { result } = renderHook(() => useMachinePaneChat({ machineId, terminalId }));
+
+      await act(async () => {
+        await result.current.deleteConversation(terminalId);
+      });
+
+      const deletes = mockFetchWithAuth.mock.calls.filter(
+        (call) => (call[1] as RequestInit | undefined)?.method === 'DELETE',
+      );
+      expect(deletes).toHaveLength(0);
+      expect(result.current.currentConversationId).toBe(terminalId);
+    });
+
     it('opening a history conversation loads it under the ACTIVE mode\'s page id and adopts it', async () => {
       const { machineId, terminalId } = ids('history-open');
       routeFetches({

@@ -229,7 +229,7 @@ export default function MachinePaneChat({
         </TabsContent>
 
         <TabsContent value="settings" className="mt-0 min-h-0 flex-1 overflow-auto">
-          <PaneSettings selectedAgentTitle={pane.selectedAgent?.title ?? null} agent={pane.selectedAgent} />
+          <PaneSettings agent={pane.selectedAgent} />
         </TabsContent>
       </Tabs>
 
@@ -250,10 +250,8 @@ export default function MachinePaneChat({
  * its page, not in a terminal pane.
  */
 function PaneSettings({
-  selectedAgentTitle,
   agent,
 }: {
-  selectedAgentTitle: string | null;
   agent: {
     title: string;
     driveName: string;
@@ -283,7 +281,7 @@ function PaneSettings({
           <SettingsRow label="System prompt" value={agent.systemPrompt ? 'Custom' : 'None'} />
         </dl>
         <p className="text-muted-foreground">
-          Configure {selectedAgentTitle} on its own page.
+          Configure {agent.title} on its own page.
         </p>
       </div>
     );

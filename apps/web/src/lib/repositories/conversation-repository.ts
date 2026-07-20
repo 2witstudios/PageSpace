@@ -5,7 +5,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, sql } from '@pagespace/db/operators'
+import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core'
 import { userActivities } from '@pagespace/db/schema/monitoring'
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -180,10 +180,15 @@ export const conversationRepository = {
    * Get an AI_CHAT agent by ID
    */
   async getAiAgent(agentId: string): Promise<AiAgent | null> {
+    // Conversation-hosting pages: AI_CHAT agents, and MACHINE pages — machine
+    // panes anchor their terminal conversations to the machine page (Phase 4
+    // pre-creates them, Phase 11's pane lists/loads them, #2166). Agent-only
+    // routes (config, drives, consult) do their own AI_CHAT checks and are
+    // unaffected by this widening.
     const agent = await db.query.pages.findFirst({
       where: and(
         eq(pages.id, agentId),
-        eq(pages.type, 'AI_CHAT'),
+        inArray(pages.type, ['AI_CHAT', 'MACHINE']),
         eq(pages.isTrashed, false)
       ),
       columns: {

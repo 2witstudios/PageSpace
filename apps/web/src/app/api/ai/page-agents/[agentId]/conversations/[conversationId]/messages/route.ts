@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { eq, and, ne, desc, sql } from '@pagespace/db/operators'
+import { eq, and, ne, desc, sql, inArray } from '@pagespace/db/operators'
 import { chatMessages, pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -19,7 +19,7 @@ const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: fal
  * Messages are returned in UIMessage format compatible with the Vercel AI SDK,
  * including tool calls and tool results if present.
  *
- * @param agentId - The unique identifier of the AI agent (AI_CHAT page ID)
+ * @param agentId - The conversation-hosting page id (AI_CHAT agent or MACHINE page)
  * @param conversationId - The unique identifier of the conversation session
  *
  * Query Parameters:
@@ -66,11 +66,13 @@ export async function GET(
 
     const { agentId, conversationId } = await context.params;
 
-    // Verify agent exists and is AI_CHAT type
+    // Verify the conversation-hosting page exists: an AI_CHAT agent, or a
+    // MACHINE page (machine panes anchor terminal conversations there —
+    // same widening as conversationRepository.getAiAgent, #2166 Phase 11).
     const agent = await db.query.pages.findFirst({
       where: and(
         eq(pages.id, agentId),
-        eq(pages.type, 'AI_CHAT'),
+        inArray(pages.type, ['AI_CHAT', 'MACHINE']),
         eq(pages.isTrashed, false)
       ),
     });

@@ -33,6 +33,7 @@ vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ kind: 'eq', a, b })),
   ne: vi.fn((a, b) => ({ kind: 'ne', a, b })),
   and: vi.fn((...c) => ({ kind: 'and', c })),
+  inArray: vi.fn((f, values) => ({ kind: 'inArray', f, values })),
   desc: vi.fn((f) => ({ kind: 'desc', f })),
   sql: Object.assign(vi.fn(), { as: vi.fn() }),
 }));
