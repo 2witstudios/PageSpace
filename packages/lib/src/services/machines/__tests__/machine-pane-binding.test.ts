@@ -60,8 +60,15 @@ describe('deriveMachinePaneBinding', () => {
     expect(result).toBeNull();
   });
 
-  it('given a non-pagespace row, should return null', async () => {
+  it('given a non-pagespace (pty-surface) row, should return null', async () => {
     const row = makeRow({ agentType: 'claude' });
+    const deps = makeDeps({ terminalStore: makeTerminalStore(row) });
+    const result = await deriveMachinePaneBinding({ chatId: MACHINE_ID, conversationId: CONVERSATION_ID }, deps);
+    expect(result).toBeNull();
+  });
+
+  it('given a row with an unrecognized/retired agentType (e.g. pagespace-cli), should return null', async () => {
+    const row = makeRow({ agentType: 'pagespace-cli' });
     const deps = makeDeps({ terminalStore: makeTerminalStore(row) });
     const result = await deriveMachinePaneBinding({ chatId: MACHINE_ID, conversationId: CONVERSATION_ID }, deps);
     expect(result).toBeNull();

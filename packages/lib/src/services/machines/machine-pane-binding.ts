@@ -21,16 +21,7 @@
 import type { MachineAgentTerminalStore } from './agent-terminals-store';
 import { SANDBOX_ROOT } from '../sandbox/sandbox-paths';
 import { BRANCH_REPO_PATH } from './machine-branches';
-
-/**
- * The agent-terminal `agentType` that marks a row as a PageSpace Agent pane
- * (not a PTY session). Hardcoded here rather than imported from
- * `agent-terminal-types.ts`'s `AGENT_LAUNCH_SPECS` registry because that
- * registry's own `pagespace` entry (issue #2166 step 1) lands in a separate,
- * parallel phase not yet on this branch — reconcile against its canonical
- * constant once that phase merges, instead of duplicating the literal.
- */
-const PAGESPACE_AGENT_TYPE = 'pagespace';
+import { isAgentRuntimeType, isPtyAgentType } from './agent-terminal-types';
 
 export type MachinePaneBindingFailureReason = 'binding_page_mismatch' | 'project_not_found' | 'branch_not_found';
 
@@ -74,11 +65,15 @@ export interface DeriveMachinePaneBindingDeps {
 
 /**
  * Derive the machine-pane tool binding for a conversation, or `null` when
- * this conversation isn't a machine-bound PageSpace Agent pane at all (no
- * row, or a page agent's own `agentType` — its conversation is never
- * machine-bound). A resolved `pagespace` row that fails page-identity or
- * scope-existence checks fails CLOSED (`ok: false`) rather than falling back
- * to an unbound run.
+ * this conversation isn't a machine-bound PageSpace Agent pane at all — no
+ * row, an unrecognized/retired `agentType` (e.g. `pagespace-cli`), or a
+ * `'pty'`-surface type (`shell`/`claude`/`codex`) whose own conversation is
+ * never machine-bound. Uses `isAgentRuntimeType`/`isPtyAgentType`
+ * (`agent-terminal-types.ts`) rather than comparing against a hardcoded
+ * `'pagespace'` literal, per that module's own doc comment — this stays
+ * correct if a future `'chat'`-surface type joins the registry. A resolved
+ * chat-surface row that fails page-identity or scope-existence checks fails
+ * CLOSED (`ok: false`) rather than falling back to an unbound run.
  *
  * PERFORMS NO ACCESS CHECK on `input.chatId` itself (mirrors the same
  * explicit caveat on `resolveAgentTerminalById` in `agent-terminals.ts`) —
@@ -95,7 +90,8 @@ export async function deriveMachinePaneBinding(
 ): Promise<MachinePaneBindingResult> {
   const row = await deps.terminalStore.findById(input.conversationId);
   if (!row) return null;
-  if (row.agentType !== PAGESPACE_AGENT_TYPE) return null;
+  if (!isAgentRuntimeType(row.agentType)) return null;
+  if (isPtyAgentType(row.agentType)) return null;
   if (row.machineId !== input.chatId) return { ok: false, reason: 'binding_page_mismatch' };
 
   if (row.machineBranchId) {
