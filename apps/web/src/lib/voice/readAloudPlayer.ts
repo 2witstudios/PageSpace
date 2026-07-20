@@ -118,6 +118,7 @@ async function playNext(runId: number): Promise<void> {
 }
 
 export function startReadAloud(chunks: string[]): void {
+  ensureVoiceModeStopsReadAloud();
   stopReadAloud();
   if (chunks.length === 0) return;
   queue = [...chunks];
@@ -148,13 +149,24 @@ export function isReadAloudPlaying(): boolean {
   return useReadAloudPlayerStore.getState().isPlaying;
 }
 
-// Enforced here (not per call-site) so the invariant holds no matter which
-// UI entry point enables Voice Mode, present or future: a mic-capturing live
+// Enforced here (not per call-site) so the invariant holds no matter which UI
+// entry point enables Voice Mode, present or future: a mic-capturing live
 // call must never run concurrently with this module's own TTS audio, since
 // each has its own separate AudioContext and would otherwise be picked up by
 // Voice Mode's microphone as if it were user speech.
-useVoiceModeStore.subscribe((state, prevState) => {
-  if (state.isEnabled && !prevState.isEnabled) {
-    stopReadAloud();
-  }
-});
+//
+// Registered lazily (on first startReadAloud(), not at module import time)
+// so merely importing this module — e.g. a component under test that renders
+// but never exercises Read Aloud — never touches useVoiceModeStore.subscribe.
+// By the time any audio could actually be playing, this has always already
+// run, since startReadAloud() is the only path that starts playback.
+let voiceModeSubscriptionRegistered = false;
+function ensureVoiceModeStopsReadAloud(): void {
+  if (voiceModeSubscriptionRegistered) return;
+  voiceModeSubscriptionRegistered = true;
+  useVoiceModeStore.subscribe((state, prevState) => {
+    if (state.isEnabled && !prevState.isEnabled) {
+      stopReadAloud();
+    }
+  });
+}
