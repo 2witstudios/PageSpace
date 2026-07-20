@@ -32,6 +32,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Incoming Webhooks** — mint a signed, page-scoped URL (owner/admin only, from the webhook icon
+  on a Channel or AI Chat page) so an external system — CI, monitoring, a script — can push events
+  into PageSpace without a full drive-scoped credential. A signed delivery to a Channel webhook
+  posts its `content` verbatim as a message; binding one or more workflows to a webhook (via the
+  new `/api/pages/[pageId]/webhooks/[id]/triggers` API) makes the same delivery also fire those
+  workflows with the full payload as context — the two actions compose rather than being mutually
+  exclusive. See [the Incoming Webhooks docs](https://pagespace.ai/docs/integrations/incoming-webhooks)
+  for the HMAC signing scheme and a working curl example. This is distinct from the existing
+  outbound "Generic Webhook" AI tool provider, which lets an agent call out to an arbitrary URL —
+  Incoming Webhooks is the opposite direction.
 - **`pagespace drives update-context` and a full `pagespace roles` command family** — the CLI can
   now set a drive's AI context prompt (`drives update-context <driveId> <drivePrompt>`) and
   manage custom drive roles end-to-end (`roles list|get|create|update|delete`,
