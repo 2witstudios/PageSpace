@@ -7,6 +7,7 @@ import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/ta
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import {
   authenticateRequestWithOptions,
   isAuthError,
@@ -44,17 +45,6 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
-
-/**
- * Escape SQL LIKE pattern special characters to prevent wildcard injection.
- * Must be used with ESCAPE '\\' clause in the query.
- */
-function escapeLikePattern(value: string): string {
-  return value
-    .replace(/\\/g, '\\\\')  // Escape backslashes first
-    .replace(/%/g, '\\%')    // Escape percent
-    .replace(/_/g, '\\_');   // Escape underscore
-}
 
 /**
  * GET /api/tasks

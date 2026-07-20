@@ -32,6 +32,11 @@
       "import": "./dist/db/bounded-query.js",
       "require": "./dist/db/bounded-query.js"
     },
+    "./db/like-pattern": {
+      "types": "./dist/db/like-pattern.d.ts",
+      "import": "./dist/db/like-pattern.js",
+      "require": "./dist/db/like-pattern.js"
+    },
     "./ai/normalize-parts": {
       "types": "./dist/ai/normalize-parts.d.ts",
       "import": "./dist/ai/normalize-parts.js",

@@ -69,6 +69,7 @@ import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pag
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
+import * as dbOperators from '@pagespace/db/operators';
 
 // ============================================================================
 // Test Fixtures
@@ -379,6 +380,28 @@ describe('GET /api/mentions/search', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(200);
+    });
+  });
+
+  describe('search term escaping', () => {
+    it('escapes LIKE metacharacters in the search term before building the ilike condition (regression: over-matching fix)', async () => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getUserAccessLevel).mockResolvedValue('VIEW' as never);
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId]);
+
+      const ilikeSpy = vi.spyOn(dbOperators, 'ilike');
+
+      // A search for "50% off" contains a literal '%' — if it reaches ilike()
+      // unescaped, Postgres reads it as a wildcard instead of a literal character.
+      const request = new Request(
+        `https://example.com/api/mentions/search?q=${encodeURIComponent('50% off')}&driveId=${mockDriveId}&types=page`
+      );
+      const response = await GET(request);
+
+      expect(response.status).toBe(200);
+      const patterns = ilikeSpy.mock.calls.map(([, pattern]) => pattern);
+      expect(patterns).toContain('%50\\%%');
+      expect(patterns).toContain('%off%');
     });
   });
 });
