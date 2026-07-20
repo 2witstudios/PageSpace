@@ -17,7 +17,7 @@ Incoming Webhooks let an external system — CI, a monitoring tool, a cron job, 
 
 ## What you can do
 
-- Mint a named webhook on a **Channel** or an **AI Chat (agent)** page — only the drive's **owner** or an **admin** can create, toggle, or delete one.
+- Mint a named webhook on any non-trashed page — only the drive's **owner** or an **admin** can create, toggle, or delete one. The **Incoming Webhooks** dialog that does this from the UI is currently wired up on **Channel** and **AI Chat (agent)** pages; other page types can still mint one via the API.
 - Get back a URL (\`/api/webhooks/<token>\`) and a secret shown exactly once — save it, PageSpace never shows it again and can't recover it for you.
 - POST any JSON object to that URL, signed with the secret. A **Channel** webhook with no other wiring posts the payload's \`content\` into the channel verbatim, as if a bot had typed it.
 - Bind one or more **workflows** to a webhook (via the API — see below) so the same delivery also kicks off an agent run, with the full payload handed to it as context.
