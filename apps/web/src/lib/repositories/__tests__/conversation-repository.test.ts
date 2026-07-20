@@ -221,6 +221,47 @@ describe('conversationRepository.createConversation', () => {
       expect.objectContaining({ id: 'conv-mine', userId: 'user-1' })
     );
   });
+
+  it('given { isShared: true }, persists a shared row, keeping the squat-guard + onConflictDoNothing', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+
+    await conversationRepository.createConversation('conv-shared', 'user-1', 'machine-1', { isShared: true });
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-shared', userId: 'user-1', contextId: 'machine-1', isShared: true })
+    );
+    expect(onConflictDoNothing).toHaveBeenCalled();
+  });
+
+  it('given no opts (or isShared omitted), still defaults to isShared: false', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
+    const valuesMock = vi.fn().mockReturnValue({ onConflictDoNothing });
+    mockDb.insert = vi.fn().mockReturnValue({ values: valuesMock });
+
+    await conversationRepository.createConversation('conv-default', 'user-1', 'agent-1', {});
+
+    expect(valuesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conv-default', isShared: false })
+    );
+  });
+
+  it('given { isShared: true }, still refuses a conversationId owned by a different user (squat-guard applies regardless of isShared)', async () => {
+    mockSelectChain.from
+      .mockImplementationOnce(() => mockConversationsLookup([]))
+      .mockImplementationOnce(() => mockChatMessagesLookup([{ userId: 'victim-user' }]));
+
+    await conversationRepository.createConversation('conv-legacy', 'attacker-user', 'machine-1', { isShared: true });
+
+    expect(mockDb.insert).not.toHaveBeenCalled();
+  });
 });
 
 describe('conversationRepository.setConversationShared', () => {
