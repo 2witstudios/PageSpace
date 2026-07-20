@@ -643,6 +643,121 @@ describe('createSandboxTools', () => {
     });
   });
 
+  describe('machine-pane binding (machineBinding)', () => {
+    function runDepsCapturingCwd() {
+      const seenCwds: Array<string | undefined> = [];
+      const runDeps = fakeRunDeps();
+      runDeps.reconnect = async () => ({
+        sandboxId: 'sbx',
+        spriteInstanceId: null,
+        runCommand: async (args: { cwd?: string }) => {
+          seenCwds.push(args.cwd);
+          return { exitCode: 0, stdout: 'hi', stderr: '' };
+        },
+        writeFiles: async () => {},
+        readFileToBuffer: async () => Buffer.from('data'),
+        createCheckpoint: async () => {},
+      });
+      return { runDeps, seenCwds };
+    }
+
+    it('bash: given a binding and no explicit cwd, should default the runner cwd to the binding\'s cwd', async () => {
+      const { runDeps, seenCwds } = runDepsCapturingCwd();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const rawContext: ToolExecutionContext = {
+        userId: 'u1',
+        machineBinding: { machineId: 'm1', cwd: '/workspace/repo' },
+      };
+      const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
+      expect(result).toMatchObject({ success: true });
+      expect(seenCwds).toEqual(['/workspace/repo']);
+    });
+
+    it('bash: given a binding AND an explicit cwd, the explicit cwd should win', async () => {
+      const { runDeps, seenCwds } = runDepsCapturingCwd();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const rawContext: ToolExecutionContext = {
+        userId: 'u1',
+        machineBinding: { machineId: 'm1', cwd: '/workspace/repo' },
+      };
+      const result = await exec(tools.bash, { command: 'echo hi', cwd: '/workspace/other' }, rawContext);
+      expect(result).toMatchObject({ success: true });
+      expect(seenCwds).toEqual(['/workspace/other']);
+    });
+
+    it('bash: given no binding, should leave the default cwd behavior unchanged (the runner\'s own SANDBOX_ROOT default)', async () => {
+      const { runDeps, seenCwds } = runDepsCapturingCwd();
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+      expect(result).toMatchObject({ success: true });
+      expect(seenCwds).toEqual(['/workspace']);
+    });
+
+    it('bash: given a binding with a branchSandbox, acquireSandbox should carry the branch target', async () => {
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const rawContext: ToolExecutionContext = {
+        userId: 'u1',
+        machineBinding: {
+          machineId: 'm1',
+          cwd: '/workspace/repo',
+          branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
+        },
+      };
+      const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
+      expect(result).toMatchObject({ success: true });
+      expect(seenAcquisitions).toEqual([
+        expect.objectContaining({ branchSandbox: { machineId: 'm1', machineBranchId: 'branch-1' } }),
+      ]);
+    });
+
+    it('bash: given no binding, acquireSandbox should carry no branchSandbox', async () => {
+      const seenAcquisitions: unknown[] = [];
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async (input) => {
+        seenAcquisitions.push(input);
+        return { ok: true, sandboxId: 'sbx', resumed: false };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
+      expect(seenAcquisitions).toEqual([expect.objectContaining({ branchSandbox: undefined })]);
+    });
+
+    it('bash: given the branch acquire fails, should surface a tool error and run no command', async () => {
+      let reconnected = false;
+      const runDeps = fakeRunDeps();
+      runDeps.acquireSandbox = async () => ({ ok: false, reason: 'branch_not_found' });
+      runDeps.reconnect = async () => {
+        reconnected = true;
+        return {
+          sandboxId: 'sbx',
+          spriteInstanceId: null,
+          runCommand: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+          writeFiles: async () => {},
+          readFileToBuffer: async () => Buffer.from(''),
+          createCheckpoint: async () => {},
+        };
+      };
+      const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate, machines: okMachines() });
+      const rawContext: ToolExecutionContext = {
+        userId: 'u1',
+        machineBinding: {
+          machineId: 'm1',
+          cwd: '/workspace/repo',
+          branchSandbox: { machineBranchId: 'branch-1', sandboxId: 'sbx-1' },
+        },
+      };
+      const result = await exec(tools.bash, { command: 'echo hi' }, rawContext);
+      expect(result).toMatchObject({ success: false });
+      expect(reconnected).toBe(false);
+    });
+  });
+
   describe('terminal tools resolve the active machine before delegating', () => {
     it('bash/writeFile/readFile/editFile should each resolve the configured machines to determine the active one', async () => {
       const listMachines = vi.fn().mockResolvedValue([{ kind: 'own' }]);
