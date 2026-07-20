@@ -111,6 +111,25 @@ describe('PATCH /api/pages/[pageId]/webhooks/[id]/triggers/[triggerId]', () => {
     expect(response.status).toBe(404);
     expect(mockUpdateReturning).not.toHaveBeenCalled();
   });
+
+  it('scopes both lookups so a trigger on another page/webhook cannot be toggled (IDOR)', async () => {
+    mockUpdateReturning.mockResolvedValue([{ ...TRIGGER_ROW, isEnabled: false }]);
+    await PATCH(makeRequest('PATCH', { isEnabled: false }), PARAMS);
+    // Webhook must be AND-scoped to (id, pageId)...
+    expect(mockWebhookFindFirst.mock.calls[0][0].where).toEqual({
+      and: [
+        { eq: ['pageWebhooks.id', 'wh-1'] },
+        { eq: ['pageWebhooks.pageId', 'page-1'] },
+      ],
+    });
+    // ...and the trigger AND-scoped to (triggerId, pageWebhookId).
+    expect(mockTriggerFindFirst.mock.calls[0][0].where).toEqual({
+      and: [
+        { eq: ['webhookTriggers.id', 't-1'] },
+        { eq: ['webhookTriggers.pageWebhookId', 'wh-1'] },
+      ],
+    });
+  });
 });
 
 describe('DELETE /api/pages/[pageId]/webhooks/[id]/triggers/[triggerId]', () => {

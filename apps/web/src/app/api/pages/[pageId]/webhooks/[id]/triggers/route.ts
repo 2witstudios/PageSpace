@@ -23,11 +23,18 @@ const createSchema = z.object({
 // tagged with this provider constant (mirrors 'zoom' on connection-anchored rows).
 const PAGE_WEBHOOK_PROVIDER = 'page-webhook';
 
-// A page webhook fans out to at most this many workflow bindings. The list
-// endpoint returns the full set in one bounded query, so the create path caps
-// at the same number — this keeps GET from ever silently truncating (no cursor
-// needed) while staying far above any realistic wiring depth.
+// Create caps genuinely-new bindings per webhook (far above any realistic
+// wiring depth). The check-then-insert is not atomic, so a burst of concurrent
+// binds for DISTINCT workflows could momentarily overshoot the cap by the
+// concurrency count — hence the list ceiling below sits well above it, so GET
+// still returns every row (no silent truncation, no cursor needed) even after
+// a race. The cap is a safety valve, not a hard invariant the list depends on.
 const MAX_TRIGGERS_PER_WEBHOOK = 100;
+
+// Hard upper bound on rows the list returns in its single page. Set generously
+// above MAX_TRIGGERS_PER_WEBHOOK so any concurrent-overshoot past the cap stays
+// fully visible; creation never legitimately reaches it.
+const TRIGGER_LIST_CEILING = 500;
 
 // Returns the webhook only if it belongs to this page — scopes every trigger op
 // to a webhook the caller's page owns, and yields the page's driveId for the
@@ -62,12 +69,12 @@ export async function GET(request: Request, context: { params: Promise<{ pageId:
     const scope = await findWebhookWithDrive(pageId, id);
     if (!scope) return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
 
-    // Stable ordering so repeated reads return the same sequence, and the whole
-    // set fits in one page (creation is capped at MAX_TRIGGERS_PER_WEBHOOK).
+    // Stable ordering so repeated reads return the same sequence; the ceiling
+    // sits above the create cap so the whole set always fits in one page.
     const triggers = await db.query.webhookTriggers.findMany({
       where: eq(webhookTriggers.pageWebhookId, id),
       orderBy: [asc(webhookTriggers.createdAt), asc(webhookTriggers.id)],
-      limit: MAX_TRIGGERS_PER_WEBHOOK,
+      limit: TRIGGER_LIST_CEILING,
     });
 
     return NextResponse.json({ triggers });

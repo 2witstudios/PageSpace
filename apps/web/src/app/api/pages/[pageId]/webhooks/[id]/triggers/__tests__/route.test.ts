@@ -15,6 +15,7 @@ const mockWorkflowFindFirst = vi.fn();
 const mockTriggerFindFirst = vi.fn();
 const mockTriggerFindMany = vi.fn();
 const mockInsertReturning = vi.fn();
+const mockInsertValues = vi.fn();
 const mockCountResult = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -33,11 +34,14 @@ vi.mock('@pagespace/db/db', () => ({
       }),
     }),
     insert: () => ({
-      values: () => ({
-        onConflictDoNothing: () => ({
-          returning: () => mockInsertReturning(),
-        }),
-      }),
+      values: (v: unknown) => {
+        mockInsertValues(v);
+        return {
+          onConflictDoNothing: () => ({
+            returning: () => mockInsertReturning(),
+          }),
+        };
+      },
     }),
   },
 }));
@@ -99,15 +103,31 @@ beforeEach(() => {
 });
 
 describe('GET /api/pages/[pageId]/webhooks/[id]/triggers', () => {
-  it('lists the webhook triggers with a bounded, deterministically-ordered query', async () => {
+  it('lists the webhook triggers with a bounded, deterministically-ordered query scoped to the webhook', async () => {
     mockTriggerFindMany.mockResolvedValue([{ id: 't-1', pageWebhookId: 'wh-1', workflowId: 'wf-1' }]);
     const response = await GET(makeRequest('GET'), PARAMS);
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.triggers).toHaveLength(1);
-    expect(mockTriggerFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 100, orderBy: expect.any(Array) }),
-    );
+    const findManyArg = mockTriggerFindMany.mock.calls[0][0];
+    expect(findManyArg.limit).toBe(500);
+    expect(Array.isArray(findManyArg.orderBy)).toBe(true);
+    // The list must be filtered to THIS webhook's id — a dropped filter would leak
+    // every drive's triggers.
+    expect(findManyArg.where).toEqual({ eq: ['webhookTriggers.pageWebhookId', 'wh-1'] });
+  });
+
+  it('scopes the webhook lookup to the URL page (blocks cross-page access)', async () => {
+    await GET(makeRequest('GET'), PARAMS);
+    // findWebhookWithDrive must AND the webhook id with pageId — without the
+    // pageId clause a caller could read another page's webhook triggers.
+    const webhookLookupWhere = mockWebhookFindFirst.mock.calls[0][0].where;
+    expect(webhookLookupWhere).toEqual({
+      and: [
+        { eq: ['pageWebhooks.id', 'wh-1'] },
+        { eq: ['pageWebhooks.pageId', 'page-1'] },
+      ],
+    });
   });
 
   it('rejects a non-owner/admin with 403', async () => {
@@ -126,12 +146,23 @@ describe('GET /api/pages/[pageId]/webhooks/[id]/triggers', () => {
 });
 
 describe('POST /api/pages/[pageId]/webhooks/[id]/triggers', () => {
-  it('binds a same-drive workflow and audits the create', async () => {
+  it('binds a same-drive workflow with a page-anchored row and audits the create', async () => {
     mockInsertReturning.mockResolvedValue([{ id: 't-1', pageWebhookId: 'wh-1', workflowId: 'wf-1' }]);
     const response = await POST(makeRequest('POST', { workflowId: 'wf-1' }), PARAMS);
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(body.trigger.id).toBe('t-1');
+    // The inserted row must anchor to the page webhook (not a connection), tag
+    // the page provider, and carry the imported sentinel eventType — so the
+    // XOR CHECK passes and event-matching is skipped.
+    const inserted = mockInsertValues.mock.calls[0][0];
+    expect(inserted).toEqual({
+      workflowId: 'wf-1',
+      pageWebhookId: 'wh-1',
+      provider: 'page-webhook',
+      eventType: '*',
+    });
+    expect(inserted).not.toHaveProperty('connectionId');
     expect(mockAuditRequest).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: 'data.write', resourceType: 'webhook_trigger' }),
