@@ -103,7 +103,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isNull } from '@pagespace/db/operators';
+import { isNull, sql } from '@pagespace/db/operators';
 import { taskItems } from '@pagespace/db/schema/tasks';
 
 // ============================================================================
@@ -519,6 +519,17 @@ describe('GET /api/tasks', () => {
       await GET(request);
 
       expect(db.query.taskItems.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('escapes LIKE metacharacters in the search term before building the ILIKE subquery pattern (regression: over-matching fix)', async () => {
+      // A task titled "100% done" contains a literal '%' — if it reaches the
+      // ILIKE subquery unescaped, Postgres reads it as a wildcard instead of a
+      // literal character.
+      const request = new Request(`https://example.com/api/tasks?context=user&search=${encodeURIComponent('100% done')}`);
+      await GET(request);
+
+      const [, , searchPattern] = vi.mocked(sql).mock.calls[0] as unknown as [unknown, unknown, string];
+      expect(searchPattern).toBe('%100\\% done%');
     });
   });
 

@@ -4,6 +4,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
@@ -13,17 +14,6 @@ import { pages, drives, pageType, type PageTypeEnum } from '@pagespace/db/schema
 import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { z } from 'zod';
-
-/**
- * Escape LIKE pattern metacharacters (%, _) in user input
- * Prevents user input from being interpreted as wildcards
- */
-function escapeLikePattern(input: string): string {
-  return input
-    .replace(/\\/g, '\\\\')  // Escape backslashes first
-    .replace(/%/g, '\\%')    // Escape percent
-    .replace(/_/g, '\\_');   // Escape underscore
-}
 
 /**
  * Build a multi-word search condition
