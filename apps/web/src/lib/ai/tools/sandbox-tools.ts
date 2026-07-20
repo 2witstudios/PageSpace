@@ -45,6 +45,19 @@ export function machineRefEquals(a: MachineRef, b: MachineRef): boolean {
   return machineRefId(a) === machineRefId(b);
 }
 
+/**
+ * `bash`'s cwd-default policy for a machine-bound "PageSpace Agent" pane
+ * (issue #2166 phase 7): an explicit `cwd` argument always wins; absent one,
+ * the binding's own `cwd` (the pane's checkout) is used. Returns `undefined`
+ * when neither is present, preserving the runner's own SANDBOX_ROOT default.
+ */
+export function bindingCwdFor(
+  explicitCwd: string | undefined,
+  binding: { cwd: string } | undefined,
+): string | undefined {
+  return explicitCwd ?? binding?.cwd;
+}
+
 /** Resolves an agent-facing id (from switch_machine's input) back to a configured MachineRef. */
 export function machineRefFromId(id: string, configured: MachineRef[]): MachineRef | undefined {
   return configured.find((m) => machineRefId(m) === id);
@@ -346,7 +359,15 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
     const tenantId = machines.resolveTenantId
       ? await machines.resolveTenantId(rawContext, activeMachine, ctx.tenantId)
       : ctx.tenantId;
-    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine } };
+    // A machine-bound "PageSpace Agent" pane's branchSandbox (issue #2166
+    // phase 7) routes acquireSandbox through the attach-only branch seam
+    // (acquireRequest in tool-runners.ts already forwards ctx.branchSandbox) —
+    // this is the one place that binding is translated onto the actor ctx.
+    const binding = rawContext?.machineBinding;
+    const branchSandbox = binding?.branchSandbox
+      ? { machineId: binding.machineId, machineBranchId: binding.branchSandbox.machineBranchId }
+      : undefined;
+    return { ok: true, ctx: { ...ctx, driveId, tenantId, activeMachine, branchSandbox } };
   };
 
   return {
@@ -357,7 +378,14 @@ export function createSandboxTools({ runDeps, resolveContext, gate, machines }: 
       execute: async ({ command, cwd, timeoutMs }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps });
+        const rawContext = readContext(options);
+        return runBashInSandbox({
+          command,
+          cwd: bindingCwdFor(cwd, rawContext?.machineBinding),
+          timeoutMs,
+          ctx: opened.ctx,
+          deps: runDeps,
+        });
       },
     }),
 
