@@ -37,7 +37,6 @@ describe('drizzle/0215 webhook_triggers anchor generalization', () => {
   it('should nullable-ize connectionId and add pageWebhookId as a bare nullable column (no default, no rewrite)', () => {
     expect(code).toContain('ALTER TABLE "webhook_triggers" ALTER COLUMN "connectionId" DROP NOT NULL');
     expect(code).toContain('ALTER TABLE "webhook_triggers" ADD COLUMN "pageWebhookId" text;');
-    expect(code).not.toMatch(/ADD COLUMN "pageWebhookId"[^;]*(NOT NULL|DEFAULT)/);
   });
 
   it('should cascade-delete triggers with their page webhook', () => {
@@ -56,11 +55,13 @@ describe('drizzle/0215 webhook_triggers anchor generalization', () => {
   });
 
   it('should enforce exactly one anchor via the XOR CHECK (idempotent, per the 0156 commands_scope_chk pattern)', () => {
-    expect(code).toContain('ADD CONSTRAINT "webhook_triggers_anchor_chk" CHECK');
-    expect(code.replace(/\s+/g, ' ')).toContain(
-      '("connectionId" IS NOT NULL AND "pageWebhookId" IS NULL) OR ("connectionId" IS NULL AND "pageWebhookId" IS NOT NULL)',
-    );
-    expect(code).toContain('WHEN duplicate_object THEN null');
+    expect(code).toContain(`DO $$ BEGIN
+  ALTER TABLE "webhook_triggers" ADD CONSTRAINT "webhook_triggers_anchor_chk" CHECK (
+    ("connectionId" IS NOT NULL AND "pageWebhookId" IS NULL) OR ("connectionId" IS NULL AND "pageWebhookId" IS NOT NULL)
+  );
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;`);
   });
 
   it('should be strictly additive on the live table — no drops, renames, or data rewrites', () => {

@@ -79,3 +79,10 @@ export const webhookTriggersRelations = relations(webhookTriggers, ({ one }) => 
 
 export type WebhookTrigger = typeof webhookTriggers.$inferSelect;
 export type NewWebhookTrigger = typeof webhookTriggers.$inferInsert;
+
+/**
+ * eventType value for page-anchored rows: page webhooks skip event matching
+ * in v1 (every enabled trigger on the webhook fires), so insert paths must
+ * write this sentinel rather than invent per-provider event names.
+ */
+export const PAGE_WEBHOOK_EVENT_TYPE = '*';
