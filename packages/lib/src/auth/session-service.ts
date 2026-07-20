@@ -5,6 +5,15 @@ import { sessionRepository } from './session-repository';
 
 const SESSION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Pure clamp: the earlier of `currentExpiresAt` and `notLaterThan`. Never
+ * returns a time later than `currentExpiresAt`, so a grace-expiry can only ever
+ * bring a session's death forward — never postpone it.
+ */
+export function clampExpiry(currentExpiresAt: Date, notLaterThan: Date): Date {
+  return currentExpiresAt.getTime() <= notLaterThan.getTime() ? currentExpiresAt : notLaterThan;
+}
+
 export interface SessionClaims {
   sessionId: string;
   userId: string;
@@ -143,6 +152,27 @@ export class SessionService {
       resourceId: session.resourceId ?? undefined,
       driveId: session.driveId ?? undefined,
     };
+  }
+
+  /**
+   * Bring a session's expiry forward to at most `now + graceMs`, clamping so it
+   * NEVER extends a live session (`min(current, now+grace)`). Used by device
+   * refresh to retire the session it replaces WITHOUT an instant hard-revoke, so
+   * in-flight requests (e.g. the 1s active-streams poll) stay valid for the
+   * grace window instead of 401-storming. The retired session then dies on its
+   * own via `validateSession`'s expiry check.
+   *
+   * No active session for the hash → no-op (never throws).
+   */
+  async expireSessionByHashSoon(tokenHash: string, graceMs: number): Promise<void> {
+    const currentExpiresAt = await sessionRepository.getActiveSessionExpiry(tokenHash);
+    if (!currentExpiresAt) return;
+
+    const notLaterThan = new Date(Date.now() + graceMs);
+    const clamped = clampExpiry(currentExpiresAt, notLaterThan);
+    if (clamped.getTime() < currentExpiresAt.getTime()) {
+      await sessionRepository.setExpiresAtByHash(tokenHash, clamped);
+    }
   }
 
   async revokeSession(token: string, reason: string): Promise<void> {
