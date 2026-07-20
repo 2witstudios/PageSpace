@@ -44,6 +44,7 @@ import {
   type AcquireMachineSandboxResult,
   type MachineRefLike,
 } from './machine-session';
+import type { AcquireBranchSandboxResult } from './branch-session';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 
@@ -75,6 +76,15 @@ export interface SandboxActorContext {
    * for that call rather than guessed at.
    */
   turnId?: string;
+  /**
+   * Present when this run is bound to a "PageSpace Agent" branch pane (issue
+   * #2166 phases 5/9's `deriveMachinePaneBinding.branchSandbox`) — the
+   * branch's owning Machine page id plus the `machine_branches` row backing
+   * it. Routes `acquireSandbox` through the attach-only branch seam
+   * (`acquireBranchSandbox`, branch-session.ts) instead of the machine's own
+   * persistent session. Undefined for every other run.
+   */
+  branchSandbox?: { machineId: string; machineBranchId: string };
 }
 
 export interface SandboxQuotaDeps {
@@ -155,10 +165,20 @@ export interface SandboxCheckpointDeps {
   createCheckpoint: (input: { sandbox: ExecutableSandbox; comment: string }) => Promise<void>;
 }
 
+/**
+ * `acquireSandbox`'s request: the machine-session shape plus the optional
+ * branch routing key. `branchSandbox` present → the caller routes to
+ * `acquireBranchSandbox` (attach-only); absent → `acquireMachineSandbox` as
+ * before.
+ */
+export type AcquireSandboxRequest = Omit<AcquireMachineSandboxInput, 'deps'> & {
+  branchSandbox?: { machineId: string; machineBranchId: string };
+};
+
 export interface SandboxRunDeps {
   isEnabled: () => boolean;
-  /** Pre-bound `acquireMachineSandbox` (lifecycle deps already injected). */
-  acquireSandbox: (input: Omit<AcquireMachineSandboxInput, 'deps'>) => Promise<AcquireMachineSandboxResult>;
+  /** Pre-bound `acquireMachineSandbox` / `acquireBranchSandbox` (lifecycle deps already injected). */
+  acquireSandbox: (input: AcquireSandboxRequest) => Promise<AcquireMachineSandboxResult | AcquireBranchSandboxResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
   reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
@@ -231,7 +251,7 @@ function safeLogWarn(
 // vs infra failures that are genuinely unexpected (error-level).
 const AUTHZ_DENY_REASONS = new Set([
   'no_drive_access', 'insufficient_role', 'no_agent_access', 'app_admin_required', 'kill_switch_off', 'no_machine',
-  'machine_runtime_exceeded',
+  'machine_runtime_exceeded', 'branch_not_found',
 ]);
 
 
@@ -306,9 +326,7 @@ function fail(
   return { success: false, error: DENIAL_MESSAGES[reason], reason };
 }
 
-function acquireRequest(
-  ctx: SandboxActorContext,
-): Omit<AcquireMachineSandboxInput, 'deps'> {
+function acquireRequest(ctx: SandboxActorContext): AcquireSandboxRequest {
   return {
     tenantId: ctx.tenantId,
     driveId: ctx.driveId,
@@ -316,6 +334,7 @@ function acquireRequest(
     requestOrigin: ctx.requestOrigin,
     agentPageId: ctx.agentPageId,
     activeMachine: ctx.activeMachine,
+    branchSandbox: ctx.branchSandbox,
   };
 }
 
@@ -366,7 +385,11 @@ async function safeNotifyTerminalActivity(
 }
 
 // Map a denial from the lifecycle acquire onto the tool-facing reason set.
-function reasonFromAcquire(result: Extract<AcquireMachineSandboxResult, { ok: false }>): SandboxToolDenialReason {
+// `branch_not_found` (acquireBranchSandbox's own fail-closed reason, no
+// tool-facing equivalent) falls through to 'error' with the rest.
+function reasonFromAcquire(
+  result: Extract<AcquireMachineSandboxResult | AcquireBranchSandboxResult, { ok: false }>,
+): SandboxToolDenialReason {
   switch (result.reason) {
     case 'app_admin_required':
     case 'no_drive_access':
